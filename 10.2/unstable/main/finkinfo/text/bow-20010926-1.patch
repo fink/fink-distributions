@@ -1,0 +1,838 @@
+diff -ur bow-20010926/argp/argp-help.c bow-ken/argp/argp-help.c
+--- bow-20010926/argp/argp-help.c	Tue Mar 25 14:21:16 1997
++++ bow-ken/argp/argp-help.c	Fri Dec 14 03:06:12 2001
+@@ -27,7 +27,8 @@
+ #include <string.h>
+ #include <assert.h>
+ #include <stdarg.h>
+-#include <malloc.h>
++#include <sys/types.h>
++#include <sys/malloc.h>
+ #include <ctype.h>
+ 
+ #if HAVE_STRINGS_H
+diff -ur bow-20010926/argp/strndup.c bow-ken/argp/strndup.c
+--- bow-20010926/argp/strndup.c	Fri Mar 14 09:36:32 1997
++++ bow-ken/argp/strndup.c	Fri Dec 14 03:06:21 2001
+@@ -5,7 +5,7 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <sys/types.h>
+-#include <malloc.h>
++#include <sys/malloc.h>
+ 
+ /* Find the length of STRING, but scan at most MAXLEN characters.
+    If no '\0' terminator is found in that many characters, return MAXLEN.  */
+diff -ur bow-20010926/barrel.c bow-ken/barrel.c
+--- bow-20010926/barrel.c	Thu Sep 14 16:47:05 2000
++++ bow-ken/barrel.c	Fri Dec 14 02:55:22 2001
+@@ -19,7 +19,6 @@
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111, USA */
+ 
+ #include <bow/libbow.h>
+-#include <values.h>
+ 
+ static int _bow_barrel_version = -1;
+ #define BOW_DEFAULT_BARREL_VERSION 3
+@@ -73,34 +72,25 @@
+   return di;
+ }
+ 
+-/* Add statistics to the barrel BARREL by indexing all the documents
+-   found when recursively decending directory DIRNAME.  Return the number
+-   of additional documents indexed. */
+-int
+-bow_barrel_add_from_text_dir (bow_barrel *barrel, 
+-			      const char *dirname, 
+-			      const char *except_name,
+-			      const char *classname)
+-{
+-  int text_file_count, binary_file_count;
++struct index_file_context {
++  const char *except_name;
++  bow_barrel *barrel;
+   int class;
++  int text_file_count;
++  int binary_file_count;
++};
++#define CONTEXT ((struct index_file_context*)context)
+ 
+-#ifdef VPC_ONLY
+-  /* Used when we are building a class barrel */
+-  bow_cdoc cdoc;
+-  bow_cdoc *cdocp;
+-  int word_count = 0;
+-  int di;
+-
+-  /* Function used to build a multinomial vpc barrel without building a
+-   * document barrel */
+-  int class_barrel_index_file (const char *filename, void *context)
++  int barrel_index_file (const char *filename, void *context)
+     {
+       FILE *fp;
++      bow_cdoc cdoc;
++      bow_cdoc *cdocp;
++      int di;			/* a document index */
+       int num_words;
+ 
+       /* If the filename matches the exception name, return immediately. */
+-      if (except_name && !strcmp (filename, except_name))
++      if (CONTEXT->except_name && !strcmp (filename, CONTEXT->except_name))
+ 	return 0;
+ 
+       if (!(fp = fopen (filename, "r")))
+@@ -111,34 +101,68 @@
+ 	}
+       if (bow_fp_is_text (fp))
+ 	{
++	  /* The file contains text; snarf the words and put them in
++	     the WI2DVF map. */
++	  cdoc.type = bow_doc_train;
++	  cdoc.class = CONTEXT->class;
++	  /* Set to one so bow_infogain_per_wi_new() works correctly
++	     by default. */
++	  cdoc.prior = 1.0f;
++	  assert (cdoc.class >= 0);
++	  cdoc.filename = strdup (filename);
++	  assert (cdoc.filename);
++	  cdoc.class_probs = NULL;
++	  /* Add the CDOC to CDOCS, and determine the "index" of this
++             document. */
++	  di = bow_array_append (CONTEXT->barrel->cdocs, &cdoc);
+ 	  /* Add all the words in this document. */
+-	  num_words = bow_wi2dvf_add_di_text_fp (&(barrel->wi2dvf), di, fp,
++	  num_words = bow_wi2dvf_add_di_text_fp (&(CONTEXT->barrel->wi2dvf), di, fp,
+ 						 filename);
+-	  word_count += num_words;
+-	  text_file_count++;
++	  /* Fill in the new CDOC's idea of WORD_COUNT */
++	  cdocp = bow_array_entry_at_index (CONTEXT->barrel->cdocs, di);
++	  cdocp->word_count = num_words;
++	  CONTEXT->text_file_count++;
+ 	}
+       else
+ 	{
+ 	  bow_verbosify (bow_progress,
+ 			 "\nFile `%s' skipped because not text\n",
+ 			 filename);
+-	  binary_file_count++;
++	  CONTEXT->binary_file_count++;
+ 	}
+       fclose (fp);
+       bow_verbosify (bow_progress,
+ 		     "\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b\b"
+ 		     "%6d : %8d", 
+-		     text_file_count, bow_num_words ());
++		     CONTEXT->text_file_count, bow_num_words ());
+       return 1;
+     }
+-#endif
+ 
+-  int barrel_index_file (const char *filename, void *context)
++/* Add statistics to the barrel BARREL by indexing all the documents
++   found when recursively decending directory DIRNAME.  Return the number
++   of additional documents indexed. */
++int
++bow_barrel_add_from_text_dir (bow_barrel *barrel, 
++			      const char *dirname, 
++			      const char *except_name,
++			      const char *classname)
++{
++  struct index_file_context context;
++
++#ifdef VPC_ONLY
++  /* Used when we are building a class barrel */
++  bow_cdoc cdoc;
++  bow_cdoc *cdocp;
++  int word_count = 0;
++  int di;
++
++
++
++  /* Function used to build a multinomial vpc barrel without building a
++   * document barrel */
++  int class_barrel_index_file (const char *filename, void *context)
+     {
+       FILE *fp;
+-      bow_cdoc cdoc;
+-      bow_cdoc *cdocp;
+-      int di;			/* a document index */
+       int num_words;
+ 
+       /* If the filename matches the exception name, return immediately. */
+@@ -153,26 +177,10 @@
+ 	}
+       if (bow_fp_is_text (fp))
+ 	{
+-	  /* The file contains text; snarf the words and put them in
+-	     the WI2DVF map. */
+-	  cdoc.type = bow_doc_train;
+-	  cdoc.class = class;
+-	  /* Set to one so bow_infogain_per_wi_new() works correctly
+-	     by default. */
+-	  cdoc.prior = 1.0f;
+-	  assert (cdoc.class >= 0);
+-	  cdoc.filename = strdup (filename);
+-	  assert (cdoc.filename);
+-	  cdoc.class_probs = NULL;
+-	  /* Add the CDOC to CDOCS, and determine the "index" of this
+-             document. */
+-	  di = bow_array_append (barrel->cdocs, &cdoc);
+ 	  /* Add all the words in this document. */
+ 	  num_words = bow_wi2dvf_add_di_text_fp (&(barrel->wi2dvf), di, fp,
+ 						 filename);
+-	  /* Fill in the new CDOC's idea of WORD_COUNT */
+-	  cdocp = bow_array_entry_at_index (barrel->cdocs, di);
+-	  cdocp->word_count = num_words;
++	  word_count += num_words;
+ 	  text_file_count++;
+ 	}
+       else
+@@ -189,17 +197,19 @@
+ 		     text_file_count, bow_num_words ());
+       return 1;
+     }
++#endif
+ 
+   if (!(barrel->classnames))
+     barrel->classnames = bow_int4str_new (0);
+-  class = bow_str2int (barrel->classnames, classname);
++  context.class = bow_str2int (barrel->classnames, classname);
++  context.barrel = barrel;
+ 
+ #ifdef VPC_ONLY
+   /* If we are building a class barrel, make one cdoc per class */
+   if (barrel->is_vpc)
+     {
+       cdoc.type = bow_doc_train;
+-      cdoc.class = class;
++      cdoc.class = context.class;
+       cdoc.filename = strdup (classname);
+       cdoc.word_count = 0; /* Number of documents in this class */
+       cdoc.normalizer = -1.0f;
+@@ -215,7 +225,7 @@
+   bow_verbosify (bow_progress,
+ 		 "Gathering stats... files : unique-words :: "
+ 		 "                 ");
+-  text_file_count = binary_file_count = 0;
++  context.text_file_count = context.binary_file_count = 0;
+ #ifdef VPC_ONLY
+   /* Call our special function for building a class barrel rather than
+    * a document barrel.  When finished, set the priors and word counts */
+@@ -228,12 +238,12 @@
+     }
+   else    
+ #endif
+-  bow_map_filenames_from_dir (barrel_index_file, 0, dirname, "");
++  bow_map_filenames_from_dir (barrel_index_file, &context, dirname, "");
+   bow_verbosify (bow_progress, "\n");
+-  if (binary_file_count > text_file_count)
++  if (context.binary_file_count > context.text_file_count)
+     bow_verbosify (bow_quiet,
+ 		   "Found mostly binary files, which were ignored.\n");
+-  return text_file_count;
++  return context.text_file_count;
+ }
+ 
+ /* Call this on a vector-per-document barrel to set the CDOC->PRIOR's
+@@ -356,21 +366,7 @@
+   float *wi2ig;
+   int wi2ig_size;
+   int wi, i;
+-  struct wiig_list_entry {
+-    float ig;
+-    int wi;
+-  } *wiig_list;
+-  /* For sorting the above entries. */
+-  int compare_wiig_list_entry (const void *e1, const void *e2)
+-    {
+-      if (((struct wiig_list_entry*)e1)->ig >
+-	  ((struct wiig_list_entry*)e2)->ig)
+-	return -1;
+-      else if (((struct wiig_list_entry*)e1)->ig ==
+-	  ((struct wiig_list_entry*)e2)->ig)
+-	return 0;
+-      else return 1;
+-    }
++  wiig *wiig_list;
+ 
+   if (num_words_to_keep == 0)
+     return;
+@@ -383,15 +379,15 @@
+ 
+   /* Make a list of the info gain numbers paired with their WI's,
+      in prepartion for sorting. */
+-  wiig_list = alloca (sizeof (struct wiig_list_entry) * wi2ig_size);
++  wiig_list = alloca (sizeof (wiig) * wi2ig_size);
+   for (wi = 0; wi < wi2ig_size; wi++)
+     {
+       wiig_list[wi].wi = wi;
+       wiig_list[wi].ig = wi2ig[wi];
+     }
+   /* Sort the list */
+-  qsort (wiig_list, wi2ig_size, sizeof (struct wiig_list_entry), 
+-	 compare_wiig_list_entry);
++  qsort (wiig_list, wi2ig_size, sizeof (wiig), 
++	 wiig_compare);
+ 
+   num_words_to_keep = MIN (num_words_to_keep, wi2ig_size);
+ 
+@@ -1128,6 +1124,7 @@
+   bow_dv *dv;
+   int dvi;
+ };
++#undef CONTEXT
+ #define CONTEXT ((struct bow_barrel_iterator_context*)context)
+ 
+ static void
+diff -ur bow-20010926/bow/libbow.h bow-ken/bow/libbow.h
+--- bow-20010926/bow/libbow.h	Mon Feb 19 14:50:43 2001
++++ bow-ken/bow/libbow.h	Fri Dec 14 03:06:29 2001
+@@ -37,7 +37,7 @@
+ #include <sys/types.h>		/* for netinet/in.h on SunOS */
+ #include <sys/stat.h>
+ #include <netinet/in.h>		/* for machine-independent byte-order */
+-#include <malloc.h>		/* for malloc() and friends. */
++#include <sys/malloc.h>		/* for malloc() and friends. */
+ #include <stdlib.h>             /* For malloc() etc. on DEC Alpha */
+ #include <string.h>		/* for strlen() on DEC Alpha */
+ #include <limits.h>		/* for PATH_MAX and SHRT_MAX and friends */
+@@ -2226,5 +2226,24 @@
+ } bow_flex_type;
+ 
+ extern bow_flex_type bow_flex_option;
++
++typedef struct _wiig {
++  int wi;
++  float ig;
++} wiig;
++
++struct _doc_hit {
++  int di;
++  float score;
++  const char **terms;
++  int terms_count;
++};
++
++/* For sorting the above entries. */
++int wiig_compare (const void *wiig1, const void *wiig2);
++int compare_doc_hits (struct _doc_hit *hit1, struct _doc_hit *hit2);
++
++#define sqrtf sqrt
++#define MAXDOUBLE DBL_MAX
+ 
+ #endif /* __libbow_h_INCLUDE */
+diff -ur bow-20010926/bow/svm.h bow-ken/bow/svm.h
+--- bow-20010926/bow/svm.h	Fri May 19 13:48:31 2000
++++ bow-ken/bow/svm.h	Fri Dec 14 02:23:04 2001
+@@ -22,7 +22,6 @@
+ 
+ #include <math.h>
+ #include <string.h>
+-#include <values.h>
+ #include <time.h>
+ #include <signal.h>
+ #include <sys/times.h>
+diff -ur bow-20010926/crossbow.c bow-ken/crossbow.c
+--- bow-20010926/crossbow.c	Tue May 23 17:08:26 2000
++++ bow-ken/crossbow.c	Fri Dec 14 02:34:57 2001
+@@ -971,9 +971,11 @@
+     }
+ }
+ 
+-void
+-crossbow_classify_docs_in_dirname (const char *dirname, int verbose)
+-{
++struct classify_filename_context {
++  int verbose;
++};
++#define CONTEXT ((struct classify_filename_context *)context)
++
+   int classify_filename (const char *filename, void *context)
+     {
+       crossbow_doc doc;
+@@ -997,11 +999,16 @@
+       doc.cis_size = -1;
+       doc.cis = NULL;
+       ((((crossbow_method*)bow_argp_method)->classify_doc)
+-       (&doc, verbose, stdout));
++       (&doc, CONTEXT->verbose, stdout));
+       return 0;
+     }
+ 
+-  bow_map_filenames_from_dir (classify_filename, NULL, dirname, "");
++void
++crossbow_classify_docs_in_dirname (const char *dirname, int verbose)
++{
++  struct classify_filename_context context;
++  context.verbose = verbose;
++  bow_map_filenames_from_dir (classify_filename, &context, dirname, "");
+ }
+ 
+ 
+diff -ur bow-20010926/dirichlet.c bow-ken/dirichlet.c
+--- bow-20010926/dirichlet.c	Mon Dec 18 09:38:53 2000
++++ bow-ken/dirichlet.c	Fri Dec 14 03:05:59 2001
+@@ -1,6 +1,6 @@
+ #include <stdio.h>
+ #include <math.h>
+-#include <malloc.h>
++#include <sys/malloc.h>
+ #include <assert.h>
+ #include <stdlib.h>
+ 
+diff -ur bow-20010926/docnames.c bow-ken/docnames.c
+--- bow-20010926/docnames.c	Tue Oct  5 12:24:08 1999
++++ bow-ken/docnames.c	Fri Dec 14 01:13:25 2001
+@@ -146,6 +146,21 @@
+   return num_files;
+ }
+ 
++struct append_filename_context {
++  bow_doc_list *dl_next;
++  bow_doc_list **dl;
++};
++#define CONTEXT ((struct append_filename_context*)context)
++
++  int append_filename (const char *filename, void *context)
++    {
++      CONTEXT->dl_next = *(CONTEXT->dl);
++      *(CONTEXT->dl) = bow_malloc (sizeof (bow_doc_list) + strlen (filename) + 1);
++      (*(CONTEXT->dl))->next = CONTEXT->dl_next;
++      strcpy ((*(CONTEXT->dl))->filename, filename);
++      return 0;
++    }
++
+ /* Create a linked list of filenames, and append the document list
+    pointed to by DL to it; return the new concatenated lists in *DL.
+    The function returns the total number of filenames.  When creating
+@@ -157,17 +172,10 @@
+ 		     const char *dirname,
+ 		     const char *exclude_patterns)
+ {
+-  bow_doc_list *dl_next = NULL;
+-  int append_filename (const char *filename, void *context)
+-    {
+-      dl_next = *dl;
+-      *dl = bow_malloc (sizeof (bow_doc_list) + strlen (filename) + 1);
+-      (*dl)->next = dl_next;
+-      strcpy ((*dl)->filename, filename);
+-      return 0;
+-    }
+-
+-  return bow_map_filenames_from_dir (append_filename, NULL,
++  struct append_filename_context context;
++  context.dl_next = NULL;
++  context.dl = dl;
++  return bow_map_filenames_from_dir (append_filename, &context,
+ 				     dirname, exclude_patterns);
+ }
+ 
+diff -ur bow-20010926/info_gain.c bow-ken/info_gain.c
+--- bow-20010926/info_gain.c	Tue Nov 16 15:28:37 1999
++++ bow-ken/info_gain.c	Fri Dec 14 01:14:50 2001
+@@ -520,16 +520,7 @@
+   float *wi2ig;			/* the array of information gains */
+   int wi2ig_size;
+   int wi, i;
+-  struct wiig { int wi; float ig; } *wiigs;
+-  int wiig_compare (const void *wiig1, const void *wiig2)
+-    {
+-      if (((struct wiig*)wiig1)->ig > ((struct wiig*)wiig2)->ig)
+-	return -1;
+-      else if (((struct wiig*)wiig1)->ig == ((struct wiig*)wiig2)->ig)
+-	return 0;
+-      else
+-	return 1;
+-    }
++  wiig *wiigs;
+ 
+   wi2ig = bow_infogain_per_wi_new (barrel, num_classes, &wi2ig_size);
+   if (num_to_print == 0)
+@@ -537,7 +528,7 @@
+ 
+   /* Create and fill and array of `word-index and information-gain
+      structures' that can be sorted. */
+-  wiigs = bow_malloc (wi2ig_size * sizeof (struct wiig));
++  wiigs = bow_malloc (wi2ig_size * sizeof (wiig));
+   for (wi = 0; wi < wi2ig_size; wi++)
+     {
+       wiigs[wi].wi = wi;
+@@ -545,7 +536,7 @@
+     }
+ 
+   /* Sort it. */
+-  qsort (wiigs, wi2ig_size, sizeof (struct wiig), wiig_compare);
++  qsort (wiigs, wi2ig_size, sizeof (wiig), wiig_compare);
+ 
+   /* Print it. */
+   for (i = 0; i < num_to_print; i++)
+diff -ur bow-20010926/int4word.c bow-ken/int4word.c
+--- bow-20010926/int4word.c	Sun Jan 21 17:42:32 2001
++++ bow-ken/int4word.c	Fri Dec 14 01:21:46 2001
+@@ -304,36 +304,22 @@
+   int wi2ig_size;
+   bow_int4str *new_map;
+   int wi;
+-  struct wiig_list_entry {
+-    float ig;
+-    int wi;
+-  } *wiig_list;
+-  /* For sorting the above entries. */
+-  int compare_wiig_list_entry (const void *e1, const void *e2)
+-    {
+-      if (((struct wiig_list_entry*)e1)->ig >
+-	  ((struct wiig_list_entry*)e2)->ig)
+-	return -1;
+-      else if (((struct wiig_list_entry*)e1)->ig ==
+-	  ((struct wiig_list_entry*)e2)->ig)
+-	return 0;
+-      else return 1;
+-    }
++  wiig *wiig_list;
+   
+   new_map = bow_int4str_new (0);
+   wi2ig = bow_infogain_per_wi_new (barrel, num_classes, &wi2ig_size);
+ 
+   /* Make a list of the info gain numbers paired with their WI's,
+      in prepartion for sorting. */
+-  wiig_list = alloca (sizeof (struct wiig_list_entry) * wi2ig_size);
++  wiig_list = alloca (sizeof (wiig) * wi2ig_size);
+   for (wi = 0; wi < wi2ig_size; wi++)
+     {
+       wiig_list[wi].wi = wi;
+       wiig_list[wi].ig = wi2ig[wi];
+     }
+   /* Sort the list */
+-  qsort (wiig_list, wi2ig_size, sizeof (struct wiig_list_entry), 
+-	 compare_wiig_list_entry);
++  qsort (wiig_list, wi2ig_size, sizeof (wiig), 
++	 wiig_compare);
+ 
+ 
+   if (num_words_to_keep > wi2ig_size || num_words_to_keep <= 0)
+@@ -387,32 +373,45 @@
+   return total_word_count;
+ }
+ 
+-/* Add to the word occurrence counts by recursively decending directory 
+-   DIRNAME and parsing all the text files; skip any files matching
+-   EXCEPTION_NAME. */
+-int
+-bow_words_add_occurrences_from_text_dir (const char *dirname,
+-					 const char *exception_name)
+-{
+-  int text_document_count = 0;
+-  int file_word_count, total_word_count = 0;
++struct words_index_file_context {
++  const char *exception_name;
++  int text_document_count;
++  int file_word_count;
++  int total_word_count;
++};
++#define CONTEXT ((struct words_index_file_context *)context)
++
+   int words_index_file (const char *filename, void *context)
+     {
+       /* If the filename matches the exception name, return immediately. */
+-      if (exception_name && !strcmp (filename, exception_name))
++      if (CONTEXT->exception_name && !strcmp (filename, CONTEXT->exception_name))
+ 	return 0;
+ 
+-      file_word_count = bow_words_add_occurrences_from_file (filename);
+-      total_word_count += file_word_count;
+-      if (file_word_count)
+-	text_document_count++;
++      CONTEXT->file_word_count = bow_words_add_occurrences_from_file (filename);
++      CONTEXT->total_word_count += CONTEXT->file_word_count;
++      if (CONTEXT->file_word_count)
++	CONTEXT->text_document_count++;
+       return 0;
+     }
+ 
++/* Add to the word occurrence counts by recursively decending directory 
++   DIRNAME and parsing all the text files; skip any files matching
++   EXCEPTION_NAME. */
++int
++bow_words_add_occurrences_from_text_dir (const char *dirname,
++					 const char *exception_name)
++{
++  struct words_index_file_context context;
++
++  context.text_document_count = 
++    context.file_word_count = 
++    context.total_word_count = 0;
++  context.exception_name = exception_name;
++  
+   bow_verbosify (bow_progress,
+ 		 "Counting words... files : unique-words :: "
+ 		 "                 ");
+-  bow_map_filenames_from_dir (words_index_file, 0, dirname, exception_name);
++  bow_map_filenames_from_dir (words_index_file, &context, dirname, exception_name);
+   bow_verbosify (bow_progress, "\n");
+-  return total_word_count;
++  return context.total_word_count;
+ }
+diff -ur bow-20010926/maxent.c bow-ken/maxent.c
+--- bow-20010926/maxent.c	Thu Sep 14 16:47:05 2000
++++ bow-ken/maxent.c	Fri Dec 14 02:22:37 2001
+@@ -314,25 +314,15 @@
+   long total_words = 0;
+   int max_wi = MIN (barrel->wi2dvf->size, bow_num_words());
+   int max_ci = bow_barrel_num_classes (barrel);
+-  struct wiig { int wi; float ig; } **mis;
++  wiig **mis;
+   int wpi;
+ 
+-  int wiig_compare (const void *wiig1, const void *wiig2)
+-    {
+-      if (((struct wiig*)wiig1)->ig > ((struct wiig*)wiig2)->ig)
+-	return -1;
+-      else if (((struct wiig*)wiig1)->ig == ((struct wiig*)wiig2)->ig)
+-	return 0;
+-      else
+-	return 1;
+-    }
+-
+   /* do this on a class barrel */
+ 
+   /* malloc and initialize the double array of mutual infos */
+   mis = bow_malloc (sizeof(struct wiig *) * max_ci);
+   for (ci = 0; ci < max_ci ; ci ++)
+-    mis[ci] = bow_malloc (sizeof (struct wiig) * max_wi);
++    mis[ci] = bow_malloc (sizeof (wiig) * max_wi);
+ 
+   for (ci = 0; ci < max_ci ; ci++)
+     for (wi = 0 ; wi < max_wi; wi++)
+@@ -378,7 +368,7 @@
+ 
+   /* ok, now sort each class to bring the best infogains to the top*/
+   for (ci = 0; ci < max_ci; ci++)
+-    qsort(mis[ci], max_wi, sizeof (struct wiig), wiig_compare);
++    qsort(mis[ci], max_wi, sizeof (wiig), wiig_compare);
+ 
+   /* Check that we're not saving bogus words */
+   for (ci = 0; ci < max_ci; ci++)
+diff -ur bow-20010926/multiclass.c bow-ken/multiclass.c
+--- bow-20010926/multiclass.c	Fri Oct 15 15:17:42 1999
++++ bow-ken/multiclass.c	Fri Dec 14 02:37:04 2001
+@@ -1047,9 +1047,6 @@
+     }
+ }
+ 
+-void
+-bow_sort_scores (bow_score *scores, int count)
+-{
+   static int score_compare (const void *x, const void *y)
+     {
+       if (((bow_score *)x)->weight > ((bow_score *)y)->weight)
+@@ -1059,6 +1056,10 @@
+       else
+ 	return 1;
+     }
++
++void
++bow_sort_scores (bow_score *scores, int count)
++{
+   qsort (scores, count, sizeof (bow_score), score_compare);
+ }
+ 
+diff -ur bow-20010926/rainbow.c bow-ken/rainbow.c
+--- bow-20010926/rainbow.c	Thu Sep 14 16:47:06 2000
++++ bow-ken/rainbow.c	Fri Dec 14 02:20:56 2001
+@@ -1533,31 +1533,22 @@
+     }
+ }
+ 
+-
+-
+-/* Run test trials, outputing results to TEST_FP.  The results are
+-   indended to be read and processed by the Perl script
+-   ./rainbow-stats.  The test documents come from files inside the
+-   directories that are named in argv[].  */
+-void
+-rainbow_test_files (FILE *out_fp, const char *test_dirname)
+-{
++struct process_wv_context {
++  FILE *out_fp;
+   bow_score *hits;
+-  /* int num_test_docs; */
+-  int num_hits_to_retrieve = bow_barrel_num_classes (rainbow_class_barrel);
+-  int actual_num_hits;
+-  int hi;			/* hit index */
+   const char *current_class;
++  int actual_num_hits;
++  int num_hits_to_retrieve;
+   int current_ci;
+-  int ci;
+-  unsigned int dirlen = 1024;
+-  char dir[dirlen];
++};
++#define CONTEXT ((struct process_wv_context *)context)
+ 
+   /* Deals with the word vector once it has been taken from the file
+      or HDB database.  Called by test_file and test_hdb_file. (see below) */
+   int process_wv (const char *filename, bow_wv *query_wv, void *context) 
+     {
+       bow_cdoc *class_cdoc;
++      int hi;
+ 
+       if (!query_wv)
+ 	{
+@@ -1565,9 +1556,9 @@
+ 	  return 0;
+ 	}
+     
+-      fprintf (out_fp, "%s %s ", 
++      fprintf (CONTEXT->out_fp, "%s %s ", 
+ 	       filename,	/* This test instance */
+-	       current_class); /* The name of the correct class */
++	       CONTEXT->current_class); /* The name of the correct class */
+ 
+       /* Remove words not in the class_barrel */
+       bow_wv_prune_words_not_in_wi2dvf (query_wv, 
+@@ -1575,33 +1566,33 @@
+ 
+       bow_wv_set_weights (query_wv, rainbow_class_barrel);
+       bow_wv_normalize_weights (query_wv, rainbow_class_barrel);
+-      actual_num_hits = 
++      CONTEXT->actual_num_hits = 
+ 	bow_barrel_score (rainbow_class_barrel, 
+-			  query_wv, hits,
+-			  num_hits_to_retrieve,
++			  query_wv, CONTEXT->hits,
++			  CONTEXT->num_hits_to_retrieve,
+ 			  (rainbow_arg_state.loo_cv
+-			   ? current_ci
++			   ? CONTEXT->current_ci
+ 			   : -1));
+-      for (hi = 0; hi < actual_num_hits; hi++)
++      for (hi = 0; hi < CONTEXT->actual_num_hits; hi++)
+ 	{
+ 	  class_cdoc = 
+ 	    bow_array_entry_at_index (rainbow_class_barrel->cdocs,
+-				      hits[hi].di);
++				      CONTEXT->hits[hi].di);
+ 	  /* For the sake CommonLisp, don't print numbers smaller than
+ 	     1e-35, because it can't `(read)' them. */
+ 	  if (rainbow_arg_state.use_lisp_score_truncation
+-	      && hits[hi].weight < 1e-35
+-	      && hits[hi].weight > 0)
+-	    hits[hi].weight = 0;
+-	  fprintf (out_fp, "%s:%.*g ", 
++	      && CONTEXT->hits[hi].weight < 1e-35
++	      && CONTEXT->hits[hi].weight > 0)
++	    CONTEXT->hits[hi].weight = 0;
++	  fprintf (CONTEXT->out_fp, "%s:%.*g ", 
+ 		   filename_to_classname (class_cdoc->filename),
+-		   bow_score_print_precision, hits[hi].weight);
++		   bow_score_print_precision, CONTEXT->hits[hi].weight);
+ 	}
+-      fprintf (out_fp, "\n");
++      fprintf (CONTEXT->out_fp, "\n");
+       return 0;
+     }
+ 
+-  /* This nested function is called once for each test document. */
++  /* This (formerly) nested function is called once for each test document. */
+   int test_file (const char *filename, void *context)
+     {
+       bow_wv *query_wv = NULL;
+@@ -1625,6 +1616,20 @@
+       return process_wv (filename, query_wv, context);
+     }
+ 
++
++
++/* Run test trials, outputing results to TEST_FP.  The results are
++   indended to be read and processed by the Perl script
++   ./rainbow-stats.  The test documents come from files inside the
++   directories that are named in argv[].  */
++void
++rainbow_test_files (FILE *out_fp, const char *test_dirname)
++{
++  struct process_wv_context context;
++  int ci;
++  unsigned int dirlen = 1024;
++  char dir[dirlen];
++
+ #if HAVE_HDB
+   /* This is used for the case that we are dealing with HDB files.
+      At this point, the fulltext of the file has already been retrieved
+@@ -1644,7 +1649,9 @@
+     }
+ #endif
+ 
+-  hits = alloca (sizeof (bow_score) * num_hits_to_retrieve);
++  context.num_hits_to_retrieve = bow_barrel_num_classes (rainbow_class_barrel);
++  context.hits = alloca (sizeof (bow_score) * context.num_hits_to_retrieve);
++  context.out_fp = out_fp;
+ 
+   fprintf (out_fp, "#0\n");
+   for (ci = 0; ci < bow_barrel_num_classes (rainbow_doc_barrel); ci++)
+@@ -1660,15 +1667,15 @@
+ 
+       /* Remember which classname this comes from, so, above, we know
+ 	 the correct class */
+-      current_ci = class_cdoc->class;
+-      current_class = bow_barrel_classname_at_index (rainbow_doc_barrel, ci);
++      context.current_ci = class_cdoc->class;
++      context.current_class = bow_barrel_classname_at_index (rainbow_doc_barrel, ci);
+       /* Test each document in that diretory. */
+ #if HAVE_HDB
+       if (bow_hdb)
+ 	bow_map_filenames_from_hdb (test_hdb_file, 0, dir, "");
+       else
+ #endif
+-	bow_map_filenames_from_dir (test_file, 0, dir, "");
++	bow_map_filenames_from_dir (test_file, &context, dir, "");
+     }
+ }
+ 
+diff -ur bow-20010926/Makefile.in bow-ken/Makefile.in
+--- bow-20010926/Makefile.in	Thu Jan 17 02:18:49 2002
++++ bow-ken/Makefile.in	Thu Jan 17 02:20:03 2002
+@@ -101,7 +101,7 @@
+ # Pattern rule
+ ALL_CPPFLAGS = $(CPPFLAGS) $(INCLUDEFLAGS) -Ibow -I$(srcdir) -I$(srcdir)/argp $(DEFS)
+ ALL_CFLAGS = $(CFLAGS)
+-ALL_LIBS = $(LIBS) -L. -lbow -L./argp -largp -lm -lcrypt
++ALL_LIBS = $(LIBS) -L. -lbow -L./argp -largp -lm
+ 
+ 
+ # Libbow section
+@@ -116,6 +116,7 @@
+ barrel.c \
+ bitvec.c \
+ bmalloc.c \
++compare.c \
+ deflexer.c \
+ dv.c \
+ docnames.c \
+diff -ur bow-20010926/compare.c bow-ken/compare.c
+--- bow-20010926/compare.c	Thu Jan 17 02:27:50 2002
++++ bow-ken/compare.c	Thu Jan 17 02:28:22 2002
+@@ -0,0 +1,23 @@
++#include <bow/libbow.h>
++
++  int wiig_compare (const void *wiig1, const void *wiig2)
++    {
++      if (((wiig*)wiig1)->ig > ((wiig*)wiig2)->ig)
++	return -1;
++      else if (((wiig*)wiig1)->ig == ((wiig*)wiig2)->ig)
++	return 0;
++      else
++	return 1;
++    }
++
++  /* For sorting the combined list of document hits */
++  int compare_doc_hits (struct _doc_hit *hit1, struct _doc_hit *hit2)
++    {
++      if (hit1->score < hit2->score)
++	return 1;
++      else if (hit1->score == hit2->score)
++	return 0;
++      else
++	return -1;
++    }
++
