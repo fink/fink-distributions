@@ -1,0 +1,164 @@
+--- root.orig/Makefile	Sun Nov 24 14:45:45 2002
++++ root.new/Makefile	Mon Feb 24 18:50:57 2003
+@@ -452,11 +452,13 @@
+ 	   $(INSTALL) $(ALLEXECS)               $(DESTDIR)$(BINDIR); \
+ 	   echo "Installing libraries in $(DESTDIR)$(LIBDIR)"; \
+ 	   $(INSTALLDIR)                        $(DESTDIR)$(LIBDIR); \
+-	   vers=`sed 's|\(.*\)\..*/.*|\1|' < build/version_number` ; \
++	   major=`sed 's|\(.*\)\.\(.*\)/.*|\1|' < build/version_number` ; \
++	   minor=`sed 's|\(.*\)\.\(.*\)/.*|\2|' < build/version_number` ; \
+ 	   for lib in $(ALLLIBS) $(CINTLIB); do \
+ 	      rm -f $(DESTDIR)$(LIBDIR)/`basename $$lib` ; \
+-	      rm -f $(DESTDIR)$(LIBDIR)/`basename $$lib`.$$vers ; \
+-	      $(INSTALL) $$lib*                 $(DESTDIR)$(LIBDIR); \
++	      rm -f $(DESTDIR)$(LIBDIR)/`basename $$lib $(SOEXT)`$$major.$(SOEXT) ; \
++	      rm -f $(DESTDIR)$(LIBDIR)/`basename $$lib $(SOEXT)`$$major.$$minor.$(SOEXT) ; \
++	      $(INSTALL) `echo $$lib | sed "s/$(SOEXT)//"`* $(DESTDIR)$(LIBDIR); \
+ 	   done ; \
+ 	   echo "Installing headers in $(DESTDIR)$(INCDIR)"; \
+ 	   $(INSTALLDIR)                        $(DESTDIR)$(INCDIR); \
+@@ -542,8 +544,12 @@
+ 	      test "x`ls $(DESTDIR)$(BINDIR)`" = "x" ; then \
+ 	      rm -rf $(DESTDIR)$(BINDIR); \
+ 	   fi ; \
++	   major=`sed 's|\(.*\)\.\(.*\)/.*|\1|' < build/version_number` ; \
++	   minor=`sed 's|\(.*\)\.\(.*\)/.*|\2|' < build/version_number` ; \
+ 	   for lib in $(ALLLIBS) $(CINTLIB); do \
+-	      rm -f $(DESTDIR)$(LIBDIR)/`basename $$lib`* ; \
++	      rm -f $(DESTDIR)$(LIBDIR)/`basename $$lib` ; \
++	      rm -f $(DESTDIR)$(LIBDIR)/`basename $$lib $(SOEXT)`$$major.$(SOEXT) ; \
++	      rm -f $(DESTDIR)$(LIBDIR)/`basename $$lib $(SOEXT)`$$major.$$minor.$(SOEXT) ; \
+ 	   done ; \
+ 	   if test -d $(DESTDIR)$(LIBDIR) && \
+ 	      test "x`ls $(DESTDIR)$(LIBDIR)`" = "x" ; then \
+--- root.orig/config/Makefile.macosx	Sun Nov 17 23:12:31 2002
++++ root.new/config/Makefile.macosx	Mon Feb 24 11:26:54 2003
+@@ -23,28 +23,30 @@
+ CXX           = g++
+ CC            = gcc
+ CXXFLAGS      = -pipe -W -Wall -fsigned-char -fno-common \
+-                -I/usr/X11R6/include $(EXTRA_CXXFLAGS)
++                -I/usr/X11R6/include $(EXTRA_CXXFLAGS) $(FINK_CXXFLAGS)
+ CFLAGS        = -pipe -W -Wall -fsigned-char -fno-common \
+-                -I/usr/X11R6/include $(EXTRA_CFLAGS)
++                -I/usr/X11R6/include $(EXTRA_CFLAGS) $(FINK_CFLAGS)
+ CINTCXXFLAGS  = -pipe -W -Wall -fsigned-char -fno-common \
+-                -DG__REGEXP $(EXTRA_CXXFLAGS) -DG__UNIX -DG__SHAREDLIB \
++                -DG__REGEXP $(EXTRA_CXXFLAGS) $(FINK_CXXFLAGS) \
++		-DG__UNIX -DG__SHAREDLIB \
+                 -DG__ROOT -DG__REDIRECTIO -DG__OSFDLL
+ CINTCFLAGS    = -pipe -W -Wall -fsigned-char -fno-common \
+                 -DG__REGEXP -DG__UNIX -DG__SHAREDLIB \
+-                -DG__ROOT -DG__REDIRECTIO -DG__OSFDLL $(EXTRA_CFLAGS)
++                -DG__ROOT -DG__REDIRECTIO -DG__OSFDLL \
++		$(EXTRA_CFLAGS) $(FINK_CFLAGS)
+ COMPILER      = gnu
+ 
+ # Linker:
+ LD            = g++
+ LDFLAGS       = $(OPT) -Xlinker -bind_at_load -flat_namespace
+ SOFLAGS       = $(OPT) -dynamiclib -flat_namespace -undefined suppress \
+-                -install_name
++                -install_name $(LIBDIR)/
+ SOEXT         = dylib
+ 
+ # System libraries:
+-SYSLIBS       = -lm $(EXTRA_LDFLAGS) -ldl
++SYSLIBS       = -lm $(EXTRA_LDFLAGS) $(FINK_LDFLAGS) -ldl
+ XLIBS         = $(XPMLIBDIR) $(XPMLIB) -L/usr/X11R6/lib -lX11
+-CILIBS        = -lm $(EXTRA_LDFLAGS) -ldl
++CILIBS        = -lm $(EXTRA_LDFLAGS) $(FINK_LDFLAGS) -ldl
+ 
+ # Fortran:
+ F77           = g77
+@@ -59,6 +61,6 @@
+                 -lXmu -lXext -lX11
+ X3DLIBEXTRA   = -L/usr/X11R6/lib -lX11
+ 
+-EXTRA_CXXFLAGS= -I./include $(shell [ -d /sw/include ] && echo -I/sw/include)
+-EXTRA_CFLAGS  = -I./include $(shell [ -d /sw/include ] && echo -I/sw/include)
+-EXTRA_LDFLAGS = $(shell [ -d /sw/lib ] && echo -L/sw/lib)
++FINK_CXXFLAGS = $(shell [ -d /sw/include ] && echo -I/sw/include)
++FINK_CFLAGS   = $(shell [ -d /sw/include ] && echo -I/sw/include)
++FINK_LDFLAGS  = $(shell [ -d /sw/lib ] && echo -L/sw/lib)
+--- root.orig/build/unix/makelib.sh	Fri Oct 25 10:25:47 2002
++++ root.new/build/unix/makelib.sh	Thu Mar 27 16:00:57 2003
+@@ -26,6 +26,24 @@
+ 
+ rm -f $LIB
+ 
++if [ $PLATFORM = "macosx" ]; then
++   # We need beside the shared library (.dylib) a bundle (.so) to load
++   LDFLAGS="`[ -d /sw/lib ] && echo -L/sw/lib` -ldl"
++   BUNDLE=`echo $LIB | sed s/.dylib/.so/`
++   if [ "x`echo $SOFLAGS | grep -- '-g'`" != "x" ]; then
++      opt=-g
++   else
++      opt=-O
++   fi
++   echo $LD $opt -bundle -flat_namespace -undefined suppress -o $BUNDLE \
++	$OBJS $LDFLAGS $EXTRA
++   $LD $opt -bundle -flat_namespace -undefined suppress -o $BUNDLE \
++	$OBJS $LDFLAGS $EXTRA
++   if [ "x$MAJOR" != "x" ]; then
++       EXTRA="${EXTRA} -compatibility_version ${MAJOR} -current_version ${MAJOR}.${MINOR}.${REVIS}"
++   fi
++fi
++
+ if [ $PLATFORM = "aix" ]; then
+    makeshared="/usr/ibmcxx/bin/makeC++SharedLib"
+ fi
+@@ -58,34 +76,17 @@
+    $LD $SOFLAGS $LDFLAGS -o $LIB `lorder $OBJS | tsort -q` $EXTRA
+    # for elf:  echo $PLATFORM: $LD $SOFLAGS$SONAME $LDFLAGS -o $LIB $OBJS
+    # for elf:  $LD $SOFLAGS$SONAME $LDFLAGS -o $LIB `lorder $OBJS | tsort -q`
+-elif [ $PLATFORM = "macosx" ]; then
+-   # We need two library files: a .dylib to link to and a .so to load
+-   BUNDLE=`echo $LIB | sed s/.dylib/.so/`
+-   echo $LD $SOFLAGS $SONAME -o $LIB $OBJS \
+-	`[ -d /sw/lib ] && echo -L/sw/lib` -ldl $EXTRA
+-   $LD $SOFLAGS $SONAME -o $LIB $OBJS \
+-	`[ -d /sw/lib ] && echo -L/sw/lib` -ldl $EXTRA
+-   if [ "x`echo $SOFLAGS | grep -- '-g'`" != "x" ]; then
+-      opt=-g
+-   else
+-      opt=-O
+-   fi
+-   echo $LD $opt -bundle -flat_namespace -undefined suppress -o $BUNDLE \
+-	$OBJS `[ -d /sw/lib ] && echo -L/sw/lib` -ldl $EXTRA
+-   $LD $opt -bundle -flat_namespace -undefined suppress -o $BUNDLE \
+-	$OBJS `[ -d /sw/lib ] && echo -L/sw/lib` -ldl $EXTRA
+ elif [ $LD = "KCC" ]; then
+    echo $LD $LDFLAGS -o $LIB $OBJS $EXTRA
+    $LD $LDFLAGS -o $LIB $OBJS $EXTRA
+ else
+-   if [ "x$MAJOR" = "x" ] ; then
+-      echo $LD $SOFLAGS$SONAME $LDFLAGS -o $LIB $OBJS $EXTRA
+-      $LD $SOFLAGS$SONAME $LDFLAGS -o $LIB $OBJS $EXTRA
+-   else
+-      echo $LD $SOFLAGS$SONAME.$MAJOR.$MINOR $LDFLAGS -o $LIB.$MAJOR.$MINOR $OBJS $EXTRA
+-      $LD $SOFLAGS$SONAME.$MAJOR.$MINOR $LDFLAGS \
+-         -o $LIB.$MAJOR.$MINOR $OBJS $EXTRA
++   if [ "x$MAJOR" != "x" ]; then
++     # add versioning information into shlibs name
++     SONAME=`echo $SONAME | sed "s/.*\./&${MAJOR}./"`
++     LIB=`echo $LIB | sed "s/\/*.*\/.*\./&${MAJOR}.${MINOR}./"`
+    fi
++   echo $LD $SOFLAGS$SONAME $LDFLAGS -o $LIB $OBJS $EXTRA
++   $LD $SOFLAGS$SONAME $LDFLAGS -o $LIB $OBJS $EXTRA
+ fi
+ 
+ linkstat=$?
+@@ -93,9 +94,9 @@
+    exit $linkstat
+ fi
+ 
+-if [ "x$MAJOR" != "x" ] && [ -f $LIB.$MAJOR.$MINOR ]; then
+-   ln -fs $SONAME.$MAJOR.$MINOR $LIB.$MAJOR
+-   ln -fs $SONAME.$MAJOR        $LIB
++if [ "x$MAJOR" != "x" ] && [ -f $LIB ]; then
++   ln -fs `echo $SONAME | sed "s/.*\./&${MINOR}./"` `echo $LIB | sed "s/\.${MINOR}//"`
++   ln -fs $SONAME `echo $LIB | sed "s/\.${MAJOR}\.${MINOR}//"`
+ fi
+ 
+ if [ $PLATFORM = "hpux" ]; then
