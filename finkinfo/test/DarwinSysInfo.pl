@@ -498,7 +498,7 @@ sub get_rez {
 }
 
 sub get_hdd {
-  my @hddlist = `df -l -x volfs -x fdesc -x devfs -x hsfs -x cdfs`;
+  my @hddlist = `/bin/df -l`;
   my $hddline;
   my ($hddtotal, $hddused, $hddcount) = (0, 0, 0);
 
@@ -507,8 +507,8 @@ sub get_hdd {
     if ($hddline =~ /^\/dev\S+\ +([0-9.]+)\ +([0-9.]+)\ +([0-9.]+)\ .+[\%].*$/) {
       if ($3 != 0) {
         $hddcount++;
-        $hddtotal += $1;
-        $hddused += $2;
+        $hddtotal += sprintf("%.2f", $1/2);
+        $hddused += sprintf("%.2f", $2/2);
       }
     }
   }
