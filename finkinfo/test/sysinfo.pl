@@ -25,7 +25,7 @@ my $DEVTYPE, $DEVTYPE2, $PACKIN, $PACKIN2, $PACKOUT, $PACKOUT2;
 my $RES;
 my $HDDTOTAL, $HDDUSED, $HDDCOUNT;
 my $PROCS;
-my $UPTIME, $DAYS;
+my $UPTIME;
 
 IRC::register("Darwin SysInfo", "0.2", "", "");
 IRC::print "Loading Darwin SysInfo Script";
@@ -223,19 +223,23 @@ sub get_procs {
 }
 
 sub get_uptime {
+  my $days;
+
   chomp($UPTIME = `uptime`);
   $UPTIME =~ /.*up (.+),.+[0-9]+ user/;
-  $DAYS = $1;
-  if ($DAYS =~ /.?([0-9.]+).?days, (.+):(.+)/) {
+  $days = $1;
+  if ($days =~ /\s{0,1}([0-9.]+)\s{0,1}days{0,1}, (.+):(.+)/) {
     $UPTIME = sprintf("%dd, %dh, %dm", $1, $2, $3);
-  } elsif ($DAYS =~ /.?([0-9.]+).?days, (.+).?hrs/) {
+  } elsif ($days =~ /\s{0,1}([0-9.]+)\s{0,1}days{0,1}, (.+)\s{0,1}hrs{0,1}/) {
     $UPTIME = sprintf("%dd, %dh", $1, $2);
-  } elsif ($DAYS =~ /.?.?(.+):(.+)/) {
+  } elsif ($days =~ /\s{0,1}([0-9.]+)\s{0,1}days{0,1}, (.+)\s{0,1}mins{0,1}/) {
+    $UPTIME = sprintf("%dd, %dm", $1, $2); 
+  } elsif ($days =~ /\s{0,2}(.+):(.+)/) {
     $UPTIME = sprintf("%dh, %dm", $1, $2);
-  } elsif ($DAYS =~ /.?(.+) mins/) {
+  } elsif ($days =~ /\s{0,1}(.+) mins{0,1}/) {
     $UPTIME = sprintf("%dm", $1);
   } else {
-    $UPTIME = "Not Currently Available ($DAYS)";
+    $UPTIME = "Not Currently Available ($days)";
   }
 }
 
