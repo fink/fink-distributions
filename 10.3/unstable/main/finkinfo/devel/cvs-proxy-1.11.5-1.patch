@@ -1,0 +1,230 @@
+diff -ru cvs-1.11.5/src/client.c cvs-1.11.5-patched/src/client.c
+--- cvs-1.11.5/src/client.c	2003-01-16 16:10:55.000000000 +0100
++++ cvs-1.11.5-patched/src/client.c	2003-01-23 14:35:33.000000000 +0100
+@@ -134,6 +134,7 @@
+ 
+ static size_t try_read_from_server PROTO ((char *, size_t));
+ 
++static void proxy_connect PROTO ((cvsroot_t *, int));
+ static void auth_server PROTO ((cvsroot_t *, struct buffer *, struct buffer *,
+ 				int, int, struct hostent *));
+ 
+@@ -3884,7 +3885,7 @@
+     int port_number;
+     struct sockaddr_in client_sai;
+     struct hostent *hostinfo;
+-    struct buffer *to_server, *from_server;
++    struct buffer *local_to_server, *local_from_server;
+ 
+     sock = socket (AF_INET, SOCK_STREAM, 0);
+     if (sock == -1)
+@@ -3892,7 +3893,17 @@
+ 	error (1, 0, "cannot create socket: %s", SOCK_STRERROR (SOCK_ERRNO));
+     }
+     port_number = get_cvs_port_number (root);
+-    hostinfo = init_sockaddr (&client_sai, root->hostname, port_number);
++
++    /* if we have a proxy connect to that instead */
++    if (root->proxy)
++    {
++	hostinfo = init_sockaddr (&client_sai, root->proxy, root->proxy_port);
++    }
++    else
++    {
++	hostinfo = init_sockaddr (&client_sai, root->hostname, port_number);
++    }
++
+     if (trace)
+     {
+ 	fprintf (stderr, " -> Connecting to %s(%s):%d\n",
+@@ -3902,29 +3913,41 @@
+     if (connect (sock, (struct sockaddr *) &client_sai, sizeof (client_sai))
+ 	< 0)
+ 	error (1, 0, "connect to %s(%s):%d failed: %s",
+-	       root->hostname,
++	       root->proxy ? root->proxy : root->hostname,
+ 	       inet_ntoa (client_sai.sin_addr),
+-	       port_number, SOCK_STRERROR (SOCK_ERRNO));
++	       root->proxy ? root->proxy_port : port_number,
++	       SOCK_STRERROR (SOCK_ERRNO));
+ 
+-    make_bufs_from_fds (sock, sock, 0, &to_server, &from_server, 1);
++    make_bufs_from_fds (sock, sock, 0, &local_to_server, &local_from_server, 1);
+ 
+-    auth_server (root, to_server, from_server, verify_only, do_gssapi, hostinfo);
++    if (root->proxy)
++    {
++    	// REALLY ugly hack to allow proxy_connect() to use send_to_server().
++    	// The proper fix would be to remove the global to_server & from_server
++    	// variables, and instead let send_to_server() etc. take the target
++    	// server struct as a paramter.
++	to_server = local_to_server;
++	from_server = local_from_server;
++	proxy_connect (root, port_number);
++    }
++
++    auth_server (root, local_to_server, local_from_server, verify_only, do_gssapi, hostinfo);
+ 
+     if (verify_only)
+     {
+ 	int status;
+ 
+-	status = buf_shutdown (to_server);
++	status = buf_shutdown (local_to_server);
+ 	if (status != 0)
+ 	    error (0, status, "shutting down buffer to server");
+-	buf_free (to_server);
+-	to_server = NULL;
++	buf_free (local_to_server);
++	local_to_server = NULL;
+ 
+-	status = buf_shutdown (from_server);
++	status = buf_shutdown (local_from_server);
+ 	if (status != 0)
+ 	    error (0, status, "shutting down buffer from server");
+-	buf_free (from_server);
+-	from_server = NULL;
++	buf_free (local_from_server);
++	local_from_server = NULL;
+ 
+ 	/* Don't need to set server_started = 0 since we don't set it to 1
+ 	 * until returning from this call.
+@@ -3932,8 +3955,8 @@
+     }
+     else
+     {
+-	*to_server_p = to_server;
+-	*from_server_p = from_server;
++	*to_server_p = local_to_server;
++	*from_server_p = local_from_server;
+     }
+ 
+     return;
+@@ -3942,6 +3965,46 @@
+ 
+ 
+ static void
++proxy_connect (root, port_number)
++    cvsroot_t *root;
++    int port_number;
++{
++#define CONNECT_STRING "CONNECT %s:%d HTTP/1.0\r\n\r\n"
++    /* Send a "CONNECT" command to proxy: */
++    char* read_buf;
++    int codenum, count;
++    
++    /* 4 characters for port covered by the length of %s & %d */
++    char* write_buf = xmalloc (strlen (CONNECT_STRING) + strlen (root->hostname) + 20 + 1);
++    int len = sprintf (write_buf, CONNECT_STRING, root->hostname, port_number);
++    send_to_server (write_buf, len);
++    
++    /* Wait for HTTP status code, bail out if you don't get back a 2xx code.*/
++    count = read_line (&read_buf);
++    sscanf (read_buf, "%s %d", write_buf, &codenum);
++    
++    if ((codenum / 100) != 2)
++	error (1, 0, "proxy server %s:%d does not support http tunnelling",
++	       root->proxy, root->proxy_port);
++    free (read_buf);
++    free (write_buf);
++    
++    /* Skip through remaining part of MIME header, recv_line
++       consumes the trailing \n */
++    while(read_line (&read_buf) > 0)
++    {
++	if (read_buf[0] == '\r' || read_buf[0] == 0)
++	{
++	    free (read_buf);
++	    break;
++	}
++	free (read_buf);
++    }
++}
++
++
++
++static void
+ auth_server (root, lto_server, lfrom_server, verify_only, do_gssapi, hostinfo)
+     cvsroot_t *root;
+     struct buffer *lto_server;
+diff -ru cvs-1.11.5/src/client.h cvs-1.11.5-patched/src/client.h
+--- cvs-1.11.5/src/client.h	2001-05-06 02:02:37.000000000 +0200
++++ cvs-1.11.5-patched/src/client.h	2003-01-21 19:11:14.000000000 +0100
+@@ -67,6 +67,9 @@
+ #   ifndef CVS_AUTH_PORT
+ #     define CVS_AUTH_PORT 2401
+ #   endif /* CVS_AUTH_PORT */
++#   ifndef CVS_PROXY_PORT
++#     define CVS_PROXY_PORT 80
++#   endif /* CVS_PROXY_PORT */
+ # endif /* AUTH_CLIENT_SUPPORT */
+ 
+ # if HAVE_KERBEROS
+diff -ru cvs-1.11.5/src/root.c cvs-1.11.5-patched/src/root.c
+--- cvs-1.11.5/src/root.c	2002-12-06 20:10:28.000000000 +0100
++++ cvs-1.11.5-patched/src/root.c	2003-01-21 19:11:14.000000000 +0100
+@@ -295,6 +295,8 @@
+ #ifdef CLIENT_SUPPORT
+     newroot->isremote = 0;
+ #endif /* CLIENT_SUPPORT */
++    newroot->proxy = NULL;
++    newroot->proxy_port = CVS_PROXY_PORT;
+ 
+     return newroot;
+ }
+@@ -320,6 +322,8 @@
+ 	free (root->hostname);
+     if (root->directory != NULL)
+ 	free (root->directory);
++    if (root->proxy != NULL)
++	free (root->proxy);
+     free (root);
+ }
+ 
+@@ -361,6 +365,7 @@
+ 					 */
+     char *cvsroot_copy, *p, *q;		/* temporary pointers for parsing */
+     int check_hostname, no_port, no_password;
++    const char *env_var;
+ 
+     /* allocate some space */
+     newroot = new_cvsroot_t();
+@@ -514,6 +519,28 @@
+ 	/* restore the '/' */
+ 	cvsroot_copy = firstslash;
+ 	*cvsroot_copy = '/';
++
++	
++	/* Determine proxy */
++	env_var = getenv("CVS_PROXY");
++	if (!env_var)
++	    env_var = getenv("HTTP_PROXY");
++	/* Check if a proxy was specified, and if it is a HTTP proxy */
++	if (env_var && !memcmp(env_var, "http://", 7))
++	{
++	    char *port_str;
++	    
++	    /* Try to parse the proxy data */
++	    env_var += 7;
++	    /* TODO - parse username/password data, too */
++	    port_str = strchr(env_var, ':');
++	    if (port_str)
++	    {
++		*port_str++ = 0;
++		newroot->proxy_port = atoi(port_str);
++	    }
++	    newroot->proxy = xstrdup(env_var);
++	}
+     }
+ 
+     /* parse the path for all methods */
+diff -ru cvs-1.11.5/src/root.h cvs-1.11.5-patched/src/root.h
+--- cvs-1.11.5/src/root.h	2001-05-04 18:36:34.000000000 +0200
++++ cvs-1.11.5-patched/src/root.h	2003-01-21 19:11:14.000000000 +0100
+@@ -34,4 +34,6 @@
+ #ifdef CLIENT_SUPPORT
+     unsigned char isremote;	/* nonzero if we are doing remote access */
+ #endif /* CLIENT_SUPPORT */
++	char *proxy;
++	int proxy_port;
+ } cvsroot_t;
