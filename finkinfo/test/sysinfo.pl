@@ -265,7 +265,6 @@ sub build_output {
   if ($DEV2) {
     $out .= " %B|%O $DEVTYPE2: In: %B$PACKIN2%O Out: %B$PACKOUT2%O";
   }
-  $out .= "\n";
 }
 
 sub get_osxinfo {
@@ -372,23 +371,22 @@ sub build_finkout {
     $out .= " %B|%O Tools Build: %B$TOOLBUILD%O";
     $out .= " %B|%O GCC Version: %B$GCCVERS%O";
   }
-  $out .= "\n";
 }
 
 sub display_uptime {
   get_uname();    
 
   unless ($UNAME =~ /^darwin/i) {
-    $out = "System Unsupported, install Darwin and try again...\n";
-    IRC::command($out);
+    $out = "System Unsupported, install Darwin and try again...";
+    IRC::command("/say $out");
     return 1;
   }
 
   get_uptime();
 
-  $out = "My current uptime is %B$UPTIME%O".".\n";
+  $out = "My current uptime is %B$UPTIME%O".".";
 
-  IRC::command($out);
+  IRC::command("/say $out");
   return 0;
 }
 
@@ -396,14 +394,14 @@ sub display_fink {
   get_uname();
 
   unless ($UNAME =~ /^darwin/i) {
-    $out = "System Unsupported, install Darwin and try again...\n";
-    IRC::command($out);
+    $out = "System Unsupported, install Darwin and try again...";
+    IRC::command("/say $out");
     return 1;
   }
 
   unless (-f $BASEPATH."/bin/fink") {
-    $out = "Fink Not Installed, you can get Fink at http:\/\/fink.sf.net\/\n";
-    IRC::command($out);
+    $out = "Fink Not Installed, you can get Fink at http://fink.sf.net/";
+    IRC::command("/say $out");
     return 1;
   }
 
@@ -418,7 +416,7 @@ sub display_fink {
 
   build_finkout();
 
-  IRC::command($out);
+  IRC::command("/say $out");
   return 0;
 }
 
@@ -426,8 +424,8 @@ sub display_info {
   get_uname();
 
   unless ($UNAME =~ /^darwin/i) {
-    $out = "System Unsupported, install Darwin and try again...\n";
-    IRC::command($out);
+    $out = "System Unsupported, install Darwin and try again...";
+    IRC::command("/say $out");
     return 1;
   }
 
@@ -441,6 +439,6 @@ sub display_info {
 
   build_output();
 
-  IRC::command($out);
+  IRC::command("/say $out");
   return 0;
 }
