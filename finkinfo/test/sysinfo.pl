@@ -121,6 +121,12 @@ sub disable_option {
 }
 
 sub LoadConfig {
+  unless (-e "$ENV{HOME}/.xchat/sysinfo.conf") {
+    IRC::print "Configureation file not found in $ENV{HOME}/.xchat/\n";
+    IRC::print "Please create one by hand or use /showinfo and /saveinfo\n";
+    return 1;
+  }
+
   open (FD,"<$ENV{HOME}/.xchat/sysinfo.conf");
   foreach(<FD>) {
     @values = split(/=/, $_);
