@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!/usr/bin/perl -w
 # -----------------------------------------------------------------
 # Darwin SysInfo for X-Chat
 # Available at http://www.southofheaven.net/DarwinSysInfo/
@@ -9,8 +9,8 @@
 # -----------------------------------------------------------------
 
 my $out;
-my ($ENABLEDEV1, $ENABLEDEV2, $ENABLEPPP, $ENABLEFINK, $ENABLERES);
-my ($DEV1, $DEV1NAME, $DEV2, $DEV2NAME, $PPP, $PPPNAME);
+my ($ENABLEDEV1, $ENABLEDEV2, $ENABLEPPP, $ENABLEFINK, $ENABLERES, $ENABLEXMMS);
+my ($DEV1, $DEV1NAME, $DEV2, $DEV2NAME, $PPP, $PPPNAME, $DISPLAYLEVEL);
 my $BASEPATH;
 my $UNAME;
 my ($ARCH, $TYPE, $MODEL, $NUM, $CPU);
@@ -26,7 +26,7 @@ my ($FINKVERS, $DISTVERS, $FINKPKGS, $FINKTREE);
 my ($DEVTOOLS, $TOOLVERS, $TOOLBUILD, $GCCVERS);
 
 my $configfile = "$ENV{HOME}/.xchat/darwininfo.conf";
-my $version = "0.3";
+my $version = "0.4.0";
 my $scriptname = "Darwin SysInfo";
 
 IRC::print "\n\0034Loading\003\002 $scriptname $version Script\002\n";
@@ -36,18 +36,18 @@ LoadConfig();
 
 IRC::register("$scriptname", "$version", "", "");
 
-IRC::add_command_handler("infoload", LoadConfig);
-IRC::add_command_handler("infosave", SaveConfig);
-IRC::add_command_handler("infoshow", ShowConfig);
-IRC::add_command_handler("infohelp", info_help);
-IRC::add_command_handler("sys", display_info);
-IRC::add_command_handler("up", display_uptime);
-IRC::add_command_handler("fink", display_fink);
-IRC::add_command_handler("playing", display_song);
+IRC::add_command_handler("infoload", "LoadConfig");
+IRC::add_command_handler("infosave", "SaveConfig");
+IRC::add_command_handler("infoshow", "ShowConfig");
+IRC::add_command_handler("infohelp", "info_help");
+IRC::add_command_handler("sys", "display_info");
+IRC::add_command_handler("up", "display_uptime");
+IRC::add_command_handler("fink", "display_fink");
+IRC::add_command_handler("playing", "display_song");
 
-IRC::add_command_handler("enable", enable_option);
-IRC::add_command_handler("disable", disable_option);
-IRC::add_command_handler("conf", conf_options);
+IRC::add_command_handler("enable", "enable_option");
+IRC::add_command_handler("disable", "disable_option");
+IRC::add_command_handler("conf", "conf_options");
 
 sub info_help {
   IRC::print "\n";                           
@@ -69,8 +69,8 @@ sub info_help {
   IRC::print "           3 = 1 and 2";
   IRC::print "\n";                           
   IRC::print "   \002Script Functions\002\n";
-  IRC::print "      \002/infoload\002 - Reload configuration from $config\n";
-  IRC::print "      \002/infosave\002 - Saves configuration to $config\n";
+  IRC::print "      \002/infoload\002 - Reload configuration from $configfile\n";
+  IRC::print "      \002/infosave\002 - Saves configuration to $configfile\n";
   IRC::print "      \002/infohelp\002 - Display this help information\n";
   IRC::print "      \002/enable\002   - Enables an option\n";
   IRC::print "           \002Usage:\002 /enable <option>\n";
@@ -135,8 +135,8 @@ sub disable_option {
 }
 
 sub set_option {
-  $option = shift;
-  $func = shift;
+  my $option = shift;
+  my $func = shift;
 
   if ($option =~ m/fink/i) {
     if ($func =~ m/enable/i) {
@@ -241,6 +241,7 @@ sub LoadDefaults {
 }
 
 sub LoadConfig {
+  my @values;
   unless (-e "$configfile") {
     LoadDefaults();
     return 1;
@@ -249,7 +250,9 @@ sub LoadConfig {
   open (FD,"<$configfile");
   foreach(<FD>) {
     @values = split(/=/, $_);
-    chomp($values[1]);
+    if ($values[1]) {
+      chomp($values[1]);
+    }
     if ($values[0] eq "enabledev1") {
       $ENABLEDEV1 = $values[1];
     } elsif ($values[0] eq "dev1") {
@@ -655,9 +658,9 @@ sub get_devinfo {
   my ($infoline, $value);
 
   if (-e "/Developer") {
-    $DEVTOOL = "Installed";
+    $DEVTOOLS = "Installed";
   } else {
-    $DEVTOOL = "N/A";
+    $DEVTOOLS = "N/A";
   }
 
   foreach $infoline (@dev_vers) {
@@ -687,8 +690,8 @@ sub build_finkout {
   $out .= " \002|\002 Distribution: \002$DISTVERS\002";
   $out .= " \002|\002 Packages Installed: \002$FINKPKGS\002";                      
   $out .= " \002|\002 Trees: \002$FINKTREE\002";
-  $out .= " \002|\002 Dev Tools: \002$DEVTOOL\002";
-  if ($DEVTOOLS = "installed") {
+  $out .= " \002|\002 Dev Tools: \002$DEVTOOLS\002";
+  if ($DEVTOOLS =~ m/installed/i) {
     $out .= " \002|\002 Tools Version: \002$TOOLVERS\002";
     $out .= " \002|\002 Tools Build: \002$TOOLBUILD\002";
     $out .= " \002|\002 GCC Version: \002$GCCVERS\002";
@@ -756,9 +759,9 @@ sub get_song {
   if (($DISPLAYLEVEL == 1) || ($DISPLAYLEVEL == 3)) {
     if ($inf_freq ne "") {
       if ($inf_stereo == 1) {
-        $out .= " (\002$inf_freq\KHz\002/\002$inf_bitrate\Kbs\002/\002ST\002)";
+        $out .= " (\002$inf_freq\\KHz\002/\002$inf_bitrate\\Kbs\002/\002ST\002)";
       } else {
-        $out .= " (\002$inf_freq\KHz\002/\002$inf_bitrate\Kbs\002/\002Mon\002)";
+        $out .= " (\002$inf_freq\\KHz\002/\002$inf_bitrate\\Kbs\002/\002Mon\002)";
       }
     }
   }
@@ -827,8 +830,7 @@ sub display_info {
   get_uname();
 
   unless ($ENABLEXMMS =~ m/true/i) {
-    IRC::print "\0034XMMS reporting is currently disabled, /enable xmms to enabl
-e it.\0034\n";
+    IRC::print "\0034XMMS reporting is currently disabled, /enable xmms to enable it.\0034\n";
     return 1;
   }
 
@@ -863,22 +865,21 @@ sub display_song {
     return 1;
   }
 
-  unless (eval { require Xmms; 1; }) {
-    IRC::print "\0034Install Xmmm.pm then try again!\n\0034";
-    return 1;
-  }
-  unless (eval { require MP3::Info; 1; }) {
-    IRC::print "\0034Install MP3::Info.pm then try again!\n\0034";
+  eval { require Xmms; require Xmms::Remote;};
+  if ($@) {
+    IRC::print "\0034Install Xmms:: from CPAN then try again!\n\0034";
     return 1;
   }
 
-  use Xmms ();
-  use Xmms::Remote ();
-  use Xmms::Config ();
-  use MP3::Info;
-  use MP3::Info qw(:genres);
-  use MP3::Info qw(:DEFAULT :genres);
-  use MP3::Info qw(:all);
+  eval { require MP3::Info; };
+  if ($@) {
+    IRC::print "\0034Install MP3::Info from CPAN then try again!\n\0034";
+    return 1;
+  } else {
+    import MP3::Info qw(:genres);
+    import MP3::Info qw(:DEFAULT :genres);
+    import MP3::Info qw(:all);
+  }
 
   get_song();
 
