@@ -685,7 +685,11 @@ sub get_devinfo {
 
     my $infoline;
     my @gcc_vers = `cc --version`;
-    my @dev_vers = `cat \"/Developer/Applications/Project\ Builder.app/Contents/Resources/English.lproj/DevCDVersion.plist\"`;
+    if (-d "/Developer/Applications/Project\ Builder.app") {
+        my @dev_vers = `cat \"/Developer/Applications/Project\ Builder.app/Contents/Resources/English.lproj/DevCDVersion.plist\"`;
+    } else {
+        my @dev_vers = `cat \"/Developer/Applications/Xcode.app/Contents/Resources/DevCDVersion.plist\"`;
+    }
 
     foreach $infoline (@dev_vers) {
       chomp($infoline);
