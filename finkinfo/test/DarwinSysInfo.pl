@@ -10,7 +10,8 @@
 # -----------------------------------------------------------------
 
 my $out;
-my ($ENABLEDEV1, $ENABLEDEV2, $ENABLEPPP, $ENABLEFINK, $ENABLERES, $ENABLEXMMS);
+my ($player, $song_name);
+my ($ENABLEDEV1, $ENABLEDEV2, $ENABLEPPP, $ENABLEFINK, $ENABLERES, $ENABLEXMMS, $ENABLEITUNES);
 my ($DEV1, $DEV1NAME, $DEV2, $DEV2NAME, $PPP, $PPPNAME, $DISPLAYLEVEL);
 my $BASEPATH;
 my $UNAME;
@@ -99,7 +100,7 @@ sub conf_options {
   my $value = $args[1];
 
   if ($option =~ m/basepath/i) {
-    IRC::print "Base Path: $value\n";
+    IRC::print "Basepath: $value\n";
     $BASEPATH = $value;
   } elsif ($option =~ m/dev1name/i) {
     IRC::print "Device 1 Name: $value\n";
@@ -178,6 +179,12 @@ sub set_option {
     } else {
       $ENABLEXMMS = "false";
     }
+  } elsif ($option =~ m/itunes/i) {
+    if ($func =~ m/enable/i) {
+      $ENABLEITUNES = "true";
+    } else {
+      $ENABLEITUNES = "false";
+    }
   } elsif ($option =~ m/res/i) {
     if ($func =~ m/enable/i) {
       $ENABLERES = "true";
@@ -234,6 +241,9 @@ sub LoadDefaults {
   unless ($ENABLEXMMS) {
     $ENABLEXMMS = "false";
   }
+  unless ($ENABLEITUNES) {
+    $ENABLEITUNES = "false";
+  }
   unless ($DISPLAYLEVEL) {
     $DISPLAYLEVEL = "3";
   }
@@ -283,6 +293,8 @@ sub LoadConfig {
       $PPPNAME = $values[1];
     } elsif ($values[0] eq "enablexmms") {
       $ENABLEXMMS = $values[1];
+    } elsif ($values[0] eq "enableitunes") {
+      $ENABLEITUNES = $values[1];
     } elsif ($values[0] eq "enablefink") {
       $ENABLEFINK = $values[1];
     } elsif ($values[0] eq "basepath") {
@@ -317,6 +329,7 @@ sub SaveConfig {
     print(FD "ppp=$PPP\n");
     print(FD "pppname=$PPPNAME\n\n");
     print(FD "enablexmms=$ENABLEXMMS\n");
+    print(FD "enableitunes=$ENABLEITUNES\n");
     print(FD "displaylevel=$DISPLAYLEVEL\n\n");
     print(FD "enablefink=$ENABLEFINK\n");
     print(FD "basepath=$BASEPATH\n\n");
@@ -348,15 +361,16 @@ sub ShowConfig {
     IRC::print "      \002Device:\002 $PPP\n";
     IRC::print "      \002Name:\002 $PPPNAME\n";
   }
-  IRC::print "   \0034XMMS\0034\n";
-  IRC::print "      \002Enabled:\002 $ENABLEXMMS\n";
-  if ($ENABLEXMMS =~ m/true/i) {
+  IRC::print "   \0034Audio Display\0034\n";
+  IRC::print "      \002XMMS:\002 $ENABLEXMMS\n";
+  IRC::print "      \002iTunes:\002 $ENABLEITUNES\n";
+  if ($ENABLEXMMS =~ m/true/i || $ENABLEITUNES =~ m/true/i) {
     IRC::print "      \002Display Level:\002 $DISPLAYLEVEL\n";
   }
   IRC::print "   \0034Fink\0034\n";
   IRC::print "      \002Enabled:\002 $ENABLEFINK\n";
   if ($ENABLEFINK =~ m/true/i) {
-    IRC::print "      \002Base Path:\002 $BASEPATH\n";
+    IRC::print "      \002Basepath:\002 $BASEPATH\n";
   }
 
   return 1;
@@ -768,19 +782,17 @@ sub build_finkout {
   }
 }
 
-sub get_song {
+sub get_xmms_info {
   eval { require Xmms; require Xmms::Remote; };
   if ($@) {
-    IRC::print "\0034Install Xmms:: from CPAN then try again!\n\0034";
+    IRC::print "\0034Install Xmms:: from CPAN then try again!\0034";
     return 1;
   }
 
   my $remote = Xmms::Remote->new;
 
-  my ($no_tag);
-
   my $play_pos = $remote->get_playlist_pos;
-  my $song_name = $remote->get_playlist_title($play_pos);
+  $song_name = $remote->get_playlist_title($play_pos);
   my $song_time = $remote->get_playlist_timestr($play_pos);
   my $song_file = $remote->get_playlist_file($play_pos);
   unless (-e $song_file) {
@@ -790,30 +802,83 @@ sub get_song {
   my $pos_e = rindex ($song_file, ".");
   my $file_ext = substr ($song_file, $pos_e + 1);
   $file_ext =~ tr/a-z/A-Z/;
+  return 0;
+}
+
+sub get_itunes_info {
+  eval { require Mac::iTunes; require Mac::iTunes::Item; };
+  if ($@) {
+    IRC::print "\0034Install Mac::iTunes from CPAN then try again!\0034";
+    return 1;
+  }
+
+  ### FIXME only gets song title
+  my $controller = Mac::iTunes->new()->controller;
+  $song_name = $controller->current_track_name;
+
+  my $song_time = $controller::seconds;
+  my $song_file = $controller::file;
+  #unless (-e $song_file) {
+  #  IRC::print "\0034File: $song_file!\0034";
+  #  return 1;
+  #}
+
+  my $pos_e = rindex ($song_file, ".");
+  my $file_ext = substr ($song_file, $pos_e + 1);
+  $file_ext =~ tr/a-z/A-Z/;
+  return 0;
+}
+
+sub get_mp3_info {
+  eval { require MP3::Info; };
+  if ($@) {
+    IRC::print "\0034Install MP3::Info from CPAN then try again!\0034";
+    return 1;
+  } else {
+    import MP3::Info qw(:genres);
+    import MP3::Info qw(:DEFAULT :genres);
+    import MP3::Info qw(:all);
+  }
+  $tag = get_mp3tag($song_file) or $no_tag = 1;
+  $info = get_mp3info($song_file);
+  return 0;
+}
+
+sub get_mp4_info {
+  eval { require MP4::Info; };
+  if ($@) {
+    IRC::print "\0034Install MP4::Info from CPAN then try again!\0034";
+    return 1;
+  }
+  $tag = get_mp4tag($song_file) or $no_tag = 1;
+  $info = get_mp4info($song_file);
+  return 0;
+}
+
+sub get_song {
+  my ($no_tag, $tag, $info) = (0, 0, "");
+
+  if ($ENABLEXMMS =~ m/true/i) {
+    if (get_xmms_info()) {
+      return 1;
+    }
+    $player = "XMMS";
+  }
+
+  if ($ENABLEITUNES =~ m/true/i) {
+    if (get_itunes_info()) {
+      return 1;
+    }
+    $player = "iTunes";
+  }
 
   if ($file_ext eq "M4A") {
-    eval { require MP4::Info; };
-    if ($@) {
-      IRC::print "\0034Install MP4::Info from CPAN then try again!\n\0034";
-      return 1;
-    }
-    my $tag = get_mp4tag($song_file) or $no_tag = 1;
-    my $info = get_mp4info($song_file);
+    get_mp4_info();
   } elsif ($file_ext eq "MP3") {
-    eval { require MP3::Info; };
-    if ($@) {
-      IRC::print "\0034Install MP3::Info from CPAN then try again!\n\0034";
-      return 1;
-    } else {
-      import MP3::Info qw(:genres);
-      import MP3::Info qw(:DEFAULT :genres);
-      import MP3::Info qw(:all);
-    }
-    my $tag = get_mp3tag($song_file) or $no_tag = 1;
-    my $info = get_mp3info($song_file);
+    get_mp3_info();
   } else {
     my $tag = 0;
-    my $info = "";
+    my $notag = 2;
   }
   my $inf_freq = $info->{FREQUENCY};
   my $inf_bitrate = $info->{BITRATE};
@@ -854,7 +919,7 @@ sub get_song {
     }
   }
 
-  if ($song_time ne "0:00") {
+  if ($song_time ne "0:00" && $song_time) {
     $out .= " (\002$song_time\002)";
   }
   if (($DISPLAYLEVEL == 1) || ($DISPLAYLEVEL == 3)) {
@@ -963,8 +1028,8 @@ sub display_song {
     return 1;
   }
 
-  unless ($ENABLEXMMS =~ m/true/i) {
-    IRC::print "\0034XMMS reporting is currently disabled, /enable xmms to enable it.\0034\n";
+  unless ($ENABLEXMMS =~ m/true/i || $ENABLEITUNES =~ m/true/i) {
+    IRC::print "\0034XMMS and iTunes reporting is currently disabled, /enable xmms or /enable itunes to enable one.\0034\n";
     return 1;
   }
 
@@ -973,9 +1038,14 @@ sub display_song {
   if ($out == 1) {
     return 1;
   } elsif (length($out) < 5) {
-    IRC::print "\0034Must have XMMS running at least!\n";
+    if ($ENABLEXMMS =~ m/true/i) {
+      IRC::print "\0034Must have XMMS running at least!\n";
+    } elsif ($ENABLEITUNES =~ m/true/i) {
+      IRC::print "\0034Must have iTunes running at least!\n";
+    }
     return 1;
   }
-  IRC::command("/me plays $out in xmms.");
+
+  IRC::command("/me plays $out in $player.");
   return 1;
 }
