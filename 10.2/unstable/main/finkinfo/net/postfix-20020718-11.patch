@@ -1,0 +1,181 @@
+diff -ruN postfix-1.1.11-20020602.orig/conf/post-install postfix-1.1.11-20020602/conf/post-install
+--- postfix-1.1.11-20020602.orig/conf/post-install	2002-04-17 16:09:26.000000000 -0700
++++ postfix-1.1.11-20020602/conf/post-install	2002-06-09 12:39:50.000000000 -0700
+@@ -183,7 +183,7 @@
+ 
+ umask 022
+ 
+-PATH=/bin:/usr/bin:/usr/sbin:/usr/etc:/sbin:/etc:/usr/contrib/bin:/usr/gnu/bin:/usr/ucb:/usr/bsd
++PATH=@FINKPREFIX@/bin:@FINKPREFIX@/sbin:/bin:/usr/bin:/usr/sbin:/usr/etc:/sbin:/etc:/usr/contrib/bin:/usr/gnu/bin:/usr/ucb:/usr/bsd
+ SHELL=/bin/sh
+ IFS=" 	
+ "
+diff -ruN postfix-1.1.11-20020602.orig/mta-switch postfix-1.1.11-20020602/mta-switch
+--- postfix-1.1.11-20020602.orig/mta-switch	1969-12-31 16:00:00.000000000 -0800
++++ postfix-1.1.11-20020602/mta-switch	2002-06-09 11:39:31.000000000 -0700
+@@ -0,0 +1,148 @@
++#!/bin/sh
++
++# Moves /usr/sbin/sendmail out of the way for postfix install
++
++PREFIX="@FINKPREFIX@"
++
++function sendmailPointsToPostfix () {
++	if [ -L /usr/sbin/sendmail -a "`/bin/ls -l /usr/sbin/sendmail | sed -e 's|.* -> \(.*\)$|\1|'`x" == "${PREFIX}/sbin/sendmailx" ] ; then
++		return 0
++	else
++		return 1
++	fi
++}
++
++case "$1" in 
++	install|setup|enable|activate|start|postfix)
++		echo -n 'Checking if we need to move /usr/sbin/sendmail out of the way... '
++		
++		if sendmailPointsToPostfix ; then
++			echo 'no.'
++			echo 'Postfix is already in place.'
++		else
++			echo 'yes.'
++			
++			if [ -f /usr/sbin/sendmail.old ] ; then
++				echo -n '/usr/sbin/sendmail.old already exists. What would like to overwrite it [yN]? '
++				
++				read ANS
++				case "$ANS" in
++					y*|Y*)	rm -f /usr/sbin/sendmail.old || exit 1 ;;
++					*)		echo '/usr/sbin/sendmail.old in the way. Failed.' ; exit 1 ;;
++				esac
++			fi
++			
++			echo
++			echo 'Backing up the old sendmail to /usr/bin/sendmail.old.'
++			mv /usr/sbin/sendmail /usr/sbin/sendmail.old || exit 1
++			echo "Putting a link to Postfix's sendmail in its place."
++			ln -s "${PREFIX}/sbin/sendmail" /usr/sbin/sendmail || exit 1
++			echo 'Succeeded.'
++			echo
++			
++			if [ "x$2" == "x-n" ] ; then
++				echo 'Leaving /etc/hostconfig intact.'
++				exit;
++			fi
++			
++			echo 'Now we will take a crack at /etc/hostconfig.'
++			if grep '^[[:space:]]*MAILSERVER=-YES-' /etc/hostconfig > /dev/null ; then
++				#if [ -f /etc/hostconfig.old ] ; then
++				#	COUNTER=1
++				#	while [ -f /etc/hostconfig.old${COUNTER} ] ; do
++				#		COUNTER=`expr $COUNTER + 1` || exit 1
++				#	done
++				#else
++					COUNTER=""
++				#fi
++				
++				echo "Backing up /etc/hostconfig to /etc/hostconfig.old${COUNTER}."
++				cp -p /etc/hostconfig /etc/hostconfig.old${COUNTER} || exit 1
++				echo 'Turning off the default sendmail in /etc/hosconfig.'
++				sed -e 's/^\([[:space:]]*\)MAILSERVER=-YES-/\1MAILSERVER=-NO-/i' /etc/hostconfig.old${COUNTER} > /etc/hostconfig || exit 1
++				echo 'Succeeded.'
++			else
++				echo '/etc/hostconfig already has sendmail disabled.'
++			fi
++		fi
++		;;
++	
++	stop|remove|uninstall|delete|rm|disable|sendmail)
++		echo -n 'Checking if /usr/sbin/sendmail points to postfix... '
++		
++		if sendmailPointsToPostfix ; then
++			echo 'yes.'
++			
++			if [ ! -f /usr/sbin/sendmail.old ] ; then
++				echo '/usr/sbin/sendmail.old does not exist; cannot restore sendmail.'
++				exit 1;
++			fi
++			
++			echo
++			echo 'Replacing /usr/sbin/sendmail with sendmail.old'
++			mv /usr/sbin/sendmail.old /usr/sbin/sendmail || exit 1
++			echo 'Succeeded.'
++			echo
++			
++			if [ "x$2" == "x-n" ] ; then
++				echo 'Leaving /etc/hostconfig intact.'
++				exit;
++			fi
++			
++			echo 'Now we will take a crack at /etc/hostconfig.'
++			if grep '^[[:space:]]*MAILSERVER=-YES-' /etc/hostconfig > /dev/null ; then
++				echo 'Sendmail is already enabled in /etc/hostconfig.'
++			else
++				#if [ -f /etc/hostconfig.old ] ; then
++				#	COUNTER=1
++				#	while [ -f /etc/hostconfig.old${COUNTER} ] ; do
++				#		COUNTER=`expr $COUNTER + 1` || exit 1
++				#	done
++				#else
++					COUNTER=""
++				#fi
++				
++				echo "Backing up /etc/hostconfig to /etc/hostconfig.old${COUNTER}."
++				cp -p /etc/hostconfig /etc/hostconfig.old${COUNTER} || exit 1
++				
++				if ! grep '^[[:space:]]*MAILSERVER=' /etc/hostconfig > /dev/null ; then
++					echo '/etc/hostconfig does not include a MAILSERVER= line.'
++					echo -n 'Would you like to add one[Yn]? '
++					
++					ANS='?';
++					while [ $ANS == '?' ] ; do
++						read ANS
++						case "$ANS" in
++							y*|Y*)
++								echo 'MAILSERVER=-YES-' >> /etc/hostconfig || exit 1
++							;;
++							
++							n*|N*)
++								echo 'Leaving /etc/hostconfig as it is, removing backup.'
++								rm /etc/hostconfig.old${COUTNER} || exit 1
++							;;
++							
++							*)
++								ANS='?'
++							;;
++						esac
++					done
++				else
++					echo 'Turning on the default sendmail in /etc/hosconfig.'
++					sed -e 's/^\([[:space:]]*\)MAILSERVER=-NO-/\1MAILSERVER=-YES-/i' /etc/hostconfig.old${COUNTER} > /etc/hostconfig || exit 1
++					echo 'Succeeded.'
++				fi
++			fi
++		else
++			echo 'no.'
++			echo 'Not making any changes.'
++		fi
++		;;
++	
++	*)	echo 'mta-switch -- Switches between postfix and sendmail'
++		echo 'usage: mta-switch {postfix|sendmail} [-n]'
++		echo '    -n turns off modifcation of /etc/hostconfig'
++		exit 1
++		;;
++esac
++
+diff -ruN postfix-1.1.11-20020602.orig/src/util/sys_defs.h postfix-1.1.11-20020602/src/util/sys_defs.h
+--- postfix-1.1.11-20020602.orig/src/util/sys_defs.h	2002-04-15 14:56:08.000000000 -0700
++++ postfix-1.1.11-20020602/src/util/sys_defs.h	2002-06-09 12:34:59.000000000 -0700
+@@ -88,10 +88,10 @@
+ #define HAS_FSYNC
+ #define HAS_DB
+ #define HAS_SA_LEN
+-#define DEF_DB_TYPE	"hash"
+-#define ALIAS_DB_MAP	"hash:/etc/aliases"
++#define DEF_DB_TYPE	"db"
++#define ALIAS_DB_MAP	"netinfo:/aliases"
+ #define GETTIMEOFDAY(t) gettimeofday(t,(struct timezone *) 0)
+-#define ROOT_PATH	"/bin:/usr/bin:/sbin:/usr/sbin"
++#define ROOT_PATH	"@FINKPREFIX@/bin:@FINKPREFIX@/sbin:/bin:/usr/bin:/sbin:/usr/sbin"
+ #define USE_STATFS
+ #define STATFS_IN_SYS_MOUNT_H
+ #define HAS_POSIX_REGEXP
