@@ -64,7 +64,7 @@ sub info_help {
   IRC::print "      \002/sys\002 - display system stats and information\n";
   IRC::print "      \002/up\002  - display current system uptime\n";
   IRC::print "\n";                           
-  IRC::print "   \002Fink Functions\002 \0034NOTE: Requires and valid install of Fink http://fink.sourceforge.net/\0034\n";
+  IRC::print "   \002Fink Functions\002 \0034NOTE: Requires and valid install of Fink http://fink.sf.net/\0034\n";
   IRC::print "      \002/fink\002 - display fink stats and information\n";
   IRC::print "\n";                           
   IRC::print "   \002XMMS Functions\002 \0034NOTE: Requires xmms and mp3-info perl modules\0034\n";
@@ -381,12 +381,14 @@ sub get_cpu {
   my $truetype;
   if ($TYPE eq "750") {
     $truetype = "G3";
+  } elsif ($TYPE eq "970") {
+    $truetype = "G5";
   } else {
     $truetype = $TYPE;
   }
 
   chomp($NUM=`sysctl hw.ncpu`);
-  $NUM =~ s/hw.ncpu = //;
+  $NUM =~ s/hw.ncpu[ =|:] //;
   if ($NUM eq 1 ) {
     $MODEL = "$ARCH/$truetype";
   } elsif ($NUM eq 2) {
@@ -398,9 +400,9 @@ sub get_cpu {
   }
 
   chomp($CPU = `ioreg -n $ARCH,$TYPE | grep '"clock-frequency" ='`);
-  if ($CPU =~ /.*[<](.+)[>].*/) {
+  if ($CPU =~ /\s*\<(.+)\>\s*/) {
     $CPU = hex($1)/1000000;
-    if ($CPU gt 999) {
+    if (int($CPU) > 999) {
       $CPU = sprintf("%.0fGHz", $CPU/1000);
     } else {
       $CPU = sprintf("%.0fMHz", $CPU);
@@ -828,7 +830,7 @@ sub display_fink {
   }
 
   unless (-f $BASEPATH."/bin/fink") {
-    IRC::print "\0034Fink Not Installed, you can get Fink at http://fink.sourceforge.net/\0034\n";
+    IRC::print "\0034Fink Not Installed, you can get Fink at http://fink.sf.net/\0034\n";
     IRC::print "\0034Or your base path is incorrectly set, /conf basepath <location>\0034\n";
     return 1;
   }
