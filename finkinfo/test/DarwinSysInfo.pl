@@ -24,6 +24,7 @@ my $UPTIME;
 my ($OSX, $OSXVERS, $OSXBUILD);
 my ($FINKVERS, $DISTVERS, $FINKPKGS, $FINKTREE);
 my ($DEVTOOLS, $TOOLVERS, $TOOLBUILD, $GCCVERS);
+
 my $configfile = "$ENV{HOME}/.xchat/darwininfo.conf";
 my $version = "0.3";
 my $scriptname = "Darwin SysInfo";
@@ -42,6 +43,7 @@ IRC::add_command_handler("infohelp", info_help);
 IRC::add_command_handler("sys", display_info);
 IRC::add_command_handler("up", display_uptime);
 IRC::add_command_handler("fink", display_fink);
+IRC::add_command_handler("playing", display_song);
 
 IRC::add_command_handler("enable", enable_option);
 IRC::add_command_handler("disable", disable_option);
@@ -693,6 +695,81 @@ sub build_finkout {
   }
 }
 
+sub get_song {
+  my $remote = Xmms::Remote->new;
+
+  my ($no_tag, $file_ext);
+
+  my $play_pos = $remote->get_playlist_pos;
+  my $song_name = $remote->get_playlist_title($play_pos);
+  my $song_time = $remote->get_playlist_timestr($play_pos);
+  my $song_file = $remote->get_playlist_file($play_pos);
+  my $tag = get_mp3tag($song_file) or $no_tag = 1;
+  my $info = get_mp3info($song_file);
+  my $inf_freq = $info->{FREQUENCY};
+  my $inf_bitrate = $info->{BITRATE};
+  my $inf_stereo = $info->{STEREO};
+  my $inf_title = $tag->{TITLE};
+  my $inf_artist = $tag->{ARTIST};
+  my $inf_album = $tag->{ALBUM};
+  my $inf_genre = $tag->{GENRE};
+
+  my $play_pos_disp = $play_pos+1;
+
+  $out = "\002$inf_artist\002 - \002$inf_title\002";
+
+  if (($inf_artist ne "") || ($inf_title ne "")) {
+    $no_tag = 0;
+  }
+  if (($inf_artist eq "") || ($inf_title eq "")) {
+    $no_tag = 2;
+    my $pos_s = rindex ($song_file, "/");
+    $pos_s++;
+    my $pos_e = rindex ($song_file, ".");
+    my $len_e = length ($song_file) - $pos_e + 1;
+    my $len_s = length ($song_file) - $pos_s - $len_e + 1;
+    my $leng = length ($song_file);
+    $file_ext = substr ($song_file, $pos_e + 1);
+    $file_ext =~ tr/a-z/A-Z/;
+    $song_file = substr ($song_file, $pos_s, $len_s);
+  }
+  if ($no_tag == 1) {
+    $out = "\002$song_name\002";
+  }
+  if ($no_tag == 2) {
+    $out = "\002$song_file\002";
+    if (($song_file eq "") && ($song_name ne "")) {
+      $out = "\002$song_name\002";
+    }
+    if (($file_ext ne "MP3") && ($file_ext ne "MP2") &&
+        ($file_ext ne "MPG") && ($song_name ne "")) {
+      $out = "\002$song_name\002 (\002$file_ext\002)";
+    }
+  }
+
+  if ($song_time ne "0:00") {
+    $out .= " (\002$song_time\002)";
+  }
+  if (($DISPLAYLEVEL == 1) || ($DISPLAYLEVEL == 3)) {
+    if ($inf_freq ne "") {
+      if ($inf_stereo == 1) {
+        $out .= " (\002$inf_freq\KHz\002/\002$inf_bitrate\Kbs\002/\002ST\002)";
+      } else {
+        $out .= " (\002$inf_freq\KHz\002/\002$inf_bitrate\Kbs\002/\002Mon\002)";
+      }
+    }
+  }
+  if (($DISPLAYLEVEL == 2) || ($DISPLAYLEVEL == 3)) {
+    if ($inf_album ne "") {
+      $out .= " (Album: \002$inf_album\002)";
+    }
+    if (($inf_genre ne "") && ($inf_genre ne "Other") &&
+        ($inf_genre ne "genre")) {
+      $out .= " (Genre: \002$inf_genre\002)";
+    }
+  }
+}
+
 sub display_uptime {
   get_uname();    
 
@@ -746,6 +823,12 @@ sub display_fink {
 sub display_info {
   get_uname();
 
+  unless ($ENABLEXMMS =~ m/true/i) {
+    IRC::print "\0034XMMS reporting is currently disabled, /enable xmms to enabl
+e it.\0034\n";
+    return 1;
+  }
+
   unless ($UNAME =~ m/darwin/i) {
     IRC::print "\0034System Unsupported, install Darwin and try again...\0034";
     return 1;
@@ -765,5 +848,37 @@ sub display_info {
   build_output();
 
   IRC::command("/say $out");
+  return 1;
+}
+
+sub display_song {
+  get_uname();
+
+  unless ($UNAME =~ m/darwin/i) {
+
+    IRC::print "\0034System Unsupported, install Darwin and try again...\0034";
+    return 1;
+  }
+
+  unless (eval { require Xmms; 1; }) {
+    IRC::print "\0034Install Xmmm.pm then try again!\n\0034";
+    return 1;
+  }
+  unless (eval { require MP3::Info; 1; }) {
+    IRC::print "\0034Install MP3::Info.pm then try again!\n\0034";
+    return 1;
+  }
+
+  use Xmms ();
+  use Xmms::Remote ();
+  use Xmms::Config ();
+  use MP3::Info;
+  use MP3::Info qw(:genres);
+  use MP3::Info qw(:DEFAULT :genres);
+  use MP3::Info qw(:all);
+
+  get_song();
+
+  IRC::command("/me Plays $out");
   return 1;
 }
