@@ -25,7 +25,7 @@ my $DEVTYPE, $DEVTYPE2, $PACKIN, $PACKIN2, $PACKOUT, $PACKOUT2;
 my $RES;
 my $HDD, $HDDFREE;
 my $PROCS;
-my $UPTIME;
+my $UPTIM, $DAYSE;
 
 IRC::register("Darwin SysInfo", "0.2", "", "");
 IRC::print "Loading Darwin SysInfo Script";
@@ -177,8 +177,15 @@ sub get_procs {
 sub get_uptime {
   $UPTIME = `uptime`;
   chop ($UPTIME);
-  $UPTIME =~ /.*up.?.?([0-9].+),.+[0-9]+ user/;
-  $UPTIME = $1;
+  $UPTIME =~ /.*up (.+),.+[0-9]+ user/;
+  $DAYS = $1;
+  if ($DAYS =~ /.?(.+).?days, (.+):(.+)/) {
+    $UPTIME = sprintf("%sd, %dh, %dm", $1, $2, $3);
+  } elsif ($DAYS =~ /.?.?(.+):(.+)/) {
+    $UPTIME = sprintf("%dh, %dm", $1, $2);
+  } else {
+    $UPTIME = "Not Currently Available ($DAYS)";
+  }
 }
 
 sub build_output {
