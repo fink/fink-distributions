@@ -1676,7 +1676,12 @@ sub real_install {
 						$package->phase_unpack();
 						$package->phase_patch();
 						$package->set_buildlock();
-						$SIG{__DIE__} = sub { $^S && ref($config->get_option('BuildLock')) && $config->get_option('BuildLock')->clear_buildlock() };
+						$SIG{__DIE__} =
+							sub {
+								$^S   # skip parser errors and die() in eval{}
+									&&
+								$package->clear_buildlock();
+							};  # clear buildlock if we crash while building
 						$package->phase_compile();
 						$package->phase_install();
 						$SIG{__DIE__} = 'DEFAULT';

@@ -42,7 +42,7 @@ use Fink::Command qw(mkdir_p rm_f rm_rf symlink_f du_sk);
 
 use File::Basename qw(&dirname &basename);
 
-use POSIX qw(uname);
+use POSIX qw(uname strftime);
 
 use strict;
 use warnings;
@@ -2677,16 +2677,19 @@ sub set_buildlock {
 			die "can't create directory for control files for package $lockpkg\n";
 	}
 
+	my $timestamp = strftime "%Y.%m.%d-%H.%M.%S", localtime;
+
 	# generate dpkg "control" file
 
 	my $control = <<EOF;
 Package: $lockpkg
 Source: fink
-Version: 0-0
+Version: $timestamp
 Section: unknown
 Installed-Size: 0
 Architecture: $debarch
-Description: Lockfile functionality while compiling
+Description: Package compile-time lockfile
+Maintainer: Fink Core Group <fink-core\@lists.sourceforge.net>
 Provides: fink-buildlock
 EOF
 
@@ -2695,11 +2698,11 @@ EOF
 
 	# BuildConflicts of pkg are Conflicts of lockpkg
 	if ($parent->has_param('BuildConflicts')) {
-		$control .= "Conflicts: " . &collapse_space($parent->pkglist('BuildConflicts')) . "\n";
+		$control .= 'Conflicts: ' . &collapse_space($parent->pkglist('BuildConflicts')) . "\n";
 	}
 
 	# All *Depends of pkg are Depends of lockpkg
-	my @depends = [];
+	my @depends = ( [] );
 	foreach my $field (qw(Depends Pre-Depends BuildDepends)) {
 		if ($self->has_pkglist($field)) {
 			push @depends, @{&pkglist2lol($self->pkglist($field))};
@@ -2707,8 +2710,7 @@ EOF
 	}
 
 	# remove pkgs being built now from list (avoid chicken-and-egg)
-	foreach my $buildpkg ( map {$_->get_name()} $self->get_splitoffs(1,1) ) {
-		my $pkgregex = qr('\A\Q'.$buildpkg.'\E(\Z|\s+\()'); # name in a pkglist atom
+	foreach my $pkgregex ( map { quotemeta($_->get_name()).'(?:\Z|\s*\()' } $self->get_splitoffs(1,1) ) {
 		foreach my $deplist (@depends) {
 			# nuke the whole OR cluster if any atom matches
 			# ($deplist is the listref value from @depends so changing
@@ -2719,22 +2721,17 @@ EOF
 	}
 
 	# make sure we keep a fink that knows about build locking!
-	unshift @depends, 'fink (>= 0.23.1-1.dmacks)';
+	unshift @depends, [ 'fink (>= 0.23.1.cvs)' ];
 
-	$control .= "Depends: " . &lol2pkglist(\@depends);
+	$control .= 'Depends: ' . &lol2pkglist(\@depends) . "\n";
 
 	### write "control" file
 	open(CONTROL,">$destdir/DEBIAN/control") or die "can't write control file for $lockpkg: $!\n";
 	print CONTROL $control;
 	close(CONTROL) or die "can't write control file for $lockpkg: $!\n";
 
-	### create .deb using dpkg-deb (directly in pool directory b/c no section)
-	my $debpath = "$basepath/fink/debs";
-	if (not -d $debpath) {
-		mkdir_p $debpath or
-			die "can't create directory for packages\n";
-	}
-	if (&execute("dpkg-deb -b $destdir $debpath")) {
+	### create .deb using dpkg-deb (in buildpath so apt doesn't see it)
+	if (&execute("dpkg-deb -b $destdir $buildpath")) {
 		die "can't create package $lockpkg\n";
 	}
 
@@ -2745,12 +2742,9 @@ EOF
 						"the directory manually to save disk space. ".
 						"Continuing with normal procedure.");
 
-	# record PkgVersion object from which we are locked
-	$config->set_options('BuildLock', $self);
-
 	# install $lockpkg (== set lockfile for building $self)
 	print "Setting build lock...\n";
-	my $debfile = $debpath."/".$lockpkg."_0-0_".$debarch.".deb";
+	my $debfile = $buildpath.'/'.$lockpkg.'_'.$timestamp.'_'.$debarch.'.deb';
 	if (&execute("dpkg -i $debfile")) {
 		die "can't set build lock for " . $self->get_fullname() . "\n";
 	}
@@ -2766,16 +2760,13 @@ EOF
 sub clear_buildlock {
 	my $self = shift;
 
-	my $lockpkg = $self->{lockpkg};
+	my $lockpkg = $self->{_lockpkg};
 
 	# remove $lockpkg (== clear lock for building $self)
 	print "Removing build lock...\n";
-	if (&execute("dpkg --remove $lockpkg")) {
+	if (&execute("dpkg -r $lockpkg")) {
 		die "can't remove build lock for " . $self->get_fullname() . "\n";
 	}
-
-	# clear recorded lock info from fink runtime config
-	$config->set_options('BuildLock', undef);
 }
 
 # returns hashref for the ENV to be used while running package scripts
