@@ -2667,7 +2667,13 @@ sub phase_purge {
 sub set_buildlock {
 	my $self = shift;
 
-	my $lockpkg_minor = 'fink-buildlock-' . $self->get_fullname();
+	# always lock on parent pkgname
+	my $lockpkg_minor = 'fink-buildlock-';
+	if (exists $self->{parent}) {
+		$lockpkg_minor .= $self->{parent}->get_fullname();
+	} else {
+		$lockpkg_minor .= $self->get_fullname();
+	}
 	my $lockpkg = $lockpkg_minor . '-' .  strftime "%Y.%m.%d-%H.%M.%S", localtime;
 	$self->{_lockpkg} = $lockpkg;
 
