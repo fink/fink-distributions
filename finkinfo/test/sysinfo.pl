@@ -25,7 +25,7 @@ my ($OSX, $OSXVERS, $OSXBUILD);
 my ($FINKVERS, $DISTVERS, $FINKPKGS, $FINKTREE);
 my ($DEVTOOLS, $TOOLVERS, $TOOLBUILD, $GCCVERS);
 
-IRC::print "Loading Darwin SysInfo Script\n";
+IRC::print "\nLoading Darwin SysInfo Script\n";
 
 # Try to load the config
 LoadConfig();
@@ -120,10 +120,34 @@ sub disable_option {
   return 1;
 }
 
+sub LoadDefaults {
+  IRC::print "$ENV{HOME}/.xchat/sysinfo.conf not found.\n";
+  IRC::print "Loading defaults and creating the file.\n";
+  IRC::print "Please edit and modify it for your system.\n";
+
+  $ENABLEDEV1 = "true";
+  $DEV1 = "en0";
+  $DEV1NAME = "EtherNet";
+
+  $ENABLEDEV2 = "false";
+  $DEV2 = "en1";
+  $DEV2NAME = "AirPort";
+
+  $ENABLEPPP = "false";
+  $PPP = "ppp0";
+  $PPPNAME = "Internal Modem";
+
+  $ENABLEFINK = "false";
+  $BASEPATH = "/sw";
+
+  ShowConfig();
+  SaveConfig();
+  return 1;
+}
+
 sub LoadConfig {
   unless (-e "$ENV{HOME}/.xchat/sysinfo.conf") {
-    IRC::print "Configureation file not found in $ENV{HOME}/.xchat/\n";
-    IRC::print "Please create one by hand or use /showinfo and /saveinfo\n";
+    LoadDefaults();
     return 1;
   }
 
