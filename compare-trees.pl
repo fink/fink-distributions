@@ -3,15 +3,17 @@
 use File::Basename;
 use Getopt::Std;
 
-our ($opt_h, $opt_l);
-getopts('hl');
+our ($opt_h, $opt_l, $opt_m);
+getopts('hlm:');
 
 if ($opt_h) {
 	print <<END;
-usage: $0 [-h] [-l] [directory ...]
+usage: $0 [-h] [-l] [-m <text>] [directory ...]
 
-	-h       this help
-	-l       include trees other than stable/unstable
+	-h         this help
+	-l         include trees other than stable/unstable
+	-m <text>  list only packages maintained by someone
+	           matching text <text>
 
 END
 	exit 0;
@@ -45,6 +47,7 @@ for my $tree (@TREES) {
 			($md5sum, $file) = split(/\s+/, $file);
 			if (open(INFO, $file)) {
 				my $firstpack = "";
+				my $maint     = "";
 				my $packname  = "";
 				my $version   = 0;
 				my $revision  = 0;
@@ -52,30 +55,35 @@ for my $tree (@TREES) {
 				my $stable    = "stable";
 				$stable = $1 if ($file =~ m#/([^/]+)/[^/]+/finkinfo#);
 				next if ($stable ne "stable" and $stable ne "unstable" and not $opt_l);
-				while (<INFO>) {
-					if (/^\s*version:\s*(\S+)\s*$/i) {
-						$version = $1;
-					} elsif (/^\s*revision:\s*(\S+)\s*$/i) {
-						$revision = $1;
-					} elsif (/^\s*epoch:\s*(\S+)\s*$/i) {
-						$epoch = $1;
-					} elsif (/^\s*package:\s*(\S+)\s*$/i) {
-						my $package = $1;
-						if ($firstpack eq "") {
-							$firstpack = $package;
-						}
-						$package =~ s/\%N/$firstpack/i;
-						if ($packname ne "") {
-							push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, get_treestring($treename, $stable, $file));
-							push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, get_treestring($treename, $stable, $file));
-						}
-						$packname = $package;
-					}
-				}
+				chomp(my @info = <INFO>);
 				close(INFO);
-				$packname =~ s/\%N/$firstpack/g;
-				push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, get_treestring($treename, $stable, $file));
-				push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, get_treestring($treename, $stable, $file));
+				if (not defined $opt_m or grep(/^maintainer:.*$opt_m.*$/i, @info)) {
+					for (@info) {
+						if (/^\s*version:\s*(\S+)\s*$/i) {
+							$version = $1;
+						} elsif (/^\s*revision:\s*(\S+)\s*$/i) {
+							$revision = $1;
+						} elsif (/^\s*epoch:\s*(\S+)\s*$/i) {
+							$epoch = $1;
+						} elsif (/^\s*maintainer:\s*(.+?)\s*$/i) {
+							$maint = $1;
+						} elsif (/^\s*package:\s*(\S+)\s*$/i) {
+							my $package = $1;
+							if ($firstpack eq "") {
+								$firstpack = $package;
+							}
+							$package =~ s/\%N/$firstpack/i;
+							if ($packname ne "") {
+								push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, get_treestring($treename, $stable, $file));
+								push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, get_treestring($treename, $stable, $file));
+							}
+							$packname = $package;
+						}
+					}
+					$packname =~ s/\%N/$firstpack/g;
+					push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, get_treestring($treename, $stable, $file));
+					push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, get_treestring($treename, $stable, $file));
+				}
 			} else {
 				warn "unable to open $file: $!\n";
 			}
