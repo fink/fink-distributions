@@ -5,7 +5,7 @@
 # Author: <thesin@users.sourceforge.net>
 # usage : /sys, /up, /fink, /playing
 #         /infosave, /infoshow, /infoload, /infohelp
-#         /enable <option>, /disable <option, /conf <option> <value>
+#         /enable <option>, /disable <option>, /conf <option> <value>
 # -----------------------------------------------------------------
 
 my $out;
@@ -871,6 +871,7 @@ sub display_info {
 }
 
 sub display_song {
+  $out = "";
   get_uname();
 
   unless ($UNAME =~ m/darwin/i) {
