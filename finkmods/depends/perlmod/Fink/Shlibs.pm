@@ -208,7 +208,7 @@ sub scan {
   my $self = shift;
   my $directory = shift;
   my (@filelist, $wanted);
-  my ($filename, $shlibname, $compat, $package);
+  my ($filename, $shlibname, $compat, $package, $line, @lines);
 
   return if not -d $directory;
 
@@ -225,29 +225,34 @@ sub scan {
   foreach $filename (@filelist) {
     open(SHLIB, $filename) or die "can't open $filename: $!\n";
       while(<SHLIB>) {
-        chomp($_);
-        if ($_ =~ /^(.+) ([.0-9]+) (.*)$/) {
-          $shlibname = $1;
-          $compat = $2;
-          $package = $3;
+        @lines = split(/\n/, $_);
+        foreach $line (@lines) {
+          chomp($line);
+          $line =~ s/^[\s|\t]+//;
+          $line =~ s/[\s|\t]+$//;
+          if ($line =~ /^(.+) ([.0-9]+) (.*)$/) {
+            $shlibname = $1;
+            $compat = $2;
+            $package = $3;
+
+            unless ($shlibname) {
+              print "No lib name in $filename\n";
+              next;
+            }
+            unless ($compat) {
+              print "No lib compatability version for $shlibname\n";
+              next;
+            }
+            unless ($package) {
+              print "No owner package(s) for $shlibname\n";
+              next;
+            }
+
+            $self->inject_shlib($shlibname, $compat, $package);
+          }
         }
       }
     close(SHLIB);
-
-    unless ($shlibname) {
-      print "No lib name in $filename\n";
-      next;
-    }
-    unless ($compat) {
-      print "No lib compatability version for $shlibname\n";
-      next;
-    }
-    unless ($package) {
-      print "No owner package(s) for $shlibname\n";
-      next;
-    }
-
-    $self->inject_shlib($shlibname, $compat, $package);
   }
 }
 
