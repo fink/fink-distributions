@@ -1,42 +1,69 @@
 Package: svn-ssl
-Version: 1.0.5
+Version: 1.1.2
 Revision: 1
-Description: Compelling replacement for CVS - svnserve, tools (with SSL)
+Description: Subversion - svnserve, tools (with SSL)
 License: BSD
 Maintainer: Christian Schaffner <chris01@users.sourceforge.net>
 
 # Dependencies:
-Depends: %N-shlibs (= %v-%r)
-BuildDepends: apr-ssl (>= 0.9.5-4), apr-ssl-common (>= 0.9.5-4), db42-ssl, gdbm3, expat (>= 1.95.6-2), libxml2 (>= 2.5.10-12), python23 (>= 1:2.3.3-14) | python23-nox (>= 1:2.3.3-14), fink (>= 0.16.0-1), neon24-ssl (>= 0.24.6-1), openldap-ssl-dev (>= 2.1.22-14), cyrus-sasl2-dev (>= 2.1.15-13), openssl097-dev, texinfo (>= 4.2-22), libiconv-dev (>= 1.9.1-11), apache2-ssl-dev (>= 2.0.48-5), system-java13-dev, dlcompat-dev
+Depends: %N-shlibs (= %v-%r), daemonic
+BuildDepends: apr-ssl (>= 0.9.5-6), apr-ssl-common (>= 0.9.5-6), db42-ssl, gdbm3, expat (>= 1.95.6-2), libxml2 (>= 2.5.10-2), fink (>= 0.16.0-1), neon24-ssl (>= 0.24.7-1), openldap-ssl-dev (>= 2.1.22-4), cyrus-sasl2-dev (>= 2.1.15-3), openssl097-dev, texinfo (>= 4.2-22), libiconv-dev (>= 1.9.1-1), gettext-bin, gettext-dev, io-string-pm, libtool14 (>= 1.5.10-1), autoconf2.5, automake1.9, gcc3.3, dlcompat-dev
 Conflicts: svn-client, svn-client-ssl (<= 0.26.0-2), apache2 (<< 2.0.47-1)
 Replaces: svn-client, svn-client-ssl (<= 0.26.0-2)
 
 # Unpack Phase:
 Source: http://subversion.tigris.org/tarballs/subversion-%v.tar.bz2
-Source-MD5: 8e8288fee061f5278ec201fc5e5e141c
+Source-MD5: b93a792b6bc610dc6c1c254591979a8c
 
 # Patch Phase:
 Patch: %n.patch
 
 # Compile Phase:
-ConfigureParams: --libexecdir='${prefix}/lib/svn' --mandir='${prefix}/share/man' --infodir='${prefix}/share/info' --with-neon=%p --with-apr=%p --with-apr-util=%p --enable-shared --with-apxs=%p/sbin/apxs --without-apache --disable-mod-activation --with-jdk=/System/Library/Frameworks/JavaVM.framework/Versions/CurrentJDK/Home --without-swig --with-python=%p/bin/python2.3 --without-perl
+ConfigureParams: --libexecdir='${prefix}/lib/svn' --mandir='${prefix}/share/man' --infodir='${prefix}/share/info' --with-neon=%p --with-apr=%p --with-apr-util=%p --enable-shared --without-apxs --without-apache --disable-mod-activation --without-jdk --disable-javahl --with-jikes=no --disable-swig-bindings --without-swig --without-python --without-perl
 SetCPPFLAGS: -I%p/include/db4 -no-cpp-precomp
 GCC: 3.3
 CompileScript: <<
-
+#! /bin/sh -e
  ### Remove packages that are installed by fink
  rm -rf neon
  rm -rf apr
  rm -rf apr-util
- 
+
+ # recreate configure with libtool 1.5.
+ ./autogen.sh
  ### Configure shared
- perl -pi.bak -e "s/hardcode_direct=yes/hardcode_direct=no/" configure
- ./configure %c
- perl -pi -e 's/^fast_install=yes/fast_install=needless/g' libtool
+ export CC=gcc-3.3; export CXX=g++-3.3; ./configure %c
+
+ ### force SWIG to use gcc 3.3 too
+ perl -pi.bak -e 's|(SWIG.*)gcc|${1}gcc-3.3|g' Makefile
  
  ### make everything shared
- make
- #make check
+ make CC=gcc-3.3 CXX=g++-3.3
+ 
+ ### Run tests over ra_local:
+#  echo "Running tests over ra_local using BDB..."
+#  make check
+ 
+ ### Run tests over ra_local:
+#  echo "Running tests over ra_local using fs_fs..."
+#  make check FS_TYPE=fsfs
+
+ ### Run tests over ra_svn:
+#  echo "Running tests over ra_svn..."
+#  subversion/svnserve/svnserve -d -r `pwd`/subversion/tests/clients/cmdline
+#  make check BASE_URL=svn://localhost
+#  killall -v -u root svnserve
+
+ ### Run tests over ra_dav:
+ # NOTE: The update_tests.py fails if tested against 1.0.x server
+ # See DescPackaging on how to set up for tests over ra_dav
+#  echo "Running tests over ra_dav..."
+#  make check BASE_URL=http://localhost
+
+ ### Build swig java bindings (they don't build yet!)
+ ### need to add --enable-swig-bindings=java to configure
+ #make swig-java-lib
+ #make swig-java-java
 <<
 
 # Install Phase:
@@ -54,7 +81,7 @@ InstallScript: <<
  cp -r notes %i/share/doc/%n
  cp -r doc/book/misc-docs %i/share/doc/%n/book
  cp -r doc/book/README doc/book/REVIEW doc/book/TODO %i/share/doc/%n/book
- cp doc/book/book/book.pdf %i/share/doc/%n/book
+ cp doc/book/book/svn-book.pdf %i/share/doc/%n/book
  
  ### Configure and install examples, tools and notes
  perl -pi -e 's;#!/usr/bin/env python2;#!/usr/bin/env %p/bin/python2.3;' tools/backup/*.py
@@ -74,19 +101,46 @@ InstallScript: <<
  cp -r tools/test-scripts %i/share/%n/tools
  
  cp -r contrib %i/share/%n
- 
+
  # Remove unneeded .in files
  find %i/share/%n -name \*.in -print0 | xargs -0 rm -f
  
  ### Install binaries
  /usr/bin/install -d %i/bin
  /usr/bin/install -m 755 svn-config %i/bin
+
+ # Install default directory for repositories
  /usr/bin/install -d %i/var
  /usr/bin/install -m 770 -d %i/var/svn
  chown www:admin %i/var/svn
+
+ ### Install swig java bindings
+ #make install-swig-java DESTDIR=%d swig_javadir=%p/share/java/svn-swig-java
 <<
+
+DaemonicName: svnserve
+DaemonicFile: <<
+ <service>
+  <description>Subversion server</description>
+  <message>Subversion server</message>
+
+  <daemon name="svnserve">
+    <executable background="no">/usr/bin/sudo</executable>
+    <parameters>-u www %p/bin/svnserve -d -r %p/var/svn</parameters>
+  </daemon>
+ </service>
+<<
+PostInstScript: <<
+ daemonic install svnserve
+<<
+PreRmScript: <<
+ if [ $1 != "upgrade" ]; then
+   daemonic remove svnserve
+ fi
+<<
+
 SplitOff: <<
-  Description: Compelling replacement for CVS - Development headers and libraries (with SSL)
+  Description: Subversion - Development headers and libraries (with SSL)
   Package: %N-dev
   Depends: %N-shlibs (= %v-%r)
   BuildDependsOnly: True
@@ -101,6 +155,8 @@ SplitOff: <<
     lib/libsvn_delta-1.dylib
     lib/libsvn_diff-1.dylib
     lib/libsvn_fs-1.dylib
+    lib/libsvn_fs_base-1.dylib
+    lib/libsvn_fs_fs-1.dylib
     lib/libsvn_ra-1.dylib
     lib/libsvn_ra_dav-1.dylib
     lib/libsvn_ra_local-1.dylib
@@ -112,16 +168,18 @@ SplitOff: <<
   DocFiles: COPYING HACKING
 <<
 SplitOff2: <<
-  Description: Compelling replacement for CVS - Shared libraries (with SSL)
+  Description: Subversion - Shared libraries (with SSL)
   Package: %N-shlibs
   Conflicts: svn-client-ssl (<= 0.26.0-2)
   Replaces: svn-client-ssl (<= 0.26.0-2)
-  Depends: apr-ssl-shlibs (>= 0.9.5-4), db42-ssl-shlibs, gdbm3-shlibs, expat-shlibs (>= 1.95.6-2), libxml2-shlibs (>= 2.5.10-12), neon24-ssl-shlibs (>= 0.24.6-1), openldap-ssl-shlibs (>= 2.1.22-14), cyrus-sasl2-shlibs (>= 2.1.15-13), openssl097-shlibs, system-java13, dlcompat-shlibs
+  Depends: apr-ssl-shlibs (>= 0.9.5-6), db42-ssl-shlibs, gdbm3-shlibs, expat-shlibs (>= 1.95.6-2), libxml2-shlibs (>= 2.5.10-2), neon24-ssl-shlibs (>= 0.24.7-1), openldap-ssl-shlibs (>= 2.1.22-4), cyrus-sasl2-shlibs (>= 2.1.15-3), openssl097-shlibs, gettext, dlcompat-shlibs
   Files: <<
     lib/libsvn_client-1.0.0.0.dylib
     lib/libsvn_delta-1.0.0.0.dylib
     lib/libsvn_diff-1.0.0.0.dylib
     lib/libsvn_fs-1.0.0.0.dylib
+    lib/libsvn_fs_base-1.0.0.0.dylib
+    lib/libsvn_fs_fs-1.0.0.0.dylib
     lib/libsvn_ra-1.0.0.0.dylib
     lib/libsvn_ra_dav-1.0.0.0.dylib
     lib/libsvn_ra_local-1.0.0.0.dylib
@@ -133,6 +191,8 @@ SplitOff2: <<
     lib/libsvn_delta-1.0.dylib
     lib/libsvn_diff-1.0.dylib
     lib/libsvn_fs-1.0.dylib
+    lib/libsvn_fs_base-1.0.dylib
+    lib/libsvn_fs_fs-1.0.dylib
     lib/libsvn_ra-1.0.dylib
     lib/libsvn_ra_dav-1.0.dylib
     lib/libsvn_ra_local-1.0.dylib
@@ -146,6 +206,8 @@ SplitOff2: <<
     %p/lib/libsvn_delta-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
     %p/lib/libsvn_diff-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
     %p/lib/libsvn_fs-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_fs_base-1.0.dylib 1.0.0 %n (>= 1.1.2-1)
+    %p/lib/libsvn_fs_fs-1.0.dylib 1.0.0 %n (>= 1.1.2-1)
     %p/lib/libsvn_ra-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
     %p/lib/libsvn_ra_dav-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
     %p/lib/libsvn_ra_local-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
@@ -157,16 +219,15 @@ SplitOff2: <<
   DocFiles: BUGS CHANGES COMMITTERS COPYING HACKING INSTALL README
 <<
 SplitOff3: <<
-  Description: Compelling replacement for CVS - Client (with SSL)
+  Description: Subversion - Client (with SSL)
   Package: svn-client-ssl
   Depends: %N-shlibs (= %v-%r)
   Replaces: svn-ssl (<= 1.0.2-1)
   Files: <<
     bin/svn
-    bin/svnlook
     bin/svnversion
+    share/locale
     share/man/man1/svn.1
-    share/man/man1/svnlook.1
     share/man/man1/svnversion.1
     share/%N/contrib/client-side
     share/%N/tools/client-side
@@ -186,151 +247,53 @@ SplitOff3: <<
     moved to the client split off in 1.0.2-1.
   <<
 <<
-SplitOff4: <<
-  Package: libapache2-ssl-mod-svn
-  Depends: %N-shlibs (= %v-%r), apache2-ssl (>= 2.0.48-5), apr-ssl-common
-  Files: <<
-    lib/apache2
-    var/svn
-  <<
-  DocFiles: COPYING HACKING INSTALL
-  Description: Compelling replacement for CVS - mod_svn (with SSL)
-  DescUsage: <<
-    This installs the subversion network server for apache2.
-    Please read section III C in the file 
-    /sw/share/doc/libapache2-ssl-mod-svn/INSTALL
-    for informations on how to run a subversion server via apache2.
-    
-    You could install the repositories under the preconfigured directory
-    /sw/var/svn
-    which should have the correct permissions. Make sure that all files
-    in the new repository have the correct permissions for apache to read 
-    and write. E.g. run 'chown -R www /sw/var/svn/yourrepos' and 
-    'chmod -R go-rwx /sw/var/svn/yourrepos'.
-    
-    You then need to add the following lines to your /sw/etc/apache2/httpd.conf
-    file:
-    <Location /svn/yourrepos>
-      DAV svn
-      SVNPath /sw/var/svn/yourrepos
-    </Location>
-    
-    Your repository should show up at <http://localhost/svn/yourrepos>. If it 
-    does not check your apache2 logs at /sw/var/apache2/logs/error_log
-    
-    If you need the examples or the tools (e.g. svnadmin) install the 
-    'svn-ssl' package.
-  <<
-  PostInstScript: <<
-    APXS=%p/sbin/apxs
-    MOD_PREFIX=`$APXS -q LIBEXECDIR`
-
-    # Enable svn modules
-    MODULENAME=dav_svn
-    MODULE=$MOD_PREFIX/mod_$MODULENAME.so
-    echo "Enabling mod_$MODULENAME module..."
-    $APXS -e -a -n $MODULENAME $MODULE
-
-    MODULENAME=authz_svn
-    MODULE=$MOD_PREFIX/mod_$MODULENAME.so
-    echo "Enabling mod_$MODULENAME module..."
-    $APXS -e -a -n $MODULENAME $MODULE
-
-    echo "Restarting apache2..."
-    %p/sbin/apachectl graceful
-  <<
-  PreRmScript: <<
-    if [ "$1" != "remove" -a "$1" != "purge" ]; then
-      exit 0
-    fi
-
-    # Disable svn modules
-    APXS=%p/sbin/apxs
-    MOD_PREFIX=`$APXS -q LIBEXECDIR`
-
-    MODULENAME=dav_svn
-    MODULE=$MOD_PREFIX/mod_$MODULENAME.so
-    echo "Disabling mod_$MODULENAME module..."
-    $APXS -e -A -n $MODULENAME $MODULE
-
-    MODULENAME=authz_svn
-    MODULE=$MOD_PREFIX/mod_$MODULENAME.so
-    echo "Disabling mod_$MODULENAME module..."
-    $APXS -e -A -n $MODULENAME $MODULE
-
-    echo "#####################################################################"
-    echo "The subversion apache modules are now disabled in the"
-    echo "%p/etc/apache2/httpd.conf file and will be removed. Please make sure"
-    echo "that you haven't any svn repositories still enabled in your"
-    echo "%p/etc/apache2/httpd.conf file. You then should restart apache by"
-    echo "typing '%p/sbin/apachectl graceful'."
-    echo "#####################################################################"
-  <<
-<<
-SplitOff5: <<
+SplitOff8: <<
  Package: %N-doc
- Description: Compelling replacement for CVS - Documentation
+ Description: Subversion - Documentation
  Files: <<
   share/doc
   share/info
  <<
  DocFiles: COPYING
 <<
+# SplitOff7: <<
+#   Package: %N-swig-java
+#   Depends: %N-shlibs (= %v-%r), system-java14, swig-shlibs (>= 1.3.20-2)
+#   Files: <<
+#     share/java/%N-swig-java
+#   <<
+#   JarFiles: subversion/bindings/swig/java/build/svn-api.jar
+#   Shlibs: <<
+#     %p/lib/libsvn_swig_java-1.0.dylib 1.0.0 %n (>= 1.0.4-11)
+#   <<
+#   DocFiles: COPYING HACKING INSTALL.swig README.swig
+#   Description: Subversion - Swig Java bindings (with SSL)
+#   DescDetail: <<
+#     Bindings to call svn functions from java 1.4.
+#   <<
+#   DescUsage: <<
+#     Please read the files in '/sw/share/doc/svn-ssl-swig-java/'.
+#   <<
+# <<
 
-PostInstScript: <<
- echo ""
- echo "PLEAE NOTE:"
- echo "As of release 0.35.0, Subversion once again does deltification"
- echo "automatically.  This means that the deltification step most"
- echo "repositories introduced into their post-commit hooks as of"
- echo "release 0.33.0 should now be reverted.  Look for a line with"
- echo "'svnadmin deltify' in hooks/post-commit, and remove it."
- echo ""
- echo "NOTICE:"
- echo "#####################################################################"
- echo "##  WARNING: Incompatible change in database in 0.34 release       ##"
- echo "#####################################################################"
- echo "##                                                                 ##"
- echo "## The 0.34 release made an incompatible change to the Subversion  ##"
- echo "## database. Repositories created with versions of Subversion      ##"
- echo "## prior to 0.34 will not work with Subversion 0.34 and later.     ##"
- echo "## To  upgrade, first use 'svnadmin dump' with  your existing      ##"
- echo "## Subversion binaries. Then upgrade your binaries to 0.34, and    ##"
- echo "## use 'svnadmin load' to create a new repository from your        ##"
- echo "## dumpfile.                                                       ##"
- echo "## Don't  forget  to  copy any custom configuration/hooks from the ##"
- echo "## old to the new repository.                                      ##"
- echo "##                                                                 ##"
- echo "#####################################################################"
- echo ""
- echo "Please see the notes/repository_upgrade_HOWTO document for"
- echo "documentation on how to update an old repos."
- echo ""
- echo "Also located here:"
- echo " <http://svn.collab.net/repos/svn/trunk/notes/repos_upgrade_HOWTO>"
-<<
-
+# Additional Info
 DescDetail: <<
 The goal of the Subversion project is to build a version control system that is
 a compelling replacement for CVS in the open source community. 
 	
-Why should I switch to Subversion, after all CVS is the standard?  Some
-advantages of Subversion include: 
-- Commits are atomic
-- Moving and renaming are versioned.
-- Working with directories is easy. E.g. adding a directory adds all
-  sub-files and folders to the repository.
-- It is fast: branching and tagging are cheap (constant time) operations,
-  client/server protocol sends diffs in both directions, and in general
-  execution time is proportional to change size, not project size.
-- Meta-data is versioned per file, e.g. store the 'execute' permission flag on
-  files in the repository.
-- Efficient handling of binary files - it uses a binary diffing algorithm to
-  transmit and store successive revisions.
-
-Is Subversion stable enough for me to use for my own projects?  The Developers
-think so! Read the full FAQ answer on the website:
-<http://subversion.tigris.org/project_faq.html#stable>
+Subversion's Features:
+- Most current CVS features
+- Directories, renames, and file meta-data are versioned
+- Commits are truly atomic
+- Branching and tagging are cheap (constant time) operations
+- Client/server protocol sends diffs in both directions
+- Time costs are proportional to change size, not data size
+- Efficient handling of binary files  - it uses a binary diffing algorithm to
+  transmit and store successive revisions
+- Versioning of symbolic links
+- Choice of database or plain-file repository implementations 
+- Apache network server option, with WebDAV/DeltaV  protocol
+- Standalone server option
 
 Subversion is broken into these packages in fink:
 (The -ssl variants enable ssl encryption.)
@@ -340,6 +303,7 @@ Subversion is broken into these packages in fink:
   
 - The "svn-ssl" package installs a stand-alone server 'svnserve'.
   Install this package if you want to maintain a stand-alone server.
+  Type 'fink describe svn-ssl' to get usage help.
   
 - The "svn-ssl-doc" package installs html documentation, the pdf book, 
   and notes from the developers of svn.
@@ -363,35 +327,41 @@ DescUsage: <<
  for usage.
  Some tools (e.g. hook and back-up scripts) and examples are stored in 
  /sw/share/svn-ssl/tools and /sw/share/svn-ssl/contrib
+ 
+ You can start the Subversion server manually using a command similar to
+ '/usr/bin/sudo -u www /sw/bin/svnserve -d -r /sw/var/svn' or you can 
+ run 'daemonic enable svnserve' as root to create a StartupItem for it.
+ 
+ 'svnserve' is run as user 'www' in order that apache and svnserve can
+ access the same repositories at the same time under '/sw/var/svn'
+ 
+ You could install the repositories under the preconfigured directory
+ /sw/var/svn
+ which should have the correct permissions. Make sure that all files
+ in the new repository have the correct permissions for svnserve (and apache)
+ to read and write. E.g. run 'chown -R www /sw/var/svn/yourrepos' and 
+ 'chmod -R go-rwx /sw/var/svn/yourrepos'.
+<<
+DescPackaging: <<
+ To run the tests over ra_dav apache2 must be running with (an older) 
+ fink 'libapache2-ssl-mod-svn' already installed. You need to add the
+ following to your '/sw/etc/apache2/httpd.conf' file:
+ 
+ <Location /repositories>
+  DAV svn
+  SVNParentPath /sw/src/svn-ssl-%v-%r/subversion-%v/subversion/tests/clients/cmdline/repositories
+ </Location>
+ <Location /local_tmp/repos>
+  DAV svn
+  SVNPath /sw/src/svn-ssl-%v-%r/subversion-%v/subversion/tests/clients/cmdline/local_tmp/repos
+ </Location>
+ 
+ where %v and %r are replaced with the correct versions. Then do
+ 'sudo apachectl graceful' to enable the mod_svn support.
 
- PLEAE NOTE:
- As of release 0.35.0, Subversion once again does deltification
- automatically.  This means that the deltification step most
- repositories introduced into their post-commit hooks as of
- release 0.33.0 should now be reverted.  Look for a line with
- "svnadmin deltify" in hooks/post-commit, and remove it.
-
- NOTICE:
-#####################################################################
-##  WARNING: Incompatible change in database in 0.34 release       ##
-#####################################################################
-##                                                                 ##
-## The 0.34 release made an incompatible change to the Subversion  ##
-## database. Repositories created with versions of Subversion      ##
-## prior to 0.34 will not work with Subversion 0.34 and later.     ##
-## To  upgrade, first use 'svnadmin dump' with  your existing      ##
-## Subversion binaries. Then upgrade your binaries to 0.34, and    ##
-## use 'svnadmin load' to create a new repository from your        ##
-## dumpfile.                                                       ##
-## Don't  forget  to  copy any custom configuration/hooks from the ##
-## old to the new repository.                                      ##
-##                                                                 ##
-#####################################################################
-
- Please see the /sw/share/doc/svn-ssl/notes/repos_upgrade_HOWTO 
- document for documentation on how to update an old repos.
- Also located here:
-  <http://svn.collab.net/repos/svn/trunk/notes/repos_upgrade_HOWTO>
+ The "Replaces: svn-ssl (<= 1.1.1-1)" is needed since svnlook was 
+ (incorrectly) in the svn-client-ssl package < 1.1.1 and was 
+ moved to the main package in 1.1.1-1.
 <<
 DescPort: <<
 Patch needed to stop relinking a .dylib in the install path, 
@@ -407,7 +377,7 @@ Many thanks to Peter O'Gorman for the help with the libtool patch.
 Prebinding cannot be enabled at this time since apr is not built 
 prebound.
 Once this is fixed, one could try to enable building two_level by doing:
-perl -pi -e 's,-flat_namespace -undefined suppress,,g' configure
+perl -pi.bak -e 's,-flat_namespace -undefined suppress,,g' configure
 If that fails, maybe try to add '-lfoo' to Makefile.in
 Or, if that fails too,  change '-undefined suppress -flat_namespace' 
 to '-undefined dynamic_lookup'
