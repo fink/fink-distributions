@@ -242,12 +242,18 @@ sub check_pkg {
    # get list of depend pkgs
    foreach $match (@matches) {
     if (length($match) > 1) {
-      $depend = `dpkg --search $match`;
-      $depend =~ s/\:.*$//;		# strip out everything after the colon
-      chomp($depend);
-      ### FIXME: add virtual and/or provides here to use || and && in pkgs.
-      next if ($depend eq $pkgname);	# Can't dpend on it's self
-      push(@depends, $depend);
+      ### FIXME, need to use open and close here
+      open (SEARCH, "dpkg --search $match 2>/dev/null |") or die "can't run dpkg search: $!\n";
+        while (<SEARCH>) {
+          chomp();
+          #next if;
+          $_ =~ s/\:.*$//;		# strip out everything after the colon
+
+          ### FIXME: add virtual and/or provides here to use || and && in pkgs.
+          next if ($_ eq $pkgname);	# Can't dpend on it's self
+          push(@depends, $_);
+        }
+      close(SEARCH);
     }
   }
  
