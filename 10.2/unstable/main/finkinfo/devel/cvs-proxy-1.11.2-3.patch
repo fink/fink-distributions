@@ -1,6 +1,6 @@
 diff -ru cvs-1.11.2/src/client.c cvs-1.11.2-patched/src/client.c
 --- cvs-1.11.2/src/client.c	2001-08-09 22:27:26.000000000 +0200
-+++ cvs-1.11.2-patched/src/client.c	2002-08-02 14:39:54.000000000 +0200
++++ cvs-1.11.2-patched/src/client.c	2002-11-29 18:56:19.000000000 +0100
 @@ -134,6 +134,7 @@
  
  static size_t try_read_from_server PROTO ((char *, size_t));
@@ -9,6 +9,15 @@ diff -ru cvs-1.11.2/src/client.c cvs-1.11.2-patched/src/client.c
  static void auth_server PROTO ((cvsroot_t *, struct buffer *, struct buffer *,
  				int, int, struct hostent *));
  
+@@ -3874,7 +3875,7 @@
+     int port_number;
+     struct sockaddr_in client_sai;
+     struct hostent *hostinfo;
+-    struct buffer *to_server, *from_server;
++    struct buffer *local_to_server, *local_from_server;
+ 
+     sock = socket (AF_INET, SOCK_STREAM, 0);
+     if (sock == -1)
 @@ -3882,7 +3883,17 @@
  	error (1, 0, "cannot create socket: %s", SOCK_STRERROR (SOCK_ERRNO));
      }
@@ -28,7 +37,7 @@ diff -ru cvs-1.11.2/src/client.c cvs-1.11.2-patched/src/client.c
      if (trace)
      {
  	fprintf (stderr, " -> Connecting to %s(%s):%d\n",
-@@ -3892,12 +3903,22 @@
+@@ -3892,27 +3903,39 @@
      if (connect (sock, (struct sockaddr *) &client_sai, sizeof (client_sai))
  	< 0)
  	error (1, 0, "connect to %s(%s):%d failed: %s",
@@ -39,21 +48,55 @@ diff -ru cvs-1.11.2/src/client.c cvs-1.11.2-patched/src/client.c
 +	       root->proxy ? root->proxy_port : port_number,
 +	       SOCK_STRERROR (SOCK_ERRNO));
  
-     make_bufs_from_fds (sock, sock, 0, &to_server, &from_server, 1);
+-    make_bufs_from_fds (sock, sock, 0, &to_server, &from_server, 1);
++    make_bufs_from_fds (sock, sock, 0, &local_to_server, &local_from_server, 1);
  
+-    auth_server (root, to_server, from_server, verify_only, do_gssapi, hostinfo);
 +    if (root->proxy)
 +    {
-+	*to_server_p = to_server;
-+	*from_server_p = from_server;
++    	// REALLY ugly hack to allow proxy_connect() to use send_to_server().
++    	// The proper fix would be to remove the global to_server & from_server
++    	// variables, and instead let send_to_server() etc. take the target
++    	// server struct as a paramter.
++	to_server = local_to_server;
++	from_server = local_from_server;
 +	proxy_connect (root, port_number);
-+	*to_server_p = NULL;
-+	*from_server_p = NULL;
 +    }
 +
-     auth_server (root, to_server, from_server, verify_only, do_gssapi, hostinfo);
++    auth_server (root, local_to_server, local_from_server, verify_only, do_gssapi, hostinfo);
  
      if (verify_only)
-@@ -3930,6 +3951,46 @@
+     {
+ 	int status;
+ 
+-	status = buf_shutdown (to_server);
++	status = buf_shutdown (local_to_server);
+ 	if (status != 0)
+ 	    error (0, status, "shutting down buffer to server");
+-	status = buf_shutdown (from_server);
++	status = buf_shutdown (local_from_server);
+ 	if (status != 0)
+ 	    error (0, status, "shutting down buffer from server");
+ 
+-	buf_free (to_server);
+-	buf_free (from_server);
++	buf_free (local_to_server);
++	buf_free (local_from_server);
+ 
+ 	/* Don't need to set server_started = 0 since we don't set it to 1
+ 	 * until returning from this call.
+@@ -3920,8 +3943,8 @@
+     }
+     else
+     {
+-	*to_server_p = to_server;
+-	*from_server_p = from_server;
++	*to_server_p = local_to_server;
++	*from_server_p = local_from_server;
+     }
+ 
+     return;
+@@ -3930,6 +3953,46 @@
  
  
  static void
@@ -68,8 +111,8 @@ diff -ru cvs-1.11.2/src/client.c cvs-1.11.2-patched/src/client.c
 +    
 +    /* 4 characters for port covered by the length of %s & %d */
 +    char* write_buf = xmalloc (strlen (CONNECT_STRING) + strlen (root->hostname) + 20 + 1);
-+    sprintf (write_buf, CONNECT_STRING, root->hostname, port_number);
-+    send_to_server (write_buf, 0);
++    int len = sprintf (write_buf, CONNECT_STRING, root->hostname, port_number);
++    send_to_server (write_buf, len);
 +    
 +    /* Wait for HTTP status code, bail out if you don't get back a 2xx code.*/
 +    count = read_line (&read_buf);
@@ -102,7 +145,7 @@ diff -ru cvs-1.11.2/src/client.c cvs-1.11.2-patched/src/client.c
      struct buffer *lto_server;
 diff -ru cvs-1.11.2/src/client.h cvs-1.11.2-patched/src/client.h
 --- cvs-1.11.2/src/client.h	2001-05-06 02:02:37.000000000 +0200
-+++ cvs-1.11.2-patched/src/client.h	2002-08-02 12:20:21.000000000 +0200
++++ cvs-1.11.2-patched/src/client.h	2002-11-29 16:15:10.000000000 +0100
 @@ -67,6 +67,9 @@
  #   ifndef CVS_AUTH_PORT
  #     define CVS_AUTH_PORT 2401
@@ -115,7 +158,7 @@ diff -ru cvs-1.11.2/src/client.h cvs-1.11.2-patched/src/client.h
  # if HAVE_KERBEROS
 diff -ru cvs-1.11.2/src/root.c cvs-1.11.2-patched/src/root.c
 --- cvs-1.11.2/src/root.c	2001-07-05 21:11:39.000000000 +0200
-+++ cvs-1.11.2-patched/src/root.c	2002-08-02 12:27:21.000000000 +0200
++++ cvs-1.11.2-patched/src/root.c	2002-11-29 16:15:10.000000000 +0100
 @@ -316,6 +316,8 @@
  #ifdef CLIENT_SUPPORT
      newroot->isremote = 0;
@@ -173,7 +216,7 @@ diff -ru cvs-1.11.2/src/root.c cvs-1.11.2-patched/src/root.c
      /* parse the path for all methods */
 diff -ru cvs-1.11.2/src/root.h cvs-1.11.2-patched/src/root.h
 --- cvs-1.11.2/src/root.h	2001-05-04 18:36:34.000000000 +0200
-+++ cvs-1.11.2-patched/src/root.h	2002-08-02 12:24:36.000000000 +0200
++++ cvs-1.11.2-patched/src/root.h	2002-11-29 16:15:10.000000000 +0100
 @@ -34,4 +34,6 @@
  #ifdef CLIENT_SUPPORT
      unsigned char isremote;	/* nonzero if we are doing remote access */
