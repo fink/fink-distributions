@@ -104,7 +104,7 @@ sub get_mem {
   } elsif ($MEMGKM =~ /^M$/) {
     $MEMTOTAL = sprintf("%.0f", $MEMTOTAL/1024**2);
   } elsif ($MEMGKM =~ /^G$/) {
-    $MEMTOTAL = sprintf("%.0f", $MEMTOTAL/1024**3);  
+    $MEMTOTAL = sprintf("%.2f", $MEMTOTAL/1024**3);  
   }
 
   $MEMPERCENT = $MEMUSED/$MEMTOTAL*100;
