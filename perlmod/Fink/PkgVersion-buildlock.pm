@@ -1931,8 +1931,6 @@ sub phase_compile {
 		return;
 	}
 
-	$self->set_buildlock();
-
 	if (!$self->is_type('dummy')) {
 		# dummy packages do not actually compile (so no build dir),
 		# but they can have a CompileScript to run
@@ -2126,8 +2124,6 @@ sub phase_install {
 	### install
 
 	$self->run_script($install_script, "installing", 0);
-
-	$self->clear_buildlock();
 
 	### splitoffs
 	
@@ -2730,9 +2726,6 @@ EOF
 	$control .= "Depends: " . &lol2pkglist(\@depends);
 
 	### write "control" file
-
-	print "Writing control file...\n";
-
 	open(CONTROL,">$destdir/DEBIAN/control") or die "can't write control file for $lockpkg: $!\n";
 	print CONTROL $control;
 	close(CONTROL) or die "can't write control file for $lockpkg: $!\n";
@@ -2747,14 +2740,15 @@ EOF
 		die "can't create package $lockpkg\n";
 	}
 
-	### record ourselves in the runtime config hash
-	my $lockpkgs = $config->get_option('LockPkgs', {});
-	$lockpkgs->{$lockpkg} = 1;
+	# record lockpkg package-name in fink runtime config
 	$config->set_options('LockPkgs', $lockpkgs);
 
 	# install $lockpkg (== set lockfile for building $self)
+	print "Setting build lock...\n";
 	if (&execute("dpkg -i ".$lockpkg."_0-0_".$debarch.".deb")) {
-		die "can't install package $lockpkg\n";
+		die "can't set build lock for " . $self->get_fullname() . "\n";
+
+
 	}
 }
 
@@ -2764,14 +2758,13 @@ sub clear_buildlock {
 	my $lockpkg = $self->{lockpkg};
 
 	# remove $lockpkg (== clear lock for building $self)
+	print "Removing build lock...\n";
 	if (&execute("dpkg --remove $lockpkg")) {
-		die "can't remove package $lockpkg\n";
+		die "can't remove build lock for " . $self->get_fullname() . "\n";
 	}
 
-	### remove ourselves from the runtime config hash
-	my $lockpkgs = $config->get_option('LockPkgs', {});
-	delete $lockpkgs->{$lockpkg};
-	$config->set_options('LockPkgs', $lockpkgs);
+	# clear lockpkg info from fink runtime config
+	$config->set_options('LockPkgs', undef);
 }
 
 # returns hashref for the ENV to be used while running package scripts

@@ -1675,8 +1675,10 @@ sub real_install {
 					if (!$package->is_installed() || $op == $OP_REBUILD) {
 						$package->phase_unpack();
 						$package->phase_patch();
+						$package->set_buildlock();
 						$package->phase_compile();
 						$package->phase_install();
+						$package->clear_buildlock();
 						$package->phase_build();
 					} else {
 						&real_install($OP_BUILD, 0, 1, $package->get_name());
