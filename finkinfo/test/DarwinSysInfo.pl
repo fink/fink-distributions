@@ -1,10 +1,10 @@
 #!/usr/bin/perl
 # -----------------------------------------------------------------
-# Based on:
-# kc8apf's sysinfo v0.6 for x-chat
-# Avaliable at http://www.kc8apf.net/sysinfo/sysinfo.pl
-# Author: <kc8apf@kc8apf.net>
-# usage : /sys, /up, /fink, /playing, /saveinfo, /showinfo, /loadinfo
+# Darwin SysInfo for X-Chat
+# Available at http://www.southofheaven.net/DarwinSysInfo/
+# Author: <thesin@users.sourceforge.net>
+# usage : /sys, /up, /fink, /playing
+#         /infosave, /infoshow, /infoload, /infohelp
 #         /enable <option>, /disable <option, /conf <option> <value>
 # -----------------------------------------------------------------
 
@@ -24,17 +24,21 @@ my $UPTIME;
 my ($OSX, $OSXVERS, $OSXBUILD);
 my ($FINKVERS, $DISTVERS, $FINKPKGS, $FINKTREE);
 my ($DEVTOOLS, $TOOLVERS, $TOOLBUILD, $GCCVERS);
+my $configfile = "$ENV{HOME}/.xchat/darwininfo.conf";
+my $version = "0.3";
+my $scriptname = "Darwin SysInfo";
 
-IRC::print "\nLoading Darwin SysInfo Script\n";
+IRC::print "\n\0034Loading\003\002 $scriptname $version Script\002\n";
 
 # Try to load the config
 LoadConfig();
 
-IRC::register("Darwin SysInfo", "0.2", "", "");
+IRC::register("$scriptname", "$version", "", "");
 
-IRC::add_command_handler("loadinfo", LoadConfig);
-IRC::add_command_handler("saveinfo", SaveConfig);
-IRC::add_command_handler("showinfo", ShowConfig);
+IRC::add_command_handler("infoload", LoadConfig);
+IRC::add_command_handler("infosave", SaveConfig);
+IRC::add_command_handler("infoshow", ShowConfig);
+IRC::add_command_handler("infohelp", info_help);
 IRC::add_command_handler("sys", display_info);
 IRC::add_command_handler("up", display_uptime);
 IRC::add_command_handler("fink", display_fink);
@@ -42,6 +46,39 @@ IRC::add_command_handler("fink", display_fink);
 IRC::add_command_handler("enable", enable_option);
 IRC::add_command_handler("disable", disable_option);
 IRC::add_command_handler("conf", conf_options);
+
+sub info_help {
+  IRC::print "\n";                           
+  IRC::print "\002$scriptname $version\002 \0034HELP!\0034\n";
+  IRC::print "\n";
+  IRC::print "   \002System Functions\002\n";
+  IRC::print "      \002/sys\002 - display system stats and information\n";
+  IRC::print "      \002/up\002  - display current system uptime\n";
+  IRC::print "\n";                           
+  IRC::print "   \002Fink Functions\002 \0034NOTE: Requires and valid install of Fink http://fink.sf.net/\0034\n";
+  IRC::print "      \002/fink\002 - display fink stats and information\n";
+  IRC::print "\n";                           
+  IRC::print "   \002XMMS Functions\002 \0034NOTE: Requires xmms and mp3-info perl modules\0034\n";
+  IRC::print "      \002/playing\002 - display song currently playing in XMMS\n";
+  IRC::print "         \002\00315* XMMS extra display levels:\003\002\n";
+  IRC::print "           0 = No extra info";
+  IRC::print "           1 = Display song parameters (freq, kbps, st/mon)";
+  IRC::print "           2 = Display album and genre (if available)";
+  IRC::print "           3 = 1 and 2";
+  IRC::print "\n";                           
+  IRC::print "   \002Script Functions\002\n";
+  IRC::print "      \002/infoload\002 - Reload configuration from $config\n";
+  IRC::print "      \002/infosave\002 - Saves configuration to $config\n";
+  IRC::print "      \002/infohelp\002 - Display this help information\n";
+  IRC::print "      \002/enable\002   - Enables an option\n";
+  IRC::print "           \002Usage:\002 /enable <option>\n";
+  IRC::print "      \002/disable\002  - Disables and option\n";
+  IRC::print "           \002Usage:\002 /disable <option>\n";
+  IRC::print "      \002/conf\002     - Change configurations values\n";
+  IRC::print "           \002Usage:\002 /conf <variable> <value>\n";
+
+  return 1;
+}
 
 sub conf_options {
   my ($tmp) = @_;
@@ -70,9 +107,12 @@ sub conf_options {
   } elsif ($option =~ m/ppp/i) {
     IRC::print "PPP Device: $value\n";
     $PPP = $value;        
+  } elsif ($option =~ m/displaylevel/i) {
+    IRC::print "XMMS Display Level: $value\n";
+    $DISPLAYLEVEL = $value;
   } else {
-    IRC::print "$option Not a valid option\n";
-    IRC::print "Valid options are: basepath, dev1, dev1name, dev2, dev2name, ppp, pppname\n";
+    IRC::print "\0034$option Not a valid option\0034\n";
+    IRC::print "\002Valid options are:\002 basepath, dev1, dev1name, dev2, dev2name, ppp, pppname, displaylevel\n";
   }
   SaveConfig();
   return 1;
@@ -92,8 +132,8 @@ sub enable_option {
   } elsif ($option =~ m/xmms/i) { 
     $ENABLEXMMS = "true";
   } else {
-    IRC::print "$option Not Valid\n";
-    IRC::print "Valid options are: fink, dev1, dev2, ppp, xmms\n";
+    IRC::print "\0034$option Not Valid\0034\n";
+    IRC::print "\002Valid options are:\002 fink, dev1, dev2, ppp, xmms\n";
   }
   SaveConfig();
   return 1;
@@ -113,17 +153,17 @@ sub disable_option {
   } elsif ($option =~ m/xmms/i) {
     $ENABLEXMMS = "false";
   } else {
-    IRC::print "$option Not Valid\n";
-    IRC::print "Valid options are: fink, dev1, dev2, ppp, xmms\n";
+    IRC::print "\0034$option Not Valid\0034\n";
+    IRC::print "\002Valid options are:\002 fink, dev1, dev2, ppp, xmms\n";
   }
   SaveConfig();
   return 1;
 }
 
 sub LoadDefaults {
-  IRC::print "$ENV{HOME}/.xchat/sysinfo.conf not found.\n";
-  IRC::print "Loading defaults and creating the file.\n";
-  IRC::print "Please edit and modify it for your system.\n";
+  IRC::print "\0034$configfile not found.\0034\n";
+  IRC::print "\002Loading defaults and creating the file.\002\n";
+  IRC::print "\003Please edit and modify it for your system.\003\n";
 
   $ENABLEDEV1 = "true";
   $DEV1 = "en0";
@@ -137,6 +177,9 @@ sub LoadDefaults {
   $PPP = "ppp0";
   $PPPNAME = "Internal Modem";
 
+  $ENABLEXMMS = "false";
+  $DISPLAYLEVEL = "3";
+
   $ENABLEFINK = "false";
   $BASEPATH = "/sw";
 
@@ -146,12 +189,12 @@ sub LoadDefaults {
 }
 
 sub LoadConfig {
-  unless (-e "$ENV{HOME}/.xchat/sysinfo.conf") {
+  unless (-e "$configfile") {
     LoadDefaults();
     return 1;
   }
 
-  open (FD,"<$ENV{HOME}/.xchat/sysinfo.conf");
+  open (FD,"<$configfile");
   foreach(<FD>) {
     @values = split(/=/, $_);
     chomp($values[1]);
@@ -177,15 +220,17 @@ sub LoadConfig {
       $ENABLEFINK = $values[1];
     } elsif ($values[0] eq "basepath") {
       $BASEPATH = $values[1];
+    } elsif ($values[0] eq "displaylevel") {
+      $DISPLAYLEVEL = $values[1];
     }
   }
   close(FD);
-  IRC::print "Configuration loaded\n";
+  IRC::print "\00311Configuration loaded\00311\n";
   return 1;
 }
 
 sub SaveConfig {
-  open (FD, ">$ENV{HOME}/.xchat/sysinfo.conf");
+  open (FD, ">$configfile");
     print(FD "enabledev1=$ENABLEDEV1\n");
     print(FD "dev1=$DEV1\n");
     print(FD "dev1name=$DEV1NAME\n\n");
@@ -195,37 +240,44 @@ sub SaveConfig {
     print(FD "enableppp=$ENABLEPPP\n");
     print(FD "ppp=$PPP\n");
     print(FD "pppname=$PPPNAME\n\n");
+    print(FD "enablexmms=$ENABLEXMMS\n");
+    print(FD "displaylevel=$DISPLAYLEVEL\n\n");
     print(FD "enablefink=$ENABLEFINK\n");
     print(FD "basepath=$BASEPATH\n");
   close(FD);
-  IRC::print "Configuration saved\n";
+  IRC::print "\00311Configuration saved\00311\n";
   return 1;
 }
 
 sub ShowConfig {
-  IRC::print "\nDarwin SysInfo\n";
-  IRC::print "   Device 1\n";
-  IRC::print "      Enabled: $ENABLEDEV1\n";
+  IRC::print "\n\002\0034$scriptname $version\0034\002\n";
+  IRC::print "   \00311Device 1\00311\n";
+  IRC::print "      \002Enabled:\002 $ENABLEDEV1\n";
   if ($ENABLEDEV1 =~ m/true/i) {
-    IRC::print "      Device: $DEV1\n";
-    IRC::print "      Name: $DEV1NAME\n";
+    IRC::print "      \002Device:\002 $DEV1\n";
+    IRC::print "      \002Name:\002 $DEV1NAME\n";
   }
-  IRC::print "   Device 2\n";
-  IRC::print "      Enabled: $ENABLEDEV2\n";
+  IRC::print "   \00311Device 2\00311\n";
+  IRC::print "      \002Enabled:\002 $ENABLEDEV2\n";
   if ($ENABLEDEV2 =~ m/true/i) {
-    IRC::print "      Device: $DEV2\n";
-    IRC::print "      Name: $DEV2NAME\n";
+    IRC::print "      \002Device:\002 $DEV2\n";
+    IRC::print "      \002Name:\002 $DEV2NAME\n";
   }
-  IRC::print "   PPP\n";      
-  IRC::print "      Enabled: $ENABLEPPP\n";
+  IRC::print "   \00311PPP\00311\n";      
+  IRC::print "      \002Enabled:\002 $ENABLEPPP\n";
   if ($ENABLEPPP =~ m/true/i) {
-    IRC::print "      Device: $PPP\n";
-    IRC::print "      Name: $PPPNAME\n";
+    IRC::print "      \002Device:\002 $PPP\n";
+    IRC::print "      \002Name:\002 $PPPNAME\n";
   }
-  IRC::print "   Fink\n";
-  IRC::print "      Enabled: $ENABLEFINK\n";
+  IRC::print "   \00311XMMS\00311\n";
+  IRC::print "      \002Enabled:\002 $ENABLEXMMS\n";
+  if ($ENABLEXMMS =~ m/true/i) {
+    IRC::print "      \002Display Level:\002 $DISPLAYLEVEL\n";
+  }
+  IRC::print "   \00311Fink\00311\n";
+  IRC::print "      \002Enabled:\002 $ENABLEFINK\n";
   if ($ENABLEFINK =~ m/true/i) {
-    IRC::print "      Base Path: $BASEPATH\n";
+    IRC::print "      \002Base Path:\002 $BASEPATH\n";
   }
 
   return 1;
