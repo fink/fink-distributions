@@ -1,0 +1,1678 @@
+diff -ruN cyrus-imapd-2.1.13.orig/Makefile.in cyrus-imapd-2.1.13/Makefile.in
+--- cyrus-imapd-2.1.13.orig/Makefile.in	Thu May  1 13:05:22 2003
++++ cyrus-imapd-2.1.13/Makefile.in	Thu Jun 19 21:54:26 2003
+@@ -95,10 +95,10 @@
+ 	$(srcdir)/install-sh -d ${DESTDIR}$(exec_prefix)/bin
+ 	$(srcdir)/install-sh -d ${DESTDIR}$(exec_prefix)/lib
+ 	$(srcdir)/install-sh -d ${DESTDIR}$(prefix)/include/cyrus
+-	$(srcdir)/install-sh -d ${DESTDIR}$(prefix)/man/man1
+-	$(srcdir)/install-sh -d ${DESTDIR}$(prefix)/man/man3
+-	$(srcdir)/install-sh -d ${DESTDIR}$(prefix)/man/man5
+-	$(srcdir)/install-sh -d ${DESTDIR}$(prefix)/man/man8
++	$(srcdir)/install-sh -d ${DESTDIR}$(prefix)/share/man/man1
++	$(srcdir)/install-sh -d ${DESTDIR}$(prefix)/share/man/man3
++	$(srcdir)/install-sh -d ${DESTDIR}$(prefix)/share/man/man5
++	$(srcdir)/install-sh -d ${DESTDIR}$(prefix)/share/man/man8
+ 	@for d in  $(SUBDIRS); \
+ 	do \
+ 		(cd $$d; echo "### Making" install "in" `pwd`;	\
+diff -ruN cyrus-imapd-2.1.13.orig/config.h.in cyrus-imapd-2.1.13/config.h.in
+--- cyrus-imapd-2.1.13.orig/config.h.in	Thu May  1 13:08:13 2003
++++ cyrus-imapd-2.1.13/config.h.in	Thu Jun 19 18:13:31 2003
+@@ -118,6 +118,9 @@
+ /* do we have SASL support for APOP? */
+ #undef HAVE_APOP
+ 
++/* the Dynamic Relay Authorization Control package */
++#undef DRAC_AUTH
++
+ /* do we have OpenSSL? */
+ #undef HAVE_SSL
+ 
+diff -ruN cyrus-imapd-2.1.13.orig/configure cyrus-imapd-2.1.13/configure
+--- cyrus-imapd-2.1.13.orig/configure	Thu May  1 13:08:14 2003
++++ cyrus-imapd-2.1.13/configure	Thu Jun 19 18:12:58 2003
+@@ -97,6 +97,8 @@
+ ac_help="$ac_help
+   --with-perl=PERL        use PERL for perl"
+ ac_help="$ac_help
++  --with-drac=DIR         use DRAC library in <DIR> [no] "
++ac_help="$ac_help
+   --with-libwrap=DIR      use libwrap (rooted in DIR) [yes] "
+ ac_help="$ac_help
+   --with-ucdsnmp=DIR      use ucd snmp (rooted in DIR) [yes] "
+@@ -1507,7 +1509,7 @@
+ 
+   # this is CMU ADD LIBPATH
+   if test "$andrew_runpath_switch" = "none" ; then
+-	LDFLAGS="-L"/usr/local/lib" ${LDFLAGS}"
++	LDFLAGS="${LDFLAGS}"
+   else
+ 	LDFLAGS="-L"/usr/local/lib" $andrew_runpath_switch"/usr/local/lib" ${LDFLAGS}"
+   fi
+@@ -6734,6 +6736,60 @@
+ SNMP_SUBDIRS=""
+ 
+ 
++DRACLIBS=
++# Check whether --with-drac or --without-drac was given.
++if test "${with_drac+set}" = set; then
++  withval="$with_drac"
++  if test -d "$withval"; then
++		LDFLAGS="$LDFLAGS -L${withval}"
++		echo $ac_n "checking for dracauth in -ldrac""... $ac_c" 1>&6
++echo "configure:6759: checking for dracauth in -ldrac" >&5
++ac_lib_var=`echo drac'_'dracauth | sed 'y%./+-%__p_%'`
++if eval "test \"`echo '$''{'ac_cv_lib_$ac_lib_var'+set}'`\" = set"; then
++  echo $ac_n "(cached) $ac_c" 1>&6
++else
++  ac_save_LIBS="$LIBS"
++LIBS="-ldrac  $LIBS"
++cat > conftest.$ac_ext <<EOF
++#line 6767 "configure"
++#include "confdefs.h"
++/* Override any gcc2 internal prototype to avoid an error.  */
++/* We use char because int might match the return type of a gcc2
++    builtin and then its argument prototype would still apply.  */
++char dracauth();
++
++int main() {
++dracauth()
++; return 0; }
++EOF
++if { (eval echo configure:6778: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
++  rm -rf conftest*
++  eval "ac_cv_lib_$ac_lib_var=yes"
++else
++  echo "configure: failed program was:" >&5
++  cat conftest.$ac_ext >&5
++  rm -rf conftest*
++  eval "ac_cv_lib_$ac_lib_var=no"
++fi
++rm -f conftest*
++LIBS="$ac_save_LIBS"
++
++fi
++if eval "test \"`echo '$ac_cv_lib_'$ac_lib_var`\" = yes"; then
++  echo "$ac_t""yes" 1>&6
++  cat >> confdefs.h <<\EOF
++#define DRAC_AUTH 1
++EOF
++
++			DRACLIBS="-ldrac"
++else
++  echo "$ac_t""no" 1>&6
++fi
++
++	fi
++fi
++
++
+ 
+   
+   # Check whether --with-libwrap or --without-libwrap was given.
+@@ -7258,6 +7314,7 @@
+ s%@PERL@%$PERL%g
+ s%@MD5OBJ@%$MD5OBJ%g
+ s%@SNMP_SUBDIRS@%$SNMP_SUBDIRS%g
++s%@DRACLIBS@%$DRACLIBS%g
+ s%@LIB_WRAP@%$LIB_WRAP%g
+ s%@LIB_UCDSNMP@%$LIB_UCDSNMP%g
+ s%@IMAP_COM_ERR_LIBS@%$IMAP_COM_ERR_LIBS%g
+diff -ruN cyrus-imapd-2.1.13.orig/fink/cron.daily cyrus-imapd-2.1.13/fink/cron.daily
+--- cyrus-imapd-2.1.13.orig/fink/cron.daily	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/cron.daily	Thu Jun 19 10:42:01 2003
+@@ -0,0 +1,22 @@
++#!/bin/sh
++# Cyrus IMAPd daily maintenance script
++# Copyright (c) 2002 by Henrique M. Holschuh
++# Distributed under the terms of the GNU General Public License version 2
++#
++# This script:
++#   1. Backups the mailbox database to the portable text format,
++#      and compresses the result.  This backup can be used to restore
++#      the Cyrus mailbox database using ctl_mboxlist (after uncompressing
++#      the backup file).
++
++bak=@FINKPREFIX@/var/backups
++bakfile=${bak}/cyrus-mboxlist.txt.gz
++umask 022
++
++[ -x @FINKPREFIX@/sbin/ctl_mboxlist ] && {
++	[ -d $bak ] || ( mkdir -p $bak ; chmod 600 $bak )
++	[ -f $bakfile ] && mv ${bakfile} ${bakfile}.bak
++	su "--command=@FINKPREFIX@/sbin/ctl_mboxlist -d" - cyrus | gzip -9 >${bakfile}
++}
++
++exit 0
+diff -ruN cyrus-imapd-2.1.13.orig/fink/cyradm-16x16.xpm cyrus-imapd-2.1.13/fink/cyradm-16x16.xpm
+--- cyrus-imapd-2.1.13.orig/fink/cyradm-16x16.xpm	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/cyradm-16x16.xpm	Thu Jun 19 09:36:39 2003
+@@ -0,0 +1,45 @@
++/* XPM */
++static char *magick[] = {
++/* columns rows colors chars-per-pixel */
++"16 16 23 1",
++"  c Gray0",
++". c #191919",
++"X c Gray20",
++"o c #00007f",
++"O c #007f00",
++"+ c #007f7f",
++"@ c #7f0000",
++"# c #7f007f",
++"$ c #7f7f00",
++"% c #4c4c4c",
++"& c #666667",
++"* c Gray50",
++"= c Blue",
++"- c Green",
++"; c Cyan",
++": c Red",
++"> c Magenta",
++", c Yellow",
++"< c Gray60",
++"1 c #b2b2b2",
++"2 c Gray80",
++"3 c Gray90",
++"4 c Gray100",
++/* pixels */
++"22111;1212211111",
++"211221213<121221",
++"2111212232<11122",
++"121121221<231<11",
++"2112232<34334112",
++"1112222243213212",
++";2221<11*&<<*<<1",
++"1221233323232231",
++"2233223333332&1<",
++"2213123333233*1*",
++"123312121222233*",
++"1233212<<213223<",
++"12331<1<<11<123*",
++"123333322222223*",
++"123223322222323*",
++"2<&%%%X%%%%X%%X%"
++};
+diff -ruN cyrus-imapd-2.1.13.orig/fink/cyradm-32x32.xpm cyrus-imapd-2.1.13/fink/cyradm-32x32.xpm
+--- cyrus-imapd-2.1.13.orig/fink/cyradm-32x32.xpm	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/cyradm-32x32.xpm	Thu Jun 19 09:36:39 2003
+@@ -0,0 +1,61 @@
++/* XPM */
++static char *magick[] = {
++/* columns rows colors chars-per-pixel */
++"32 32 23 1",
++"  c Gray0",
++". c #191919",
++"X c Gray20",
++"o c #00007f",
++"O c #007f00",
++"+ c #007f7f",
++"@ c #7f0000",
++"# c #7f007f",
++"$ c #7f7f00",
++"% c #4c4c4c",
++"& c #666667",
++"* c Gray50",
++"= c Blue",
++"- c Green",
++"; c Cyan",
++": c Red",
++"> c Magenta",
++", c Yellow",
++"< c Gray60",
++"1 c #b2b2b2",
++"2 c Gray80",
++"3 c Gray90",
++"4 c Gray100",
++/* pixels */
++"222111112;2112121222111112112121",
++"121112;2112211223+11212111121111",
++"221112222112111333+221121221112;",
++"2112111211222133333&12222;212222",
++"11111112212122333323$221+2121211",
++"212121112122333%3 332&41%1111121",
++";212112;22132233211%44443&112211",
++"2211222222233.3112344444442112;2",
++"11111211133321114444441444%22121",
++"1212222133311 444444*%4444%22212",
++"211112233111444444:4334%444%2111",
++";11222331 433223* 2332%322231112",
++"222213&&11&*&&%#%%# %&#%  #%&221",
++"12233343434444434444344444443311",
++"113&2&&&3333333333333332222333+2",
++"2133333333333333332333232X**23%o",
++"22344333333333232233222221#*24.%",
++"124#&34#&#333333333223323:.#24.%",
++"223333333333333333322332332224.%",
++"214333333323333323322222322224.X",
++"11333333 &23X&2&&3223223222234.X",
++"123334433333333333222232223234.%",
++"12333333&2X12X& &13X2322322134.%",
++"123333333233333332333222222224.X",
++"21333332&&&1&X2 3&&3X&&X222234.X",
++"213333333333323222222222222134.%",
++"123333333333332223322322222134.X",
++"113333233233232332232222322324.X",
++"223334434434444444434434444444.%",
++"12 .     .                    .X",
++"2112%%%%o%%X%%o%X%%%o%X%X%oXXo%%",
++"11121222122212122122122122222222"
++};
+diff -ruN cyrus-imapd-2.1.13.orig/fink/cyrdump.8 cyrus-imapd-2.1.13/fink/cyrdump.8
+--- cyrus-imapd-2.1.13.orig/fink/cyrdump.8	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/cyrdump.8	Thu Jun 19 09:38:05 2003
+@@ -0,0 +1,16 @@
++.\" DO NOT MODIFY THIS FILE!  It was generated by help2man 1.24.
++.TH CYRDUMP "1" "Project Cyrus" "CMU"
++.SH NAME
++cyrdump \- dump mailboxes to stdout
++.SH SYNOPSIS
++.B 
++cyrdump [-C <configfile>] [-v] [mboxpattern ...]
++.SH DESCRIPTION
++.PP
++A tool for dumping IMAP mailboxes on a server.
++.TP
++\fB\-C <configfile>\fR
++Specify an alternate configuration file ( is used by default)
++.TP
++\fB\-v\fR
++Increase program verbosity.
+diff -ruN cyrus-imapd-2.1.13.orig/fink/cyrus-makedirs cyrus-imapd-2.1.13/fink/cyrus-makedirs
+--- cyrus-imapd-2.1.13.orig/fink/cyrus-makedirs	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/cyrus-makedirs	Thu Jun 19 09:44:02 2003
+@@ -0,0 +1,141 @@
++#!/bin/sh -e
++#
++#  cyrus-makedirs  -  Parses a Cyrus imap.d configuration file, and creates
++#                     the correct directory trees for all partitions
++#
++#  Copyright 2001,2002 by Henrique de Moraes Holschuh <hmh@debian.org.
++#  Released under the terms of the GNU General Public License (GPL) version 2
++#
++# $Id: cyrus-makedirs,v 1.10 2002/12/18 16:44:10 hmh Exp $
++
++# See lib/util.c, dir_hash_c for Cyrus' directory hashing
++# for the new hash style
++#HASHDIRS="A B C D E F G H I J K L M N O P Q R S T U V W"
++# for the old hash style
++HASHDIRS="a b c d e f g h i j k l m n o p q r s t u v w x y z"
++
++CYRUSOPTFILESYS=1
++[ -r @FINKPREFIX@/etc/default/cyrus21 ] && . @FINKPREFIX@/etc/default/cyrus21
++
++getconf () {
++	confvalue=`sed --silent -e "/^[[:blank:]]*$1:/ { \
++	s#^[[:blank:]]*$1:[[:blank:]]*## \
++	p
++	}" < "$CONF" | head -1`
++	result=${confvalue:-$2}
++}
++
++killsquat=0
++[ "$1" = "--cleansquat" ] && {
++	killsquat=1
++	shift
++}
++
++
++CONF="${1:-@FINKPREFIX@/etc/imapd.conf}"
++[ -r "$CONF" ] || {
++	echo $0: unable to read configuration file $CONF. Aborting...
++	exit 1
++}
++
++getconf configdirectory @FINKPREFIX@/var/lib/cyrus
++confdir="$result"
++[ -d "$confdir" ] || {
++	echo $0: $confdir is not an directory. Aborting...
++	exit 2
++}
++
++getconf sievedir @FINKPREFIX@/etc/sieve
++sievedir="$result"
++
++getconf sieveusehomedir 0
++case "$result" in
++	1|t|true|yes|on) nosievedir=1
++			;;
++	*)		nosievedir=0
++			;;
++esac
++
++getconf hashimapspool 0
++case "$result" in
++	1|t|true|yes|on) hashspool=1
++			;;
++	*)		hashspool=0
++			;;
++esac
++
++# Partitions list
++partitions=`sed --silent -e "/^[[:blank:]]*partition-[[:alnum:]]\+:/ { \
++            s#^[[:blank:]]*partition-[[:alnum:]]\+:[[:blank:]]*## \
++	    p
++	    } " < "$CONF" | sort | uniq | xargs`
++
++# First, fix up the entire confdir subtree
++echo "Creating cyrus control directories in ${confdir}..."
++[ -d "$confdir" ] || mkdir -p "$confdir"
++chmod 750 "$confdir"
++for i in db proc socket log msg user quota; do
++    [ -d "$confdir/$i" ] || mkdir -p "$confdir/$i"
++    chmod 700 "$confdir/$i"
++done
++chmod 750 $confdir/socket
++for i in user quota ; do
++    for j in $HASHDIRS ; do
++    	[ -d "$confdir/$i/$j" ] || mkdir "$confdir/$i/$j"
++    done
++done
++chown -R cyrus:mail "$confdir"
++
++# Now, create the spool partitions
++for i in $partitions ; do
++	echo "Creating partition spool $i..."
++	[ -d "$i" ] || mkdir -p "$i"
++	chmod 750 "$i"
++	[ $hashspool -eq 1 ] && {
++	   for j in $HASHDIRS ; do
++	        [ -d "$i/$j" ] || mkdir "$i/$j"
++	   done
++	}
++	[ -d "$i/stage." ] || mkdir "$i/stage."
++	chown -R cyrus:mail "$i"
++	# and kill any squatter indexes
++	[ $killsquat -ne 0 ] && find "$i" -name 'cyrus.squat' -type f -exec rm -f "{}" \;
++done
++
++# And the sieve directory structure
++[ $nosievedir -eq 0 ] && {
++	[ -d "$sievedir" ] || mkdir "$sievedir"
++	chmod 755 "$sievedir"
++	for j in $HASHDIRS ; do
++		[ -d "$sievedir/$j" ] || mkdir "$sievedir/$j"
++		chmod 755 "$sievedir/$j"
++	done
++	chown -R cyrus:mail "$sievedir"
++}
++
++[ "x${CYRUSOPTFILESYS}" != "x1" ] && exit 0
++#
++# Fix attributes for every partition
++#
++# ext2:  Don't use ext2 for Cyrus spools. But if you must, enable Sync writes
++# ext3:  Journal data too, since that improves access time a LOT
++#        (maybe in the future, there's a bug in 2.4.18 ext3 w/ +j)
++#
++echo "Trying to optimize Cyrus partitions, edit @FINKPREFIX@/etc/default/cyrus21 to disable..."
++partsys="${confdir} ${partitions}"
++filesys=`df -P -T ${partsys} | sed -e "1 d" -e "s/ \+/ /g" | cut -d " " -f 2 | xargs`
++for i in ${filesys} ; do
++	case ${i} in
++	ext2)
++  		echo "Setting attributes to +S for  ${partsys%% *}..."
++		find "${partsys%% *}" -type d -exec chattr +S "{}" \;
++		;;
++	ext3)
++  		echo "Setting attributes to -S -j for  ${partsys%% *}..."
++		find "${partsys%% *}" -type d -exec chattr -S -j "{}" \;
++		;;
++	esac
++	partsys="${partsys#* }"
++done
++
++exit 0
+diff -ruN cyrus-imapd-2.1.13.orig/fink/cyrus-makedirs.8 cyrus-imapd-2.1.13/fink/cyrus-makedirs.8
+--- cyrus-imapd-2.1.13.orig/fink/cyrus-makedirs.8	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/cyrus-makedirs.8	Thu Jun 19 09:44:50 2003
+@@ -0,0 +1,47 @@
++.\"                                      Hey, EMACS: -*- nroff -*-
++.\" First parameter, NAME, should be all caps
++.\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
++.\" other parameters are allowed: see man(7), man(1)
++.TH CYRUS-MAKEDIRS 8 "2002-12-08"
++.\" Please adjust this date whenever revising the manpage.
++.\"
++.\" Some roff macros, for reference:
++.\" .nh        disable hyphenation
++.\" .hy        enable hyphenation
++.\" .ad l      left justify
++.\" .ad b      justify to both left and right margins
++.\" .nf        disable filling
++.\" .fi        enable filling
++.\" .br        insert line break
++.\" .sp <n>    insert n+1 empty lines
++.\" for manpage-specific macros, see man(7)
++.SH NAME
++cyrus-makedirs \- Sets up the Cyrus IMAPd system directories (spools)
++.SH SYNOPSIS
++.B cyrus-makedirs
++.RI [ configfile ]
++.br
++.SH DESCRIPTION
++This manual page documents briefly the
++.B cyrus-makedirs
++command.
++Cyrus-makedirs is the Debian version of Cyrus upstream's mkimap program.
++.PP
++You
++.B should
++call @FINKPREFIX@/sbin/cyrus-makedirs when you change any imapd.conf(5) options
++that create or rename Cyrus mail spools/partitions.  It will be called
++automatically on package upgrades.
++.PP
++.\" TeX users may be more comfortable with the \fB<whatever>\fP and
++.\" \fI<whatever>\fP escape sequences to invode bold face and italics, 
++.\" respectively.
++.SH OPTIONS
++You can optionally tell cyrus-makedirs the Cyrus imapd.conf config file
++to use.  @FINKPREFIX@/etc/imapd.conf is assumed, if no parameters are given.
++.SH SEE ALSO
++.BR imapd.conf(5),
++.BR @FINKPREFIX@/etc/default/cyrus21
++.SH AUTHOR
++This manual page was written by Henrique de Moraes Holschuh <hmh@debian.org>,
++for the Debian GNU/Linux system (but may be used by others).
+diff -ruN cyrus-imapd-2.1.13.orig/fink/cyrus.conf cyrus-imapd-2.1.13/fink/cyrus.conf
+--- cyrus-imapd-2.1.13.orig/fink/cyrus.conf	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/cyrus.conf	Thu Jun 19 11:00:11 2003
+@@ -0,0 +1,80 @@
++# Debian/Fink defaults for Cyrus IMAP server/cluster implementation
++# see cyrus.conf(5) for more information
++#
++# All the tcp services are tcpd-wrapped. see hosts_access(5)
++# $Id: cyrus.conf,v 1.15 2002/10/06 17:55:29 hmh Exp $
++
++START {
++	# do not delete this entry!
++	recover		cmd="@FINKPREFIX@/sbin/ctl_cyrusdb -r"
++  
++	# this is only necessary if using idled for IMAP IDLE
++	# this is NOT to be enabled right now in Debian/Fink builds
++	#idled		cmd="idled"
++
++	# this is useful on backend nodes of a Murder cluster
++	# it causes the backend to syncronize its mailbox list with
++	# the mupdate master upon startup
++	#mupdatepush   cmd="@FINKPREFIX@/sbin/ctl_mboxlist -m"
++
++	# this is recommended if using duplicate delivery suppression
++	delprune	cmd="@FINKPREFIX@/sbin/ctl_deliver -E 3"
++	# this is recommended if caching TLS sessions
++	tlsprune	cmd="@FINKPREFIX@/sbin/tls_prune"
++}
++
++# UNIX sockets start with a slash and are absolute paths
++# you can use a maxchild=# to limit the maximum number of forks of a service
++# you can use babysit=true and maxforkrate=# to keep tight tabs on the service
++# most services also accept -U (limit number of reuses) and -T (timeout)
++SERVICES {
++	# --- Normal cyrus spool, or Murder backends ---
++	# add or remove based on preferences
++	imap		cmd="imapd -U 30" listen="imap" prefork=0 maxchild=100
++	#imaps		cmd="imapd -s -U 30" listen="imaps" prefork=0 maxchild=100
++	pop3		cmd="pop3d -U 30" listen="pop3" prefork=0 maxchild=50
++	#pop3s		cmd="pop3d -s -U 30" listen="pop3s" prefork=0 maxchild=50
++
++	# At least one form of LMTP is required for delivery
++	# (you must keep the Unix socket name in sync with imap.conf)
++	#lmtp		cmd="lmtpd" listen="localhost:lmtp" prefork=0 maxchild=20
++	lmtpunix	cmd="lmtpd" listen="@FINKPREFIX@/var/run/cyrus/socket/lmtp" prefork=0 maxchild=20
++	# ----------------------------------------------
++
++	# useful if you need to give users remote access to sieve
++	# by default, we limit this to localhost in Debian/Fink
++  	sieve		cmd="timsieved" listen="localhost:sieve" prefork=0 maxchild=100
++
++	# this one is needed for the notification services
++	notify		cmd="notifyd" listen="@FINKPREFIX@/var/run/cyrus/socket/notify" proto="udp" prefork=1
++
++	# --- Murder frontends -------------------------
++	# enable these and disable the matching services above, 
++	# except for sieve (which deals automatically with Murder)
++
++	# mupdate database service - must prefork at least 1
++	# (mupdate slaves)
++	#mupdate       cmd="mupdate" listen=2004 prefork=1
++	# (mupdate master, only one in the entire cluster)
++	#mupdate       cmd="mupdate -m" listen=2004 prefork=1
++
++	# proxies that will connect to the backends
++	#imap		cmd="proxyd" listen="imap" prefork=0 maxchild=100
++	#imaps		cmd="proxyd -s" listen="imaps" prefork=0 maxchild=100
++	#pop3		cmd="pop3proxyd" listen="pop3" prefork=0 maxchild=50
++	#pop3s		cmd="pop3proxyd -s" listen="pop3s" prefork=0 maxchild=50
++	#lmtp		cmd="lmtpproxyd" listen="lmtp" prefork=1 maxchild=20
++	# ----------------------------------------------
++}
++
++EVENTS {
++	# this is required
++	checkpoint	cmd="@FINKPREFIX@/sbin/ctl_cyrusdb -c" period=30
++
++	# this is only necessary if using duplicate delivery suppression
++	delprune	cmd="@FINKPREFIX@/sbin/ctl_deliver -E 3" at=0401
++
++	# this is only necessary if caching TLS sessions
++	tlsprune	cmd="@FINKPREFIX@/sbin/tls_prune" at=0401
++}
++
+diff -ruN cyrus-imapd-2.1.13.orig/fink/cyrus21.default cyrus-imapd-2.1.13/fink/cyrus21.default
+--- cyrus-imapd-2.1.13.orig/fink/cyrus21.default	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/cyrus21.default	Thu Jun 19 10:08:24 2003
+@@ -0,0 +1,21 @@
++# Defaults for Cyrus IMAPd 2.1 scripts
++# sourced by /etc/init.d/cyrus21, /usr/sbin/cyrus-makedirs
++# installed at /etc/default/cyrus21 by the maintainer scripts
++# $Id: cyrus21-common.default,v 1.2 2002/05/07 18:24:48 hmh Exp $
++
++#
++# This is a POSIX shell fragment
++#
++
++# Set this to 1 or higher to enable debugging on cyrmaster
++#CYRUS_VERBOSE=1
++
++# Socket listen queue backlog size
++# See listen(2). Default is 32, you may want to increase
++# this number if you have a very high connection rate
++#LISTENQUEUE=32
++
++# Wether cyrus-makedirs should optimize filesystems
++# or not.  Switch it off if you are going to do your
++# own optimizations.  Set to 1 to enable, 0 to disable
++#CYRUSOPTFILESYS=1
+diff -ruN cyrus-imapd-2.1.13.orig/fink/cyrus21.init cyrus-imapd-2.1.13/fink/cyrus21.init
+--- cyrus-imapd-2.1.13.orig/fink/cyrus21.init	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/cyrus21.init	Thu Jun 19 21:36:11 2003
+@@ -0,0 +1,151 @@
++#! /bin/sh
++#
++# cyrus21	/etc/init.d/ script for cyrus2 IMAPd
++#		This file manages the Cyrus IMAPd master process.
++#
++#		Copr. 2001 by Henrique de Moraes Holschuh <hmh@debian.org>
++#		Distributed under the GPL version 2
++#
++# Version:	$Id: cyrus21-common.init,v 1.15 2003/05/05 14:39:30 hmh Exp $
++#
++
++# Overridable defaults
++unset CYRUS_VERBOSE
++unset LISTENQUEUE
++[ -r /etc/default/cyrus21 ] && . /etc/default/cyrus21
++
++[ "x${CYRUS_VERBOSE}" != "x" ] && export CYRUS_VERBOSE
++OPTIONS="-d"
++[ "x${LISTENQUEUE}" != "x" ] && OPTIONS="-l ${LISTENQUEUE} ${OPTIONS}"
++
++PATH=/sbin:/usr/sbin:/bin:/usr/bin
++DAEMON=/usr/sbin/cyrmaster
++NAME=cyrmaster
++DESC="Cyrus IMAPd"
++
++test -x ${DAEMON} || exit 0
++
++set -e
++
++START="--start --quiet --pidfile /var/run/${NAME}.pid --exec ${DAEMON} -- ${OPTIONS}"
++
++verifydb() {
++   while read -r DBKEY DBVALUE ; do
++	match=`gawk "/^${DBKEY}[[:blank:]]/ { print \\$2 }" < $1`
++	[ "x${match}" != "x${DBVALUE}" ] && return 0
++   done
++   return 1
++}
++
++createdir() {
++# $1 = user
++# $2 = group
++# $3 = permissions (octal)
++# $4 = path to directory
++	[ -d "$4" ] || mkdir -p "$4"
++	chown -c -h "$1:$2" "$4"
++	chmod -c "$3" "$4"
++}
++
++missingstatoverride () {
++	echo "$0: You are missing a dpkg-statoverride on $1.  Add it." >&2
++	exit 1
++}
++
++fixdirs () {
++	dir=`dpkg-statoverride --list /var/run/cyrus` \
++		|| missingstatoverride /var/run/cyrus
++	[ -z "$dir" ] \
++		|| createdir $dir
++	dir=`dpkg-statoverride --list /var/run/cyrus/socket` \
++		|| missingstatoverride /var/run/cyrus/socket
++	[ -z "$dir" ] \
++		|| createdir $dir
++}
++
++case "$1" in
++  start)
++  	# Verify if there are old Cyrus 1.5 spools that were not upgraded
++	[ -f /var/lib/cyrus/mailboxes -a -d /var/lib/cyrus/deliverdb -a \
++	  -d /var/spool/cyrus/mail/user -a ! -d /var/spool/cyrus/mail/stage. ] && {
++	  	echo "$0: It appears that you still have an version 1.5 spool" 1>&2
++		echo "$0: that needs to be upgraded. Please refer to the guide" 1>&2
++		echo "$0: at /usr/share/doc/cyrus21-common/UPGRADE.Debian" 1>&2
++		echo
++		echo "$0: Cyrmaster not started."
++		exit 2
++	}
++	# Verify consistency of database backends
++	[ -f /usr/lib/cyrus/cyrus-db-types.active ] && {
++		# is it safe to start cyrmaster? compare "key value" pairs
++		# from the (old) active database types file with the new one
++		verifydb /usr/lib/cyrus/cyrus-db-types.txt \
++		    < /usr/lib/cyrus/cyrus-db-types.active && {
++		    echo "$0: Database backends mismatch! You must manually" 1>&2
++		    echo "$0: verify and update the Cyrus databases to the" 1>&2
++		    echo "$0: new backends." 1>&2
++		    echo "$0: Please refer to /usr/share/doc/cyrus21-common/README.Debian" 1>&2
++		    echo "$0: for instructions." 1>&2
++		    echo
++		    echo "$0: Cyrmaster not started."
++		    exit 2
++		}
++	}
++	echo -n "Starting ${DESC}: "
++	fixdirs
++	if start-stop-daemon ${START} >/dev/null 2>&1 ; then
++		echo "$NAME."
++	else
++		if start-stop-daemon --test ${START} >/dev/null 2>&1; then
++			echo "(failed)."
++			exit 1
++		else
++			echo "${DAEMON} already running."
++			exit 0
++		fi
++	fi
++	;;
++  stop)
++	echo -n "Stopping $DESC: "
++	if start-stop-daemon --stop --quiet --pidfile /var/run/$NAME.pid \
++			--quiet --startas $DAEMON >/dev/null 2>&1 ; then
++		echo "$NAME."
++	else
++		echo "(failed)."
++	fi
++	;;
++  reload|force-reload)
++	echo "Reloading $DESC configuration files."
++	start-stop-daemon --stop --signal 1 --quiet \
++		--pidfile /var/run/$NAME.pid --exec $DAEMON >/dev/null 2>&1
++  	;;
++  restart)
++  	$0 stop && {
++	  echo -n "Waiting for complete shutdown..."
++	  i=5
++	  while [ $i -gt 0 ] ; do
++	  	if start-stop-daemon --start --test \
++	  	   --pidfile /var/run/$NAME.pid \
++		   --exec $DAEMON >/dev/null 2>&1 ; then
++			break
++		fi
++		sleep 2s
++		i=$(($i - 1))
++		echo -n "."
++	  done
++	  [ $i -eq 0 ] && {
++	  	echo
++		echo "fatal: incomplete shutdown detected, aborting."
++		exit 1
++	  }
++	  echo
++	}
++	exec $0 start
++	;;
++  *)
++	echo "Usage: $0 {start|stop|restart|reload|force-reload}" 1>&2
++	exit 1
++	;;
++esac
++
++exit 0
+diff -ruN cyrus-imapd-2.1.13.orig/fink/get-backtrace.gdb cyrus-imapd-2.1.13/fink/get-backtrace.gdb
+--- cyrus-imapd-2.1.13.orig/fink/get-backtrace.gdb	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/get-backtrace.gdb	Thu Jun 19 09:37:04 2003
+@@ -0,0 +1,4 @@
++c
++bt
++quit
++
+diff -ruN cyrus-imapd-2.1.13.orig/fink/imapd.conf cyrus-imapd-2.1.13/fink/imapd.conf
+--- cyrus-imapd-2.1.13.orig/fink/imapd.conf	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/imapd.conf	Thu Jun 19 11:00:34 2003
+@@ -0,0 +1,279 @@
++# Debian/Fink Cyrus imapd.conf
++# See imapd.conf(5) for more information and more options
++
++# Configuration directory
++configdirectory: @FINKPREFIX@/var/lib/cyrus
++
++# Which partition to use for default mailboxes
++defaultpartition: default
++partition-default: @FINKPREFIX@/var/spool/cyrus/mail
++
++# News setup
++partition-news: @FINKPREFIX@/var/spool/cyrus/news
++newsspool: @FINKPREFIX@/var/spool/news
++
++# Alternate namespace
++# If enabled, activate the alternate namespace as documented in
++# @FINKPREFIX@/share/doc/cyrus2-common/html/altnamespace.html, where an user's
++# subfolders are in the same level as the INBOX
++altnamespace: no
++
++# UNIX Hierarchy Convention
++# Set to yes, and cyrus will accept dots in names, and use the forward
++# slash "/" to delimit levels of the hierarchy. This is done by converting
++# internally all dots to "^", and all "/" to dots. So the "rabbit.holes"
++# mailbox of user "helmer.fudd" is stored in "user.elmer^fud.rabbit^holes"
++#
++# WARNING: This option does NOT apply to admin tools such as cyradm 
++# (admins ONLY), reconstruct, quota, etc., NOR does it affect LMTP delivery 
++# of messages directly to mailboxes via plus-addressing.
++# See also userprefix and sharedprefix on imapd.conf(5)
++unixhierarchysep: no
++
++# Munging illegal characters in headers
++# Headers of RFC2882 messages must not have characters with the 8th bit
++# set. However, too many badly-written MUAs generate this, including most
++# spamware.  Disable this if you want Cyrus to leave the crappage untouched
++# and you don't care that IMAP SEARCH won't work right anymore.
++#munge8bit: no
++
++# Forcing recipient user to lowercase
++# Cyrus 2.1 is case-sensitive.  If all your mail users are in lowercase, it is
++# probably a very good idea to set lmtp_downcase_rcpt to true.  The default is
++# to assume the user knows what he is doing, and not downcase anything.
++#lmtp_downcase_rcpt: yes
++
++# Uncomment the following and add the space-separated users who 
++# have admin rights for all services.
++#admins: cyrus
++
++# Space-separated list of users that have lmtp "admin" status (i.e. that
++# can deliver email through TCP/IP lmtp) in addition to those in the
++# admins: entry above
++#lmtp_admins: postman
++
++# Space-separated list of users that have mupdate "admin" status, in
++# addition to those in the admins: entry above. Note that mupdate slaves and 
++# backends in a Murder cluster need to autenticate against the mupdate master
++# as admin users.
++#mupdate_admins: mupdateman
++
++# Space-separated list of users that have imapd "admin" status, in
++# addition to those in the admins: entry above
++#imap_admins: cyrus
++
++# Space-separated list of users that have sieve "admin" status, in
++# addition to those in the admins: entry above
++#sieve_admins: cyrus
++
++# List of users and groups that are allowed to proxy for other users,
++# seperated by spaces.  Any user listed in this will be allowed to login
++# for any other user.  Like "admins:" above, you can have imap_proxyservers
++# and sieve_proxyservers.
++#proxyservers: cyrus
++
++# No anonymous logins
++allowanonymouslogin: no
++
++# Minimum time between POP mail fetches in minutes
++popminpoll: 1
++
++# If nonzero, normal users may create their own IMAP accounts by creating
++# the mailbox INBOX.  The user's quota is set to the value if it is positive,
++# otherwise the user has unlimited quota.
++autocreatequota: 0
++
++# umask used by Cyrus programs
++umask: 077
++
++# Sendmail binary location (used by sieve)
++sendmail: @FINKPREFIX@/sbin/sendmail
++
++# If enabled, cyrdeliver will look for Sieve scripts in user's home
++# directories: ~user/.sieve.
++sieveusehomedir: false
++
++# If sieveusehomedir is false, this directory is searched for Sieve scripts.
++sievedir: @FINKPREFIX@/var/spool/sieve
++
++# notifyd(8) method to use for "MAIL" notifications.  If not set, "MAIL"
++# notifications are disabled.  Valid methods are: null, log, zephyr
++#mailnotifier: zephyr
++
++# notifyd(8) method to use for "SIEVE" notifications.  If not set, "SIEVE"
++# notifications are disabled.  This method is only used when no method is
++# specified in the script.  Valid methods are null, log, zephyr, mailto
++#sievenotifier: zephyr
++
++# DRAC (pop-before-smtp, imap-before-smtp) support
++# Set dracinterval to the time in minutes to call DRAC while a user is
++# connected to the imap/pop services. Set to 0 to disable DRAC (default)
++# Set drachost to the host where the rpc drac service is running
++#dracinterval: 0
++#drachost: localhost
++
++# If enabled, the partitions will also be hashed, in addition to the hashing
++# done on configuration directories. This is recommended if one partition has a
++# very bushy mailbox tree.
++hashimapspool: true
++
++# Allow plaintext logins by default (SASL PLAIN)
++allowplaintext: yes
++
++# Force PLAIN/LOGIN authentication only
++# (you need to uncomment this if you are not using an auxprop-based SASL
++# mechanism.  saslauthd users, that means you!). And pay attention to
++# sasl_minimum_layer below, too.
++#sasl_mech_list: PLAIN
++
++# The minimum SSF that the server will allow a client to negotiate. A
++# value of 1 requires integrity protection; any higher value requires some
++# amount of encryption.
++#sasl_minimum_layer: 0
++
++# The maximum SSF that the server will allow a client to negotiate. A
++# value of 1 requires integrity protection; any higher value requires some
++# amount of encryption.
++#sasl_maximum_layer: 256
++
++# List of remote realms whose users may log in using cross-realm
++# authentications.  Seperate each realm name by a space. A cross-realm
++# identity is considered any identity returned by SASL with an "@" in it.
++#loginrealms:
++
++#
++# SASL library options (these are handled directly by the SASL libraries,
++# refer to SASL documentation for an up-to-date list of these)
++#
++
++# The mechanism(s) used by the server to verify plaintext passwords. Possible
++# values are "saslauthd", "auxprop", "pwcheck" and "alwaystrue".  They
++# are tried in order, you can specify more than one, separated by spaces.
++#
++# Do note that, since sasl will be run as user cyrus, you may have a lot of
++# trouble to set this up right.
++sasl_pwcheck_method: auxprop
++
++# What auxpropd plugins to load, if using sasl_pwcheck_method: auxprop
++# by default, all plugins are tried (which is probably NOT what you want).
++#sasl_auxprop_plugin: sasldb
++
++# If enabled, the SASL library will automatically create authentication secrets
++# when given a plaintext password. Refer to SASL documentation 
++sasl_auto_transition: no
++
++#
++# SSL/TLS Options
++#
++
++# File containing the global certificate used for ALL services (imap, pop3,
++# lmtp, sieve)
++#tls_cert_file: @FINKPREFIX@/etc/ssl/certs/cyrus-global.pem
++
++# File containing the private key belonging to the global server certificate.
++#tls_key_file: @FINKPREFIX@/etc/ssl/private/cyrus-global.key
++
++# File containing the certificate used for imap. If not specified, the global
++# certificate is used.  A value of "disabled" will disable SSL/TLS for imap.
++#tls_imap_cert_file: @FINKPREFIX@/etc/ssl/certs/cyrus-imap.pem
++
++# File containing the private key belonging to the imap-specific server
++# certificate.  If not specified, the global private key is used.  A value of
++# "disabled" will disable SSL/TLS for imap.
++#tls_imap_key_file: @FINKPREFIX@/etc/ssl/private/cyrus-imap.key
++
++# File containing the certificate used for pop3. If not specified, the global
++# certificate is used.  A value of "disabled" will disable SSL/TLS for pop3.
++#tls_pop3_cert_file: @FINKPREFIX@/etc/ssl/certs/cyrus-pop3.pem
++
++# File containing the private key belonging to the pop3-specific server
++# certificate.  If not specified, the global private key is used.  A value of
++# "disabled" will disable SSL/TLS for pop3.
++#tls_pop3_key_file: @FINKPREFIX@/etc/ssl/private/cyrus-pop3.key
++
++# File containing the certificate used for lmtp. If not specified, the global
++# certificate is used.  A value of "disabled" will disable SSL/TLS for lmtp.
++#tls_lmtp_cert_file: @FINKPREFIX@/etc/ssl/certs/cyrus-lmtp.pem
++
++# File containing the private key belonging to the lmtp-specific server
++# certificate.  If not specified, the global private key is used.  A value of
++# "disabled" will disable SSL/TLS for lmtp.
++#tls_lmtp_key_file: @FINKPREFIX@/etc/ssl/private/cyrus-lmtp.key
++
++# File containing the certificate used for sieve. If not specified, the global
++# certificate is used.  A value of "disabled" will disable SSL/TLS for sieve.
++#tls_sieve_cert_file: @FINKPREFIX@/etc/ssl/certs/cyrus-sieve.pem
++
++# File containing the private key belonging to the sieve-specific server
++# certificate.  If not specified, the global private key is used.  A value of
++# "disabled" will disable SSL/TLS for sieve.
++#tls_sieve_key_file: @FINKPREFIX@/etc/ssl/private/cyrus-sieve.key
++
++# File containing one or more Certificate Authority (CA) certificates.
++#tls_ca_file: @FINKPREFIX@/etc/ssl/certs/cyrus-imapd-ca.pem
++
++# Path to directory with certificates of CAs.
++tls_ca_path: @FINKPREFIX@/etc/ssl/certs
++
++# The length of time (in minutes) that a TLS session will be cached for later
++# reuse.  The maximum value is 1440 (24 hours), the default.  A value of 0 will
++# disable session caching.
++tls_session_timeout: 1440
++
++# The list of SSL/TLS ciphers to allow.  The format of the string is described
++# in ciphers(1). THIS DISABLES THE WEAK 'FOR EXPORT' CRAP!
++tls_cipher_list: TLSv1:SSLv3:SSLv2:!NULL:!EXPORT:!DES:!LOW:@STRENGTH
++
++# Require a client certificate for ALL services (imap, pop3, lmtp, sieve).
++#tls_require_cert: false
++
++# Require a client certificate for imap ONLY.
++#tls_imap_require_cert: false
++
++# Require a client certificate for pop3 ONLY.
++#tls_pop3_require_cert: false
++
++# Require a client certificate for lmtp ONLY.
++#tls_lmtp_require_cert: false
++
++# Require a client certificate for sieve ONLY.
++#tls_sieve_require_cert: false
++
++#
++# Cyrus Murder cluster configuration
++#
++# Set the following options to the values needed for this server to
++# autenticate against the mupdate master server:
++# mupdate_server
++# mupdate_port
++# mupdate_username
++# mupdate_authname
++# mupdate_realm
++# mupdate_password
++# mupdate_retry_delay
++
++##
++## KEEP THESE IN SYNC WITH cyrus.conf
++##
++# Unix domain socket that lmtpd listens on.
++lmtpsocket: @FINKPREFIX@/var/run/cyrus/socket/lmtp
++
++# Unix domain socket that idled listens on.
++idlesocket: @FINKPREFIX@/var/run/cyrus/socket/idle
++
++# Unix domain socket that the new mail notification daemon listens on.
++notifysocket: @FINKPREFIX@/var/run/cyrus/socket/notify
++
++##
++## DEBUGGING
++##
++# Keep the hook disabled when it is not in use
++#
++# gdb Back-traces
++#debug_command: /usr/bin/gdb -batch -cd=/tmp -x @FINKPREFIX@/lib/cyrus/get-backtrace.gdb @FINKPREFIX@/lib/cyrus/bin/%s %d >/tmp/gdb-backtrace.cyrus.%1$s.%2$d <&- 2>&1 &
++#
++# system-call traces NOT AVAIL ON OS X
++#debug_command: /usr/bin/strace -tt -o /tmp/strace.cyrus.%s.%d -p %2$d <&- 2>&1 &
++#
++# library traces NOT AVAIL ON OS X
++#debug_command: /usr/bin/ltrace -tt -n 2 -o /tmp/ltrace.cyrus.%s.%d -p %2$d <&- 2>&1 &
+diff -ruN cyrus-imapd-2.1.13.orig/fink/logcheck.ignore cyrus-imapd-2.1.13/fink/logcheck.ignore
+--- cyrus-imapd-2.1.13.orig/fink/logcheck.ignore	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/logcheck.ignore	Thu Jun 19 09:37:12 2003
+@@ -0,0 +1,32 @@
++cyrus/ctl_cyrusdb\[[0-9]+\]: +(done +)?recovering cyrus databases
++cyrus/ctl_cyrusdb\[[0-9]+\]: +archiving
++cyrus/ctl_cyrusdb\[[0-9]+\]: +checkpointing
++cyrus/ctl_cyrusdb\[[0-9]+\]: +done checkpointing
++cyrus/ctl_deliver\[[0-9]+\]: +mydelete: committing txn
++cyrus/ctl_deliver\[[0-9]+\]: +mydelete: starting txn
++cyrus/ctl_deliver\[[0-9]+\]: +duplicate_prune: pruning back
++cyrus/ctl_deliver\[[0-9]+\]: +duplicate_prune: purged
++cyrus/tls_prune\[[0-9]+\]: +(tls_prune: )?purged
++cyrus/master\[[0-9]+\]: +ready for work
++cyrus/master\[[0-9]+\]: +about to exec
++cyrus/master\[[0-9]+\]: +process [0-9]+ exited, status 0
++cyrus/master\[[0-9]+\]: +service [a-zA-Z0-9]+ now has [0-9]+ workers
++cyrus/[a-zA-Z0-9]+\[[0-9]+\]: +executed
++cyrus/[a-zA-Z0-9]+\[[0-9]+\]: +accepted connection
++cyrus/[a-zA-Z0-9]+\[[0-9]+\]: +telling master
++cyrus/lmtpd\[[0-9]+\]: +lmtp connection preauth'd as postman
++cyrus/lmtpd\[[0-9]+\]: +dupelim: eliminated duplicate message to
++cyrus/lmtpd\[[0-9]+\]: +duplicate_check:
++cyrus/lmtpd\[[0-9]+\]: +duplicate_mark:
++cyrus/lmtpd\[[0-9]+\]: +mystore: committing txn
++cyrus/lmtpd\[[0-9]+\]: +mystore: starting txn
++cyrus/pop3d\[[0-9]+\]: +login:
++cyrus/imapd\[[0-9]+\]: +abort_txn: aborting txn
++cyrus/imapd\[[0-9]+\]: +delete: starting txn
++cyrus/imapd\[[0-9]+\]: +login:
++cyrus/imapd\[[0-9]+\]: +open: user .* opened
++cyrus/imapd\[[0-9]+\]: +mycommit: committing txn
++cyrus/imapd\[[0-9]+\]: +myfetch: reusing txn
++cyrus/imapd\[[0-9]+\]: +myfetch: starting txn
++cyrus/imapd\[[0-9]+\]: +mystore: reusing txn
++cyrus/imapd\[[0-9]+\]: +seen_db: user .* opened
+diff -ruN cyrus-imapd-2.1.13.orig/fink/pam/imap cyrus-imapd-2.1.13/fink/pam/imap
+--- cyrus-imapd-2.1.13.orig/fink/pam/imap	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/pam/imap	Thu Jun 19 09:38:52 2003
+@@ -0,0 +1,15 @@
++# PAM configuration file for Cyrus IMAP service
++# $Id: imap.pam,v 1.2 2002/05/25 11:25:07 hmh Exp $
++#
++# If you want to use Cyrus in a setup where users don't have
++# accounts on the local machine, you'll need to make sure
++# you use something like pam_permit for account checking.
++#
++# Also, take a look into libpam-ldap, libpam-mysql/libpam-pgsql
++# and libpam-pwdfile. They're likely to be helpful aid for creating
++# a closed-box email system.
++#
++
++auth	required	pam_unix.so nullok
++account	required	pam_unix.so
++
+diff -ruN cyrus-imapd-2.1.13.orig/fink/pam/lmtp cyrus-imapd-2.1.13/fink/pam/lmtp
+--- cyrus-imapd-2.1.13.orig/fink/pam/lmtp	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/pam/lmtp	Thu Jun 19 09:38:52 2003
+@@ -0,0 +1,15 @@
++# PAM configuration file for Cyrus LMTP service
++# $Id: lmtp.pam,v 1.2 2002/05/25 11:25:07 hmh Exp $
++#
++# If you want to use Cyrus in a setup where users don't have
++# accounts on the local machine, you'll need to make sure
++# you use something like pam_permit for account checking.
++#
++# Also, take a look into libpam-ldap, libpam-mysql/libpam-pgsql
++# and libpam-pwdfile. They're likely to be helpful aid for creating
++# a closed-box email system.
++#
++
++auth	required	pam_unix.so nullok
++account	required	pam_unix.so
++
+diff -ruN cyrus-imapd-2.1.13.orig/fink/pam/mupdate cyrus-imapd-2.1.13/fink/pam/mupdate
+--- cyrus-imapd-2.1.13.orig/fink/pam/mupdate	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/pam/mupdate	Thu Jun 19 11:01:12 2003
+@@ -0,0 +1,16 @@
++# PAM configuration file for Cyrus Murder mupdate service
++# $Id: mupdate.pam,v 1.2 2002/05/25 11:25:07 hmh Exp $
++#
++# You'd better read the documentation damn well before you
++# start mupdate... this file is also likely wrong, please file
++# a bug against the cyrus21-murder package if you have better
++# ideas for the Debian/Fink default version of this file.
++#
++# Also, take a look into libpam-ldap, libpam-mysql/libpam-pgsql
++# and libpam-pwdfile. They're likely to be helpful aid for creating
++# a closed-box email system.
++#
++
++auth	required	pam_unix.so nullok
++account	required	pam_unix.so
++
+diff -ruN cyrus-imapd-2.1.13.orig/fink/pam/pop cyrus-imapd-2.1.13/fink/pam/pop
+--- cyrus-imapd-2.1.13.orig/fink/pam/pop	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/pam/pop	Thu Jun 19 09:38:52 2003
+@@ -0,0 +1,15 @@
++# PAM configuration file for Cyrus POP3 service
++# $Id: pop.pam,v 1.2 2002/05/25 11:25:07 hmh Exp $
++#
++# If you want to use Cyrus in a setup where users don't have
++# accounts on the local machine, you'll need to make sure
++# you use something like pam_permit for account checking.
++#
++# Also, take a look into libpam-ldap, libpam-mysql/libpam-pgsql
++# and libpam-pwdfile. They're likely to be helpful aid for creating
++# a closed-box email system.
++#
++
++auth	required	pam_unix.so nullok
++account	required	pam_unix.so
++
+diff -ruN cyrus-imapd-2.1.13.orig/fink/pam/sieve cyrus-imapd-2.1.13/fink/pam/sieve
+--- cyrus-imapd-2.1.13.orig/fink/pam/sieve	Wed Dec 31 17:00:00 1969
++++ cyrus-imapd-2.1.13/fink/pam/sieve	Thu Jun 19 09:38:52 2003
+@@ -0,0 +1,15 @@
++# PAM configuration file for Cyrus SIEVE timsieved service
++# $Id: sieve.pam,v 1.2 2002/05/25 11:25:07 hmh Exp $
++#
++# If you want to use Cyrus in a setup where users don't have
++# accounts on the local machine, you'll need to make sure
++# you use something like pam_permit for account checking.
++#
++# Also, take a look into libpam-ldap, libpam-mysql/libpam-pgsql
++# and libpam-pwdfile. They're likely to be helpful aid for creating
++# a closed-box email system.
++#
++
++auth	required	pam_unix.so nullok
++account	required	pam_unix.so
++
+diff -ruN cyrus-imapd-2.1.13.orig/imap/Makefile.in cyrus-imapd-2.1.13/imap/Makefile.in
+--- cyrus-imapd-2.1.13.orig/imap/Makefile.in	Mon Mar 24 10:54:43 2003
++++ cyrus-imapd-2.1.13/imap/Makefile.in	Thu Jun 19 18:15:55 2003
+@@ -67,6 +67,7 @@
+ SIEVE_LIBS = @SIEVE_LIBS@
+ IMAP_COM_ERR_LIBS = @IMAP_COM_ERR_LIBS@
+ LIB_WRAP = @LIB_WRAP@
++DRAC_LIBS = @DRACLIBS@
+ LIBS = $(IMAP_LIBS) $(IMAP_COM_ERR_LIBS)
+ DEPLIBS = ../acap/libacap.a ../lib/libcyrus.a @DEPLIBS@
+ 
+@@ -212,15 +213,18 @@
+ 
+ imapd: xversion $(IMAPDOBJS) libimap.a $(DEPLIBS) $(SERVICE)
+ 	$(CC) $(LDFLAGS) -o imapd \
+-	 $(SERVICE) $(IMAPDOBJS) libimap.a $(DEPLIBS) $(LIBS) $(LIB_WRAP)
++	 $(SERVICE) $(IMAPDOBJS) libimap.a $(DEPLIBS) $(LIBS) $(LIB_WRAP) \
++	 $(DRAC_LIBS)
+ 
+ imapd.pure: $(IMAPDOBJS) libimap.a $(DEPLIBS) $(SERVICE)
+ 	$(PURIFY) $(PUREOPT) $(CC) $(LDFLAGS) -o imapd.pure \
+-	 $(SERVICE) $(IMAPDOBJS) libimap.a $(DEPLIBS) $(LIBS) $(LIB_WRAP)
++	 $(SERVICE) $(IMAPDOBJS) libimap.a $(DEPLIBS) $(LIBS) $(LIB_WRAP) \
++	 $(DRAC_LIBS)
+ 
+ imapd.quant: $(IMAPDOBJS) libimap.a $(DEPLIBS) $(SERVICE)
+ 	$(QUANTIFY) $(QUANTOPT) $(CC) $(LDFLAGS) -o imapd.quant \
+-	 $(SERVICE) $(IMAPDOBJS) libimap.a $(DEPLIBS) $(LIBS) $(LIB_WRAP)
++	 $(SERVICE) $(IMAPDOBJS) libimap.a $(DEPLIBS) $(LIBS) $(LIB_WRAP) \
++	 $(DRAC_LIBS)
+ 
+ proxyd: $(PROXYDOBJS) libimap.a $(DEPLIBS) $(SERVICE)
+ 	$(CC) $(LDFLAGS) -o proxyd \
+@@ -252,7 +256,7 @@
+ 
+ pop3d: pop3d.o tls.o libimap.a $(DEPLIBS) $(SERVICE)
+ 	$(CC) $(LDFLAGS) -o pop3d pop3d.o tls.o $(SERVICE) \
+-	 libimap.a $(DEPLIBS) $(LIBS) $(LIB_WRAP)
++	 libimap.a $(DEPLIBS) $(LIBS) $(LIB_WRAP) $(DRAC_LIBS)
+ 
+ pop3proxyd: pop3proxyd.o tls.o libimap.a $(DEPLIBS) $(SERVICE)
+ 	$(CC) $(LDFLAGS) -o pop3proxyd pop3proxyd.o tls.o $(SERVICE) \
+diff -ruN cyrus-imapd-2.1.13.orig/imap/config.c cyrus-imapd-2.1.13/imap/config.c
+--- cyrus-imapd-2.1.13.orig/imap/config.c	Mon Apr 14 14:31:36 2003
++++ cyrus-imapd-2.1.13/imap/config.c	Fri Jun 20 11:26:13 2003
+@@ -68,7 +68,7 @@
+ #include "hash.h"
+ #include "prot.h" /* for PROT_BUFSIZE */
+ 
+-#define CONFIG_FILENAME "/etc/imapd.conf"
++#define CONFIG_FILENAME "@FINKPREFIX@/etc/imapd.conf"
+ 
+ #define CONFIGHASHSIZE 200 /* > 2x # of options */
+ static struct hash_table confighash;
+diff -ruN cyrus-imapd-2.1.13.orig/imap/cvt_cyrusdb.c cyrus-imapd-2.1.13/imap/cvt_cyrusdb.c
+--- cyrus-imapd-2.1.13.orig/imap/cvt_cyrusdb.c	Mon Apr 14 14:15:12 2003
++++ cyrus-imapd-2.1.13/imap/cvt_cyrusdb.c	Thu Jun 19 18:47:18 2003
+@@ -62,7 +62,9 @@
+ #include <com_err.h>
+ 
+ #include <sys/ipc.h>
++#if !defined(__APPLE__)
+ #include <sys/msg.h>
++#endif
+ 
+ #include "acl.h"
+ #include "auth.h"
+diff -ruN cyrus-imapd-2.1.13.orig/imap/imapd.c cyrus-imapd-2.1.13/imap/imapd.c
+--- cyrus-imapd-2.1.13.orig/imap/imapd.c	Tue Apr 22 10:02:06 2003
++++ cyrus-imapd-2.1.13/imap/imapd.c	Thu Jun 19 18:26:59 2003
+@@ -120,6 +120,18 @@
+ static SSL *tls_conn = NULL;
+ #endif /* HAVE_SSL */
+ 
++#ifdef DRAC_AUTH
++static struct {
++    int interval;		/* dracd "ping" interval; 0 = disabled */
++    unsigned long clientaddr;
++    struct prot_waitevent *event;
++} drac;
++
++extern int dracconn(char *server, char **errmsg);
++extern int dracsend(unsigned long userip, char **errmsg);
++extern int dracdisc(char **errmsg);
++#endif /* DRAC_AUTH */
++
+ /* current sub-user state */
+ static struct mailbox mboxstruct;
+ static struct mailbox *imapd_mailbox;
+@@ -560,6 +572,23 @@
+     /* setup for sending IMAP IDLE notifications */
+     idle_enabled();
+ 
++#ifdef DRAC_AUTH
++    /* setup for sending DRAC "pings" */
++    drac.event = NULL;
++    drac.interval = config_getint("dracinterval", 5);
++    if (drac.interval < 0) drac.interval = 0;
++    if (drac.interval) {
++	char *err;
++
++	if (dracconn((char*) config_getstring("drachost", "localhost"), &err) != 0) {
++	    /* disable DRAC */
++	    drac.interval = 0;
++	    syslog(LOG_ERR, "dracconn: %s", err);
++	    syslog(LOG_ERR, "DRAC notifications disabled");
++	}
++    }
++#endif /* DRAC_AUTH */
++
+     /* create connection to the SNMP listener, if available. */
+     snmp_connect(); /* ignore return code */
+     snmp_set_str(SERVER_NAME_VERSION,CYRUS_VERSION);
+@@ -641,6 +670,12 @@
+ 		  imapd_haveaddr = 1;
+ 	      }
+ 	}
++
++#ifdef DRAC_AUTH
++	drac.clientaddr = imapd_remoteaddr.sin_addr.s_addr;
++    } else {
++	drac.clientaddr = 0;
++#endif /* DRAC_AUTH */
+     }
+ 
+     /* create the SASL connection */
+@@ -683,6 +718,11 @@
+     prot_flush(imapd_out);
+     snmp_increment(ACTIVE_CONNECTIONS, -1);
+ 
++#ifdef DRAC_AUTH
++    if (drac.event) prot_removewaitevent(imapd_in, drac.event);
++    drac.event = NULL;
++#endif /* DRAC_AUTH */
++
+     /* cleanup */
+     imapd_reset();
+ 
+@@ -773,6 +813,10 @@
+     tls_shutdown_serverengine();
+ #endif
+ 
++#ifdef DRAC_AUTH
++    if (drac.interval) (void) dracdisc((char **)NULL);
++#endif /* DRAC_AUTH */
++
+     exit(code);
+ }
+ 
+@@ -796,6 +840,35 @@
+ 
+ }
+ 
++#ifdef DRAC_AUTH
++/*
++ * Ping dracd every 'drac.interval' minutes
++ * to let it know that we are still connected
++ */
++struct prot_waitevent *drac_ping(struct protstream *s,
++				 struct prot_waitevent *ev, void *rock)
++{
++    char *err;
++    static int nfailure = 0;
++
++    if (dracsend(drac.clientaddr, &err) != 0) {
++	syslog(LOG_ERR, "dracsend: %s", err);
++	if (++nfailure >= 3) {
++	    /* can't contact dracd for 3 consecutive tries - disable DRAC */
++	    prot_removewaitevent(s, ev);
++	    drac.event = NULL;
++	    syslog(LOG_ERR, "DRAC notifications disabled");
++	    return NULL;
++	}
++    }
++    else
++	nfailure = 0;
++
++    ev->mark = time(NULL) + (drac.interval * 60);
++    return ev;
++}
++#endif /* DRAC_AUTH */
++
+ /*
+  * Top-level command loop parsing
+  */
+@@ -1811,6 +1884,11 @@
+ 
+     prot_printf(imapd_out, "%s OK %s\r\n", tag, reply);
+ 
++#ifdef DRAC_AUTH
++    if (drac.interval && drac.clientaddr)
++	drac.event = prot_addwaitevent(imapd_in, 0 /* now */, drac_ping, NULL);
++#endif /* DRAC_AUTH */
++
+     /* Create telemetry log */
+     imapd_logfd = telemetry_log(imapd_userid, imapd_in, imapd_out);
+ 
+@@ -1931,6 +2009,11 @@
+ 
+     prot_setsasl(imapd_in,  imapd_saslconn);
+     prot_setsasl(imapd_out, imapd_saslconn);
++
++#ifdef DRAC_AUTH
++    if (drac.interval && drac.clientaddr)
++	drac.event = prot_addwaitevent(imapd_in, 0 /* now */, drac_ping, NULL);
++#endif /* DRAC_AUTH */
+ 
+     /* Create telemetry log */
+     imapd_logfd = telemetry_log(imapd_userid, imapd_in, imapd_out);
+diff -ruN cyrus-imapd-2.1.13.orig/imap/krbck.c cyrus-imapd-2.1.13/imap/krbck.c
+--- cyrus-imapd-2.1.13.orig/imap/krbck.c	Thu Feb 13 13:15:26 2003
++++ cyrus-imapd-2.1.13/imap/krbck.c	Fri Jun 20 11:26:03 2003
+@@ -59,7 +59,7 @@
+ 
+ #define EXIT_CHOKE (int) 10
+ 
+-#define CONFIG_FILENAME "/etc/imapd.conf"
++#define CONFIG_FILENAME "@FINKPREFIX@/etc/imapd.conf"
+ #define MAX_FILENAME_LEN 255
+ 
+ static int  evalcheck(char*, int, char*);
+diff -ruN cyrus-imapd-2.1.13.orig/imap/mboxlist.c cyrus-imapd-2.1.13/imap/mboxlist.c
+--- cyrus-imapd-2.1.13.orig/imap/mboxlist.c	Wed Apr 30 14:33:20 2003
++++ cyrus-imapd-2.1.13/imap/mboxlist.c	Thu Jun 19 15:50:07 2003
+@@ -62,7 +62,9 @@
+ #include <com_err.h>
+ 
+ #include <sys/ipc.h>
++#if !defined(__APPLE__)
+ #include <sys/msg.h>
++#endif
+ 
+ #include "acl.h"
+ #include "auth.h"
+diff -ruN cyrus-imapd-2.1.13.orig/imap/pop3d.c cyrus-imapd-2.1.13/imap/pop3d.c
+--- cyrus-imapd-2.1.13.orig/imap/pop3d.c	Tue Apr 22 10:02:06 2003
++++ cyrus-imapd-2.1.13/imap/pop3d.c	Thu Jun 19 18:36:10 2003
+@@ -100,6 +100,10 @@
+ extern char *optarg;
+ extern int opterr;
+ 
++#ifdef DRAC_AUTH
++static int drac_enabled;
++extern int dracauth(char *server, unsigned long userip, char **errmsg);
++#endif /* DRAC_AUTH */
+ 
+ 
+ #ifdef HAVE_SSL
+@@ -382,6 +386,10 @@
+     prot_settimeout(popd_in, timeout*60);
+     prot_setflushonread(popd_in, popd_out);
+ 
++#ifdef DRAC_AUTH
++    drac_enabled = (config_getint("dracinterval", 5) > 0);
++#endif /* DRAC_AUTH */
++
+     if (kflag) kpop();
+ 
+     /* we were connected on pop3s port so we should do 
+@@ -1339,6 +1347,20 @@
+     }
+     popd_mailbox = &mboxstruct;
+     proc_register("pop3d", popd_clienthost, popd_userid, popd_mailbox->name);
++
++#ifdef DRAC_AUTH
++    if (drac_enabled) {
++	char *err;
++
++	if (dracauth((char*) config_getstring("drachost", "localhost"),
++		      popd_remoteaddr.sin_addr.s_addr, &err) != 0) {
++	    /* disable DRAC */
++	    drac_enabled = 0;
++	    syslog(LOG_ERR, "dracauth: %s", err);
++	    syslog(LOG_ERR, "DRAC notifications disabled");
++	}
++    }
++#endif /* DRAC_AUTH */
+ 
+     /* Create telemetry log */
+     telemetry_log(popd_userid, popd_in, popd_out);
+diff -ruN cyrus-imapd-2.1.13.orig/imap/setproctitle.c cyrus-imapd-2.1.13/imap/setproctitle.c
+--- cyrus-imapd-2.1.13.orig/imap/setproctitle.c	Thu Feb 13 13:15:30 2003
++++ cyrus-imapd-2.1.13/imap/setproctitle.c	Thu Jun 19 16:38:42 2003
+@@ -162,6 +162,7 @@
+ #  include <sys/pstat.h>
+ # endif
+ # if SPT_TYPE == SPT_PSSTRINGS
++#  include <sys/time.h>
+ #  include <machine/vmparam.h>
+ #  include <sys/exec.h>
+ #  ifndef PS_STRINGS	/* hmmmm....  apparently not available after all */
+diff -ruN cyrus-imapd-2.1.13.orig/imap/version.c cyrus-imapd-2.1.13/imap/version.c
+--- cyrus-imapd-2.1.13.orig/imap/version.c	Mon Mar 24 11:13:58 2003
++++ cyrus-imapd-2.1.13/imap/version.c	Thu Jun 19 18:36:58 2003
+@@ -134,6 +134,10 @@
+     snprintf(env_buf + strlen(env_buf), MAXIDVALUELEN - strlen(env_buf),
+ 	     "; %s", SIEVE_VERSION);
+ #endif
++#ifdef DRAC_AUTH
++    snprintf(env_buf + strlen(env_buf), MAXIDVALUELEN - strlen(env_buf),
++	     "; DRAC");
++#endif
+ #ifdef HAVE_LIBWRAP
+     snprintf(env_buf + strlen(env_buf), MAXIDVALUELEN - strlen(env_buf),
+ 	     "; TCP Wrappers");
+diff -ruN cyrus-imapd-2.1.13.orig/imtest/imtest.c cyrus-imapd-2.1.13/imtest/imtest.c
+--- cyrus-imapd-2.1.13.orig/imtest/imtest.c	Thu Feb 13 13:15:33 2003
++++ cyrus-imapd-2.1.13/imtest/imtest.c	Thu Jun 19 18:52:34 2003
+@@ -47,7 +47,9 @@
+ #include <sys/time.h>
+ #include <sys/types.h>
+ #include <sys/ipc.h>
++#if !defined(__APPLE__)
+ #include <sys/msg.h>
++#endif
+ #include <sys/stat.h>
+ #include <fcntl.h>
+ 
+diff -ruN cyrus-imapd-2.1.13.orig/man/Makefile.in cyrus-imapd-2.1.13/man/Makefile.in
+--- cyrus-imapd-2.1.13.orig/man/Makefile.in	Tue Jun 25 09:22:29 2002
++++ cyrus-imapd-2.1.13/man/Makefile.in	Thu Jun 19 21:53:56 2003
+@@ -58,7 +58,7 @@
+ 
+ SHELL = /bin/sh
+ 
+-prefix = @prefix@
++prefix = @prefix@/share
+ exec_prefix = @exec_prefix@
+ cyrus_prefix = @cyrus_prefix@
+ 
+diff -ruN cyrus-imapd-2.1.13.orig/man/imapd.conf.5 cyrus-imapd-2.1.13/man/imapd.conf.5
+--- cyrus-imapd-2.1.13.orig/man/imapd.conf.5	Tue Nov 19 21:15:22 2002
++++ cyrus-imapd-2.1.13/man/imapd.conf.5	Thu Jun 19 18:38:39 2003
+@@ -382,8 +382,14 @@
+ The SASL password (if needed) to use when authenticating to the mupdate server.
+ .IP "\fBmupdate_retry_delay:\fR 20" 5
+ The time to wait between connection retries to the mupdate server.
++.IP "\fBdracinterval:\fR 5" 5
++If nonzero, enables the use of DRAC (Dynamic Relay Authorization Control)
++by the pop3d and imapd daemons.  Also sets the interval (in minutes) between
++re-authorization requests made by imapd.
++.IP "\fBdrachost:\fR localhost" 5
++Hostname of the RPC dracd server.
+ .SH SEE ALSO
+ .PP
+ \fBimapd(8)\fR, \fBpop3d(8)\fR, \fBlmtpd(8)\fR, \fBtimsieved(8)\fR,
+ \fBidled(8)\fR, \fBnotifyd(8)\fR, \fBdeliver(8)\fR, \fBmaster(8)\fR, 
+-\fBciphers(1)\fR
++\fBrpc.dracd(1m)\fR, \fBciphers(1)\fR
+diff -ruN cyrus-imapd-2.1.13.orig/master/masterconf.c cyrus-imapd-2.1.13/master/masterconf.c
+--- cyrus-imapd-2.1.13.orig/master/masterconf.c	Thu Feb 13 13:15:45 2003
++++ cyrus-imapd-2.1.13/master/masterconf.c	Fri Jun 20 11:21:24 2003
+@@ -58,7 +58,7 @@
+ 
+ #include "masterconf.h"
+ 
+-#define CONFIG_FILENAME "/etc/cyrus.conf"
++#define CONFIG_FILENAME "@FINKPREFIX@/etc/cyrus.conf"
+ 
+ struct configlist {
+     char *key;
+diff -ruN cyrus-imapd-2.1.13.orig/perl/Makefile.in cyrus-imapd-2.1.13/perl/Makefile.in
+--- cyrus-imapd-2.1.13.orig/perl/Makefile.in	Thu Jan  2 10:27:35 2003
++++ cyrus-imapd-2.1.13/perl/Makefile.in	Thu Jun 19 21:26:18 2003
+@@ -80,13 +80,26 @@
+ 	(cd imap; \
+ 	 OPENSSL_LIB="$(OPENSSL_LIB)" OPENSSL_INC="$(OPENSSL_INC)" \
+ 	 SASL_LIB="$(SASL_LIB)" SASL_INC="$(SASL_INC)" CC="$(CC)" \
+-	   $(PERL) Makefile.PL PREFIX=$(prefix))
++	 $(PERL) Makefile.PL PREFIX=$(prefix) \
++	 INSTALLPRIVLIB=@FINKPREFIX@/lib/perl5/5.6.0 \
++	 INSTALLARCHLIB=@FINKPREFIX@/lib/perl5/5.6.0/darwin \
++	 INSTALLSITELIB=@FINKPREFIX@/lib/perl5/5.6.0 \
++	 INSTALLSITEARCH=@FINKPREFIX@/lib/perl5/5.6.0/darwin \
++	 INSTALLMAN1DIR=@FINKINSTALL@/share/man/man1 \
++	 INSTALLMAN3DIR=@FINKINSTALL@/share/man/man3)
+ 
+ install::
+ 	@for d in  $(SUBDIRS); \
+ 	do \
+ 		(cd $$d; echo "### Making" install "in" `pwd`;	\
+-			$(MAKE) $(MFLAGS) DESTDIR=$(DESTDIR) install) || exit 1; \
++			$(MAKE) $(MFLAGS) PREFIX=@FINKINSTALL@ \
++			INSTALLPRIVLIB=@FINKINSTALL@/lib/perl5/5.6.0 \
++			INSTALLARCHLIB=@FINKINSTALL@/lib/perl5/5.6.0/darwin \
++			INSTALLSITELIB=@FINKINSTALL@/lib/perl5/5.6.0 \
++			INSTALLSITEARCH=@FINKINSTALL@/lib/perl5/5.6.0/darwin \
++			INSTALLMAN1DIR=@FINKINSTALL@/share/man/man1 \
++			INSTALLMAN3DIR=@FINKINSTALL@/share/man/man3 \
++			DESTDIR=$(DESTDIR) install) || exit 1; \
+ 	done
+ 
+ clean::
+diff -ruN cyrus-imapd-2.1.13.orig/perl/sieve/Makefile.in cyrus-imapd-2.1.13/perl/sieve/Makefile.in
+--- cyrus-imapd-2.1.13.orig/perl/sieve/Makefile.in	Mon Jul 22 10:16:09 2002
++++ cyrus-imapd-2.1.13/perl/sieve/Makefile.in	Thu Jun 19 20:38:47 2003
+@@ -78,7 +78,13 @@
+ 			if [ -f Makefile.PL ]; then \
+ 			   OPENSSL_LIB="$(OPENSSL_LIB)" OPENSSL_INC="$(OPENSSL_INC)" \
+ 			   SASL_LIB="$(SASL_LIB)" SASL_INC="$(SASL_INC)" CC="$(CC)" \
+-			     $(PERL) Makefile.PL PREFIX=$(prefix); \
++			     $(PERL) Makefile.PL PREFIX=$(prefix) \
++				INSTALLPRIVLIB=@FINKPREFIX@/lib/perl5/5.6.0 \
++				INSTALLARCHLIB=@FINKPREFIX@/lib/perl5/5.6.0/darwin \
++				INSTALLSITELIB=@FINKPREFIX@/lib/perl5/5.6.0 \
++				INSTALLSITEARCH=@FINKPREFIX@/lib/perl5/5.6.0/darwin \
++				INSTALLMAN1DIR=@FINKINSTALL@/share/man/man1 \
++				INSTALLMAN3DIR=@FINKINSTALL@/share/man/man3; \
+ 			fi; \
+ 			$(MAKE) $(MFLAGS) DESTDIR=$(DESTDIR) all) || exit 1; \
+ 	done
+diff -ruN cyrus-imapd-2.1.13.orig/perl/sieve/lib/request.c cyrus-imapd-2.1.13/perl/sieve/lib/request.c
+--- cyrus-imapd-2.1.13.orig/perl/sieve/lib/request.c	Thu Feb 13 13:15:53 2003
++++ cyrus-imapd-2.1.13/perl/sieve/lib/request.c	Thu Jun 19 19:16:29 2003
+@@ -51,7 +51,9 @@
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <sys/ipc.h>
++#if !defined(__APPLE__)
+ #include <sys/msg.h>
++#endif
+ 
+ #include <stdlib.h>
+ #include <stdio.h>
+diff -ruN cyrus-imapd-2.1.13.orig/tools/dohash cyrus-imapd-2.1.13/tools/dohash
+--- cyrus-imapd-2.1.13.orig/tools/dohash	Thu Feb 22 21:43:01 2001
++++ cyrus-imapd-2.1.13/tools/dohash	Fri Jun 20 11:26:50 2003
+@@ -89,7 +89,7 @@
+     }
+ }
+ 
+-$imapdconf = shift || "/etc/imapd.conf";
++$imapdconf = shift || "@FINKPREFIX@/etc/imapd.conf";
+ 
+ $yn = "y";
+ $hashispool = 0;
+@@ -112,7 +112,7 @@
+ }
+ close CONF;
+ 
+-if (! $conf) { $conf = "/var/imap"; }
++if (! $conf) { $conf = "@FINKPREFIX@/var/imap"; }
+ 
+ if ($interactive) {
+     print "upgrade $conf? ";
+diff -ruN cyrus-imapd-2.1.13.orig/tools/mkimap cyrus-imapd-2.1.13/tools/mkimap
+--- cyrus-imapd-2.1.13.orig/tools/mkimap	Thu Sep 27 10:02:34 2001
++++ cyrus-imapd-2.1.13/tools/mkimap	Fri Jun 20 11:24:36 2003
+@@ -59,7 +59,7 @@
+ __END__
+ require 5;
+ 
+-$imapdconf = shift || "/etc/imapd.conf";
++$imapdconf = shift || "@FINKPREFIX@/etc/imapd.conf";
+ $sievedir = "/usr/sieve";
+ $nosievedir = 0;
+ $hashispool = 0;
+diff -ruN cyrus-imapd-2.1.13.orig/tools/rehash cyrus-imapd-2.1.13/tools/rehash
+--- cyrus-imapd-2.1.13.orig/tools/rehash	Fri Aug 23 15:10:43 2002
++++ cyrus-imapd-2.1.13/tools/rehash	Fri Jun 20 11:27:01 2003
+@@ -132,7 +132,7 @@
+     }
+ }
+ 
+-$imapdconf = shift || "/etc/imapd.conf";
++$imapdconf = shift || "@FINKPREFIX@/etc/imapd.conf";
+ 
+ $yn = "y";
+ $sievedir = "/usr/sieve";
+@@ -165,7 +165,7 @@
+ }
+ close CONF;
+ 
+-if (! $conf) { $conf = "/var/imap"; }
++if (! $conf) { $conf = "@FINKPREFIX@/var/imap"; }
+ 
+ if ($interactive) {
+     print "upgrade $conf? ";
+diff -ruN cyrus-imapd-2.1.13.orig/tools/translatesieve cyrus-imapd-2.1.13/tools/translatesieve
+--- cyrus-imapd-2.1.13.orig/tools/translatesieve	Tue May  7 14:49:42 2002
++++ cyrus-imapd-2.1.13/tools/translatesieve	Fri Jun 20 11:25:15 2003
+@@ -85,7 +85,7 @@
+     }
+ }
+ 
+-$imapdconf = shift || "/etc/imapd.conf";
++$imapdconf = shift || "@FINKPREFIX@/etc/imapd.conf";
+ 
+ $sievedir = "/usr/sieve";
+ $unixhierarchysep = 0;
+diff -ruN cyrus-imapd-2.1.13.orig/tools/undohash cyrus-imapd-2.1.13/tools/undohash
+--- cyrus-imapd-2.1.13.orig/tools/undohash	Sat May 25 13:57:53 2002
++++ cyrus-imapd-2.1.13/tools/undohash	Fri Jun 20 11:25:25 2003
+@@ -45,7 +45,7 @@
+ 
+ $| = 1;
+ 
+-$imapdconf = shift || "/etc/imapd.conf";
++$imapdconf = shift || "@FINKPREFIX@/etc/imapd.conf";
+ $hashispool = 0;
+ 
+ open CONF, $imapdconf or die "can't open $imapdconf";
+diff -ruN cyrus-imapd-2.1.13.orig/tools/upgradesieve cyrus-imapd-2.1.13/tools/upgradesieve
+--- cyrus-imapd-2.1.13.orig/tools/upgradesieve	Thu Feb 22 21:46:56 2001
++++ cyrus-imapd-2.1.13/tools/upgradesieve	Fri Jun 20 11:25:39 2003
+@@ -85,7 +85,7 @@
+     }
+ }
+ 
+-$imapdconf = shift || "/etc/imapd.conf";
++$imapdconf = shift || "@FINKPREFIX@/etc/imapd.conf";
+ 
+ $sievedir = "/usr/sieve";
+ 
