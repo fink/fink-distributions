@@ -112,7 +112,7 @@ sub get_all_shlibs {
       $shlib_db_outdated = 0;
 		
       # Unless the NoAutoIndex option is set, check whether we should regenerate
-      # the index based on its modification date and that of the package descs.
+      # the index based on its modification date.
       if (not $config->param_boolean("NoAutoIndex")) {
         $shlib_db_mtime = (stat("$basepath/var/db/$db"))[9];
 
@@ -128,10 +128,6 @@ sub get_all_shlibs {
       # If the index is not outdated, we can use it, and thus safe a lot of time
       if (not $shlib_db_outdated) {
         %shlib_hash = %{Storable::retrieve("$basepath/var/db/$db")};
-        my ($shlibtmp);
-        foreach $shlibtmp (keys %shlib_hash) {
-          push @shlib_list, $shlib_hash{$shlibtmp};
-        }
       }
     }
   }
@@ -142,6 +138,11 @@ sub get_all_shlibs {
   }
 
   $have_shlibs = 1;
+
+  my ($shlibtmp);
+  foreach $shlibtmp (keys %shlib_hash) {
+    push @shlib_list, $shlib_hash{$shlibtmp};
+  }
 
   print "Information about ".($#shlib_list+1)." shlibs read in ",
     (time - $time), " seconds.\n\n";
@@ -163,7 +164,7 @@ sub search_comparedb {
       next if $file eq "CVS";
       return 1 if (&search_comparedb($fullpath));
     } else {
-      next if !(substr($file, length($file)-5) eq ".shlibs");
+      next if !(substr($file, length($file)-7) eq ".shlibs");
       @stats = stat($fullpath);
       return 1 if ($stats[9] > $shlib_db_mtime);
     }
