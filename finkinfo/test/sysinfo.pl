@@ -1,4 +1,4 @@
-#$Id: sysinfo.pl,v 1.5 2002/08/22 16:01:15 thesin Exp $
+#$Id: sysinfo.pl,v 1.6 2002/08/22 16:45:22 thesin Exp $
 
 #!/usr/bin/perl -w
 
