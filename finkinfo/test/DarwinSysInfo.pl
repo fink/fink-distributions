@@ -829,11 +829,6 @@ sub display_fink {
 sub display_info {
   get_uname();
 
-  unless ($ENABLEXMMS =~ m/true/i) {
-    IRC::print "\0034XMMS reporting is currently disabled, /enable xmms to enable it.\0034\n";
-    return 1;
-  }
-
   unless ($UNAME =~ m/darwin/i) {
     IRC::print "\0034System Unsupported, install Darwin and try again...\0034";
     return 1;
@@ -862,6 +857,11 @@ sub display_song {
   unless ($UNAME =~ m/darwin/i) {
 
     IRC::print "\0034System Unsupported, install Darwin and try again...\0034";
+    return 1;
+  }
+
+  unless ($ENABLEXMMS =~ m/true/i) {
+    IRC::print "\0034XMMS reporting is currently disabled, /enable xmms to enable it.\0034\n";
     return 1;
   }
 
