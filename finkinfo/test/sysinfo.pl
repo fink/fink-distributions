@@ -72,7 +72,7 @@ sub get_cpu {
     $MODEL = "#? $ARCH/$truetype";
   }
 
-  chomp($CPU = `ioreg -n $ARCH,$TYPE | grep clock-frequency`);
+  chomp($CPU = `ioreg -n $ARCH,$TYPE | grep '"clock-frequency" ='`);
   if ($CPU =~ /.*[<](.+)[>].*/) {
     $CPU = hex($1)/1000000;
     if ($CPU gt 999) {
@@ -226,9 +226,9 @@ sub get_uptime {
   chomp($UPTIME = `uptime`);
   $UPTIME =~ /.*up (.+),.+[0-9]+ user/;
   $DAYS = $1;
-  if ($DAYS =~ /.?(.+).?days, (.+):(.+)/) {
+  if ($DAYS =~ /.?([0-9.]+).?days, (.+):(.+)/) {
     $UPTIME = sprintf("%dd, %dh, %dm", $1, $2, $3);
-  } elsif ($DAYS =~ /.?(.+).?days, (.+).?hrs/) {
+  } elsif ($DAYS =~ /.?([0-9.]+).?days, (.+).?hrs/) {
     $UPTIME = sprintf("%dd, %dh", $1, $2);
   } elsif ($DAYS =~ /.?.?(.+):(.+)/) {
     $UPTIME = sprintf("%dh, %dm", $1, $2);
