@@ -50,16 +50,16 @@ for my $tree (@TREES) {
 						}
 						$package =~ s/\%N/$firstpack/i;
 						if ($packname ne "") {
-							push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, $treename . '/' . $stable);
-							push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, $treename . '/' . $stable);
+							push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, get_treestring($treename, $stable, $file));
+							push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, get_treestring($treename, $stable, $file));
 						}
 						$packname = $package;
 					}
 				}
 				close(INFO);
 				$packname =~ s/\%N/$firstpack/g;
-				push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, $treename . '/' . $stable);
-				push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, $treename . '/' . $stable);
+				push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, get_treestring($treename, $stable, $file));
+				push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, get_treestring($treename, $stable, $file));
 			} else {
 				warn "unable to open $file: $!\n";
 			}
@@ -100,4 +100,20 @@ sub get_verstring {
 	} else {
 		return $version . '-' . $revision;
 	}
+}
+
+sub get_treestring {
+	my $treename = shift;
+	my $stable   = shift;
+	my $file     = shift;
+
+	if ($file =~ m#/crypto/#) {
+		$file = "/crypto";
+	} elsif ($file =~ m#.*(/[^/]+)/[^/]+$#) {
+		$file = $1;
+	} else {
+		$file = "";
+	}
+
+	return $treename . '/' . $stable . $file;
 }
