@@ -2710,17 +2710,19 @@ EOF
 	}
 
 	# remove pkgs being built now from list (avoid chicken-and-egg)
-	foreach my $pkgregex ( map { quotemeta($_->get_name()).'(?:\Z|\s*\()' } $self->get_splitoffs(1,1) ) {
-		foreach my $deplist (@depends) {
-			# nuke the whole OR cluster if any atom matches
-			# ($deplist is the listref value from @depends so changing
-			# $deplist changes the list linked from @depends; no need
-			# to edit @depends directly)
-			$deplist = [] if grep { /$pkgregex/ } @$deplist;
-		}
+	my $pkgregex = join "|", map { quotemeta($_->get_name()) } $self->get_splitoffs(1,1);
+	$pkgregex = qr/^(?:$pkgregex)(?:\s*\(|\Z)/;  # a pkglist atom of any of us
+	foreach my $deplist (@depends) {
+		# nuke the whole OR cluster if any atom matches
+		# ($deplist is the listref value from @depends so changing
+		# $deplist changes the list linked from @depends; no need
+		# to edit @depends directly)
+		$deplist = [] if grep { /$pkgregex/ } @$deplist;
 	}
 
-	# make sure we keep a fink that knows about build locking!
+	### CRITICAL FIXME: change this to be the version whose
+	###                 fink-virt-packages exports BuildDependsOnly
+	###                 packages to dpkg
 	unshift @depends, [ 'fink (>= 0.23.1.cvs)' ];
 
 	$control .= 'Depends: ' . &lol2pkglist(\@depends) . "\n";
