@@ -42,7 +42,7 @@ our @EXPORT_OK;
 our %PACKAGES;
 
 # this is the one and only version number
-our $depends_version = "0.1.2.cvs";
+our $depends_version = "0.1.3.cvs";
 
 END { }       # module clean-up code here (global destructor)
 
@@ -56,6 +56,7 @@ sub run_dependscheck {
   my $self = shift;
   my $pkgname = shift;
   my (@depends, $depend);
+  my ($pkgversion);
 
   unless (defined $pkgname) {
     print "NOP\n";
@@ -67,6 +68,9 @@ sub run_dependscheck {
 
   foreach $depend (@depends) {
     chomp($depend);
+    $pkgversion = get_dependversion($depend);
+    $pkgversion = "(>= $pkgversion)";
+    $depend = "$depend $pkgversion";
     $PACKAGES{$depend} = 1;  
   }
 
@@ -77,6 +81,17 @@ sub run_dependscheck {
   }
 
   return;
+}
+
+sub get_dependversion($depend) {
+  my $depend = shift;
+  my ($pkgversion);
+
+  $pkgversion = `fink list --width=200 $depend | grep $depend | awk {'print \$3'}`;
+  $pkgversion =~ s/\:.*$//;             # strip out everything after the colon
+  chomp($pkgversion);
+
+  return $pkgversion;
 }
 
 sub check_pkg {
