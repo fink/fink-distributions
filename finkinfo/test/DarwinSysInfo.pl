@@ -704,6 +704,9 @@ sub get_song {
   my $song_name = $remote->get_playlist_title($play_pos);
   my $song_time = $remote->get_playlist_timestr($play_pos);
   my $song_file = $remote->get_playlist_file($play_pos);
+  unless (-e $song_file) {
+    return 1;
+  }
   my $tag = get_mp3tag($song_file) or $no_tag = 1;
   my $info = get_mp3info($song_file);
   my $inf_freq = $info->{FREQUENCY};
@@ -879,7 +882,7 @@ sub display_song {
 
   get_song();
 
-  if ($out eq "") {
+  if (length($out) < 5) {
     IRC::print "\0034Must have XMMS running at least!\n";
     return 1;
   }
