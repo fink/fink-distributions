@@ -2791,24 +2791,28 @@ EOF
 						"the file manually to save disk space. ".
 						"Continuing with normal procedure.");
 	if ($lock_failed) {
+		print "Trying to clean up...\n";
+		&execute("dpkg -r $lockpkg");
 		my $fullname = $self->get_fullname();
 		die <<EOMSG
 Can't set build lock for $fullname.
 
-If the above message says that there are problems with dependencies,
-fink is has probably gotten confused by trying to build many packages
-at once. Try building just this current package. When that has
-completed successfully, retry whatever you did that led to the present
-error.
+There are two common causes for this, depending on the error message
+following "Setting build lock..." above:
 
-If the above message says that there are conflicts among several
-fink-buildlock packages, fink thinks that the package it is about to
-build is currently being built by another fink process. If that is not
-true (perhaps a previous build attempt crashed?), just use fink to
-remove the currently-installed $lockpkg_minor-
-package(s). Then retry whatever you did that led to the present error.
+1. Problems with dependencies: fink has probably gotten confused by
+   trying to build many packages at once. Try building just this
+   current package. When that has completed successfully, retry
+   whatever you did that led to the present error.
 
-In either case, don't worry--you have not wasted compiling time.
+2. Conflicts among several fink-buildlock packages: fink thinks that
+   the package it is about to build is currently being built by
+   another fink process. If that is not true (perhaps a previous build
+   attempt crashed?), just use fink to remove the currently-installed
+   $lockpkg_minor- package(s).
+   Then retry whatever you did that led to the present error.
+
+In either case, don't worry, you have not wasted compiling time:
 Packages that had been completely built before this error occurred
 will not have to be recompiled.
 EOMSG
