@@ -690,7 +690,7 @@ sub get_devinfo {
       foreach $infoline (@dev_vers) {
         chomp($infoline);
         if ($infoline =~ /^.* = \"(.*)\";/) {
-          $TOOLVERS = "Xcode $1";
+          $TOOLVERS = "$1";
         }
       }
       # now find the cctools version
@@ -716,7 +716,7 @@ sub get_devinfo {
           $buildline = 0;
         } elsif ($versline) {
           if ($infoline =~ /\<string\>(.+)\<\/string\>/) {
-            $TOOLVERS = "$1";
+            $TOOLVERS = "Xcode $1";
           }
           $versline = 0;
         } else {
