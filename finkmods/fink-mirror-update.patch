@@ -1,6 +1,6 @@
 diff -ruN fink/fink.in fink-mirrors/fink.in
 --- fink/fink.in	2002-11-21 08:00:53.000000000 -0700
-+++ fink-mirrors/fink.in	2002-12-23 21:16:27.000000000 -0700
++++ fink-mirrors/fink.in	2002-12-24 09:43:26.000000000 -0700
 @@ -55,6 +55,7 @@
  sub show_version {
    require Fink::FinkVersion;
@@ -11,7 +11,7 @@ diff -ruN fink/fink.in fink-mirrors/fink.in
  }
 diff -ruN fink/perlmod/Fink/FinkVersion.pm.in fink-mirrors/perlmod/Fink/FinkVersion.pm.in
 --- fink/perlmod/Fink/FinkVersion.pm.in	2002-11-21 08:00:54.000000000 -0700
-+++ fink-mirrors/perlmod/Fink/FinkVersion.pm.in	2002-12-23 21:20:14.000000000 -0700
++++ fink-mirrors/perlmod/Fink/FinkVersion.pm.in	2002-12-24 09:43:26.000000000 -0700
 @@ -31,7 +31,8 @@
    $VERSION = 1.00;
    @ISA         = qw(Exporter);
@@ -47,7 +47,7 @@ diff -ruN fink/perlmod/Fink/FinkVersion.pm.in fink-mirrors/perlmod/Fink/FinkVers
  1;
 diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-mirrors/perlmod/Fink/SelfUpdate.pm
 --- fink/perlmod/Fink/SelfUpdate.pm	2002-12-08 22:29:56.000000000 -0700
-+++ fink-mirrors/perlmod/Fink/SelfUpdate.pm	2002-12-23 22:41:31.000000000 -0700
++++ fink-mirrors/perlmod/Fink/SelfUpdate.pm	2002-12-24 11:25:27.000000000 -0700
 @@ -28,7 +28,7 @@
  use Fink::NetAccess qw(&fetch_url);
  use Fink::Engine;
@@ -82,15 +82,61 @@ diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-mirrors/perlmod/Fink/SelfUpdate.p
      }
      if (not $answer) {
        return;
-@@ -78,6 +80,7 @@
+@@ -78,7 +80,25 @@
    }
  
    $installed_version = &pkginfo_version();
+-  if ($installed_version eq "cvs" or -d "$finkdir/dists/CVS") {
 +  $installed_mirror = &mirror_version();
-   if ($installed_version eq "cvs" or -d "$finkdir/dists/CVS") {
++
++   if (($installed_version eq "cvs" and not -d "$finkdir/CVS") and
++       ($installed_mirror eq "cvs" and not -d "$mirrordir/CVS")) {
++    print "\n";
++    $answer =
++      &prompt_boolean("You have previously used CVS to update package ".
++                      "descriptions and mirror lists, but your Fink ".
++                      "installation is not set up for direct CVS ".
++                      "updating (without inject.pl). Do you want to set".
++                      "both up for direct CVS updating now?", 1);
++    if (not $answer) {
++      return;
++    }
++
++    &setup_direct_cvs();   
++    &do_finish();
++    return;
++   } elsif ($installed_version ne "cvs" or not -d "$finkdir/CVS") {
      print "\n";
      $answer =
-@@ -129,8 +132,9 @@
+       &prompt_boolean("You have previously used CVS to update package ".
+@@ -90,10 +110,25 @@
+     }
+ 
+     &setup_direct_cvs();
++    &do_direct_cvs();
+     &do_finish();
+     return;
+-  }
++  } elsif ($installed_mirror ne "cvs" or not -d "$mirrordir/CVS") {
++    print "\n";
++    $answer =
++      &prompt_boolean("You have previously used CVS to update mirror ".
++                      "lists, but your Fink installation is not set up ".
++                      "for direct CVS updating (without inject.pl). Do ".
++                      "you want to set up direct CVS updating now?", 1);
++    if (not $answer) {
++      return;
++    }
+ 
++    &setup_direct_cvs();
++    &do_direct_cvs();
++    &do_finish();
++    return;
++  }
+ 
+   if ($usecvs or not $config->param_boolean("SelfUpdateNoCVS")) {
+     print "\n";
+@@ -129,8 +164,9 @@
    $config->save();
  
    # get the file with the current release number
@@ -101,7 +147,7 @@ diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-mirrors/perlmod/Fink/SelfUpdate.p
    ### if we are in 10.1, need to use "LATEST-FINK" not "CURRENT-FINK"
    if ($Fink::Config::distribution =~ /10.1/) {
        $currentfink = "LATEST-FINK";
-@@ -140,37 +144,58 @@
+@@ -140,37 +176,58 @@
      die "Can't get latest version info\n";
    }
  
@@ -171,7 +217,7 @@ diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-mirrors/perlmod/Fink/SelfUpdate.p
    $username =
      &prompt("Fink has the capability to run the CVS commands as a ".
  	    "normal user. That has some advantages - it uses that ".
-@@ -179,6 +204,19 @@
+@@ -179,6 +236,19 @@
  	    "root. Please specify the user login name that should be ".
  	    "used:",
  	    $username);
@@ -191,7 +237,7 @@ diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-mirrors/perlmod/Fink/SelfUpdate.p
  
    # sanity check
    @testlist = getpwnam($username);
-@@ -195,11 +233,6 @@
+@@ -195,11 +265,6 @@
  	    "anonymous");
    print "\n";
  
@@ -203,7 +249,7 @@ diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-mirrors/perlmod/Fink/SelfUpdate.p
    if (-d $tempdir) {
      if (&execute("rm -rf $tempdir")) {
        die "Can't remove left-over temporary directory '$tempdir'\n";
-@@ -244,15 +277,30 @@
+@@ -244,15 +309,30 @@
      $cmd = "cvs -z3 -d:ext:$cvsuser\@cvs.sourceforge.net:/cvsroot/fink";
      $ENV{CVS_RSH} = "ssh";
    }
@@ -242,7 +288,7 @@ diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-mirrors/perlmod/Fink/SelfUpdate.p
        chdir "fink" or die "Can't cd to fink\n";
        $cmdd = "$cmd checkout -d 10.1 packages/dists";
        if ($username ne "root") {
-@@ -263,54 +311,99 @@
+@@ -263,54 +343,99 @@
  	  die "Downloading package descriptions from CVS failed.\n";
        }
        chdir $tempdir or die "Can't cd to $tempdir: $!\n";
@@ -386,16 +432,16 @@ diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-mirrors/perlmod/Fink/SelfUpdate.p
    }
    &execute("rm -rf $tempdir");
  
-@@ -327,33 +420,56 @@
+@@ -327,21 +452,27 @@
  ### call cvs update
  
  sub do_direct_cvs {
 -  my ($descdir, @sb, $cmd, $username, $msg);
-+  my (@sb, $mirrordir, $finkdir, $cmd, $cmdd, $username, $msg);
- 
+-
 -  $descdir = "$basepath/fink";
 -  chdir $descdir or die "Can't cd to $descdir: $!\n";
--
++  my (@sb, $mirrordir, $finkdir, $cmd, $cmdd, $username, $msg);
+ 
 -  @sb = stat("$descdir/CVS");
 +  $mirrordir = "$basepath/lib/fink/mirror";
 +  $finkdir = "$basepath/fink";
@@ -405,17 +451,7 @@ diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-mirrors/perlmod/Fink/SelfUpdate.p
 +  $ENV{CVS_RSH} = "ssh";
 +
 +  $msg = "I will now run the cvs command to retrieve the lastest ";
-+
-+  if (-d "$mirrordir/CVS") {
-+    $msg .= "mirror lists";
-+  }
-+  if (-d "$mirrordir/CVS" && -d "$finkdir/CVS") {
-+    $msg .= " and ";
-+  }
-+  if (-d "$finkdir/CVS") {
-+    $msg .= "package descriptions";
-+  }
-+  $msg .= ". ";
++  $msg .= "mirror lists and package descriptions. ";
 +
 +  if (-d "$mirrordir/CVS") {
 +    @sb = stat("$mirrordir/CVS");
@@ -432,32 +468,31 @@ diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-mirrors/perlmod/Fink/SelfUpdate.p
 +      "user '$username'. ";   
    }
  
--  $msg .= "After that, the core packages will be updated right away; ".
--    "you should then update the other packages using commands like ".
--    "'fink update-all'.";
-+  if (-d "$finkdir/CVS") {
-+    $msg .= "After that, the core packages will be updated right away; ".
-+      "you should then update the other packages using commands like ".
-+      "'fink update-all'.";
-+  }
+   $msg .= "After that, the core packages will be updated right away; ".
+@@ -350,10 +481,20 @@
  
    print "\n";
    &print_breaking($msg);
-   print "\n";
- 
--  $ENV{CVS_RSH} = "ssh";
--  if (&execute($cmd)) {
++
 +  chdir $mirrordir or die "Can't cd to $mirrordir: $!\n";
++  $msg = "Updating mirror lists...";
+   print "\n";
++  &print_breaking($msg);
 +  if (&execute($cmdd)) {
 +    die "Updating using CVS failed. Check the error messages above.\n";
 +  }
-+
+ 
+-  $ENV{CVS_RSH} = "ssh";
+-  if (&execute($cmd)) {
 +  chdir $finkdir or die "Can't cd to $finkdir: $!\n";
++  $msg = "Updating package descriptions...";
++  print "\n";
++  &print_breaking($msg);
 +  if (&execute($cmdd)) {
      die "Updating using CVS failed. Check the error messages above.\n";
    }
  }
-@@ -363,26 +479,37 @@
+@@ -363,26 +504,37 @@
  
  sub do_tarball {
    my $newversion = shift;
