@@ -1,4 +1,4 @@
-#$Id: sysinfo.pl,v 1.3 2002/08/22 15:48:16 thesin Exp $
+#$Id: sysinfo.pl,v 1.4 2002/08/22 15:54:05 thesin Exp $
 
 #!/usr/bin/perl -w
 
@@ -131,7 +131,7 @@ sub display_info
     #--MEMORY USED--#
     $MEMUSED = `top -l1 | grep PhysMem | cut -d":" -f2 | cut -d"," -f4`;
     chop ($MEMUSED);
-    $MEMUSED =~ / ([0-9]+)([GKM]) used$/;
+    $MEMUSED =~ / ([0-9.]+)([GKM]) used$/;
     $MEMUSED = $1;
     $MEMUSEDGKM = $2;      
     if ($MEMUSEDGKM =~ /^K$/) {
