@@ -1,0 +1,2252 @@
+diff -u -Naur gnupg-1.0.7.orig/aclocal.m4 gnupg-1.0.7/aclocal.m4
+--- gnupg-1.0.7.orig/aclocal.m4	Mon Apr 29 10:58:48 2002
++++ gnupg-1.0.7/aclocal.m4	Mon Aug 12 18:49:18 2002
+@@ -512,7 +512,7 @@
+ aix*)
+   ac_symcode='[BCDTU]'
+   ;;
+-freebsd* | netbsd* | openbsd* | bsdi* | sunos* | cygwin32* | mingw32*)
++freebsd* | netbsd* | openbsd* | bsdi* | sunos* | cygwin32* | mingw32* | darwin*)
+   ac_sympat='_\([_A-Za-z][_A-Za-z0-9]*\)'
+   ac_symxfrm='_\1 \1'
+   ;;
+diff -u -Naur gnupg-1.0.7.orig/cipher/dynload.c gnupg-1.0.7/cipher/dynload.c
+--- gnupg-1.0.7.orig/cipher/dynload.c	Mon Aug 20 04:51:53 2001
++++ gnupg-1.0.7/cipher/dynload.c	Mon Aug 12 18:49:10 2002
+@@ -23,14 +23,10 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
+-#ifdef HAVE_DL_DLOPEN
+-  #include <dlfcn.h>
+-#elif defined(HAVE_DLD_DLD_LINK)
+-  #include <dld.h>
+-#elif defined(HAVE_DL_SHL_LOAD)
+-  #include <dl.h>
+-  #include <errno.h>
+-#endif
++
++#include <mach-o/dyld.h>
++#include <errno.h>
++
+ #ifdef __MINGW32__
+   #include <windows.h>
+ #endif
+@@ -69,6 +65,44 @@
+     return addr;
+ }
+ #endif /*HAVE_DL_SHL_LOAD*/
++
++/*if HAVE_DYDL*/
++#define HAVE_DL_DLOPEN
++#define dlerror() (errno == 0 ? NULL : strerror(errno))
++
++void*
++dlopen(const char *pathname, int mode)
++{
++    NSObjectFileImage image;
++    NSObjectFileImageReturnCode rc;
++
++    rc = NSCreateObjectFileImageFromFile(pathname, &image);
++    if (rc != NSObjectFileImageSuccess) {
++        return NULL;
++    }
++    return NSLinkModule(image, pathname, TRUE);
++}
++
++int
++dlclose( void *handle )
++{
++    NSUnLinkModule(handle, FALSE);
++    return 0;
++}
++
++void*
++dlsym( void *handle, const char *symname )
++{
++    NSSymbol symbol;
++	void *result;
++    symbol = NSLookupAndBindSymbol(symname);
++    result = NSAddressOfSymbol(symbol);
++	if(result != NULL)
++	errno = 0;
++	return result;
++}
++
++/*endif*/
+ 
+ #ifdef __MINGW32__
+ #define HAVE_DL_DLOPEN
+diff -u -Naur gnupg-1.0.7.orig/configure gnupg-1.0.7/configure
+--- gnupg-1.0.7.orig/configure	Mon Apr 29 10:59:16 2002
++++ gnupg-1.0.7/configure	Mon Aug 12 18:49:14 2002
+@@ -83,7 +83,8 @@
+ IFS=" 	$as_nl"
+ 
+ # CDPATH.
+-$as_unset CDPATH || test "${CDPATH+set}" != set || { CDPATH=:; export CDPATH; }
++unset CDPATH
++#$as_unset CDPATH || test "${CDPATH+set}" != set || { CDPATH=:; export CDPATH; }
+ 
+ # Name of the host.
+ # hostname on some systems (SVR3.2, Linux) returns a bogus exit status,
+@@ -1240,7 +1241,7 @@
+ rm conftest.sed
+ 
+ # expand $ac_aux_dir to an absolute path
+-am_aux_dir=`CDPATH=:; cd $ac_aux_dir && pwd`
++am_aux_dir=`unset CDPATH; cd $ac_aux_dir && pwd`
+ 
+ test x"${MISSING+set}" = xset || MISSING="\${SHELL} $am_aux_dir/missing"
+ # Use eval to expand $SHELL
+@@ -1348,7 +1349,7 @@
+ rmdir .deps 2>/dev/null
+ 
+ # test to see if srcdir already configured
+-if test "`CDPATH=:; cd $srcdir && pwd`" != "`pwd`" &&
++if test "`unset CDPATH; cd $srcdir && pwd`" != "`pwd`" &&
+    test -f $srcdir/config.status; then
+   { { echo "$as_me:1353: error: source directory already configured; run \"make distclean\" there first" >&5
+ echo "$as_me: error: source directory already configured; run \"make distclean\" there first" >&2;}
+@@ -1626,6 +1627,9 @@
+     *-*-cygwin*)
+         disallowed_modules="rndunix rndlinux rndegd tiger"
+         ;;
++	*-darwin*)
++		disallowed_modules="rndw32 rndunix rndegd tiger"
++		;;
+     *)
+         disallowed_modules="rndw32"
+        ;;
+@@ -3379,6 +3383,9 @@
+             CFLAGS="$CFLAGS -Ae -D_HPUX_SOURCE"
+         fi
+         ;;
++	*-darwin*)
++		CFLAGS="$CFLAGS -traditional-cpp"
++		;;
+     *-dec-osf4*)
+         if test -z "$GCC" ; then
+             # Suppress all warnings
+@@ -3459,7 +3466,7 @@
+ aix*)
+   ac_symcode='[BCDTU]'
+   ;;
+-freebsd* | netbsd* | openbsd* | bsdi* | sunos* | cygwin32* | mingw32*)
++freebsd* | netbsd* | openbsd* | bsdi* | sunos* | cygwin32* | mingw32* | darwin*)
+   ac_sympat='_\([_A-Za-z][_A-Za-z0-9]*\)'
+   ac_symxfrm='_\1 \1'
+   ;;
+@@ -3733,6 +3740,7 @@
+         rs6000 | powerpc | powerpcle)
+           # Yippee! All RS/6000 and PowerPC code is position-independent.
+           CFLAGS_PIC=""
++		  NO_PIC=no;
+           ;;
+         esac
+ 
+@@ -3934,7 +3942,7 @@
+         DYNLINK_MOD_CFLAGS="-shared -rdynamic $CFLAGS_PIC -Wl,-Bshareable -Wl,-x"
+         ;;
+ 
+-     hpux*)
++	hpux*)
+ 	# if using the vendor (ANSI) compiler, arrange to have `-b' passed
+ 	# to the linker.  If using gcc, it supports `-shared' to do the same.
+         if test -n "$GCC" ; then
+@@ -3945,7 +3953,7 @@
+         ;;
+ 
+     *-irix6.5*)
+-        # Irix 6.5 (and probably a lot earlier, but I only still have
++    # Irix 6.5 (and probably a lot earlier, but I only still have
+ 	# access to 6.5.x) doesn't require any additional flags, as `-KPIC'
+ 	# is the default.  Also, `-shared' works with the vendor compiler
+ 	DYNLINK_MOD_CFLAGS="-shared"
+@@ -3966,6 +3974,12 @@
+         DYNLINK_MOD_CFLAGS="-shared $CFLAGS_PIC"
+         ;;
+ 
++    *-darwin*)
++		NAME_OF_DEV_RANDOM="/dev/random"
++		NAME_OF_URANDOM="/dev/urandom"
++		DYNLINK_MOD_CFLAGS="-bundle -undefined suppress -force_flat_namespace $CFLAGS_PIC"
++		;;
++
+     *)
+         # -shared is a gcc-ism.  Find pic flags from GNUPG_CHECK_PIC.
+         if test -n "$GCC" ; then
+@@ -6527,6 +6541,14 @@
+     DYNLINK_LDFLAGS="$CFLAGS_EXPORTDYNAMIC"
+     use_gnupg_extensions=yes
+   else
++  echo $ac_n "using dyld"" $ac_c" 1>&6
++  echo "configure:4898: using dyld $ac_c" >&5
++  echo "#define USE_DYNAMIC_LINKING 1" >> confdefs.h
++  echo "#define HAVE_DYLD 1" >> confdefs.h
++
++  DYNLINK_LDFLAGS="$CFLAGS_EXPORTDYNAMIC"
++  use_gnupg_extensions=yes
++
+ 
+ for ac_func in dlopen
+ do
+@@ -9971,7 +9993,7 @@
+          if test "$gnupg_cv_have_broken_mlock" = "yes"; then
+ 
+ cat >>confdefs.h <<\EOF
+-#define HAVE_BROKEN_MLOCK 1
++#define HAVE_BROKEN_MLOCK 0
+ EOF
+ 
+              echo "$as_me:9977: result: yes" >&5
+@@ -11113,7 +11135,8 @@
+ IFS=" 	$as_nl"
+ 
+ # CDPATH.
+-$as_unset CDPATH || test "${CDPATH+set}" != set || { CDPATH=:; export CDPATH; }
++unset CDPATH
++#$as_unset CDPATH || test "${CDPATH+set}" != set || { CDPATH=:; export CDPATH; }
+ 
+ exec 6>&1
+ 
+diff -u -Naur gnupg-1.0.7.orig/doc/gpg.info gnupg-1.0.7/doc/gpg.info
+--- gnupg-1.0.7.orig/doc/gpg.info	Wed Dec 31 19:00:00 1969
++++ gnupg-1.0.7/doc/gpg.info	Mon Aug 12 18:49:10 2002
+@@ -0,0 +1,1338 @@
++This is gpg.info, produced by makeinfo version 4.1 from gpg.texi.
++
++START-INFO-DIR-ENTRY
++* gpg: (gpg). An encryption and signing tool
++END-INFO-DIR-ENTRY
++
++
++
++File: gpg.info,  Node: Top,  Up: (dir)
++
++gpg
++***
++
++* Menu:
++
++Name
++****
++
++   gpg --- encryption and signing tool
++
++Synopsis
++********
++
++DESCRIPTION
++***********
++
++   `gpg' is the main program for the GnuPG system.
++
++   This man page only lists the commands and options available.  For a
++more verbose documentation get the GNU Privacy Handbook (GPH), which is
++available at http://www.gnupg.org/gph/ .  You will find a list of HOWTO
++documents at http://www.gnupg.org/docs.html .
++
++   Please remember that option parsing stops as soon as a non option is
++encountered, you can explicitly stop option parsing by using the
++special option "--".
++
++COMMANDS
++********
++
++   `gpg' recognizes these commands:
++
++-s, --sign
++     Make a signature. This command may be combined with --encrypt.
++
++--clearsign
++     Make a clear text signature.
++
++-b, --detach-sign
++     Make a detached signature.
++
++-e, --encrypt
++     Encrypt data. This option may be combined with --sign.
++
++-c, --symmetric
++     Encrypt with symmetric cipher only.  This command asks for a
++     passphrase.
++
++--store
++     Store only (make a simple RFC1991 packet).
++
++--decrypt `file'
++     Decrypt `file' (or stdin if no file is specified) and write it to
++     stdout (or the file specified with --output). If the decrypted
++     file is signed, the signature is also verified. This command
++     differs from the default operation, as it never writes to the
++     filename which is included in the file and it rejects files which
++     don't begin with an encrypted message.
++
++--verify `sigfile' `signed-files'
++     Assume that `sigfile' is a signature and verify it without
++     generating any output. With no arguments, the signature packet is
++     read from stdin. If only a sigfile is given, it may be a complete
++     signature or a detached signature, in which case the signed stuff
++     is expected in a file without the ".sig" or ".asc" extension.
++     With more than 1 argument, the first should be a detached signature
++     and the remaining files are the signed stuff. To read the signed
++     stuff from stdin, use `-' as the second filename.  For security
++     reasons a detached signature cannot read the signed material from
++     stdin without denoting it in the above way.
++
++--verify-files `files'
++     This is a special version of the --verify command which does not
++     work with detached signatures. The command expects the files to be
++     verified either on the command line or reads the filenames from
++     stdin; each name must be on separate line. The command is intended
++     for quick checking of many files.
++
++--list-keys `names'
++--list-public-keys `names'
++     List all keys from the public keyrings, or just the ones given on
++     the command line.
++
++--list-secret-keys `names'
++     List all keys from the secret keyrings, or just the ones given on
++     the command line.
++
++--list-sigs `names'
++     Same as --list-keys, but the signatures are listed too.
++
++--check-sigs `names'
++     Same as --list-sigs, but the signatures are verified.
++
++--fingerprint `names'
++     List all keys with their fingerprints. This is the same output as
++     --list-keys but with the additional output of a line with the
++     fingerprint. May also be combined with --list-sigs or -check-sigs.
++     If this command is given twice, the fingerprints of all secondary
++     keys are listed too.
++
++--list-packets
++     List only the sequence of packets. This is mainly useful for
++     debugging.
++
++--gen-key
++     Generate a new key pair. This command is normally only used
++     interactively.
++
++     There is an experimental feature which allows you to create keys
++     in batch mode. See the file `doc/DETAILS' in the source
++     distribution on how to use this.
++
++--edit-key `name'
++     Present a menu which enables you to do all key related tasks:
++
++    sign
++          Make a signature on key of user `name' If the key is not yet
++          signed by the default user (or the users given with -u), the
++          program displays the information of the key again, together
++          with its fingerprint and asks whether it should be signed.
++          This question is repeated for all users specified with -u.
++
++    lsign
++          Same as --sign but the signature is marked as non-exportable
++          and will therefore never be used by others. This may be used
++          to make keys valid only in the local environment.
++
++    nrsign
++          Same as --sign but the signature is marked as non-revocable
++          and can therefore never be revoked.
++
++    nrlsign
++          Combines the functionality of nrsign and lsign to make a
++          signature that is both non-revocable and non-exportable.
++
++    revsig
++          Revoke a signature. GnuPG asks for every signature which has
++          been done by one of the secret keys, whether a revocation
++          certificate should be generated.
++
++    trust
++          Change the owner trust value. This updates the trust-db
++          immediately and no save is required.
++
++    disable
++    enable
++          Disable or enable an entire key. A disabled key can normally
++          not be used for encryption.
++
++    adduid
++          Create an alternate user id.
++
++    addphoto
++          Create a photographic user id.
++
++    deluid
++          Delete a user id.
++
++    addkey
++          Add a subkey to this key.
++
++    delkey
++          Remove a subkey.
++
++    revkey
++          Revoke a subkey.
++
++    expire
++          Change the key expiration time. If a key is selected, the
++          time of this key will be changed.  With no selection the key
++          expiration of the primary key is changed.
++
++    passwd
++          Change the passphrase of the secret key.
++
++    primary
++          Flag the current user id as the primary one, removes the
++          primary user id flag from all other user ids and sets the
++          timestamp of all affected self-signatures one second ahead.
++          Note that setting a photo user ID as primary makes it primary
++          over other photo user IDs, and setting a regular user ID as
++          primary makes it primary over other regular user IDs.
++
++    uid `n'
++          Toggle selection of user id with index `n'.  Use 0 to
++          deselect all.
++
++    key `n'
++          Toggle selection of subkey with index `n'.  Use 0 to deselect
++          all.
++
++    check
++          Check all selected user ids.
++
++    showphoto
++          Display the selected photographic user id.
++
++    pref
++          List preferences.
++
++    showpref
++          More verbose preferences listing.
++
++    setpref `string'
++          Set the list of user ID preferences to `string', this should
++          be a string similar to the one printed by "pref". Using an
++          empty string will set the default preference string, using
++          "none" will set the preferences to nil. Only available
++          algorithms are allowed. This command just initializes an
++          internal list and does not change anything unless another
++          command which changes the self-signatures is used.
++
++    updpref
++          Change the preferences of all user IDs (or just of the
++          selected ones to the current list of preferences. The
++          timestamp of all affected self-signatures fill be advanced by
++          one second.
++
++    toggle
++          Toggle between public and secret key listing.
++
++    save
++          Save all changes to the key rings and quit.
++
++    quit
++          Quit the program without updating the key rings.
++
++     The listing shows you the key with its secondary keys and all user
++     ids. Selected keys or user ids are indicated by an asterisk. The
++     trust value is displayed with the primary key: the first is the
++     assigned owner trust and the second is the calculated trust value.
++     Letters are used for the values:
++
++    -
++          No ownertrust assigned / not yet calculated.
++
++    e
++          Trust calculation has failed; probably due to an expired key.
++
++    q
++          Not enough information for calculation.
++
++    n
++          Never trust this key.
++
++    m
++          Marginally trusted.
++
++    f
++          Fully trusted.
++
++    u
++          Ultimately trusted.
++
++--sign-key `name'
++     Signs a public key with your secret key. This is a shortcut
++     version of the subcommand "sign" from --edit.
++
++--lsign-key `name'
++     Signs a public key with your secret key but marks it as
++     non-exportable. This is a shortcut version of the subcommand
++     "lsign" from --edit.
++
++--nrsign-key `name'
++     Signs a public key with your secret key but marks it as
++     non-revocable.  This is a shortcut version of the subcommand
++     "nrsign" from --edit.
++
++--delete-key `name'
++     Remove key from the public keyring
++
++--delete-secret-key `name'
++     Remove key from the secret and public keyring
++
++--delete-secret-and-public-key `name'
++     Same as --delete-key, but if a secret key exists, it will be
++     removed first.
++
++--gen-revoke
++     Generate a revocation certificate for the complete key. To revoke
++     a subkey or a signature, use the --edit command.
++
++--export `names'
++     Either export all keys from all keyrings (default keyrings and
++     those registered via option --keyring), or if at least one name is
++     given, those of the given name. The new keyring is written to
++     stdout or to the file given with option "output". Use together
++     with --armor to mail those keys.
++
++--send-keys `names'
++     Same as --export but sends the keys to a keyserver.  Option
++     --keyserver must be used to give the name of this keyserver. Don't
++     send your complete keyring to a keyserver - select only those keys
++     which are new or changed by you.
++
++--export-all `names'
++     Same as --export, but also exports keys which are not compatible
++     with OpenPGP.
++
++--export-secret-keys `names'
++--export-secret-subkeys `names'
++     Same as --export, but exports the secret keys instead.  This is
++     normally not very useful and a security risk.  The second form of
++     the command has the special property to render the secret part of
++     the primary key useless; this is a GNU extension to OpenPGP and
++     other implementations can not be expected to successfully import
++     such a key.  See the option --simple-sk-checksum if you want to
++     import such an exported key with an older OpenPGP implementation.
++
++--import `files'
++--fast-import `files'
++     Import/merge keys. This adds the given keys to the keyring. The
++     fast version is currently just a synonym.
++
++     There are a few other options which control how this command works.
++     Most notable here is the --merge-only option which does not insert
++     new keys but does only the merging of new signatures, user-IDs and
++     subkeys.
++
++--recv-keys `key IDs'
++     Import the keys with the given key IDs from a keyserver. Option
++     --keyserver must be used to give the name of this keyserver.
++
++--search-keys `names'
++     Search the keyserver for the given names. Multiple names given here
++     will be joined together to create the search string for the
++     keyserver.  Option --keyserver must be used to give the name of
++     this keyserver.
++
++--update-trustdb
++     Do trust DB maintenance. This command goes over all keys and builds
++     the Web-of-Trust. This is an interactive command because it may
++     has to ask for the "ownertrust" values of keys. The user has to
++     give an estimation in how far she trusts the owner of the
++     displayed key to correctly certify (sign) other keys. It does only
++     ask for that value if it has not yet been assigned to a key. Using
++     the edit menu, that value can be changed at any time later.
++
++--check-trustdb
++     Do trust DB maintenance without user interaction. Form time to time
++     the trust database must be updated so that expired keys and
++     resulting changes in the Web-of-Trust can be tracked. GnuPG tries
++     to figure when this is required and then does it implicitly; this
++     command can be used to force such a check. The processing is
++     identically to that of --update-trustdb but it skips keys with a
++     not yet defined "ownertrust".
++
++     For use with cron jobs, this command can be used together with
++     --batch in which case the check is only done when it is due. To
++     force a run even in batch mode add the option --yes.
++
++--export-ownertrust `file'
++     Store the ownertrust values into `file' (or stdin if not given).
++     This is useful for backup purposes as these values are the only
++     ones which can't be re-created from a corrupted trust DB.
++
++--import-ownertrust `files'
++     Update the trustdb with the ownertrust values stored in `files'
++     (or stdin if not given); existing values will be overwritten.
++
++--print-md `algo' `files'
++--print-mds `files'
++     Print message digest of algorithm ALGO for all given files or
++     stdin.  With the second form (or a deprecated "*" as algo) digests
++     for all available algorithms are printed.
++
++--gen-random `0|1|2' `count'
++     Emit COUNT random bytes of the given quality level. If count is
++     not given or zero, an endless sequence of random bytes will be
++     emitted.  PLEASE, don't use this command unless you know what you
++     are doing; it may remove precious entropy from the system!
++
++--gen-prime `mode' `bits' `qbits'
++     Use the source, Luke :-). The output format is still subject to
++     change.
++
++--version
++     Print version information along with a list of supported
++     algorithms.
++
++--warranty
++     Print warranty information.
++
++-h, --help
++     Print usage information. This is a really long list even though it
++     doesn't list all options.
++
++OPTIONS
++*******
++
++   Long options can be put in an options file (default
++"~/.gnupg/options").  Do not write the 2 dashes, but simply the name of
++the option and any required arguments. Lines with a hash as the first
++non-white-space character are ignored. Commands may be put in this file
++too, but that does not make sense.
++
++   `gpg' recognizes these options:
++
++-a, --armor
++     Create ASCII armored output.
++
++-o, --output `file'
++     Write output to `file'.
++
++-u, --local-user `name'
++     Use `name' as the user ID to sign.  This option is silently
++     ignored for the list commands, so that it can be used in an
++     options file.
++
++--default-key `name'
++     Use `name' as default user ID for signatures. If this is not used
++     the default user ID is the first user ID found in the secret
++     keyring.
++
++-r, --recipient `name'
++
++     Encrypt for user id `name'. If this option is not specified, GnuPG
++     asks for the user-id unless --default-recipient is given
++
++--default-recipient `name'
++     Use `name' as default recipient if option --recipient is not used
++     and don't ask if this is a valid one. `name' must be non-empty.
++
++--default-recipient-self
++     Use the default key as default recipient if option --recipient is
++     not used and don't ask if this is a valid one. The default key is
++     the first one from the secret keyring or the one set with
++     --default-key.
++
++--no-default-recipient
++     Reset --default-recipient and -default-recipient-self.
++
++--encrypt-to `name'
++     Same as --recipient but this one is intended for use in the
++     options file and may be used with your own user-id as an
++     "encrypt-to-self". These keys are only used when there are other
++     recipients given either by use of --recipient or by the asked user
++     id.  No trust checking is performed for these user ids and even
++     disabled keys can be used.
++
++--no-encrypt-to
++     Disable the use of all --encrypt-to keys.
++
++-v, --verbose
++     Give more information during processing. If used twice, the input
++     data is listed in detail.
++
++-q, --quiet
++     Try to be as quiet as possible.
++
++-z `n'
++     Set compression level to `n'. A value of 0 for `n' disables
++     compression. Default is to use the default compression level of
++     zlib (normally 6).
++
++-t, --textmode
++     Use canonical text mode. If -t (but not --textmode) is used
++     together with armoring and signing, this enables clearsigned
++     messages.  This kludge is needed for PGP compatibility; normally
++     you would use --sign or -clearsign to selected the type of the
++     signature.
++
++-n, --dry-run
++     Don't make any changes (this is not completely implemented).
++
++-i, --interactive
++     Prompt before overwriting any files.
++
++--batch
++     Use batch mode. Never ask, do not allow interactive commands.
++
++--no-tty
++     Make sure that the TTY (terminal) is never used for any output.
++     This option is needed in some cases because GnuPG sometimes prints
++     warnings to the TTY if --batch is used.
++
++--no-batch
++     Disable batch mode. This may be of use if --batch is enabled from
++     an options file.
++
++--yes
++     Assume "yes" on most questions.
++
++--no
++     Assume "no" on most questions.
++
++--default-cert-check-level `n'
++     The default to use for the check level when signing a key.
++
++     0 means you make no particular claim as to how carefully you
++     verified the key.
++
++     1 means you believe the key is owned by the person who claims to
++     own it but you could not, or did not verify the key at all. This is
++     useful for a "persona" verification, where you sign the key of a
++     pseudonymous user.
++
++     2 means you did casual verification of the key. For example, this
++     could mean that you verified that the key fingerprint and checked
++     the user ID on the key against a photo ID.
++
++     3 means you did extensive verification of the key. For example,
++     this could mean that you verified the key fingerprint with the
++     owner of the key in person, and that you checked, by means of a
++     hard to forge document with a photo ID (such as a passport) that
++     the name of the key owner matches the name in the user ID on the
++     key, and finally that you verified (by exchange of email) that the
++     email address on the key belongs to the key owner.
++
++     Note that the examples given above for levels 2 and 3 are just
++     that: examples. In the end, it is up to you to decide just what
++     "casual" and "extensive" mean to you.
++
++     This option defaults to 0.
++
++--trusted-key `long key ID'
++     Assume that the specified key (which must be given as a full 8
++     byte key ID) is as trustworthy as one of your own secret keys.
++     This option is useful if you don't want to keep your secret keys
++     (or one of them) online but still want to be able to check the
++     validity of a given recipient's or signator's key.
++
++--always-trust
++     Skip key validation and assume that used keys are always fully
++     trusted.  You won't use this unless you have installed some
++     external validation scheme. This option also suppresses the
++     "[uncertain]" tag printed with signature checks when there is no
++     evidence that the user ID is bound to the key.
++
++--keyserver `name'
++     Use `name' as your keyserver. This is the server that --recv-keys,
++     --send-keys, and -search-keys will communicate with to receive keys
++     from, send keys to, and search for keys on. The format of the
++     `name' is a URI: `scheme:[//]keyservername[:port]' The scheme is
++     the type of keyserver: "hkp" for the Horowitz (or compatible)
++     keyservers, "ldap" for the NAI LDAP keyserver, or "mailto" for the
++     Horowitz email keyserver. Note that your particular installation of
++     GnuPG may have other keyserver types available as well.
++
++     Most keyservers synchronize with each other, so there is generally
++     no need to send keys to more than one server. Using the command
++     "host -l pgp.net | grep wwwkeys" gives you a list of HKP
++     keyservers. When using one of the wwwkeys servers, due to load
++     balancing using round-robin DNS you may notice that you get a
++     different key server each time.
++
++--keyserver-options `parameters'
++     This is a space or comma delimited string that gives options for
++     the keyserver. Options can be prepended with a `no-' to give the
++     opposite meaning. While not all options are available for all
++     keyserver types, some common options are:
++
++    include-revoked
++          When receiving or searching for a key, include keys that are
++          marked on the keyserver as revoked. Note that this option is
++          always set when using the NAI HKP keyserver, as this
++          keyserver does not differentiate between revoked and
++          unrevoked keys.
++
++    include-disabled
++          When receiving or searching for a key, include keys that are
++          marked on the keyserver as disabled. Note that this option is
++          not used with HKP keyservers, as they do not support
++          disabling keys.
++
++    use-temp-files
++          On most Unix-like platforms, GnuPG communicates with the
++          keyserver helper program via pipes, which is the most
++          efficient method. This option forces GnuPG to use temporary
++          files to communicate. On some platforms (such as Win32 and
++          RISC OS), this option is always enabled.
++
++    keep-temp-files
++          If using `use-temp-files', do not delete the temp files after
++          using them. This option is useful to learn the keyserver
++          communication protocol by reading the temporary files.
++
++    verbose
++          Tell the keyserver helper program to be more verbose. This
++          option can be repeated multiple times to increase the
++          verbosity level.
++
++    honor-http-proxy
++          For keyserver schemes that use HTTP (such as HKP), try to
++          access the keyserver over the proxy set with the environment
++          variable "http_proxy".
++
++    auto-key-retrieve
++          This option enables the automatic retrieving of keys from a
++          keyserver when verifying signatures made by keys that are not
++          on the local keyring.
++
++--show-photos
++     Causes --list-keys, -list-sigs, -list-public-keys, and
++     --list-secret-keys to also display the photo ID attached to a key,
++     if any.  See also --photo-viewer.
++
++--no-show-photos
++     Resets the --show-photos flag.
++
++--photo-viewer `string'
++     This is the command line that should be run to view a photo ID.
++     "%i" will be expanded to a filename containing the photo. "%I"
++     does the same, except the file will not be deleted once the viewer
++     exits.  Other flags are "%k" for the key ID, "%K" for the long key
++     ID, "%f" for the key fingerprint, "%t" for the extension of the
++     image type (e.g. "jpg"), "%T" for the MIME type of the image (e.g.
++     "image/jpeg"), and "%%" for an actual percent sign. If neither %i
++     or %I are present, then the photo will be supplied to the viewer
++     on standard input.
++
++     The default viewer is "xloadimage -fork -quiet -title 'KeyID 0x%k'
++     stdin"
++
++--show-keyring
++     Causes --list-keys, -list-public-keys, and -list-secret-keys to
++     display the name of the keyring a given key resides on. This is
++     only useful when you're listing a specific key or set of keys. It
++     has no effect when listing all keys.
++
++--keyring `file'
++     Add `file' to the list of keyrings.  If `file' begins with a tilde
++     and a slash, these are replaced by the HOME directory. If the
++     filename does not contain a slash, it is assumed to be in the
++     home-directory ("~/.gnupg" if --homedir is not used).  The
++     filename may be prefixed with a scheme:
++
++     "gnupg-ring:" is the default one.
++
++     It might make sense to use it together with --no-default-keyring.
++
++--secret-keyring `file'
++     Same as --keyring but for the secret keyrings.
++
++--homedir `directory'
++     Set the name of the home directory to `directory' If this option
++     is not used it defaults to "~/.gnupg". It does not make sense to
++     use this in a options file. This also overrides the environment
++     variable "GNUPGHOME".
++
++--charset `name'
++     Set the name of the native character set. This is used to convert
++     some strings to proper UTF-8 encoding.  Valid values for `name'
++     are:
++
++    iso-8859-1
++          This is the default Latin 1 set.
++
++    iso-8859-2
++          The Latin 2 set.
++
++    koi8-r
++          The usual Russian set (rfc1489).
++
++    utf-8
++          Bypass all translations and assume that the OS uses native
++          UTF-8 encoding.
++
++--utf8-strings
++--no-utf8-strings
++     Assume that the arguments are already given as UTF8 strings. The
++     default (--no-utf8-strings) is to assume that arguments are
++     encoded in the character set as specified by --charset. These
++     options affect all following arguments. Both options may be used
++     multiple times.
++
++--options `file'
++     Read options from `file' and do not try to read them from the
++     default options file in the homedir (see --homedir). This option
++     is ignored if used in an options file.
++
++--no-options
++     Shortcut for "--options /dev/null". This option is detected before
++     an attempt to open an option file.  Using this option will also
++     prevent the creation of a "~./gnupg" homedir.
++
++--load-extension `name'
++     Load an extension module. If `name' does not contain a slash it is
++     searched in "/usr/local/lib/gnupg" See the manual for more
++     information about extensions.
++
++--debug `flags'
++     Set debugging flags. All flags are or-ed and `flags' may be given
++     in C syntax (e.g. 0x0042).
++
++--debug-all
++     Set all useful debugging flags.
++
++--status-fd `n'
++     Write special status strings to the file descriptor `n'.  See the
++     file DETAILS in the documentation for a listing of them.
++
++--logger-fd `n'
++     Write log output to file descriptor `n' and not to stderr.
++
++--no-comment
++     Do not write comment packets. This option affects only the
++     generation of secret keys. Please note, that this has nothing to
++     do with the comments in clear text signatures.
++
++--comment `string'
++     Use `string' as comment string in clear text signatures.  The
++     default is not do write a comment string.
++
++--default-comment
++     Force to write the standard comment string in clear text
++     signatures. Use this to overwrite a --comment from a config file.
++     This option is now obsolete because there is no default comment
++     string anymore.
++
++--no-version
++     Omit the version string in clear text signatures.
++
++--emit-version
++     Force to write the version string in clear text signatures. Use
++     this to overwrite a previous --no-version from a config file.
++
++-N, --notation-data `name=value'
++     Put the name value pair into the signature as notation data.
++     `name' must consist only of alphanumeric characters, digits or the
++     underscore; the first character must not be a digit.  `value' may
++     be any printable string; it will be encoded in UTF8, so you should
++     check that your --charset is set correctly.  If you prefix `name'
++     with an exclamation mark, the notation data will be flagged as
++     critical (rfc2440:5.2.3.15).
++
++--show-notation
++     Show key signature notations in the --list-sigs or -check-sigs
++     listings.
++
++--no-show-notation
++     Do not show key signature notations in the --list-sigs or
++     -check-sigs listings.
++
++--set-policy-url `string'
++     Use `string' as Policy URL for signatures (rfc2440:5.2.3.19).  If
++     you prefix it with an exclamation mark, the policy URL packet will
++     be flagged as critical.
++
++--show-policy-url
++     Show any policy URLs set in the --list-sigs or -check-sigs
++     listings.
++
++--no-show-policy-url
++     Do not show any policy URLs set in the --list-sigs or -check-sigs
++     listings.
++
++--set-filename `string'
++     Use `string' as the name of file which is stored in messages.
++
++--for-your-eyes-only
++     Set the `for your eyes only' flag in the message. This causes GnuPG
++     to refuse to save the file unless the --output option is given, and
++     PGP to use the "secure viewer" with a Tempest-resistant font to
++     display the message. This option overrides --set-filename.
++
++--no-for-your-eyes-only
++     Resets the --for-your-eyes-only flag.
++
++--use-embedded-filename
++     Try to create a file with a name as embedded in the data.  This
++     can be a dangerous option as it allows to overwrite files.
++
++--completes-needed `n'
++     Number of completely trusted users to introduce a new key signer
++     (defaults to 1).
++
++--marginals-needed `n'
++     Number of marginally trusted users to introduce a new key signer
++     (defaults to 3)
++
++--max-cert-depth `n'
++     Maximum depth of a certification chain (default is 5).
++
++--cipher-algo `name'
++     Use `name' as cipher algorithm. Running the program with the
++     command --version yields a list of supported algorithms. If this
++     is not used the cipher algorithm is selected from the preferences
++     stored with the key.
++
++--digest-algo `name'
++     Use `name' as message digest algorithm. Running the program with
++     the command --version yields a list of supported algorithms.
++     Please note that using this option may violate the OpenPGP
++     requirement, that a 160 bit hash is to be used for DSA.
++
++--s2k-cipher-algo `name'
++     Use `name' as the cipher algorithm used to protect secret keys.
++     The default cipher is BLOWFISH. This cipher is also used for
++     conventional encryption if --cipher-algo is not given.
++
++--s2k-digest-algo `name'
++     Use `name' as the digest algorithm used to mangle the passphrases.
++     The default algorithm is RIPE-MD-160.  This digest algorithm is
++     also used for conventional encryption if --digest-algo is not
++     given.
++
++--s2k-mode `n'
++     Selects how passphrases are mangled. If `n' is 0 a plain
++     passphrase (which is not recommended) will be used, a 1 (default)
++     adds a salt to the passphrase and a 3 iterates the whole process a
++     couple of times.  Unless --rfc1991 is used, this mode is also used
++     for conventional encryption.
++
++--simple-sk-checksum
++     Secret keys are integrity protected by using a SHA-1 checksum. This
++     method will be part of an enhanced OpenPGP specification but GnuPG
++     already uses it as a countermeasure against certain attacks. Old
++     applications don't understand this new format, so this option may
++     be used to switch back to the old behaviour. Using this this option
++     bears a security risk.
++
++--compress-algo `n'
++     Use compression algorithm `n'. Default is 2 which is RFC1950
++     compression. You may use 1 to use the old zlib version (RFC1951)
++     which is used by PGP. 0 disables compression. The default
++     algorithm may give better results because the window size is not
++     limited to 8K. If this is not used the OpenPGP behavior is used,
++     i.e. the compression algorithm is selected from the preferences;
++     note, that this can't be done if you do not encrypt the data.
++
++--disable-cipher-algo `name'
++     Never allow the use of `name' as cipher algorithm.  The given name
++     will not be checked so that a later loaded algorithm will still
++     get disabled.
++
++--disable-pubkey-algo `name'
++     Never allow the use of `name' as public key algorithm.  The given
++     name will not be checked so that a later loaded algorithm will
++     still get disabled.
++
++--no-sig-cache
++     Do not cache the verification status of key signatures.  Caching
++     gives a much better performance in key listings. However, if you
++     suspect that your public keyring is not save against write
++     modifications, you can use this option to disable the caching. It
++     probably does not make sense to disable it because all kind of
++     damage can be done if someone else has write access to your public
++     keyring.
++
++--no-sig-create-check
++     GnuPG normally verifies each signature right after creation to
++     protect against bugs and hardware malfunctions which could leak
++     out bits from the secret key. This extra verification needs some
++     time (about 115% for DSA keys), and so this option can be used to
++     disable it.  However, due to the fact that the signature creation
++     needs manual interaction, this performance penalty does not matter
++     in most settings.
++
++--auto-check-trustdb
++     If GnuPG feels that its information about the Web-of-Trust has to
++     be updated, it automatically runs the --check-trustdb command
++     internally. This may be a time consuming process.
++
++--no-auto-check-trustdb
++     Resets the --auto-check-trustdb option.
++
++--throw-keyid
++     Do not put the keyid into encrypted packets. This option hides the
++     receiver of the message and is a countermeasure against traffic
++     analysis. It may slow down the decryption process because all
++     available secret keys are tried.
++
++--not-dash-escaped
++     This option changes the behavior of cleartext signatures so that
++     they can be used for patch files. You should not send such an
++     armored file via email because all spaces and line endings are
++     hashed too. You can not use this option for data which has 5
++     dashes at the beginning of a line, patch files don't have this. A
++     special armor header line tells GnuPG about this cleartext
++     signature option.
++
++--escape-from-lines
++     Because some mailers change lines starting with "From " to "<From
++     " it is good to handle such lines in a special way when creating
++     cleartext signatures. All other PGP versions do it this way too.
++     This option is not enabled by default because it would violate
++     rfc2440.
++
++--passphrase-fd `n'
++     Read the passphrase from file descriptor `n'. If you use 0 for
++     `n', the passphrase will be read from stdin. This can only be used
++     if only one passphrase is supplied.  Don't use this option if you
++     can avoid it.
++
++--command-fd `n'
++     This is a replacement for the deprecated shared-memory IPC mode.
++     If this option is enabled, user input on questions is not expected
++     from the TTY but from the given file descriptor. It should be used
++     together with --status-fd. See the file doc/DETAILS in the source
++     distribution for details on how to use it.
++
++--use-agent
++     Try to use the GnuPG-Agent. Please note that this agent is still
++     under development. With this option, GnuPG first tries to connect
++     to the agent before it asks for a passphrase.
++
++--gpg-agent-info
++     Override the value of the environment variable `GPG_AGENT_INFO'.
++     This is only used when --use-agent has been given
++
++--rfc1991
++     Try to be more RFC1991 (PGP 2.x) compliant.
++
++--pgp2
++     Set up all options to be as PGP 2.x compliant as possible, and
++     warn if an action is taken (e.g. encrypting to a non-RSA key) that
++     will create a message that PGP 2.x will not be able to handle.
++     Note that `PGP 2.x' here means `MIT PGP 2.6.2'. There are other
++     versions of PGP 2.x available, but the MIT release is a good
++     common baseline.
++
++     This option implies `--rfc1991 -no-openpgp -disable-mdc
++     --no-force-v4-certs -no-comment -escape-from -force-v3-sigs
++     --no-ask-sig-expire -no-ask-cert-expire -cipher-algo IDEA
++     --digest-algo MD5 -compress-algo 1'
++
++--no-pgp2
++     Resets the --pgp2 option.
++
++--pgp6
++     Set up all options to be as PGP 6 compliant as possible. This
++     restricts you to the ciphers IDEA (if the IDEA plugin is
++     installed), 3DES, and CAST5, the hashes MD5, SHA1 and RIPEMD160,
++     and the compression algorithms none and ZIP. This also disables
++     making signatures with signing subkeys as PGP 6 does not understand
++     signatures made by signing subkeys.
++
++     This option implies `--disable-mdc -no-comment -escape-from
++     --force-v3-sigs -no-ask-sig-expire -compress-algo 1'
++
++--no-pgp6
++     Resets the --pgp6 option.
++
++--openpgp
++     Reset all packet, cipher and digest options to OpenPGP behavior.
++     Use this option to reset all previous options like --rfc1991,
++     -force-v3-sigs, -s2k-*, --cipher-algo, -digest-algo and
++     -compress-algo to OpenPGP compliant values. All PGP workarounds
++     are also disabled.
++
++--force-v3-sigs
++     OpenPGP states that an implementation should generate v4
++     signatures but PGP versions 5 and higher do only recognizes v4
++     signatures on key material. This option forces v3 signatures for
++     signatures on data.
++
++--no-force-v3-sigs
++     Reset the --force-v3-sigs option.
++
++--force-v4-certs
++     Always use v4 key signatures even on v3 keys. This option also
++     changes the default hash algorithm for v3 RSA keys from MD5 to
++     SHA-1.
++
++--no-force-v4-certs
++     Reset the --force-v4-certs option.
++
++--force-mdc
++     Force the use of encryption with appended manipulation code. This
++     is always used with the newer ciphers (those with a blocksize
++     greater than 64 bit).
++
++--allow-non-selfsigned-uid
++     Allow the import and use of keys with user IDs which are not
++     self-signed. This is not recommended, as a non self-signed user ID
++     is trivial to forge.
++
++--no-allow-non-selfsigned-uid
++     Reset the --allow-non-selfsigned-uid option.
++
++--allow-freeform-uid
++     Disable all checks on the form of the user ID while generating a
++     new one. This option should only be used in very special
++     environments as it does not ensure the de-facto standard format of
++     user IDs.
++
++--ignore-time-conflict
++     GnuPG normally checks that the timestamps associated with keys and
++     signatures have plausible values. However, sometimes a signature
++     seems to be older than the key due to clock problems. This option
++     makes these checks just a warning.
++
++--ignore-valid-from
++     GnuPG normally does not select and use subkeys created in the
++     future. This option allows the use of such keys and thus exhibits
++     the pre-1.0.7 behaviour. You should not use this option unless you
++     there is some clock problem.
++
++--ignore-crc-error
++     The ASCII armor used by OpenPG is protected by a CRC checksum
++     against transmission errors. Sometimes it happens that the CRC
++     gets mangled somewhere on the transmission channel but the actual
++     content (which is anyway protected by the OpenPGP protocol) is
++     still okay. This option will let gpg ignore CRC errors.
++
++--lock-once
++     Lock the databases the first time a lock is requested and do not
++     release the lock until the process terminates.
++
++--lock-multiple
++     Release the locks every time a lock is no longer needed. Use this
++     to override a previous --lock-once from a config file.
++
++--lock-never
++     Disable locking entirely. This option should be used only in very
++     special environments, where it can be assured that only one process
++     is accessing those files. A bootable floppy with a stand-alone
++     encryption system will probably use this. Improper usage of this
++     option may lead to data and key corruption.
++
++--no-random-seed-file
++     GnuPG uses a file to store its internal random pool over
++     invocations.  This makes random generation faster; however
++     sometimes write operations are not desired. This option can be
++     used to achieve that with the cost of slower random generation.
++
++--no-verbose
++     Reset verbose level to 0.
++
++--no-greeting
++     Suppress the initial copyright message but do not enter batch mode.
++
++--no-secmem-warning
++     Suppress the warning about "using insecure memory".
++
++--no-permission-warning
++     Suppress the warning about unsafe file permissions.
++
++--no-armor
++     Assume the input data is not in ASCII armored format.
++
++--no-default-keyring
++     Do not add the default keyrings to the list of keyrings.
++
++--skip-verify
++     Skip the signature verification step. This may be used to make the
++     decryption faster if the signature verification is not needed.
++
++--with-colons
++     Print key listings delimited by colons. Note, that the output will
++     be encoded in UTF-8 regardless of any --charset setting.
++
++--with-key-data
++     Print key listings delimited by colons (like --with-colons) and
++     print the public key data.
++
++--with-fingerprint
++     Same as the command --fingerprint but changes only the format of
++     the output and may be used together with another command.
++
++--fast-list-mode
++     Changes the output of the list commands to work faster; this is
++     achieved by leaving some parts empty. Some applications don't need
++     the user ID and the trust information given in the listings. By
++     using this options they can get a faster listing. The exact
++     behaviour of this option may change in future versions.
++
++--fixed-list-mode
++     Do not merge user ID and primary key in --with-colon listing mode
++     and print all timestamps as seconds since 1970-01-01.
++
++--list-only
++     Changes the behaviour of some commands. This is like --dry-run but
++     different in some cases. The semantic of this command may be
++     extended in the future. Currently it only skips the actual
++     decryption pass and therefore enables a fast listing of the
++     encryption keys.
++
++--no-literal
++     This is not for normal use. Use the source to see for what it
++     might be useful.
++
++--set-filesize
++     This is not for normal use. Use the source to see for what it
++     might be useful.
++
++--emulate-md-encode-bug
++     GnuPG versions prior to 1.0.2 had a bug in the way a signature was
++     encoded.  This options enables a workaround by checking faulty
++     signatures again with the encoding used in old versions. This may
++     only happen for ElGamal signatures which are not widely used.
++
++--show-session-key
++     Display the session key used for one message. See
++     --override-session-key for the counterpart of this option.
++
++     We think that Key-Escrow is a Bad Thing; however the user should
++     have the freedom to decide whether to go to prison or to reveal
++     the content of one specific message without compromising all
++     messages ever encrypted for one secret key. DON'T USE IT UNLESS
++     YOU ARE REALLY FORCED TO DO SO.
++
++--override-session-key `string'
++     Don't use the public key but the session key `string'. The format
++     of this string is the same as the one printed by
++     --show-session-key. This option is normally not used but comes
++     handy in case someone forces you to reveal the content of an
++     encrypted message; using this option you can do this without
++     handing out the secret key.
++
++--ask-sig-expire
++     When making a data signature, prompt for an expiration time. If
++     this option is not specified, the expiration time is "never".
++
++--no-ask-sig-expire
++     Resets the --ask-sig-expire option.
++
++--ask-cert-expire
++     When making a key signature, prompt for an expiration time. If this
++     option is not specified, the expiration time is "never".
++
++--no-ask-cert-expire
++     Resets the --ask-cert-expire option.
++
++--expert
++     Allow the user to do certain nonsenical or "silly" things like
++     signing an expired or revoked key, or certain potentially
++     incompatible things like adding more than one photo ID to a single
++     key. In general, this option is for experts only. If you don't
++     really understand what it is doing, leave this off.
++
++--no-expert
++     Resets the --expert option.
++
++--merge-only
++     Don't insert new keys into the keyrings while doing an import.
++
++--allow-secret-key-import
++     This is an obsolete option and is not used anywhere.
++
++--try-all-secrets
++     Don't look at the key ID as stored in the message but try all
++     secret keys in turn to find the right decryption key. This option
++     forces the behaviour as used by anonymous recipients (created by
++     using --throw-keyid) and might come handy in case where an
++     encrypted message contains a bogus key ID.
++
++--enable-special-filenames
++     This options enables a mode in which filenames of the form `-&n',
++     where n is a non-negative decimal number, refer to the file
++     descriptor n and not to a file with that name.
++
++--no-expensive-trust-checks
++     Experimental use only.
++
++--preserve-permissions
++     Don't change the permissions of a secret keyring back to user
++     read/write only. Use this option only if you really know what you
++     are doing.
++
++--preference-list `string'
++     Set the list of preferences to `string', this list should be a
++     string similar to the one printed by the command "pref" in the edit
++     menu.
++
++How to specify a user ID
++************************
++
++   There are different ways on how to specify a user ID to GnuPG; here
++are some examples:
++
++
++
++234567C4
++0F34E556E
++01347A56A
++0xAB123456
++     Here the key ID is given in the usual short form.
++
++234AABBCC34567C4
++0F323456784E56EAB
++01AB3FED1347A5612
++0x234AABBCC34567C4
++     Here the key ID is given in the long form as used by OpenPGP (you
++     can get the long key ID using the option --with-colons).
++
++1234343434343434C434343434343434
++123434343434343C3434343434343734349A3434
++0E12343434343434343434EAB3484343434343434
++0xE12343434343434343434EAB3484343434343434
++     The best way to specify a key ID is by using the fingerprint of
++     the key. This avoids any ambiguities in case that there are
++     duplicated key IDs (which are really rare for the long key IDs).
++
++=Heinrich Heine <heinrichh@uni-duesseldorf.de>
++     Using an exact to match string. The equal sign indicates this.
++
++<heinrichh@uni-duesseldorf.de>
++     Using the email address part which must match exactly. The left
++     angle bracket indicates this email address mode.
++
+++Heinrich Heine duesseldorf
++     All words must match exactly (not case sensitive) but can appear in
++     any order in the user ID. Words are any sequences of letters,
++     digits, the underscore and all characters with bit 7 set.
++
++Heine
++*Heine
++     By case insensitive substring matching. This is the default mode
++     but applications may want to explicitly indicate this by putting
++     the asterisk in front.
++
++   Note that you can append an exclamation mark to key IDs or
++fingerprints. This flag which tells GnuPG to use exactly that primary
++or secondary key and don't try to figure out which secondary or primary
++key to use.
++
++RETURN VALUE
++************
++
++   The program returns 0 if everything was fine, 1 if at least a
++signature was bad, and other error codes for fatal errors.
++
++EXAMPLES
++********
++
++gpg -se -r `Bob' `file'
++     sign and encrypt for user Bob
++
++gpg --clearsign `file'
++     make a clear text signature
++
++gpg -sb `file'
++     make a detached signature
++
++gpg --list-keys `user_ID'
++     show keys
++
++gpg --fingerprint `user_ID'
++     show fingerprint
++
++gpg --verify `pgpfile'
++gpg --verify `sigfile' `files'
++     Verify the signature of the file but do not output the data. The
++     second form is used for detached signatures, where `sigfile' is
++     the detached signature (either ASCII armored of binary) and
++     `files' are the signed data; if this is not given the name of the
++     file holding the signed data is constructed by cutting off the
++     extension (".asc" or ".sig") of `sigfile' or by asking the user
++     for the filename.
++
++ENVIRONMENT
++***********
++
++HOME
++     Used to locate the default home directory.
++
++GNUPGHOME
++     If set directory used instead of "~/.gnupg".
++
++GPG_AGENT_INFO
++     Used to locate the gpg-agent; only honred when --use-agent is set.
++     The value constist of 3 colon delimited fields: The first is the
++     path to the Unix Domain Socket, the second the PID of the
++     gpg-agent and the protocol version which should be set to 1. When
++     starting the gpg-agent as described in its documentation, this
++     variable is set to the correct value. The option --gpg-agent-info
++     can be used to overide it.
++
++http_proxy
++     Only honored when the option --honor-http-proxy is set.
++
++FILES
++*****
++
++~/.gnupg/secring.gpg
++     The secret keyring
++
++~/.gnupg/secring.gpg.lock
++     and the lock file
++
++~/.gnupg/pubring.gpg
++     The public keyring
++
++~/.gnupg/pubring.gpg.lock
++     and the lock file
++
++~/.gnupg/trustdb.gpg
++     The trust database
++
++~/.gnupg/trustdb.gpg.lock
++     and the lock file
++
++~/.gnupg/random_seed
++     used to preserve the internal random pool
++
++~/.gnupg/options
++     May contain options
++
++/usr[/local]/share/gnupg/options.skel
++     Skeleton options file
++
++/usr[/local]/lib/gnupg/
++     Default location for extensions
++
++WARNINGS
++********
++
++   Use a *good* password for your user account and a *good* passphrase
++to protect your secret key. This passphrase is the weakest part of the
++whole system. Programs to do dictionary attacks on your secret keyring
++are very easy to write and so you should protect your "~/.gnupg/"
++directory very well.
++
++   Keep in mind that, if this program is used over a network (telnet),
++it is *very* easy to spy out your passphrase!
++
++   If you are going to verify detached signatures, make sure that the
++program knows about it; either be giving both filenames on the
++commandline or using `-' to specify stdin.
++
++BUGS
++****
++
++   On many systems this program should be installed as setuid(root).
++This is necessary to lock memory pages. Locking memory pages prevents
++the operating system from writing memory pages to disk. If you get no
++warning message about insecure memory your operating system supports
++locking without being root. The program drops root privileges as soon
++as locked memory is allocated.
++
++
++
++Tag Table:
++Node: Top67
++
++End Tag Table
+diff -u -Naur gnupg-1.0.7.orig/doc/gpgv.info gnupg-1.0.7/doc/gpgv.info
+--- gnupg-1.0.7.orig/doc/gpgv.info	Tue Oct 23 05:20:57 2001
++++ gnupg-1.0.7/doc/gpgv.info	Mon Aug 12 18:49:10 2002
+@@ -1,5 +1,9 @@
+ This is gpgv.info, produced by makeinfo version 4.0b from gpgv.texi.
+ 
++START-INFO-DIR-ENTRY
++* gpgv: (gpgv). A signature verification tool
++END-INFO-DIR-ENTRY
++
+ 
+ File: gpgv.info,  Node: Top,  Up: (dir)
+ 
+diff -u -Naur gnupg-1.0.7.orig/mpi/config.links gnupg-1.0.7/mpi/config.links
+--- gnupg-1.0.7.orig/mpi/config.links	Thu Apr 18 06:10:40 2002
++++ gnupg-1.0.7/mpi/config.links	Mon Aug 12 18:49:10 2002
+@@ -212,6 +212,15 @@
+        path="powerpc32"
+        ;;
+ 
++    powerpc-apple-darwin*)
++       echo '/* configured Darwin on powerpc */' >>./mpi/asm-syntax.h
++       echo '#define NEXT_SYNTAX'                 >>./mpi/asm-syntax.h
++       echo '#define USE_PPC_PATCHES'            >>./mpi/asm-syntax.h
++       cat   $srcdir/mpi/powerpc32/syntax.h	 >>./mpi/asm-syntax.h
++       mpi_sflags="-Wa,-mppc"
++       path="powerpc32"
++       ;;
++
+     rs6000-*-aix[456789]*    | \
+     rs6000-*-aix3.2.[456789])
+ 	mpi_sflags="-Wa,-mpwr"
+diff -u -Naur gnupg-1.0.7.orig/mpi/powerpc32/mpih-add1.S gnupg-1.0.7/mpi/powerpc32/mpih-add1.S
+--- gnupg-1.0.7.orig/mpi/powerpc32/mpih-add1.S	Sun Apr 29 09:12:37 2001
++++ gnupg-1.0.7/mpi/powerpc32/mpih-add1.S	Mon Aug 12 18:49:10 2002
+@@ -95,41 +95,41 @@
+ 
+ EALIGN(mpihelp_add_n,3,0)
+ /* Set up for loop below.  */
+-       mtcrf 0x01,%r6
+-       srwi. %r7,%r6,1
+-       li    %r10,0
+-       mtctr %r7
++       mtcrf 0x01,R(r6)
++       srwi. R(r7),R(r6),1
++       li    R(r10),0
++       mtctr R(r7)
+        bt    31,2f
+ 
+ /* Clear the carry.  */
+-       addic %r0,%r0,0
++       addic R(r0),R(r0),0
+ /* Adjust pointers for loop.  */
+-       addi  %r3,%r3,-4
+-       addi  %r4,%r4,-4
+-       addi  %r5,%r5,-4
++       addi  R(r3),R(r3),-4
++       addi  R(r4),R(r4),-4
++       addi  R(r5),R(r5),-4
+        b     0f
+ 
+-2:     lwz  %r7,0(%r5)
+-       lwz  %r6,0(%r4)
+-       addc %r6,%r6,%r7
+-       stw  %r6,0(%r3)
++2:     lwz  R(r7),0(R(r5))
++       lwz  R(r6),0(R(r4))
++       addc R(r6),R(r6),R(r7)
++       stw  R(r6),0(R(r3))
+ 	beq  1f
+ 
+ /* The loop.  */
+ 
+ /* Align start of loop to an odd word boundary to guarantee that the
+    last two words can be fetched in one access (for 601).  */
+-0:     lwz  %r9,4(%r4)
+-       lwz  %r8,4(%r5)
+-       lwzu %r6,8(%r4)
+-       lwzu %r7,8(%r5)
+-       adde %r8,%r9,%r8
+-       stw  %r8,4(%r3)
+-       adde %r6,%r6,%r7
+-       stwu %r6,8(%r3)
++0:     lwz  R(r9),4(R(r4))
++       lwz  R(r8),4(R(r5))
++       lwzu R(r6),8(R(r4))
++       lwzu R(r7),8(R(r5))
++       adde R(r8),R(r9),R(r8)
++       stw  R(r8),4(R(r3))
++       adde R(r6),R(r6),R(r7)
++       stwu R(r6),8(R(r3))
+        bdnz 0b
+ /* Return the carry.  */
+-1:     addze %r3,%r10
++1:     addze R(r3),R(r10)
+        blr
+ END(mpihelp_add_n)
+ #endif
+diff -u -Naur gnupg-1.0.7.orig/mpi/powerpc32/mpih-lshift.S gnupg-1.0.7/mpi/powerpc32/mpih-lshift.S
+--- gnupg-1.0.7.orig/mpi/powerpc32/mpih-lshift.S	Sun Apr 29 09:12:26 2001
++++ gnupg-1.0.7/mpi/powerpc32/mpih-lshift.S	Mon Aug 12 18:49:10 2002
+@@ -97,69 +97,69 @@
+ 			unsigned int cnt)  */
+ 
+ EALIGN(mpihelp_lshift,3,0)
+-       mtctr   %r5	       # copy size into CTR
+-       cmplwi  %cr0,%r5,16     # is size < 16
+-       slwi    %r0,%r5,2
+-       add     %r7,%r3,%r0     # make r7 point at end of res
+-       add     %r4,%r4,%r0     # make r4 point at end of s1
+-       lwzu    %r11,-4(%r4)    # load first s1 limb
+-       subfic  %r8,%r6,32
+-       srw     %r3,%r11,%r8    # compute function return value
+-       bge     %cr0,L(big)     # branch if size >= 16
++       mtctr   R(r5)	           /* copy size into CTR */
++       cmplwi  R(cr0),R(r5),16     /* is size < 16 */
++       slwi    R(r0),R(r5),2
++       add     R(r7),R(r3),R(r0)   /* make r7 point at end of res */
++       add     R(r4),R(r4),R(r0)   /* make r4 point at end of s1  */
++       lwzu    R(r11),-4(R(r4))    /* load first s1 limb */
++       subfic  R(r8),R(r6),32
++       srw     R(r3),R(r11),R(r8)  /* compute function return value */
++       bge     R(cr0),L(big)       /* branch if size >= 16 */
+ 
+        bdz     L(end1)
+ 
+-0:     lwzu    %r10,-4(%r4)
+-       slw     %r9,%r11,%r6
+-       srw     %r12,%r10,%r8
+-       or      %r9,%r9,%r12
+-       stwu    %r9,-4(%r7)
++0:     lwzu    R(r10),-4(R(r4))
++       slw     R(r9),R(r11),R(r6)
++       srw     R(r12),R(r10),R(r8)
++       or      R(r9),R(r9),R(r12)
++       stwu    R(r9),-4(R(r7))
+        bdz     L(end2)
+-       lwzu    %r11,-4(%r4)
+-       slw     %r9,%r10,%r6
+-       srw     %r12,%r11,%r8
+-       or      %r9,%r9,%r12
+-       stwu    %r9,-4(%r7)
++       lwzu    R(r11),-4(R(r4))
++       slw     R(r9),R(r10),R(r6)
++       srw     R(r12),R(r11),R(r8)
++       or      R(r9),R(r9),R(r12)
++       stwu    R(r9),-4(R(r7))
+        bdnz    0b
+ 
+-L(end1):slw    %r0,%r11,%r6
+-       stw     %r0,-4(%r7)
++L(end1):slw    R(r0),R(r11),R(r6)
++       stw     R(r0),-4(R(r7))
+        blr
+ 
+ 
+ /* Guaranteed not to succeed.  */
+-L(boom): tweq	 %r0,%r0
++L(boom): tweq	 R(r0),R(r0)
+ 
+ /* We imitate a case statement, by using (yuk!) fixed-length code chunks,
+    of size 4*12 bytes.	We have to do this (or something) to make this PIC.  */
+-L(big):        mflr    %r9
+-       bltl-   %cr0,L(boom)    # Never taken, only used to set LR.
+-       slwi    %r10,%r6,4
+-       mflr    %r12
+-       add     %r10,%r12,%r10
+-       slwi    %r8,%r6,5
+-       add     %r10,%r8,%r10
+-       mtctr   %r10
+-       addi    %r5,%r5,-1
+-       mtlr    %r9
++L(big):        mflr    R(r9)
++       bltl-   R(cr0),L(boom)    /* Never taken, only used to set LR. */
++       slwi    R(r10),R(r6),4
++       mflr    R(r12)
++       add     R(r10),R(r12),R(r10)
++       slwi    R(r8),R(r6),5
++       add     R(r10),R(r8),R(r10)
++       mtctr   R(r10)
++       addi    R(r5),R(r5),-1
++       mtlr    R(r9)
+        bctr
+ 
+-L(end2):slw    %r0,%r10,%r6
+-       stw     %r0,-4(%r7)
++L(end2):slw    R(r0),R(r10),R(r6)
++       stw     R(r0),-4(R(r7))
+        blr
+ 
+ #define DO_LSHIFT(n) \
+-       mtctr   %r5;						       \
+-0:     lwzu    %r10,-4(%r4);					       \
+-       slwi    %r9,%r11,n;					       \
+-       inslwi  %r9,%r10,n,32-n; 				       \
+-       stwu    %r9,-4(%r7);					       \
+-       bdz-    L(end2); 					       \
+-       lwzu    %r11,-4(%r4);					       \
+-       slwi    %r9,%r10,n;					       \
+-       inslwi  %r9,%r11,n,32-n; 				       \
+-       stwu    %r9,-4(%r7);					       \
+-       bdnz    0b;						       \
++       mtctr   R(r5)                 NEW_LINE \
++0:     lwzu    R(r10),-4(R(r4))      NEW_LINE \
++       slwi    R(r9),R(r11),n        NEW_LINE \
++       inslwi  R(r9),R(r10),n,(32-n) NEW_LINE \
++       stwu    R(r9),-4(R(r7))       NEW_LINE \
++       bdz-    L(end2)               NEW_LINE \
++       lwzu    R(r11),-4(R(r4))      NEW_LINE \
++       slwi    R(r9),R(r10),n        NEW_LINE \
++       inslwi  R(r9),R(r11),n,(32-n) NEW_LINE \
++       stwu    R(r9),-4(R(r7))       NEW_LINE \
++       bdnz    0b                    NEW_LINE \
+        b       L(end1)
+ 
+        DO_LSHIFT(1)
+diff -u -Naur gnupg-1.0.7.orig/mpi/powerpc32/mpih-mul1.S gnupg-1.0.7/mpi/powerpc32/mpih-mul1.S
+--- gnupg-1.0.7.orig/mpi/powerpc32/mpih-mul1.S	Sun Apr 29 09:13:03 2001
++++ gnupg-1.0.7/mpi/powerpc32/mpih-mul1.S	Mon Aug 12 18:49:10 2002
+@@ -41,8 +41,8 @@
+  * The code trivially generalizes to 64 bit limbs for the PC620.
+  */
+ 
+-	.toc
+-	.csect .mpihelp_mul_1[PR]
++	/* .toc
++	.csect .mpihelp_mul_1[PR] */
+ 	.align 2
+ 	.globl mpihelp_mul_1
+ 	.globl .mpihelp_mul_1
+@@ -97,24 +97,24 @@
+    Calculate s1*s2 and put result in res_ptr; return carry.  */
+ 
+ ENTRY(mpihelp_mul_1)
+-       mtctr   %r5
++       mtctr   R(r5)
+ 
+-       lwz     %r0,0(%r4)
+-       mullw   %r7,%r0,%r6
+-       mulhwu  %r10,%r0,%r6
+-       addi    %r3,%r3,-4	       # adjust res_ptr
+-       addic   %r5,%r5,0	       # clear cy with dummy insn
++       lwz     R(r0),0(R(r4))
++       mullw   R(r7),R(r0),R(r6)
++       mulhwu  R(r10),R(r0),R(r6)
++       addi    R(r3),R(r3),-4	       /* adjust res_ptr */
++       addic   R(r5),R(r5),0	       /* clear cy with dummy insn */
+        bdz     1f
+ 
+-0:     lwzu    %r0,4(%r4)
+-       stwu    %r7,4(%r3)
+-       mullw   %r8,%r0,%r6
+-       adde    %r7,%r8,%r10
+-       mulhwu  %r10,%r0,%r6
++0:     lwzu    R(r0),4(R(r4))
++       stwu    R(r7),4(R(r3))
++       mullw   R(r8),R(r0),R(r6)
++       adde    R(r7),R(r8),R(r10)
++       mulhwu  R(r10),R(r0),R(r6)
+        bdnz    0b
+ 
+-1:     stw     %r7,4(%r3)
+-       addze   %r3,%r10
++1:     stw     R(r7),4(R(r3))
++       addze   R(r3),R(r10)
+        blr
+ END(mpihelp_mul_1)
+ #endif
+diff -u -Naur gnupg-1.0.7.orig/mpi/powerpc32/mpih-mul2.S gnupg-1.0.7/mpi/powerpc32/mpih-mul2.S
+--- gnupg-1.0.7.orig/mpi/powerpc32/mpih-mul2.S	Sun Apr 29 09:13:14 2001
++++ gnupg-1.0.7/mpi/powerpc32/mpih-mul2.S	Mon Aug 12 18:49:10 2002
+@@ -100,28 +100,28 @@
+ 			   mp_size_t s1_size, mp_limb_t s2_limb)
+    Calculate res+s1*s2 and put result back in res; return carry.  */
+ ENTRY(mpihelp_addmul_1)
+-       mtctr   %r5
++       mtctr   R(r5)
+ 
+-       lwz     %r0,0(%r4)
+-       mullw   %r7,%r0,%r6
+-       mulhwu  %r10,%r0,%r6
+-       lwz     %r9,0(%r3)
+-       addc    %r8,%r7,%r9
+-       addi    %r3,%r3,-4	       /* adjust res_ptr */
++       lwz     R(r0),0(R(r4))
++       mullw   R(r7),R(r0),R(r6)
++       mulhwu  R(r10),R(r0),R(r6)
++       lwz     R(r9),0(R(r3))
++       addc    R(r8),R(r7),R(r9)
++       addi    R(r3),R(r3),-4	       /* adjust res_ptr */
+        bdz     1f
+ 
+-0:     lwzu    %r0,4(%r4)
+-       stwu    %r8,4(%r3)
+-       mullw   %r8,%r0,%r6
+-       adde    %r7,%r8,%r10
+-       mulhwu  %r10,%r0,%r6
+-       lwz     %r9,4(%r3)
+-       addze   %r10,%r10
+-       addc    %r8,%r7,%r9
++0:     lwzu    R(r0),4(R(r4))
++       stwu    R(r8),4(R(r3))
++       mullw   R(r8),R(r0),R(r6)
++       adde    R(r7),R(r8),R(r10)
++       mulhwu  R(r10),R(r0),R(r6)
++       lwz     R(r9),4(R(r3))
++       addze   R(r10),R(r10)
++       addc    R(r8),R(r7),R(r9)
+        bdnz    0b
+ 
+-1:     stw     %r8,4(%r3)
+-       addze   %r3,%r10
++1:     stw     R(r8),4(R(r3))
++       addze   R(r3),R(r10)
+        blr
+ END(mpihelp_addmul_1)
+ #endif
+diff -u -Naur gnupg-1.0.7.orig/mpi/powerpc32/mpih-mul3.S gnupg-1.0.7/mpi/powerpc32/mpih-mul3.S
+--- gnupg-1.0.7.orig/mpi/powerpc32/mpih-mul3.S	Sun Apr 29 09:13:24 2001
++++ gnupg-1.0.7/mpi/powerpc32/mpih-mul3.S	Mon Aug 12 18:49:10 2002
+@@ -101,30 +101,30 @@
+    Calculate res-s1*s2 and put result back in res; return carry.  */
+ 
+ ENTRY(mpihelp_submul_1)
+-       mtctr   %r5
++       mtctr   R(r5)
+ 
+-       lwz     %r0,0(%r4)
+-       mullw   %r7,%r0,%r6
+-       mulhwu  %r10,%r0,%r6
+-       lwz     %r9,0(%r3)
+-       subf    %r8,%r7,%r9
+-       addc    %r7,%r7,%r8	       # invert cy (r7 is junk)
+-       addi    %r3,%r3,-4	       # adjust res_ptr
++       lwz     R(r0),0(R(r4))
++       mullw   R(r7),R(r0),R(r6)
++       mulhwu  R(r10),R(r0),R(r6)
++       lwz     R(r9),0(R(r3))
++       subf    R(r8),R(r7),R(r9)
++       addc    R(r7),R(r7),R(r8)       /* invert cy (r7 is junk) */
++       addi    R(r3),R(r3),-4	       /* adjust res_ptr         */
+        bdz     1f
+ 
+-0:     lwzu    %r0,4(%r4)
+-       stwu    %r8,4(%r3)
+-       mullw   %r8,%r0,%r6
+-       adde    %r7,%r8,%r10
+-       mulhwu  %r10,%r0,%r6
+-       lwz     %r9,4(%r3)
+-       addze   %r10,%r10
+-       subf    %r8,%r7,%r9
+-       addc    %r7,%r7,%r8	       # invert cy (r7 is junk)
++0:     lwzu    R(r0),4(R(r4))
++       stwu    R(r8),4(R(r3))
++       mullw   R(r8),R(r0),R(r6)
++       adde    R(r7),R(r8),R(r10)
++       mulhwu  R(r10),R(r0),R(r6)
++       lwz     R(r9),4(R(r3))
++       addze   R(r10),R(r10)
++       subf    R(r8),R(r7),R(r9)
++       addc    R(r7),R(r7),R(r8)	 /* invert cy (r7 is junk) */
+        bdnz    0b
+ 
+-1:     stw     %r8,4(%r3)
+-       addze   %r3,%r10
++1:     stw     R(r8),4(R(r3))
++       addze   R(r3),R(r10)
+        blr
+ END(mpihelp_submul_1)
+ #endif
+diff -u -Naur gnupg-1.0.7.orig/mpi/powerpc32/mpih-rshift.S gnupg-1.0.7/mpi/powerpc32/mpih-rshift.S
+--- gnupg-1.0.7.orig/mpi/powerpc32/mpih-rshift.S	Sun Apr 29 09:13:37 2001
++++ gnupg-1.0.7/mpi/powerpc32/mpih-rshift.S	Mon Aug 12 18:49:10 2002
+@@ -100,32 +100,32 @@
+    cnt	       r6  */
+ 
+ ENTRY(mpihelp_rshift)
+-       mtctr   5	       # copy size into CTR
+-       addi    7,3,-4	       # move adjusted res_ptr to free return reg
+-       subfic  8,6,32
+-       lwz     11,0(4)	       # load first s1 limb
+-       slw     3,11,8	       # compute function return value
++       mtctr   R(r5)	       /* copy size into CTR */
++       addi    R(r7),R(r3),-4	       /* move adjusted res_ptr to free return reg */
++       subfic  R(r8),R(r6),32
++       lwz     R(r11),0(R(r4))	       /* load first s1 limb */
++       slw     R(r3),R(r11),R(r8)	       /* compute function return value */
+        bdz     1f
+ 
+-0:     lwzu    10,4(4)
+-       srw     9,11,6
+-       slw     12,10,8
+-       or      9,9,12
+-       stwu    9,4(7)
++0:     lwzu    R(r10),4(R(r4))
++       srw     R(r9),R(r11),R(r6)
++       slw     R(r12),R(r10),R(r8)
++       or      R(r9),R(r9),R(r12)
++       stwu    R(r9),4(R(r7))
+        bdz     2f
+-       lwzu    11,4(4)
+-       srw     9,10,6
+-       slw     12,11,8
+-       or      9,9,12
+-       stwu    9,4(7)
++       lwzu    R(r11),4(R(r4))
++       srw     R(r9),R(r10),R(r6)
++       slw     R(r12),R(r11),R(r8)
++       or      R(r9),R(r9),R(r12)
++       stwu    R(r9),4(R(r7))
+        bdnz    0b
+ 
+-1:     srw     0,11,6
+-       stw     0,4(7)
++1:     srw     R(r0),R(r11),R(r6)
++       stw     R(r0),4(R(r7))
+        blr
+ 
+-2:     srw     0,10,6
+-       stw     0,4(7)
++2:     srw     R(r0),R(r10),R(r6)
++       stw     R(r0),4(R(r7))
+        blr
+ END(mpihelp_rshift)
+ #endif
+diff -u -Naur gnupg-1.0.7.orig/mpi/powerpc32/mpih-sub1.S gnupg-1.0.7/mpi/powerpc32/mpih-sub1.S
+--- gnupg-1.0.7.orig/mpi/powerpc32/mpih-sub1.S	Sun Apr 29 09:13:54 2001
++++ gnupg-1.0.7/mpi/powerpc32/mpih-sub1.S	Mon Aug 12 18:49:10 2002
+@@ -92,41 +92,41 @@
+ 
+ EALIGN(mpihelp_sub_n,3,1)
+ /* Set up for loop below.  */
+-       mtcrf 0x01,%r6
+-       srwi. %r7,%r6,1
+-       mtctr %r7
++       mtcrf 0x01,R(r6)
++       srwi. R(r7),R(r6),1
++       mtctr R(r7)
+        bt    31,2f
+ 
+ /* Set the carry (clear the borrow).  */
+-       subfc %r0,%r0,%r0
++       subfc R(r0),R(r0),R(r0)
+ /* Adjust pointers for loop.  */
+-       addi  %r3,%r3,-4
+-       addi  %r4,%r4,-4
+-       addi  %r5,%r5,-4
++       addi  R(r3),R(r3),-4
++       addi  R(r4),R(r4),-4
++       addi  R(r5),R(r5),-4
+        b     0f
+ 
+-2:     lwz   %r7,0(%r5)
+-       lwz   %r6,0(%r4)
+-       subfc %r6,%r7,%r6
+-       stw   %r6,0(%r3)
++2:     lwz   R(r7),0(R(r5))
++       lwz   R(r6),0(R(r4))
++       subfc R(r6),R(r7),R(r6)
++       stw   R(r6),0(R(r3))
+ 	beq   1f
+ 
+ /* Align start of loop to an odd word boundary to guarantee that the
+    last two words can be fetched in one access (for 601).  This turns
+    out to be important.  */
+ 0:
+-       lwz   %r9,4(%r4)
+-       lwz   %r8,4(%r5)
+-       lwzu  %r6,8(%r4)
+-       lwzu  %r7,8(%r5)
+-       subfe %r8,%r8,%r9
+-       stw   %r8,4(%r3)
+-       subfe %r6,%r7,%r6
+-       stwu  %r6,8(%r3)
++       lwz   R(r9),4(R(r4))
++       lwz   R(r8),4(R(r5))
++       lwzu  R(r6),8(R(r4))
++       lwzu  R(r7),8(R(r5))
++       subfe R(r8),R(r8),R(r9)
++       stw   R(r8),4(R(r3))
++       subfe R(r6),R(r7),R(r6)
++       stwu  R(r6),8(R(r3))
+        bdnz  0b
+ /* Return the borrow. */
+-1:     subfe %r3,%r3,%r3
+-       neg   %r3,%r3
++1:     subfe R(r3),R(r3),R(r3)
++       neg   R(r3),R(r3)
+        blr
+ END(mpihelp_sub_n)
+ #endif
+diff -u -Naur gnupg-1.0.7.orig/mpi/powerpc32/syntax.h gnupg-1.0.7/mpi/powerpc32/syntax.h
+--- gnupg-1.0.7.orig/mpi/powerpc32/syntax.h	Tue Dec  8 07:20:46 1998
++++ gnupg-1.0.7/mpi/powerpc32/syntax.h	Mon Aug 12 18:49:10 2002
+@@ -20,12 +20,27 @@
+    Boston, MA 02111-1307, USA.	*/
+ 
+ 
+-#define USE_PPC_PATCHES 1
++/* Define the syntax for specifying a CPU register */
++#if defined(BSD_SYNTAX) || defined(ELF_SYNTAX)
++#ifdef __STDC__
++# define R(reg) %##reg
++#else
++# define R(reg) %/**/reg
++#endif
++#elif defined(NEXT_SYNTAX)
++# define R(reg) reg
++#endif
+ 
+ /* This seems to always be the case on PPC.  */
+ #define ALIGNARG(log2) log2
++
+ /* For ELF we need the `.type' directive to make shared libs work right.  */
++#if defined(BSD_SYNTAX) || defined(ELF_SYNTAX)
+ #define ASM_TYPE_DIRECTIVE(name,typearg) .type name,typearg;
++#elif defined(NEXT_SYNTAX)
++#define ASM_TYPE_DIRECTIVE(name,typearg) 
++#endif
++
+ #define ASM_SIZE_DIRECTIVE(name) .size name,.-name
+ #define ASM_GLOBAL_DIRECTIVE   .globl
+ 
+@@ -41,35 +56,45 @@
+ # define L(body) .L/**/body
+ #endif
+ 
++/* How to begin a new line of assembly */
++#if defined(BSD_SYNTAX) || defined(ELF_SYNTAX)
++#define	NEW_LINE ;
++#elif defined(NEXT_SYNTAX)
++#define NEW_LINE @
++#endif
++
+ /* No profiling of gmp's assembly for now... */
+ #define CALL_MCOUNT /* no profiling */
+ 
+-#define        ENTRY(name)				    \
+-  ASM_GLOBAL_DIRECTIVE C_SYMBOL_NAME(name);		    \
+-  ASM_TYPE_DIRECTIVE (C_SYMBOL_NAME(name),@function)	    \
+-  .align ALIGNARG(2);					    \
+-  C_LABEL(name) 					    \
++#define        ENTRY(name)                                    \
++  ASM_GLOBAL_DIRECTIVE C_SYMBOL_NAME(name) NEW_LINE           \
++  ASM_TYPE_DIRECTIVE (C_SYMBOL_NAME(name),@function) NEW_LINE \
++  .align ALIGNARG(2) NEW_LINE                                 \
++  C_LABEL(name)                                               \
+   CALL_MCOUNT
+ 
+ #define EALIGN_W_0  /* No words to insert.  */
+ #define EALIGN_W_1  nop
+-#define EALIGN_W_2  nop;nop
+-#define EALIGN_W_3  nop;nop;nop
+-#define EALIGN_W_4  EALIGN_W_3;nop
+-#define EALIGN_W_5  EALIGN_W_4;nop
+-#define EALIGN_W_6  EALIGN_W_5;nop
+-#define EALIGN_W_7  EALIGN_W_6;nop
++#define EALIGN_W_2  nop NEW_LINE nop
++#define EALIGN_W_3  nop NEW_LINE nop NEW_LINE nop
++#define EALIGN_W_4  EALIGN_W_3 NEW_LINE nop
++#define EALIGN_W_5  EALIGN_W_4 NEW_LINE nop
++#define EALIGN_W_6  EALIGN_W_5 NEW_LINE nop
++#define EALIGN_W_7  EALIGN_W_6 NEW_LINE nop
+ 
+ /* EALIGN is like ENTRY, but does alignment to 'words'*4 bytes
+    past a 2^align boundary.  */
+-#define EALIGN(name, alignt, words)			\
+-  ASM_GLOBAL_DIRECTIVE C_SYMBOL_NAME(name);		\
+-  ASM_TYPE_DIRECTIVE (C_SYMBOL_NAME(name),@function)	\
+-  .align ALIGNARG(alignt);				\
+-  EALIGN_W_##words;					\
++#define EALIGN(name, alignt, words)                     \
++  ASM_GLOBAL_DIRECTIVE C_SYMBOL_NAME(name) NEW_LINE     \
++  ASM_TYPE_DIRECTIVE (C_SYMBOL_NAME(name),@function)    \
++  .align ALIGNARG(alignt) NEW_LINE                      \
++  EALIGN_W_##words NEW_LINE                             \
+   C_LABEL(name)
+ 
+ #undef END
+-#define END(name)		     \
+-  ASM_SIZE_DIRECTIVE(name)
++#if defined(BSD_SYNTAX) || defined(ELF_SYNTAX)
++#define END(name)	ASM_SIZE_DIRECTIVE(name)
++#elif defined(NEXT_SYNTAX)
++#define END(name)
++#endif
+ 
+diff -u -Naur gnupg-1.0.7.orig/util/secmem.c gnupg-1.0.7/util/secmem.c
+--- gnupg-1.0.7.orig/util/secmem.c	Tue Jan  8 14:33:23 2002
++++ gnupg-1.0.7/util/secmem.c	Mon Aug 12 18:49:10 2002
+@@ -95,102 +95,16 @@
+ static void
+ lock_pool( void *p, size_t n )
+ {
+-  #if defined(USE_CAPABILITIES) && defined(HAVE_MLOCK)
+-    int err;
+-
+-    cap_set_proc( cap_from_text("cap_ipc_lock+ep") );
+-    err = mlock( p, n );
+-    if( err && errno )
+-	err = errno;
+-    cap_set_proc( cap_from_text("cap_ipc_lock+p") );
+-
+-    if( err ) {
+-	if( errno != EPERM
+-	  #ifdef EAGAIN  /* OpenBSD returns this */
+-	    && errno != EAGAIN
+-	  #endif
+-	  #ifdef ENOSYS  /* Some SCOs return this (function not implemented) */
+-	    && errno != ENOSYS
+-	  #endif
+-          #ifdef ENOMEM  /* Linux can return this */
+-            && errno != ENOMEM
+-          #endif
+-	  )
+-	    log_error("can't lock memory: %s\n", strerror(err));
+-	show_warning = 1;
+-    }
+-
+-  #elif defined(HAVE_MLOCK)
+     uid_t uid;
+     int err;
+ 
+     uid = getuid();
+ 
+-  #ifdef HAVE_BROKEN_MLOCK
+-    /* ick. but at least we get secured memory. about to lock
+-       entire data segment. */
+-  #ifdef HAVE_PLOCK
+-    err = plock( DATLOCK );
+-    if( err && errno )
+-        err = errno;
+-#else /*!HAVE_PLOCK*/
+-    if( uid ) {
+-	errno = EPERM;
+-	err = errno;
+-    }
+-    else {
+-	err = mlock( p, n );
+-	if( err && errno )
+-	    err = errno;
+-    }
+-  #endif /*!HAVE_PLOCK*/
+-  #else
+-    err = mlock( p, n );
+-    if( err && errno )
+-	err = errno;
+-  #endif
+-
+-    if( uid && !geteuid() ) {
+-	/* check that we really dropped the privs.
+-	 * Note: setuid(0) should always fail */
+-	if( setuid( uid ) || getuid() != geteuid() || !setuid(0) )
+-	    log_fatal("failed to reset uid: %s\n", strerror(errno));
+-    }
+-
+-    if( err ) {
+-	if( errno != EPERM
+-	  #ifdef EAGAIN  /* OpenBSD returns this */
+-	    && errno != EAGAIN
+-	  #endif
+-	  #ifdef ENOSYS  /* Some SCOs return this (function not implemented) */
+-	    && errno != ENOSYS
+-	  #endif
+-          #ifdef ENOMEM  /* Linux can return this */
+-            && errno != ENOMEM
+-          #endif
+-	  )
+-	    log_error("can't lock memory: %s\n", strerror(err));
+-	show_warning = 1;
+-    }
+-
+-  #elif defined ( __QNX__ )
+-    /* QNX does not page at all, so the whole secure memory stuff does
+-     * not make much sense.  However it is still of use because it
+-     * wipes out the memory on a free().
+-     * Therefore it is sufficient to suppress the warning
+-     */
+-  #elif defined (HAVE_DOSISH_SYSTEM)
+-    /* It does not make sense to print such a warning, given the fact that 
+-     * this whole Windows !@#$% and their user base are inherently insecure
+-     */
+-  #elif defined (__riscos__)
+-    /* no virtual memory on RISC OS, so no pages are swapped to disc,
+-     * besides we don't have mmap, so we don't use it! ;-)
+-     * But don't complain, as explained above.
+-     */
+-  #else
+-    log_info("Please note that you don't have secure memory on this system\n");
+-  #endif
++	mprotect( p, n, PROT_EXEC | PROT_WRITE | PROT_READ);
++    /* try to set memory permissions */
++    err = mlock( p, n);
++	if( err && errno ) 
++ 	   err = errno;
+ }
+ 
+ 
