@@ -348,7 +348,7 @@ sub ShowConfig {
 }
 
 sub get_uname {
-  chomp($UNAME = `uname -sr`);
+  chomp($UNAME = `/usr/bin/uname -sr`);
 }
 
 sub get_cpu {
