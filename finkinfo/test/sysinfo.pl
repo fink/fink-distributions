@@ -1,7 +1,4 @@
-#$Id: sysinfo.pl,v 1.6 2002/08/22 16:45:22 thesin Exp $
-
 #!/usr/bin/perl -w
-
 # -----------------------------------------------------------------
 # Based on:
 # kc8apf's sysinfo v0.6 for x-chat
@@ -12,316 +9,229 @@
 # YOU MUST ASSIGN THE VARIABLE BELOW TO SET YOUR INTERNET
 # CONNECTION DEVICE
 
-$DEV = "en0";   ## <-------------------------------CHANGE THAT
-$DEV2 = "en1";
+my $DEV = "en0";	## EtherNet
+my $TYPE = "EtherNet";	## EtherNet
+my $DEV2 = "en1";	## AirPort
+my $TYPE2 = "AirPort";	## AirPort
 
-IRC::register("TheSin's sysinfo", "0.1", "", "");
-IRC::print "Loading TheSin's sysinfo script";
+# DON'T TOUCH BELLOW THIS POINT
+# -----------------------------------------------------------------
+
+my $out;
+my $UNAME;
+my $ARCH, $TYPE, $MODEL, $NUM, $HEXCPU, $CPU;
+my $MEMTOTAL, $MEMUSED, $MEMUSEDGKM, $MEMPERCENT;
+my $DEVTYPE, $DEVTYPE2, $PACKIN, $PACKIN2, $PACKOUT, $PACKOUT2;
+my $RES;
+my $HDD, $HDDFREE;
+my $PROCS;
+my $UPTIME;
+
+IRC::register("Darwin SysInfo", "0.2", "", "");
+IRC::print "Loading Darwin SysInfo Script";
 IRC::add_command_handler("sys", "display_info");
+IRC::add_command_handler("up", "display_uptime");
 
+sub get_uname {
+  $UNAME = `uname -sr`;
+  chop ($UNAME);
+}
 
-sub display_info
-{  
-    
-    #--UNAME--#
-    $UNAME = `uname -sr`;
-    chop ($UNAME);
+sub get_cpu {
+  $ARCH = `uname -p`;
+  chop($ARCH);
 
-  #--GET INFO ON FREEBSD--#
-  if ($UNAME =~ /^freebsd/i) {
-    #--MODEL--#
-    $MODEL = `sysctl hw.model | cut -d":" -f2`;
-    chop($MODEL);
-    $MODEL =~ s/^ +//;
-
-    #--HOW MANY CPUS--#
-    $NUM=`sysctl hw.ncpu | cut -d":" -f2`;
-    chop($NUM);
-    $NUM =~ s/^ +//;
-
-    #--PROCESSOR SPEED--#
-    $CPU = `dmesg | grep CPU: | cut -d"(" -f2 | cut -d"-" -f1`;
-    chop($CPU);
-
-    #--TOTAL MEMORY--#
-    $MEMTOTAL = `sysctl hw.physmem | cut -d":" -f2`;
-    chop($MEMTOTAL);
-    $MEMTOTAL = sprintf("%d",$MEMTOTAL/1024**2);
-
-    #--MEMORY USED--#
-    $MEMUSED = `top -b | grep Mem | cut -d":" -f2`;
-    chop ($MEMUSED);
-    $MEMUSED =~ /.+, ([0-9]+)([KM]) Cache, ([0-9]+)([KM]) Buf, ([0-9]+)([KM]) Free$/;
-    $MEMCACHE = $1;
-    $MEMCACHEKM = $2;
-    $MEMBUF = $3;
-    $MEMBUFKM = $4;
-    $MEMUSED = $5;
-    $MEMUSEDKM = $6;
-    if ($MEMCACHEKM =~ /^K$/) {
-       $MEMCACHE = $MEMCACHE / 1024;
-    };
-    if ($MEMBUFKM =~ /^K$/) {
-       $MEMBUF = $MEMBUF / 1024;
-    };
-    if ($MEMUSEDKM =~ /^K$/) {
-       $MEMUSED = $MEMUSED / 1024;
-    };
-    $MEMUSED = int($MEMUSED + $MEMBUF + $MEMCACHE);
-    $MEMUSED = int($MEMTOTAL - $MEMUSED);
-
-    #--LM_SENSORS #1--#
-    $SENSOR1 = `/usr/local/bin/lmmon -i -p -s | head -n2 | tail -n1 | cut -d"/" -f2`;
-    chop ($SENSOR1);
-    $SENSOR1 =~ s/ +//;
-    
-    #--LM_SENSORS #2--#
-    $SENSOR2 = `/usr/local/bin/lmmon -i -p -s | grep -A1 Fans: | tail -n1 | cut -d":" -f2`;
-    chop ($SENSOR2);
-    $SENSOR2 =~ s/ +//;
-
-    #--CONNECTION DEVICE--# 
-    $DEVTYPE=`dmesg | grep $DEV: | head -n1 | cut -d"<" -f2 | cut -d">" -f1`;
-    chop($DEVTYPE);
-    if ($DEVTYPE =~ /^$/) {
-        $DEVTYPE="Unknown";
-    };
-
-    #--PACKETS IN--# 
-    $PACKIN = `netstat -i -n -b | grep $DEV | head -n1 | awk '{print \$7}'`;
-    if($PACKIN < 1024**3) { $PACKIN = sprintf("%.02f",$PACKIN / 1024**2)."M"; } else { $PACKIN = sprintf("%.02f", $PACKIN / 1024**3)."G"; }
-
-    #--PACKETS OUT--# 
-    $PACKOUT = `netstat -i -n -b | grep sis0 | head -n1 | awk '{print \$10}'`; 
-    if($PACKOUT < 1024**3) { $PACKOUT = sprintf("%.02f",$PACKOUT / 1024**2)."M"; } else { $PACKOUT = sprintf("%.02f", $PACKOUT / 1024**3)."G"; }
-
-  } elsif ($UNAME =~ /^darwin/i) {
-  #--GET INFO ON DARWIN--#
-    #--MODEL--#
-    $ARCH = `uname -p`;
-    chop($ARCH);
-    if ($ARCH = "powerpc") {
-      $ARCH = "PowerPC";
-    } elsif ($ARCH = "i386") {
-      $ARCH = "i386";
-    } else {
-      $ARCH = "Unknown";
-    }
-    $TYPE = `ioreg | grep $ARCH | cut -d"," -f2 | cut -d"@" -f1 | head -1`;
-    chop($TYPE);
-    $MODEL = "$ARCH"."/"."$TYPE @ ";
-    $MODEL =~ s/^ +//;
-
-    #--HOW MANY CPUS--#
-    $NUM=`sysctl hw.ncpu | cut -d" " -f3`;
-    chop($NUM);
-    $NUM =~ s/^ +//;
-
-    #--PROCESSOR SPEED--#
-    $HEXCPU = `ioreg -n $ARCH,$TYPE | grep clock-frequency | cut -d"<" -f2 | cut -d">" -f1`;
-    chop($HEXCPU);
-    $HEXCPU = hex($HEXCPU) / 1000000;
-    $CPU = sprintf("%.0f", $HEXCPU);
-
-    #--TOTAL MEMORY--#
-    $MEMTOTAL = `sysctl hw.physmem | cut -d" " -f3`;
-    chop($MEMTOTAL);
-    $MEMTOTAL = sprintf("%d",$MEMTOTAL/1024**2);
-
-    #--MEMORY USED--#
-    $MEMUSED = `top -l1 | grep PhysMem | cut -d":" -f2 | cut -d"," -f4`;
-    chop ($MEMUSED);
-    $MEMUSED =~ / ([0-9.]+)([GKM]) used$/;
-    $MEMUSED = $1;
-    $MEMUSEDGKM = $2;      
-    if ($MEMUSEDGKM =~ /^K$/) {
-       $MEMUSED = $MEMUSED /  1024;
-    };
-    if ($MEMUSEDGKM =~ /^G$/) {
-       $MEMUSED = $MEMUSED * 1024;
-    };
-    $MEMUSED = sprintf("%.0f", $MEMUSED);
-
-    #--CONNECTION DEVICE--#
-    $DEVTYPE=`dmesg | grep $DEV: | head -n1 | cut -d"<" -f2 | cut -d">" -f1`;
-    chop($DEVTYPE);
-    if ($DEVTYPE =~ /^$/) {
-        $DEVTYPE="EtherNet";
-    };
-    if ($DEV2) {
-      $DEVTYPE2=`dmesg | grep $DEV2: | head -n1 | cut -d"<" -f2 | cut -d">" -f1`;
-      chop($DEVTYPE2);
-      if ($DEVTYPE2 =~ /^$/) {
-          $DEVTYPE2="AirPort";
-      };
-    };
-
-    #--PACKETS IN--#
-    $PACKIN = `netstat -i -n -b | grep $DEV | head -n1 | awk '{print \$7}'`;
-    if($PACKIN < 1024**3) { $PACKIN = sprintf("%.02f",$PACKIN / 1024**2)."M"; } else { $PACKIN = sprintf("%.02f", $PACKIN / 1024**3)."G"; }
-    if ($DEV2) {
-      $PACKIN2 = `netstat -i -n -b | grep $DEV2 | head -n1 | awk '{print \$7}'`; 
-      if($PACKIN2 < 1024**3) { $PACKIN2 = sprintf("%.02f",$PACKIN / 1024**2)."M"; } else { $PACKIN2 = sprintf("%.02f", $PACKIN / 1024**3)."G"; }
-    };
-
-    #--PACKETS OUT--#
-    $PACKOUT = `netstat -i -n -b | grep $DEV | head -n1 | awk '{print \$10}'`;
-    if($PACKOUT < 1024**3) { $PACKOUT = sprintf("%.02f",$PACKOUT / 1024**2)."M"; } else { $PACKOUT = sprintf("%.02f", $PACKOUT / 1024**3)."G"; }
-    if ($DEV2) {
-      $PACKOUT2 = `netstat -i -n -b | grep $DEV2 | head -n1 | awk '{print \$10}'`;
-      if($PACKOUT2 < 1024**3) { $PACKOUT2 = sprintf("%.02f",$PACKOUT / 1024**2)."M"; } else { $PACKOUT2 = sprintf("%.02f", $PACKOUT / 1024**3)."G"; }
-    };
-
+  if ($ARCH =~ /^powerpc/i) {
+    $ARCH = "PowerPC";
+  } elsif ($ARCH =~ /^86/i) {
+    $ARCH = "x86";
   } else {
-  #--GET INFO ON LINUX--#
+    $ARCH = "Unknown";
+  }
 
-    #--MODEL--#
-    $MODEL = `cat /proc/cpuinfo | grep '^model name' | head -1 | cut -d":" -f2`;
-    $MODEL =~ s/^ +//;
-    
-    #--HOW MANY CPUS--#
-    $NUM=`cat /proc/cpuinfo | grep 'model name' | wc -l | cut -d" " -f7`;
-    chop ($NUM);
-    
-    #--PROCESSOR SPEED--#
-    $CPU = `cat /proc/cpuinfo | grep 'cpu MHz' | cut -d":" -f2`;
-    chop ($CPU);
-    $CPU =~ s/^ +//;
+  $TYPE = `ioreg | grep $ARCH | cut -d"," -f2 | cut -d"@" -f1 | head -1`;
+  chop($TYPE);
 
-    #--TOTAL MEMORY--#
-    $MEMTOTAL = `free | grep Mem | awk '{printf (\"%d\", \$2/1000 )}'`;
-    
-    #--MEMORY USED--#
-    $MEMUSED = `free | grep Mem | awk '{printf (\"%.0fg\", ( \$3 -(\$6 + \$7) )/1000)}'`;
-    chop ($MEMUSED);
+  $MODEL = "$ARCH"."/"."$TYPE";
+  $MODEL =~ s/^ +//;
 
-    #--BOGOMIPS--#
-    $MIPS = `cat /proc/cpuinfo | grep '^bogomips' | cut -d":" -f2`;
-    chop ($MIPS);
-    $MIPS =~ s/ +//;
-    
-    #--LM_SENSORS #1--#
-    $SENSOR1 = `sensors -f | grep 'temp:'`;
-    chop ($SENSOR1);
-    $SENSOR1 =~ /[\w\:]+[\s]+([^\s]+)/;
-    $SENSOR1 = $1;
-    
-    #--LM_SENSORS #2--#
-    $SENSOR2 = `sensors -f | grep 'fan1:'`;
-    chop ($SENSOR2);
-    $SENSOR2 =~ /[\w\:]+[\s]+([^\s]+)/;
-    $SENSOR2 = $1;
+  $NUM=`sysctl hw.ncpu | cut -d" " -f3`;
+  chop($NUM);
+  $NUM =~ s/^ +//;
 
-    #--CONNECTION DEVICE--#
-    if($DEV =~ /^ppp/i) {
-       $DEVTYPE=`cat /proc/pci | grep 'Communication controller:' | cut -d" " -f7-`;
-    } else {	    
-       $DEVTYPE=`cat /proc/pci | grep "IRQ \`/sbin/ifconfig $DEV | grep Interrupt | cut -d":" -f2 | cut -d" " -f1\`" -B1 | grep Ethernet | cut -d":" -f2- | cut -d" " -f2-`;
-    };
-    chop($DEVTYPE);
-    if ($DEVTYPE =~ /^$/) {
-        $DEVTYPE="Unknown";
-    };
+  unless($NUM eq 1 ) { $MODEL="Dual $MODEL"; }
+  chop ($MODEL);
 
-    #--PACKETS IN--# 
-    $PACKIN = `cat /proc/net/dev | grep $DEV | awk -F: '/:/ {print \$2}' | awk '{printf \$1}'`;
-    if($PACKIN < 1024**3) { $PACKIN = sprintf("%.02f",$PACKIN / 1024**2)."M"; } else { $PACKIN = sprintf("%.02f", $PACKIN / 1024**3)."G"; }
- 
-   #--PACKETS OUT--# 
-    $PACKOUT = `cat /proc/net/dev | grep $DEV | awk -F: '/:/ {print \$2}' | awk '{print \$9}'`; 
-    if($PACKOUT < 1024**3) { $PACKOUT = sprintf("%.02f",$PACKOUT / 1024**2)."M"; } else { $PACKOUT = sprintf("%.02f", $PACKOUT / 1024**3)."G"; }
+  $HEXCPU = `ioreg -n $ARCH,$TYPE | grep clock-frequency | cut -d"<" -f2 | cut -d">" -f1`;
+  chop($HEXCPU);
+  $HEXCPU = hex($HEXCPU) / 1000000;
+  $CPU = sprintf("%.0f"."MHz", $HEXCPU);
+}
 
-  };
+sub get_mem {
+  $MEMTOTAL = `sysctl hw.physmem | cut -d" " -f3`;
+  chop($MEMTOTAL);
+  $MEMTOTAL = sprintf("%d",$MEMTOTAL/1024**2);
 
-  #--GET COMMON INFO--#
+  $MEMUSED = `top -l1 | grep PhysMem | cut -d":" -f2 | cut -d"," -f4`;
+  chop ($MEMUSED);
+  $MEMUSED =~ / ([0-9.]+)([GKM]) used$/;
+  $MEMUSED = $1;
+  $MEMUSEDGKM = $2;      
+  if ($MEMUSEDGKM =~ /^K$/) {
+    $MEMUSED = $MEMUSED /  1024;
+  } elsif ($MEMUSEDGKM =~ /^G$/) {
+    $MEMUSED = $MEMUSED * 1024;
+  }
 
-    #--PROCS RUNNING--#
-    $PROCS = `ps ax | wc -l`;
-    $PROCS =~ s/^\s+//;
-    chop ($PROCS);
+  $MEMUSED = sprintf("%.0f", $MEMUSED);
 
-    #--PERCENTAGE OF MEMORY USED--#
-    $MEMPERCENT = $MEMUSED/$MEMTOTAL*100;
-    if (int($MEMPERCENT) == int($MEMPERCENT + .5)) {
-	    $MEMPERCENT = int($MEMPERCENT);
-    } else {
-	    $MEMPERCENT = int($MEMPERCENT + .5);
-    };
-    
-    #--SCREEN RESOLUTION--#
-    if ($UNAME =~ /^darwin/i) {
-      #$RES = `dmesg | grep video | cut -d"(" -f2 | cut -d")" -f1`;
-      $RES = `xdpyinfo | grep dimensions | cut -d" " -f7`;
-      chop ($RES);
-    } else {
-      $RES = `xdpyinfo | grep dimensions | cut -d" " -f7`;
-      chop ($RES);
-    };
+  $MEMPERCENT = $MEMUSED/$MEMTOTAL*100;
+  if (int($MEMPERCENT) == int($MEMPERCENT + .5)) {
+    $MEMPERCENT = int($MEMPERCENT);
+  } else {
+    $MEMPERCENT = int($MEMPERCENT + .5);
+  }
 
-    #--DISKSPACE--#
-    $HDD = `df -l -x tmpfs -x shm | awk '{ sum+=\$2/1024^2 }; END { printf (\"%dGb\", sum )}'`;
-    chop ($HDD);
-    
-    #--DISKSPACE FREE--#
-    if ($UNAME =~ /^darwin/i) {
-      $HDDFREE = `df -l -x tmpfs -x shm | awk '{ sum+=\$4/1024^2 }; END { printf (\"%dGb\", sum )}'`;
-      chop ($HDDFREE);
-    } else {
-      $HDDFREE = `df -l -x tmpfs -x shm | awk '{ sum+=\$3/1024^2 }; END { printf (\"%dGb\", sum )}'`;
-      chop ($HDDFREE);
+  if ($MEMUSEDGKM =~ /^K$/) {
+    $MEMUSED .= "Kb";
+    $MEMTOTAL .= "Kb";
+  } elsif ($MEMUSEDGKM =~ /^G$/) {
+    $MEMUSED .= "Gb";
+    $MEMTOTAL .= "Gb";
+  } else {
+    $MEMUSED .= "Mb";
+    $MEMTOTAL .= "Mb";
+  }
+}
+
+sub get_net {
+  $DEVTYPE=`dmesg | grep $DEV: | head -n1 | cut -d"<" -f2 | cut -d">" -f1`;
+  chop($DEVTYPE);
+
+  if ($DEVTYPE =~ /^$/) {
+      $DEVTYPE=$TYPE;
+  }
+
+  if ($DEV2) {
+    $DEVTYPE2=`dmesg | grep $DEV2: | head -n1 | cut -d"<" -f2 | cut -d">" -f1`;
+    chop($DEVTYPE2);
+
+    if ($DEVTYPE2 =~ /^$/) {
+        $DEVTYPE2=$TYPE2;
     }
-    
-    #--SUPPORT FOR DUAL PROCS--#
-    unless($NUM eq 1 ) { $MODEL="Dual $MODEL"; }
-    chop ($MODEL);
+  }
 
-    #--UPTIME--#
-    $UPTIME = `uptime`;
-    chop ($UPTIME);
-    $UPTIME =~ /.+ up (.+),.+[0-9]+ user/;
-    $UPTIME = $1;
+  $PACKIN = `netstat -i -n -b | grep $DEV | head -n1 | awk '{print \$7}'`;
+  if ($PACKIN < 1024**3) {
+    $PACKIN = sprintf("%.02f",$PACKIN / 1024**2)."Mb";
+  } else {
+    $PACKIN = sprintf("%.02f", $PACKIN / 1024**3)."Gb";
+  }
 
-    #--BUILD OUTPUT--#
-    $out = "%BSysInfo%O";
-    if ($UNAME !~ /^$/) {
-	$out = $out . " | System: $UNAME";
-    };
-    if ($MODEL !~ /^$/) {
-        $out = $out . " | CPU: $MODEL $CPU" . "MHz";
-    };
-    if ($MEMUSED !~ /^$/ && $MEMTOTAL !~ /^$/) {
-        $out = $out . " | Mem: $MEMUSED/" . $MEMTOTAL . "Mb ($MEMPERCENT%)";
-    };
-    if ($HDD !~ /^$/ && $HDDFREE !~ /^$/) {
-        $out = $out . " | Diskspace: " . $HDD . "b Free: " . $HDDFREE . "b";
-    };
-    if ($MIPS !~ /^$/) {
-        $out = $out . " | Bogomips: $MIPS";
-    };
-    if ($RES !~ /^$/) {
-        $out = $out . " | Screen Res: $RES";
-    };
-    if ($PROCS !~ /^$/) {
-        $out = $out . " | Procs: $PROCS";
-    };
-    if ($SENSOR1 !~ /^$/ && $SENSOR2 !~ /^$/) {
-	$out = $out . " | CPU: $SENSOR1 Fan 1: $SENSOR2";
+  if ($DEV2) {
+    $PACKIN2 = `netstat -i -n -b | grep $DEV2 | head -n1 | awk '{print \$7}'`; 
+    if ($PACKIN2 < 1024**3) {
+      $PACKIN2 = sprintf("%.02f",$PACKIN / 1024**2)."Mb";
+    } else {
+      $PACKIN2 = sprintf("%.02f", $PACKIN / 1024**3)."Gb";
     }
-    if ($UPTIME !~ /^$/) {
-	$out = $out . " | Uptime: $UPTIME";
-    };
-    if ($DEVTYPE !~ /^$/ && $PACKIN !~ /^$/ && $PACKOUT !~ /^$/) {
-      if ($PACKIN >  0 || $PACKOUT > 0) {
-        $out = $out . " | Connection Device: $DEVTYPE In: " . $PACKIN . "b Out: " . $PACKOUT . "b";
-      };
-    };
-    if ($DEVTYPE2 !~ /^$/ && $PACKIN2 !~ /^$/ && $PACKOUT2 !~ /^$/) {
-      if ($PACKIN2 > 0 || $PACKOUT2 > 0) {
-        $out = $out . " | Connection Device: $DEVTYPE2 In: " . $PACKIN2 . "b Out: " . $PACKOUT2 . "b";
-      };
-    };
+  }
 
-    #--SPEW IT INTO THE CHANNEL SHALL WE--#
+  $PACKOUT = `netstat -i -n -b | grep $DEV | head -n1 | awk '{print \$10}'`;
+  if ($PACKOUT < 1024**3) {
+    $PACKOUT = sprintf("%.02f",$PACKOUT / 1024**2)."Mb";
+  } else {
+    $PACKOUT = sprintf("%.02f", $PACKOUT / 1024**3)."Gb";
+  }
+
+  if ($DEV2) {
+    $PACKOUT2 = `netstat -i -n -b | grep $DEV2 | head -n1 | awk '{print \$10}'`;
+    if ($PACKOUT2 < 1024**3) {
+      $PACKOUT2 = sprintf("%.02f",$PACKOUT / 1024**2)."Mb";
+    } else {
+      $PACKOUT2 = sprintf("%.02f", $PACKOUT / 1024**3)."Gb";
+    }
+  }
+}
+
+sub get_rez {
+  $RES = `xdpyinfo | grep dimensions | cut -d\" \" -f7`;
+  chop ($RES);
+}
+
+sub get_hdd {
+  $HDD = `df -l -x tmpfs -x shm | awk '{ sum+=\$2/1024^2 }; END { printf (\"%dGb\\n\", sum )}'`;
+  chop ($HDD);
+   
+  $HDDFREE = `df -l -x tmpfs -x shm | awk '{ sum+=\$4/1024^2 }; END { printf (\"%dGb\\n\", sum )}'`;
+  chop ($HDDFREE);
+}
+
+sub get_procs {
+  $PROCS = `ps ax | wc -l`;
+  $PROCS =~ s/^\s+//;
+  chop ($PROCS);
+}
+
+sub get_uptime {
+  $UPTIME = `uptime`;
+  chop ($UPTIME);
+  $UPTIME =~ /.*up.?.?([0-9].+),.+[0-9]+ user/;
+  $UPTIME = $1;
+}
+
+sub build_output {
+  $out = "%BSysInfo%O";
+  $out .= " %B|%O System: %B$UNAME%O";
+  $out .= " %B|%O CPU: %B$MODEL%O @ %B$CPU%O";
+  $out .= " %B|%O RAM: %B$MEMUSED%O of %B$MEMTOTAL%O (%B$MEMPERCENT% %Oused)";
+  $out .= " %B|%O Free Disk: %B$HDDFREE%O of %B$HDD%O";
+  $out .= " %B|%O Screen Res: %B$RES%O";
+  $out .= " %B|%O Procs: %B$PROCS%O";
+  $out .= " %B|%O Uptime: %B$UPTIME%O";
+  $out .= " %B|%O $TYPE: In: %B$PACKIN%O Out: %B$PACKOUT%O";
+  if ($DEV2) {
+    $out .= " %B|%O $TYPE2: In: %B$PACKIN2%O Out: %B$PACKOUT2%O";
+  }
+}
+
+sub display_uptime {
+  get_uname();    
+
+  if ($UNAME =~ /^darwin/i) {
+    get_uptime();
+
+    $out = "My current uptime is %B$UPTIME%O".".";
+
+    IRC::command($out);
+    return 0;
+  } else {
+    $out = "System Unsupported, install Darwin and try again...\n";
     IRC::command($out);
     return 1;
+  }
+}
+
+sub display_info {
+  get_uname();
+
+  if ($UNAME =~ /^darwin/i) {
+    get_cpu();
+    get_mem();
+    get_net();
+    get_rez();
+    get_hdd();
+    get_procs();
+    get_uptime();
+
+    build_output();
+
+    IRC::command($out);
+    return 0;
+  } else {
+    $out = "System Unsupported, install Darwin and try again...\n";
+    IRC::command($out);
+    return 1;
+  }
 }
