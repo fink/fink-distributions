@@ -2696,15 +2696,15 @@ EOF
 
 	# BuildConflicts of pkg are Conflicts of lockpkg
 	if (exists $self->{parent}) {
-		@depends = @{pkglist2lol($self->{parent}->$pkglist('BuildConflicts'))};
+		@depends = @{pkglist2lol($self->{parent}->pkglist('BuildConflicts'))};
 	} else {
-		@depends = @{pkglist2lol($self->$pkglist('BuildConflicts'))};
+		@depends = @{pkglist2lol($self->pkglist('BuildConflicts'))};
 	}
-	pushd @depends, $lockpkg_minor;  # prevent concurrent builds of $self
+	push @depends, $lockpkg_minor;  # prevent concurrent builds of $self
 	$control .= 'Conflicts: ' . &lol2pkglist(\@depends) . "\n";
 
 	# All *Depends of pkg are Depends of lockpkg
-	@depends = map { @{&pkglist2lol($self->pkglist($field))} } (qw(Depends Pre-Depends BuildDepends));
+	@depends = map { @{&pkglist2lol($self->pkglist($_))} } (qw(Depends Pre-Depends BuildDepends));
 
 	# remove pkgs being built now from list (avoid chicken-and-egg)
 	my $pkgregex = join "|", map { quotemeta($_->get_name()) } $self->get_splitoffs(1,1);
@@ -2739,7 +2739,7 @@ EOF
 
 	# install $lockpkg (== set lockfile for building $self)
 	print "Setting build lock...\n";
-	my $debfile = $buildpath.'/'.$lockpkg.'_'.$timestamp.'_'.$debarch.'.deb';
+	my $debfile = $buildpath.'/'.$lockpkg.'_0-0_'.$debarch.'.deb';
 	if (&execute("dpkg -i $debfile")) {
 		die "can't set build lock for " . $self->get_fullname() . "\n";
 	}
