@@ -1,0 +1,2253 @@
+diff -uNbr distcc-0.12/Makefile distcc-0.12-built/Makefile
+--- distcc-0.12/Makefile	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/Makefile	Sat Oct 12 16:38:16 2002
+@@ -0,0 +1,358 @@
++# Top-level Makefile(.in) for distcc
++
++# $Header: /data/cvs/distcc/Makefile.in,v 1.78 2002/09/30 03:46:04 mbp Exp $
++
++# Note that distcc no longer uses automake, but this file is still
++# structured in a somewhat similar way.
++
++# Remember that a CVS checkout of this project contains some
++# directories that will not be present in a tarball distribution,
++# including web/.  So, those directories must not be built by regular
++# commands (make all, make clean, make distclean), only by
++# maintainer-* or explicit invocations.
++
++# TODO: Installing info files ought to add them to the info directory,
++# but I don't know any portable way to do this.
++
++## VARIABLES
++
++PACKAGE = distcc
++VERSION = 0.12
++PACKAGE_TARNAME = distcc
++SHELL = /bin/sh
++
++srcdir = .
++top_srcdir = .
++
++prefix = /sw
++exec_prefix = ${prefix}
++
++bindir = ${exec_prefix}/bin
++sbindir = ${exec_prefix}/sbin
++libexecdir = ${exec_prefix}/libexec
++datadir = ${prefix}/share
++sysconfdir = ${prefix}/etc
++sharedstatedir = ${prefix}/com
++localstatedir = ${prefix}/var
++libdir = ${exec_prefix}/lib
++infodir = /sw/share/info
++mandir = /sw/share/man
++includedir = ${prefix}/include
++oldincludedir = /usr/include
++docdir = ${datadir}/doc
++pkgdocdir = $(docdir)/distcc
++
++LIBS = -lpopt 
++
++DESTDIR =
++
++INSTALL = install
++INSTALL_PROGRAM = install 
++INSTALL_DATA = install -m 444
++INSTALL_SCRIPT = install -m 555
++
++pkgdoc_DOCS = AUTHORS COPYING COPYING.FDL NEWS OLDNEWS README \
++	DEPENDENCIES INSTALL 
++
++latte_HTML = web/compared.html web/doc.html web/download.html	\
++web/cvs.html web/news.html web/index.html web/problems.html	\
++web/faq.html web/tested.html web/results.html web/roadmap.html
++
++mkinstalldirs = $(SHELL) $(top_srcdir)/mkinstalldirs
++man1dir = $(mandir)/man1
++man8dir = $(mandir)/man8
++man1_MANS = man/distcc.1 man/distccd.1
++
++linuxdoc_DOCS = linuxdoc/distcc.ps.gz linuxdoc/distcc.pdf
++linuxdoc_INFO = linuxdoc/distcc.info.gz
++manualdocdir = $(pkgdocdir)/manual
++pdbbase = distcc-manual-plucker
++pdbfile = linuxdoc/$(pdbbase).pdb
++
++extradoc_DOCS = doc/distcc-irc.txt doc/results.txt doc/scheduling.txt \
++	survey.txt
++
++DIST_COMMON = Makefile.in install-sh configure configure.ac \
++	config.guess config.sub mkinstalldirs
++
++DIST_PATCHES = patches/distc patches/joerg-proof-build-01.diff \
++	patches/distc++ patches/README.patches \
++	patches/granig_distcc_multi-A-record.diff
++
++TAR = tar
++GZIP = gzip
++GZIP_OPT = -9v
++
++distdir = $(top_builddir)/$(PACKAGE)-$(VERSION)/$(subdir)
++
++distdir = $(PACKAGE_TARNAME)-$(VERSION)
++tarball = $(PACKAGE_TARNAME)-$(VERSION).tar.gz
++tarball_sig = $(tarball).asc
++distnews = $(PACKAGE_TARNAME)-$(VERSION).NEWS
++
++SOURCES = src/arg.c src/bulk.c src/clinet.c src/daemon.c src/distcc.c	\
++src/dopt.c src/dparent.c src/exec.c src/filename.c src/h_argvtostr.c	\
++src/h_exten.c src/h_hosts.c src/h_issource.c src/h_scanargs.c		\
++src/help.c src/hosts.c src/io.c src/rpc.c src/serve.c src/srvnet.c	\
++src/tempfile.c src/trace.c src/util.c src/where.c src/zip.c src/strip.c \
++src/h_strip.c src/implicit.c src/lock.c
++
++HEADERS = src/clinet.h src/distcc.h src/exitcode.h src/hosts.h		\
++	src/io.h src/tempfile.h	src/strip.h src/implicit.h		\
++	src/opt.h src/rpc.h src/trace.h src/util.h src/bulk.h 		\
++	src/exec.h src/lock.h
++
++MEN = man/distcc.1 man/distccd.1
++
++
++## OVERALL targets
++
++## IMPLICIT BUILD rules
++
++%.html: %.latte
++	-rm -f $@
++	latte-html -l web/style.latte -o $@ $<
++
++%.gz: %
++	gzip -9vf $<
++
++## BUILD targets
++
++## NOTE: "all" must be the first (default) rule, aside from patterns.
++
++# We don't build the web pages or manual by default, because many
++# people will not have the tools to do it.  Just use all-web or
++# all-linuxdoc if you want them.
++all: 
++	for s in src; do $(MAKE) -C $$s all  || exit $$? ; done
++
++all-web: all-latte
++all-latte: $(latte_HTML)
++
++# TODO: perhaps ought to also build and upload a tarball of HTML files.
++
++all-linuxdoc: linuxdoc/html/distcc.html $(linuxdoc_DOCS)
++
++
++
++## DIST targets
++
++# The sub-targets copy (and if necessary, build) various files that
++# have to go into the tarball.  They also create necessary directories
++# -- bear in mind that they might be run in parallel.
++
++# This looks a bit gross to me, but it's not as bad as it might be :-/
++
++# I was going to try building a .bz2, but it turns out that for the
++# current contents, it's not much better (~54% vs ~56%).  Probably
++# this is because of the big compressed document files.
++
++dist: dist-linuxdoc dist-pkgdoc dist-extradoc dist-main dist-src \
++	dist-python dist-men dist-patches
++	$(TAR) cfz $(tarball) $(distdir)
++	rm -r $(distdir)
++	cp NEWS $(distnews)
++
++dist-sign:
++	gpg -a --detach-sign $(tarball)
++
++dist-men: $(MEN)
++	mkdir -p $(distdir)/man
++	cp $^ $(distdir)/man
++
++dist-linuxdoc: all-linuxdoc linuxdoc/html/distcc.html $(linuxdoc_DOCS) $(linuxdoc_INFO) linuxdoc/distcc.sgml
++	mkdir -p $(distdir)/linuxdoc/html
++	cp $(linuxdoc_DOCS) $(linuxdoc_INFO) linuxdoc/distcc.sgml $(distdir)/linuxdoc
++	cp linuxdoc/html/*  $(distdir)/linuxdoc/html
++
++dist-pkgdoc: $(pkgdoc_DOCS) 
++	mkdir -p $(distdir)
++	cp $^ $(distdir)
++
++dist-extradoc: $(extradoc_DOCS)
++	mkdir -p $(distdir)/doc
++	cp $^ $(distdir)/doc
++
++dist-main: $(DIST_COMMON)
++	mkdir -p $(distdir)
++	cp $^ $(distdir)
++
++dist-src: $(SOURCES) $(HEADERS) src/Makefile.in src/config.h.in
++	mkdir -p $(distdir)/src
++	cp $^ $(distdir)/src
++
++dist-python: python/comfychair.py  test/testdistcc.py
++	mkdir -p $(distdir)/python 
++	mkdir -p $(distdir)/test
++	cp $(srcdir)/python/comfychair.py $(distdir)/python/ 
++	cp $(srcdir)/test/testdistcc.py $(distdir)/test/
++
++dist-patches: $(DIST_PATCHES)
++	mkdir -p $(distdir)/patches
++	cp $^ $(distdir)/patches
++
++
++## BUILD (linuxdoc) targets
++linuxdoc/html/distcc.html: $(srcdir)/linuxdoc/distcc.sgml
++	mkdir -p linuxdoc/html
++	cd linuxdoc/html && linuxdoc --footer=../footer.html -B html ../distcc.sgml
++
++linuxdoc/distcc.ps.gz: linuxdoc/distcc.sgml
++	cd linuxdoc && linuxdoc -B latex -o ps -p a4 distcc.sgml 
++	$(GZIP) $(GZIP_OPT) -f linuxdoc/distcc.ps
++
++linuxdoc/distcc.pdf: linuxdoc/distcc.sgml
++	cd linuxdoc && linuxdoc -B latex -o pdf -p a4 distcc.sgml
++
++linuxdoc/distcc.info.gz: linuxdoc/distcc.sgml
++	cd linuxdoc && linuxdoc -B info distcc.sgml
++	$(GZIP) $(GZIP_OPT) -f linuxdoc/distcc.info
++
++$(pdbfile): linuxdoc/html/distcc.html
++	plucker-build -N 'distcc Manual' --stayonhost -f $(pdbbase) -M 3 $<
++	mv ~/.plucker/$(pdbbase).pdb $(pdbfile)
++
++
++## BUILD (web) targets
++$(latte_HTML): web/style.latte
++
++
++
++## CHECK targets
++
++check_programs:
++	for s in src; do $(MAKE) -C $$s check_programs || exit $$?; done
++
++check: check_programs
++	PYTHONPATH=$(srcdir)/python PATH=`pwd`/src:$$PATH python2.2 $(srcdir)/test/testdistcc.py
++
++run_pyunit:
++	PYTHONPATH=$(srcdir)/python PATH=./src:$$PATH python2.2 $(srcdir)/pyunit/testdistcc.py -v suite
++
++
++
++## CLEAN targets
++
++clean: 
++	for s in src; do $(MAKE) -C $$s clean || exit $$?; done 
++
++maintainer-clean: distclean maintainer-clean-web maintainer-clean-linuxdoc \
++	maintainer-clean-src maintainer-clean-autoconf
++
++# This rule at the moment is a bit wimpy -- it doesn't delete
++# "configure" and co, because they're kept in CVS for distcc, to ease
++# building on machines with bad versions.
++maintainer-clean-autoconf:
++
++maintainer-clean-src:
++	for s in src; do $(MAKE) -C $$s maintainer-clean || exit $$?; done 
++
++maintainer-clean-web: 
++	rm -f $(latte_HTML)
++
++# We only remove the documentation files for maintainer-clean, because
++# many users will not have the tools to rebuild them.  They're shipped
++# up-to-date in the distribution.
++maintainer-clean-linuxdoc: 
++	cd linuxdoc && rm -f distcc.ps distcc.html distcc-*.html \
++	html/* html/* distcc.info distcc.info.gz distcc.ps.gz distcc.pdf
++
++
++distclean-autoconf:
++	rm -f Makefile config.status src/config.h config.cache config.log 
++
++distclean: distclean-autoconf
++	for s in src; do $(MAKE) -C $$s distclean || exit $$?; done 
++
++
++## MAINTAINER targets
++
++always_ChangeLog:
++	cvs2cl --distributed --ignore ChangeLog --revisions --tags -U ./cvs2cl.ufile
++
++upload: upload-web upload-linuxdoc
++
++upload-web: all-web
++	rsync -avz web/ survey.txt \
++		--exclude CVS --exclude '*~' --exclude '*.latte' \
++		samba.org:/home/httpd/distcc/
++
++upload-linuxdoc: all-linuxdoc
++	rsync -azv linuxdoc/ --exclude CVS --exclude '*~' \
++		samba.org:/home/httpd/distcc/manual/
++
++upload-dist:
++	rsync -avP $(tarball) $(distnews) $(tarball_sig) samba.org:/home/ftp/pub/distcc/
++
++## CVSPLOT
++
++cvsplot:
++	cvsplot -cvsdir . \
++		-include '\.(c|h|py)$$' \
++		-linedata /tmp/linedata.txt \
++		-gnuplotlinedata web/cvslinedata.png \
++		-filedata /tmp/filedata.txt \
++		-gnuplotfiledata web/cvsfiledata.png
++
++
++## INSTALL targets
++
++showpaths:
++	@echo "'make install' will install distcc as follows:"
++	@echo "  man pages            $(man1dir)"
++	@echo "  info                 $(infodir)"
++	@echo "  documents            $(pkgdocdir)"
++	@echo "  programs             $(bindir)"
++
++install: showpaths install-doc install-man install-src install-linuxdoc
++
++install-src:
++	cd src && $(MAKE) install
++
++install-man: $(man1_MANS)
++	$(INSTALL) -d $(man1dir)
++	$(INSTALL_DATA) $(man1_MANS) $(man1dir)
++
++install-doc: $(pkgdoc_DOCS)
++	$(INSTALL) -d $(pkgdocdir)
++	$(INSTALL_DATA) $(pkgdoc_DOCS) $(pkgdocdir)
++
++# XXX: install-linuxdoc does not depend on the files it installs,
++# because some people won't have the sgml-tools to do it.  We try to
++# install the pregenerated ones.
++
++install-linuxdoc: $(linuxdoc_DOCS) linuxdoc/html/distcc.html $(linuxdoc_INFO)
++	$(INSTALL) -d $(manualdocdir)/html
++	$(INSTALL) -d  $(infodir)
++	$(INSTALL_DATA) $(linuxdoc_DOCS) $(manualdocdir)
++	$(INSTALL_DATA) $(linuxdoc_INFO) $(infodir)
++	$(INSTALL_DATA) linuxdoc/html/* $(manualdocdir)/html
++
++## LINBOT targets
++
++# This target checks the website for broken links.  It's probably not
++# very interesting unless you are a maintainer and therefore in a
++# position to fix them.
++
++linbot-run:
++	mkdir -p linbot-report
++	linbot -o linbot-report http://distcc.samba.org/
++
++## ANALOG targets
++
++# These are probably only interesting for maintainers
++analog-all:
++	$(MAKE) analog-download
++	$(MAKE) analog-resolve
++	$(MAKE) analog-run
++
++analog-download:
++	rsync -avz 'samba.org:/var/log/httpd/distcc/*_log*' analog/
++
++analog-run:
++	mkdir -p analog/report && cd analog && analog -G +gdistcc.analog
++
++analog-resolve:
++	cat analog/access_log* | \
++		jdresolve --recursive --database analog/jdresolve.db - \
++		> analog/resolved_log
+diff -uNbr distcc-0.12/config.log distcc-0.12-built/config.log
+--- distcc-0.12/config.log	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/config.log	Sat Oct 12 16:38:18 2002
+@@ -0,0 +1,635 @@
++This file contains any messages produced by compilers while
++running configure, to aid debugging if configure makes a mistake.
++
++It was created by distcc configure 0.12, which was
++generated by GNU Autoconf 2.54.  Invocation command line was
++
++  $ ./configure --prefix=/sw --mandir=/sw/share/man --infodir=/sw/share/info
++
++## --------- ##
++## Platform. ##
++## --------- ##
++
++hostname = g4.internal.scenespot.org
++uname -m = Power Macintosh
++uname -r = 6.1
++uname -s = Darwin
++uname -v = Darwin Kernel Version 6.1: Fri Sep  6 23:24:34 PDT 2002; root:xnu/xnu-344.2.obj~2/RELEASE_PPC 
++
++/usr/bin/uname -p = powerpc
++/bin/uname -X     = unknown
++
++/bin/arch              = unknown
++/usr/bin/arch -k       = unknown
++/usr/convex/getsysinfo = unknown
++hostinfo               = Mach kernel version:
++	 Darwin Kernel Version 6.1:
++Fri Sep  6 23:24:34 PDT 2002; root:xnu/xnu-344.2.obj~2/RELEASE_PPC
++
++
++Kernel configured for up to 2 processors.
++1 processor is physically available.
++Processor type: ppc7450 (PowerPC 7450)
++Processor active: 0
++Primary memory available: 768.00 megabytes.
++Default processor set: 71 tasks, 115 threads, 1 processors
++Load average: 2.28, Mach factor: 0.20
++unknown
++/bin/machine           = unknown
++/usr/bin/oslevel       = unknown
++/bin/universe          = unknown
++
++PATH: /sw/bin
++PATH: /sw/sbin
++PATH: /sw/bin
++PATH: /sw/sbin
++PATH: /bin
++PATH: /sbin
++PATH: /usr/bin
++PATH: /usr/sbin
++PATH: /usr/X11R6/bin
++PATH: /usr/X11R6/bin
++
++
++## ----------- ##
++## Core tests. ##
++## ----------- ##
++
++configure:1279: checking build system type
++configure:1297: result: powerpc-apple-darwin6.1
++configure:1305: checking host system type
++configure:1319: result: powerpc-apple-darwin6.1
++configure:1408: checking for gcc
++configure:1424: found /sw/bin/gcc
++configure:1434: result: gcc
++configure:1676: checking for C compiler version
++configure:1679: gcc --version </dev/null >&5
++gcc (GCC) 3.1 20020420 (prerelease)
++Copyright (C) 2002 Free Software Foundation, Inc.
++This is free software; see the source for copying conditions.  There is NO
++warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++
++configure:1682: $? = 0
++configure:1684: gcc -v </dev/null >&5
++Reading specs from /usr/libexec/gcc/darwin/ppc/3.1/specs
++Thread model: posix
++Apple Computer, Inc. GCC version 1161, based on gcc version 3.1 20020420 (prerelease)
++configure:1687: $? = 0
++configure:1689: gcc -V </dev/null >&5
++gcc: argument to `-V' is missing
++configure:1692: $? = 1
++configure:1712: checking for C compiler default output
++configure:1715: gcc -I/sw/include -fno-common -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c  >&5
++configure:1718: $? = 0
++configure:1752: result: a.out
++configure:1757: checking whether the C compiler works
++configure:1763: ./a.out
++configure:1766: $? = 0
++configure:1781: result: yes
++configure:1788: checking whether we are cross compiling
++configure:1790: result: no
++configure:1793: checking for suffix of executables
++configure:1795: gcc -o conftest -I/sw/include -fno-common -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c  >&5
++configure:1798: $? = 0
++configure:1821: result: 
++configure:1827: checking for suffix of object files
++configure:1845: gcc -c -I/sw/include -fno-common -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:1848: $? = 0
++configure:1867: result: o
++configure:1871: checking whether we are using the GNU C compiler
++configure:1892: gcc -c -I/sw/include -fno-common -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:1895: $? = 0
++configure:1898: test -s conftest.o
++configure:1901: $? = 0
++configure:1913: result: yes
++configure:1919: checking whether gcc accepts -g
++configure:1937: gcc -c -g -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:1940: $? = 0
++configure:1943: test -s conftest.o
++configure:1946: $? = 0
++configure:1956: result: yes
++configure:1973: checking for gcc option to accept ANSI C
++configure:2030: gcc  -c -I/sw/include -fno-common -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2033: $? = 0
++configure:2036: test -s conftest.o
++configure:2039: $? = 0
++configure:2056: result: none needed
++configure:2074: gcc -c -I/sw/include -fno-common -no-cpp-precomp -I/sw/include conftest.c >&5
++conftest.c:2: parse error before "me"
++configure:2077: $? = 1
++configure: failed program was:
++#ifndef __cplusplus
++  choke me
++#endif
++configure:2178: Adding gcc options: -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD
++configure:2183: checking for strerror in -lcposix
++configure:2210: gcc -o conftest -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c -lcposix   >&5
++ld: can't locate file for: -lcposix
++configure:2213: $? = 1
++configure: failed program was:
++#line 2190 "configure"
++#include "confdefs.h"
++
++/* Override any gcc2 internal prototype to avoid an error.  */
++#ifdef __cplusplus
++extern "C"
++#endif
++/* We use char because int might match the return type of a gcc2
++   builtin and then its argument prototype would still apply.  */
++char strerror ();
++int
++main ()
++{
++strerror ();
++  ;
++  return 0;
++}
++configure:2230: result: no
++configure:2239: checking whether make sets ${MAKE}
++configure:2259: result: yes
++configure:2283: checking how to run the C preprocessor
++configure:2309: gcc -E -no-cpp-precomp -I/sw/include conftest.c
++configure:2315: $? = 0
++configure:2342: gcc -E -no-cpp-precomp -I/sw/include conftest.c
++configure:2338:28: ac_nonexistent.h: No such file or directory
++configure:2348: $? = 1
++configure: failed program was:
++#line 2337 "configure"
++#include "confdefs.h"
++#include <ac_nonexistent.h>
++configure:2385: result: gcc -E
++configure:2400: gcc -E -no-cpp-precomp -I/sw/include conftest.c
++configure:2406: $? = 0
++configure:2433: gcc -E -no-cpp-precomp -I/sw/include conftest.c
++configure:2429:28: ac_nonexistent.h: No such file or directory
++configure:2439: $? = 1
++configure: failed program was:
++#line 2428 "configure"
++#include "confdefs.h"
++#include <ac_nonexistent.h>
++configure:2479: checking for egrep
++configure:2489: result: grep -E
++configure:2494: checking for ANSI C header files
++configure:2508: gcc -E -no-cpp-precomp -I/sw/include conftest.c
++configure:2514: $? = 0
++configure:2599: gcc -o conftest -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c  >&5
++configure: In function `main':
++configure:2592: warning: implicit declaration of function `exit'
++configure:2602: $? = 0
++configure:2604: ./conftest
++configure:2607: $? = 0
++configure:2621: result: yes
++configure:2645: checking for sys/types.h
++configure:2658: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2661: $? = 0
++configure:2664: test -s conftest.o
++configure:2667: $? = 0
++configure:2677: result: yes
++configure:2645: checking for sys/stat.h
++configure:2658: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2661: $? = 0
++configure:2664: test -s conftest.o
++configure:2667: $? = 0
++configure:2677: result: yes
++configure:2645: checking for stdlib.h
++configure:2658: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2661: $? = 0
++configure:2664: test -s conftest.o
++configure:2667: $? = 0
++configure:2677: result: yes
++configure:2645: checking for string.h
++configure:2658: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2661: $? = 0
++configure:2664: test -s conftest.o
++configure:2667: $? = 0
++configure:2677: result: yes
++configure:2645: checking for memory.h
++configure:2658: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2661: $? = 0
++configure:2664: test -s conftest.o
++configure:2667: $? = 0
++configure:2677: result: yes
++configure:2645: checking for strings.h
++configure:2658: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2661: $? = 0
++configure:2664: test -s conftest.o
++configure:2667: $? = 0
++configure:2677: result: yes
++configure:2645: checking for inttypes.h
++configure:2658: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2661: $? = 0
++configure:2664: test -s conftest.o
++configure:2667: $? = 0
++configure:2677: result: yes
++configure:2645: checking for stdint.h
++configure:2658: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2661: $? = 0
++configure:2664: test -s conftest.o
++configure:2667: $? = 0
++configure:2677: result: yes
++configure:2645: checking for unistd.h
++configure:2658: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2661: $? = 0
++configure:2664: test -s conftest.o
++configure:2667: $? = 0
++configure:2677: result: yes
++configure:2704: checking sys/sendfile.h usability
++configure:2713: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2741:26: warning: sys/sendfile.h: No such file or directory
++configure:2716: $? = 0
++configure:2719: test -s conftest.o
++configure:2722: $? = 0
++configure:2731: result: yes
++configure:2735: checking sys/sendfile.h presence
++configure:2742: gcc -E -no-cpp-precomp -I/sw/include conftest.c
++configure:2738:26: sys/sendfile.h: No such file or directory
++configure:2748: $? = 1
++configure: failed program was:
++#line 2737 "configure"
++#include "confdefs.h"
++#include <sys/sendfile.h>
++configure:2766: result: no
++configure:2772: WARNING: sys/sendfile.h: accepted by the compiler, rejected by the preprocessor!
++configure:2774: WARNING: sys/sendfile.h: proceeding with the preprocessor's result
++configure:2784: checking for sys/sendfile.h
++configure:2791: result: no
++configure:2704: checking sys/signal.h usability
++configure:2713: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2716: $? = 0
++configure:2719: test -s conftest.o
++configure:2722: $? = 0
++configure:2731: result: yes
++configure:2735: checking sys/signal.h presence
++configure:2742: gcc -E -no-cpp-precomp -I/sw/include conftest.c
++configure:2748: $? = 0
++configure:2766: result: yes
++configure:2784: checking for sys/signal.h
++configure:2791: result: yes
++configure:2805: checking for in_port_t
++configure:2829: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2832: $? = 0
++configure:2835: test -s conftest.o
++configure:2838: $? = 0
++configure:2848: result: yes
++configure:2860: checking for sa_family_t
++configure:2886: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:2889: $? = 0
++configure:2892: test -s conftest.o
++configure:2895: $? = 0
++configure:2905: result: yes
++configure:2915: checking for socklen_t
++configure:2941: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure: In function `main':
++configure:2930: `socklen_t' undeclared (first use in this function)
++configure:2930: (Each undeclared identifier is reported only once
++configure:2930: for each function it appears in.)
++configure:2930: parse error before ')' token
++configure:2944: $? = 1
++configure: failed program was:
++#line 2920 "configure"
++#include "confdefs.h"
++
++#include <sys/types.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++
++
++int
++main ()
++{
++if ((socklen_t *) 0)
++  return 0;
++if (sizeof (socklen_t))
++  return 0;
++  ;
++  return 0;
++}
++configure:2960: result: no
++configure:2974: checking for gethostbyname in -lnsl
++configure:3001: gcc -o conftest -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c -lnsl   >&5
++ld: can't locate file for: -lnsl
++configure:3004: $? = 1
++configure: failed program was:
++#line 2981 "configure"
++#include "confdefs.h"
++
++/* Override any gcc2 internal prototype to avoid an error.  */
++#ifdef __cplusplus
++extern "C"
++#endif
++/* We use char because int might match the return type of a gcc2
++   builtin and then its argument prototype would still apply.  */
++char gethostbyname ();
++int
++main ()
++{
++gethostbyname ();
++  ;
++  return 0;
++}
++configure:3021: result: no
++configure:3033: checking for connect in -lsocket
++configure:3060: gcc -o conftest -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c -lsocket   >&5
++ld: can't locate file for: -lsocket
++configure:3063: $? = 1
++configure: failed program was:
++#line 3040 "configure"
++#include "confdefs.h"
++
++/* Override any gcc2 internal prototype to avoid an error.  */
++#ifdef __cplusplus
++extern "C"
++#endif
++/* We use char because int might match the return type of a gcc2
++   builtin and then its argument prototype would still apply.  */
++char connect ();
++int
++main ()
++{
++connect ();
++  ;
++  return 0;
++}
++configure:3080: result: no
++configure:3092: checking for hstrerror in -lresolv
++configure:3119: gcc -o conftest -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c -lresolv   >&5
++ld: can't locate file for: -lresolv
++configure:3122: $? = 1
++configure: failed program was:
++#line 3099 "configure"
++#include "confdefs.h"
++
++/* Override any gcc2 internal prototype to avoid an error.  */
++#ifdef __cplusplus
++extern "C"
++#endif
++/* We use char because int might match the return type of a gcc2
++   builtin and then its argument prototype would still apply.  */
++char hstrerror ();
++int
++main ()
++{
++hstrerror ();
++  ;
++  return 0;
++}
++configure:3139: result: no
++configure:3208: checking for poptStrerror in -lpopt
++configure:3235: gcc -o conftest -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c -lpopt   >&5
++configure:3238: $? = 0
++configure:3241: test -s conftest
++configure:3244: $? = 0
++configure:3255: result: yes
++configure:3281: checking popt.h usability
++configure:3290: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++In file included from configure:3318:
++/sw/include/popt.h:377: warning: type qualifiers ignored on function return type
++configure:3293: $? = 0
++configure:3296: test -s conftest.o
++configure:3299: $? = 0
++configure:3308: result: yes
++configure:3312: checking popt.h presence
++configure:3319: gcc -E -no-cpp-precomp -I/sw/include conftest.c
++configure:3325: $? = 0
++configure:3343: result: yes
++configure:3361: checking for popt.h
++configure:3368: result: yes
++configure:3392: checking for sendfile
++configure:3429: gcc -o conftest -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c -lpopt  >&5
++ld: Undefined symbols:
++_sendfile
++configure:3432: $? = 1
++configure: failed program was:
++#line 3397 "configure"
++#include "confdefs.h"
++/* System header to define __stub macros and hopefully few prototypes,
++    which can conflict with char sendfile (); below.  */
++#include <assert.h>
++/* Override any gcc2 internal prototype to avoid an error.  */
++#ifdef __cplusplus
++extern "C"
++#endif
++/* We use char because int might match the return type of a gcc2
++   builtin and then its argument prototype would still apply.  */
++char sendfile ();
++char (*f) ();
++
++int
++main ()
++{
++/* The GNU C library defines this for functions which it implements
++    to always fail with ENOSYS.  Some functions are actually named
++    something starting with __ and the normal name is an alias.  */
++#if defined (__stub_sendfile) || defined (__stub___sendfile)
++choke me
++#else
++f = sendfile;
++#endif
++
++  ;
++  return 0;
++}
++configure:3448: result: no
++configure:3392: checking for setsid
++configure:3429: gcc -o conftest -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c -lpopt  >&5
++configure:3432: $? = 0
++configure:3435: test -s conftest
++configure:3438: $? = 0
++configure:3448: result: yes
++configure:3392: checking for flock
++configure:3429: gcc -o conftest -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c -lpopt  >&5
++configure:3432: $? = 0
++configure:3435: test -s conftest
++configure:3438: $? = 0
++configure:3448: result: yes
++configure:3392: checking for lockf
++configure:3429: gcc -o conftest -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c -lpopt  >&5
++configure:3432: $? = 0
++configure:3435: test -s conftest
++configure:3438: $? = 0
++configure:3448: result: yes
++configure:3392: checking for hstrerror
++configure:3429: gcc -o conftest -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include -L/sw/lib conftest.c -lpopt  >&5
++configure:3432: $? = 0
++configure:3435: test -s conftest
++configure:3438: $? = 0
++configure:3448: result: yes
++configure:3460: checking for vararg macro support
++configure:3475: gcc -c -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD -no-cpp-precomp -I/sw/include conftest.c >&5
++configure:3478: $? = 0
++configure:3481: test -s conftest.o
++configure:3484: $? = 0
++configure:3486: result: yes
++configure:3607: creating ./config.status
++
++## ---------------------- ##
++## Running config.status. ##
++## ---------------------- ##
++
++This file was extended by distcc config.status 0.12, which was
++generated by GNU Autoconf 2.54.  Invocation command line was
++
++  CONFIG_FILES    = 
++  CONFIG_HEADERS  = 
++  CONFIG_LINKS    = 
++  CONFIG_COMMANDS = 
++  $ ./config.status 
++
++on g4.internal.scenespot.org
++
++config.status:599: creating Makefile
++config.status:599: creating src/Makefile
++config.status:702: creating src/config.h
++config.status:823: src/config.h is unchanged
++
++## ---------------- ##
++## Cache variables. ##
++## ---------------- ##
++
++ac_cv_build=powerpc-apple-darwin6.1
++ac_cv_build_alias=powerpc-apple-darwin6.1
++ac_cv_c_compiler_gnu=yes
++ac_cv_env_CC_set=
++ac_cv_env_CC_value=
++ac_cv_env_CFLAGS_set=set
++ac_cv_env_CFLAGS_value='-I/sw/include -fno-common'
++ac_cv_env_CPPFLAGS_set=set
++ac_cv_env_CPPFLAGS_value='-no-cpp-precomp -I/sw/include'
++ac_cv_env_CPP_set=
++ac_cv_env_CPP_value=
++ac_cv_env_LDFLAGS_set=set
++ac_cv_env_LDFLAGS_value=-L/sw/lib
++ac_cv_env_build_alias_set=
++ac_cv_env_build_alias_value=
++ac_cv_env_host_alias_set=
++ac_cv_env_host_alias_value=
++ac_cv_env_target_alias_set=
++ac_cv_env_target_alias_value=
++ac_cv_exeext=
++ac_cv_func_flock=yes
++ac_cv_func_hstrerror=yes
++ac_cv_func_lockf=yes
++ac_cv_func_sendfile=no
++ac_cv_func_setsid=yes
++ac_cv_header_inttypes_h=yes
++ac_cv_header_memory_h=yes
++ac_cv_header_popt_h=yes
++ac_cv_header_stdc=yes
++ac_cv_header_stdint_h=yes
++ac_cv_header_stdlib_h=yes
++ac_cv_header_string_h=yes
++ac_cv_header_strings_h=yes
++ac_cv_header_sys_sendfile_h=no
++ac_cv_header_sys_signal_h=yes
++ac_cv_header_sys_stat_h=yes
++ac_cv_header_sys_types_h=yes
++ac_cv_header_unistd_h=yes
++ac_cv_host=powerpc-apple-darwin6.1
++ac_cv_host_alias=powerpc-apple-darwin6.1
++ac_cv_lib_cposix_strerror=no
++ac_cv_lib_nsl_gethostbyname=no
++ac_cv_lib_popt_poptStrerror=yes
++ac_cv_lib_resolv_hstrerror=no
++ac_cv_lib_socket_connect=no
++ac_cv_objext=o
++ac_cv_prog_CPP='gcc -E'
++ac_cv_prog_ac_ct_CC=gcc
++ac_cv_prog_cc_g=yes
++ac_cv_prog_cc_stdc=
++ac_cv_prog_egrep='grep -E'
++ac_cv_prog_make_make_set=yes
++ac_cv_type_in_port_t=yes
++ac_cv_type_sa_family_t=yes
++ac_cv_type_socklen_t=no
++
++## ----------------- ##
++## Output variables. ##
++## ----------------- ##
++
++CC='gcc'
++CFLAGS='-I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD'
++CPP='gcc -E'
++CPPFLAGS='-no-cpp-precomp -I/sw/include'
++DEFS='-DHAVE_CONFIG_H'
++ECHO_C=''
++ECHO_N='-n'
++ECHO_T=''
++EGREP='grep -E'
++EXEEXT=''
++INSTALL='install'
++INSTALL_DATA='install -m 444'
++INSTALL_PROGRAM='install'
++INSTALL_SCRIPT='install -m 555'
++LDFLAGS='-L/sw/lib'
++LIBOBJS=''
++LIBS='-lpopt '
++LTLIBOBJS=''
++OBJEXT='o'
++PACKAGE_BUGREPORT='mbp@samba.org'
++PACKAGE_NAME='distcc'
++PACKAGE_STRING='distcc 0.12'
++PACKAGE_TARNAME='distcc'
++PACKAGE_VERSION='0.12'
++PATH_SEPARATOR=':'
++SET_MAKE=''
++SHELL='/bin/sh'
++ac_ct_CC='gcc'
++bindir='${exec_prefix}/bin'
++build='powerpc-apple-darwin6.1'
++build_alias=''
++build_cpu='powerpc'
++build_os='darwin6.1'
++build_vendor='apple'
++datadir='${prefix}/share'
++docdir='${datadir}/doc'
++exec_prefix='${prefix}'
++host='powerpc-apple-darwin6.1'
++host_alias=''
++host_cpu='powerpc'
++host_os='darwin6.1'
++host_vendor='apple'
++includedir='${prefix}/include'
++infodir='/sw/share/info'
++libdir='${exec_prefix}/lib'
++libexecdir='${exec_prefix}/libexec'
++localstatedir='${prefix}/var'
++mandir='/sw/share/man'
++oldincludedir='/usr/include'
++prefix='/sw'
++program_transform_name='s,x,x,'
++sbindir='${exec_prefix}/sbin'
++sharedstatedir='${prefix}/com'
++sysconfdir='${prefix}/etc'
++target_alias=''
++
++## ----------- ##
++## confdefs.h. ##
++## ----------- ##
++
++#define GNU_HOST "powerpc-apple-darwin6.1"
++#define HAVE_FLOCK 1
++#define HAVE_HSTRERROR 1
++#define HAVE_INTTYPES_H 1
++#define HAVE_IN_PORT_T 1
++#define HAVE_LIBPOPT 1
++#define HAVE_LOCKF 1
++#define HAVE_MEMORY_H 1
++#define HAVE_SA_FAMILY_T 1
++#define HAVE_SETSID 1
++#define HAVE_STDINT_H 1
++#define HAVE_STDLIB_H 1
++#define HAVE_STRINGS_H 1
++#define HAVE_STRING_H 1
++#define HAVE_SYS_SIGNAL_H 1
++#define HAVE_SYS_STAT_H 1
++#define HAVE_SYS_TYPES_H 1
++#define HAVE_UNISTD_H 1
++#define HAVE_VARARG_MACROS
++#define PACKAGE_BUGREPORT "mbp@samba.org"
++#define PACKAGE_NAME "distcc"
++#define PACKAGE_STRING "distcc 0.12"
++#define PACKAGE_TARNAME "distcc"
++#define PACKAGE_VERSION "0.12"
++#define STDC_HEADERS 1
++
++configure: exit 0
+diff -uNbr distcc-0.12/config.status distcc-0.12-built/config.status
+--- distcc-0.12/config.status	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/config.status	Sat Oct 12 16:38:16 2002
+@@ -0,0 +1,872 @@
++#! /bin/sh
++# Generated by configure.
++# Run this file to recreate the current configuration.
++# Compiler output produced by configure, useful for debugging
++# configure, is in config.log if it exists.
++
++debug=false
++SHELL=${CONFIG_SHELL-/bin/sh}
++## --------------------- ##
++## M4sh Initialization.  ##
++## --------------------- ##
++
++# Be Bourne compatible
++if test -n "${ZSH_VERSION+set}" && (emulate sh) >/dev/null 2>&1; then
++  emulate sh
++  NULLCMD=:
++  # Zsh 3.x and 4.x performs word splitting on ${1+"$@"}, which
++  # is contrary to our usage.  Disable this feature.
++  alias -g '${1+"$@"}'='"$@"'
++elif test -n "${BASH_VERSION+set}" && (set -o posix) >/dev/null 2>&1; then
++  set -o posix
++fi
++
++# Support unset when possible.
++if (FOO=FOO; unset FOO) >/dev/null 2>&1; then
++  as_unset=unset
++else
++  as_unset=false
++fi
++
++
++# Work around bugs in pre-3.0 UWIN ksh.
++$as_unset ENV MAIL MAILPATH
++PS1='$ '
++PS2='> '
++PS4='+ '
++
++# NLS nuisances.
++for as_var in LANG LANGUAGE LC_ALL LC_COLLATE LC_CTYPE LC_NUMERIC LC_MESSAGES LC_TIME
++do
++  if (set +x; test -n "`(eval $as_var=C; export $as_var) 2>&1`"); then
++    eval $as_var=C; export $as_var
++  else
++    $as_unset $as_var
++  fi
++done
++
++# Required to use basename.
++if expr a : '\(a\)' >/dev/null 2>&1; then
++  as_expr=expr
++else
++  as_expr=false
++fi
++
++if (basename /) >/dev/null 2>&1 && test "X`basename / 2>&1`" = "X/"; then
++  as_basename=basename
++else
++  as_basename=false
++fi
++
++
++# Name of the executable.
++as_me=`$as_basename "$0" ||
++$as_expr X/"$0" : '.*/\([^/][^/]*\)/*$' \| \
++	 X"$0" : 'X\(//\)$' \| \
++	 X"$0" : 'X\(/\)$' \| \
++	 .     : '\(.\)' 2>/dev/null ||
++echo X/"$0" |
++    sed '/^.*\/\([^/][^/]*\)\/*$/{ s//\1/; q; }
++  	  /^X\/\(\/\/\)$/{ s//\1/; q; }
++  	  /^X\/\(\/\).*/{ s//\1/; q; }
++  	  s/.*/./; q'`
++
++
++# PATH needs CR, and LINENO needs CR and PATH.
++# Avoid depending upon Character Ranges.
++as_cr_letters='abcdefghijklmnopqrstuvwxyz'
++as_cr_LETTERS='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
++as_cr_Letters=$as_cr_letters$as_cr_LETTERS
++as_cr_digits='0123456789'
++as_cr_alnum=$as_cr_Letters$as_cr_digits
++
++# The user is always right.
++if test "${PATH_SEPARATOR+set}" != set; then
++  echo "#! /bin/sh" >conftest.sh
++  echo  "exit 0"   >>conftest.sh
++  chmod +x conftest.sh
++  if (PATH="/nonexistent;."; conftest.sh) >/dev/null 2>&1; then
++    PATH_SEPARATOR=';'
++  else
++    PATH_SEPARATOR=:
++  fi
++  rm -f conftest.sh
++fi
++
++
++  as_lineno_1=$LINENO
++  as_lineno_2=$LINENO
++  as_lineno_3=`(expr $as_lineno_1 + 1) 2>/dev/null`
++  test "x$as_lineno_1" != "x$as_lineno_2" &&
++  test "x$as_lineno_3"  = "x$as_lineno_2"  || {
++  # Find who we are.  Look in the path if we contain no path at all
++  # relative or not.
++  case $0 in
++    *[\\/]* ) as_myself=$0 ;;
++    *) as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
++for as_dir in $PATH
++do
++  IFS=$as_save_IFS
++  test -z "$as_dir" && as_dir=.
++  test -r "$as_dir/$0" && as_myself=$as_dir/$0 && break
++done
++
++       ;;
++  esac
++  # We did not find ourselves, most probably we were run as `sh COMMAND'
++  # in which case we are not to be found in the path.
++  if test "x$as_myself" = x; then
++    as_myself=$0
++  fi
++  if test ! -f "$as_myself"; then
++    { { echo "$as_me:$LINENO: error: cannot find myself; rerun with an absolute path" >&5
++echo "$as_me: error: cannot find myself; rerun with an absolute path" >&2;}
++   { (exit 1); exit 1; }; }
++  fi
++  case $CONFIG_SHELL in
++  '')
++    as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
++for as_dir in /bin$PATH_SEPARATOR/usr/bin$PATH_SEPARATOR$PATH
++do
++  IFS=$as_save_IFS
++  test -z "$as_dir" && as_dir=.
++  for as_base in sh bash ksh sh5; do
++	 case $as_dir in
++	 /*)
++	   if ("$as_dir/$as_base" -c '
++  as_lineno_1=$LINENO
++  as_lineno_2=$LINENO
++  as_lineno_3=`(expr $as_lineno_1 + 1) 2>/dev/null`
++  test "x$as_lineno_1" != "x$as_lineno_2" &&
++  test "x$as_lineno_3"  = "x$as_lineno_2" ') 2>/dev/null; then
++	     $as_unset BASH_ENV || test "${BASH_ENV+set}" != set || { BASH_ENV=; export BASH_ENV; }
++	     $as_unset ENV || test "${ENV+set}" != set || { ENV=; export ENV; }
++	     CONFIG_SHELL=$as_dir/$as_base
++	     export CONFIG_SHELL
++	     exec "$CONFIG_SHELL" "$0" ${1+"$@"}
++	   fi;;
++	 esac
++       done
++done
++;;
++  esac
++
++  # Create $as_me.lineno as a copy of $as_myself, but with $LINENO
++  # uniformly replaced by the line number.  The first 'sed' inserts a
++  # line-number line before each line; the second 'sed' does the real
++  # work.  The second script uses 'N' to pair each line-number line
++  # with the numbered line, and appends trailing '-' during
++  # substitution so that $LINENO is not a special case at line end.
++  # (Raja R Harinath suggested sed '=', and Paul Eggert wrote the
++  # second 'sed' script.  Blame Lee E. McMahon for sed's syntax.  :-)
++  sed '=' <$as_myself |
++    sed '
++      N
++      s,$,-,
++      : loop
++      s,^\(['$as_cr_digits']*\)\(.*\)[$]LINENO\([^'$as_cr_alnum'_]\),\1\2\1\3,
++      t loop
++      s,-$,,
++      s,^['$as_cr_digits']*\n,,
++    ' >$as_me.lineno &&
++  chmod +x $as_me.lineno ||
++    { { echo "$as_me:$LINENO: error: cannot create $as_me.lineno; rerun with a POSIX shell" >&5
++echo "$as_me: error: cannot create $as_me.lineno; rerun with a POSIX shell" >&2;}
++   { (exit 1); exit 1; }; }
++
++  # Don't try to exec as it changes $[0], causing all sort of problems
++  # (the dirname of $[0] is not the place where we might find the
++  # original and so on.  Autoconf is especially sensible to this).
++  . ./$as_me.lineno
++  # Exit status is that of the last command.
++  exit
++}
++
++
++case `echo "testing\c"; echo 1,2,3`,`echo -n testing; echo 1,2,3` in
++  *c*,-n*) ECHO_N= ECHO_C='
++' ECHO_T='	' ;;
++  *c*,*  ) ECHO_N=-n ECHO_C= ECHO_T= ;;
++  *)       ECHO_N= ECHO_C='\c' ECHO_T= ;;
++esac
++
++if expr a : '\(a\)' >/dev/null 2>&1; then
++  as_expr=expr
++else
++  as_expr=false
++fi
++
++rm -f conf$$ conf$$.exe conf$$.file
++echo >conf$$.file
++if ln -s conf$$.file conf$$ 2>/dev/null; then
++  # We could just check for DJGPP; but this test a) works b) is more generic
++  # and c) will remain valid once DJGPP supports symlinks (DJGPP 2.04).
++  if test -f conf$$.exe; then
++    # Don't use ln at all; we don't have any links
++    as_ln_s='cp -p'
++  else
++    as_ln_s='ln -s'
++  fi
++elif ln conf$$.file conf$$ 2>/dev/null; then
++  as_ln_s=ln
++else
++  as_ln_s='cp -p'
++fi
++rm -f conf$$ conf$$.exe conf$$.file
++
++if mkdir -p . 2>/dev/null; then
++  as_mkdir_p=:
++else
++  as_mkdir_p=false
++fi
++
++as_executable_p="test -f"
++
++# Sed expression to map a string onto a valid CPP name.
++as_tr_cpp="sed y%*$as_cr_letters%P$as_cr_LETTERS%;s%[^_$as_cr_alnum]%_%g"
++
++# Sed expression to map a string onto a valid variable name.
++as_tr_sh="sed y%*+%pp%;s%[^_$as_cr_alnum]%_%g"
++
++
++# IFS
++# We need space, tab and new line, in precisely that order.
++as_nl='
++'
++IFS=" 	$as_nl"
++
++# CDPATH.
++$as_unset CDPATH
++
++exec 6>&1
++
++# Open the log real soon, to keep \$[0] and so on meaningful, and to
++# report actual input values of CONFIG_FILES etc. instead of their
++# values after options handling.  Logging --version etc. is OK.
++exec 5>>config.log
++{
++  echo
++  sed 'h;s/./-/g;s/^.../## /;s/...$/ ##/;p;x;p;x' <<_ASBOX
++## Running $as_me. ##
++_ASBOX
++} >&5
++cat >&5 <<_CSEOF
++
++This file was extended by distcc $as_me 0.12, which was
++generated by GNU Autoconf 2.54.  Invocation command line was
++
++  CONFIG_FILES    = $CONFIG_FILES
++  CONFIG_HEADERS  = $CONFIG_HEADERS
++  CONFIG_LINKS    = $CONFIG_LINKS
++  CONFIG_COMMANDS = $CONFIG_COMMANDS
++  $ $0 $@
++
++_CSEOF
++echo "on `(hostname || uname -n) 2>/dev/null | sed 1q`" >&5
++echo >&5
++config_files=" Makefile src/Makefile"
++config_headers=" src/config.h"
++
++ac_cs_usage="\
++\`$as_me' instantiates files from templates according to the
++current configuration.
++
++Usage: $0 [OPTIONS] [FILE]...
++
++  -h, --help       print this help, then exit
++  -V, --version    print version number, then exit
++  -d, --debug      don't remove temporary files
++      --recheck    update $as_me by reconfiguring in the same conditions
++  --file=FILE[:TEMPLATE]
++                   instantiate the configuration file FILE
++  --header=FILE[:TEMPLATE]
++                   instantiate the configuration header FILE
++
++Configuration files:
++$config_files
++
++Configuration headers:
++$config_headers
++
++Report bugs to <bug-autoconf@gnu.org>."
++ac_cs_version="\
++distcc config.status 0.12
++configured by ./configure, generated by GNU Autoconf 2.54,
++  with options \"'--prefix=/sw' '--mandir=/sw/share/man' '--infodir=/sw/share/info' 'CFLAGS=-I/sw/include -fno-common' 'CPPFLAGS=-no-cpp-precomp -I/sw/include' 'LDFLAGS=-L/sw/lib'\"
++
++Copyright 1992, 1993, 1994, 1995, 1996, 1998, 1999, 2000, 2001
++Free Software Foundation, Inc.
++This config.status script is free software; the Free Software Foundation
++gives unlimited permission to copy, distribute and modify it."
++srcdir=.
++# If no file are specified by the user, then we need to provide default
++# value.  By we need to know if files were specified by the user.
++ac_need_defaults=:
++while test $# != 0
++do
++  case $1 in
++  --*=*)
++    ac_option=`expr "x$1" : 'x\([^=]*\)='`
++    ac_optarg=`expr "x$1" : 'x[^=]*=\(.*\)'`
++    ac_shift=:
++    ;;
++  -*)
++    ac_option=$1
++    ac_optarg=$2
++    ac_shift=shift
++    ;;
++  *) # This is not an option, so the user has probably given explicit
++     # arguments.
++     ac_option=$1
++     ac_need_defaults=false;;
++  esac
++
++  case $ac_option in
++  # Handling of the options.
++  -recheck | --recheck | --rechec | --reche | --rech | --rec | --re | --r)
++    echo "running /bin/sh ./configure " '--prefix=/sw' '--mandir=/sw/share/man' '--infodir=/sw/share/info' 'CFLAGS=-I/sw/include -fno-common' 'CPPFLAGS=-no-cpp-precomp -I/sw/include' 'LDFLAGS=-L/sw/lib' " --no-create --no-recursion"
++    exec /bin/sh ./configure '--prefix=/sw' '--mandir=/sw/share/man' '--infodir=/sw/share/info' 'CFLAGS=-I/sw/include -fno-common' 'CPPFLAGS=-no-cpp-precomp -I/sw/include' 'LDFLAGS=-L/sw/lib' --no-create --no-recursion ;;
++  --version | --vers* | -V )
++    echo "$ac_cs_version"; exit 0 ;;
++  --he | --h)
++    # Conflict between --help and --header
++    { { echo "$as_me:$LINENO: error: ambiguous option: $1
++Try \`$0 --help' for more information." >&5
++echo "$as_me: error: ambiguous option: $1
++Try \`$0 --help' for more information." >&2;}
++   { (exit 1); exit 1; }; };;
++  --help | --hel | -h )
++    echo "$ac_cs_usage"; exit 0 ;;
++  --debug | --d* | -d )
++    debug=: ;;
++  --file | --fil | --fi | --f )
++    $ac_shift
++    CONFIG_FILES="$CONFIG_FILES $ac_optarg"
++    ac_need_defaults=false;;
++  --header | --heade | --head | --hea )
++    $ac_shift
++    CONFIG_HEADERS="$CONFIG_HEADERS $ac_optarg"
++    ac_need_defaults=false;;
++
++  # This is an error.
++  -*) { { echo "$as_me:$LINENO: error: unrecognized option: $1
++Try \`$0 --help' for more information." >&5
++echo "$as_me: error: unrecognized option: $1
++Try \`$0 --help' for more information." >&2;}
++   { (exit 1); exit 1; }; } ;;
++
++  *) ac_config_targets="$ac_config_targets $1" ;;
++
++  esac
++  shift
++done
++
++for ac_config_target in $ac_config_targets
++do
++  case "$ac_config_target" in
++  # Handling of arguments.
++  "Makefile" ) CONFIG_FILES="$CONFIG_FILES Makefile" ;;
++  "src/Makefile" ) CONFIG_FILES="$CONFIG_FILES src/Makefile" ;;
++  "src/config.h" ) CONFIG_HEADERS="$CONFIG_HEADERS src/config.h" ;;
++  *) { { echo "$as_me:$LINENO: error: invalid argument: $ac_config_target" >&5
++echo "$as_me: error: invalid argument: $ac_config_target" >&2;}
++   { (exit 1); exit 1; }; };;
++  esac
++done
++
++# If the user did not use the arguments to specify the items to instantiate,
++# then the envvar interface is used.  Set only those that are not.
++# We use the long form for the default assignment because of an extremely
++# bizarre bug on SunOS 4.1.3.
++if $ac_need_defaults; then
++  test "${CONFIG_FILES+set}" = set || CONFIG_FILES=$config_files
++  test "${CONFIG_HEADERS+set}" = set || CONFIG_HEADERS=$config_headers
++fi
++
++# Create a temporary directory, and hook for its removal unless debugging.
++$debug ||
++{
++  trap 'exit_status=$?; rm -rf $tmp && exit $exit_status' 0
++  trap '{ (exit 1); exit 1; }' 1 2 13 15
++}
++
++# Create a (secure) tmp directory for tmp files.
++: ${TMPDIR=/tmp}
++{
++  tmp=`(umask 077 && mktemp -d -q "$TMPDIR/csXXXXXX") 2>/dev/null` &&
++  test -n "$tmp" && test -d "$tmp"
++}  ||
++{
++  tmp=$TMPDIR/cs$$-$RANDOM
++  (umask 077 && mkdir $tmp)
++} ||
++{
++   echo "$me: cannot create a temporary directory in $TMPDIR" >&2
++   { (exit 1); exit 1; }
++}
++
++
++#
++# CONFIG_FILES section.
++#
++
++# No need to generate the scripts if there are no CONFIG_FILES.
++# This happens for instance when ./config.status config.h
++if test -n "$CONFIG_FILES"; then
++  # Protect against being on the right side of a sed subst in config.status.
++  sed 's/,@/@@/; s/@,/@@/; s/,;t t$/@;t t/; /@;t t$/s/[\\&,]/\\&/g;
++   s/@@/,@/; s/@@/@,/; s/@;t t$/,;t t/' >$tmp/subs.sed <<\CEOF
++s,@SHELL@,/bin/sh,;t t
++s,@PATH_SEPARATOR@,:,;t t
++s,@PACKAGE_NAME@,distcc,;t t
++s,@PACKAGE_TARNAME@,distcc,;t t
++s,@PACKAGE_VERSION@,0.12,;t t
++s,@PACKAGE_STRING@,distcc 0.12,;t t
++s,@PACKAGE_BUGREPORT@,mbp@samba.org,;t t
++s,@exec_prefix@,${prefix},;t t
++s,@prefix@,/sw,;t t
++s,@program_transform_name@,s,x,x,,;t t
++s,@bindir@,${exec_prefix}/bin,;t t
++s,@sbindir@,${exec_prefix}/sbin,;t t
++s,@libexecdir@,${exec_prefix}/libexec,;t t
++s,@datadir@,${prefix}/share,;t t
++s,@sysconfdir@,${prefix}/etc,;t t
++s,@sharedstatedir@,${prefix}/com,;t t
++s,@localstatedir@,${prefix}/var,;t t
++s,@libdir@,${exec_prefix}/lib,;t t
++s,@includedir@,${prefix}/include,;t t
++s,@oldincludedir@,/usr/include,;t t
++s,@infodir@,/sw/share/info,;t t
++s,@mandir@,/sw/share/man,;t t
++s,@build_alias@,,;t t
++s,@host_alias@,,;t t
++s,@target_alias@,,;t t
++s,@DEFS@,-DHAVE_CONFIG_H,;t t
++s,@ECHO_C@,,;t t
++s,@ECHO_N@,-n,;t t
++s,@ECHO_T@,,;t t
++s,@LIBS@,-lpopt ,;t t
++s,@build@,powerpc-apple-darwin6.1,;t t
++s,@build_cpu@,powerpc,;t t
++s,@build_vendor@,apple,;t t
++s,@build_os@,darwin6.1,;t t
++s,@host@,powerpc-apple-darwin6.1,;t t
++s,@host_cpu@,powerpc,;t t
++s,@host_vendor@,apple,;t t
++s,@host_os@,darwin6.1,;t t
++s,@CC@,gcc,;t t
++s,@CFLAGS@,-I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD,;t t
++s,@LDFLAGS@,-L/sw/lib,;t t
++s,@CPPFLAGS@,-no-cpp-precomp -I/sw/include,;t t
++s,@ac_ct_CC@,gcc,;t t
++s,@EXEEXT@,,;t t
++s,@OBJEXT@,o,;t t
++s,@SET_MAKE@,,;t t
++s,@INSTALL@,install,;t t
++s,@INSTALL_DATA@,install -m 444,;t t
++s,@INSTALL_PROGRAM@,install,;t t
++s,@INSTALL_SCRIPT@,install -m 555,;t t
++s,@CPP@,gcc -E,;t t
++s,@EGREP@,grep -E,;t t
++s,@docdir@,${datadir}/doc,;t t
++s,@LIBOBJS@,,;t t
++s,@LTLIBOBJS@,,;t t
++CEOF
++
++  # Split the substitutions into bite-sized pieces for seds with
++  # small command number limits, like on Digital OSF/1 and HP-UX.
++  ac_max_sed_lines=48
++  ac_sed_frag=1 # Number of current file.
++  ac_beg=1 # First line for current file.
++  ac_end=$ac_max_sed_lines # Line after last line for current file.
++  ac_more_lines=:
++  ac_sed_cmds=
++  while $ac_more_lines; do
++    if test $ac_beg -gt 1; then
++      sed "1,${ac_beg}d; ${ac_end}q" $tmp/subs.sed >$tmp/subs.frag
++    else
++      sed "${ac_end}q" $tmp/subs.sed >$tmp/subs.frag
++    fi
++    if test ! -s $tmp/subs.frag; then
++      ac_more_lines=false
++    else
++      # The purpose of the label and of the branching condition is to
++      # speed up the sed processing (if there are no `@' at all, there
++      # is no need to browse any of the substitutions).
++      # These are the two extra sed commands mentioned above.
++      (echo ':t
++  /@[a-zA-Z_][a-zA-Z_0-9]*@/!b' && cat $tmp/subs.frag) >$tmp/subs-$ac_sed_frag.sed
++      if test -z "$ac_sed_cmds"; then
++  	ac_sed_cmds="sed -f $tmp/subs-$ac_sed_frag.sed"
++      else
++  	ac_sed_cmds="$ac_sed_cmds | sed -f $tmp/subs-$ac_sed_frag.sed"
++      fi
++      ac_sed_frag=`expr $ac_sed_frag + 1`
++      ac_beg=$ac_end
++      ac_end=`expr $ac_end + $ac_max_sed_lines`
++    fi
++  done
++  if test -z "$ac_sed_cmds"; then
++    ac_sed_cmds=cat
++  fi
++fi # test -n "$CONFIG_FILES"
++
++for ac_file in : $CONFIG_FILES; do test "x$ac_file" = x: && continue
++  # Support "outfile[:infile[:infile...]]", defaulting infile="outfile.in".
++  case $ac_file in
++  - | *:- | *:-:* ) # input from stdin
++        cat >$tmp/stdin
++        ac_file_in=`echo "$ac_file" | sed 's,[^:]*:,,'`
++        ac_file=`echo "$ac_file" | sed 's,:.*,,'` ;;
++  *:* ) ac_file_in=`echo "$ac_file" | sed 's,[^:]*:,,'`
++        ac_file=`echo "$ac_file" | sed 's,:.*,,'` ;;
++  * )   ac_file_in=$ac_file.in ;;
++  esac
++
++  # Compute @srcdir@, @top_srcdir@, and @INSTALL@ for subdirectories.
++  ac_dir=`(dirname "$ac_file") 2>/dev/null ||
++$as_expr X"$ac_file" : 'X\(.*[^/]\)//*[^/][^/]*/*$' \| \
++         X"$ac_file" : 'X\(//\)[^/]' \| \
++         X"$ac_file" : 'X\(//\)$' \| \
++         X"$ac_file" : 'X\(/\)' \| \
++         .     : '\(.\)' 2>/dev/null ||
++echo X"$ac_file" |
++    sed '/^X\(.*[^/]\)\/\/*[^/][^/]*\/*$/{ s//\1/; q; }
++  	  /^X\(\/\/\)[^/].*/{ s//\1/; q; }
++  	  /^X\(\/\/\)$/{ s//\1/; q; }
++  	  /^X\(\/\).*/{ s//\1/; q; }
++  	  s/.*/./; q'`
++  { if $as_mkdir_p; then
++    mkdir -p "$ac_dir"
++  else
++    as_dir="$ac_dir"
++    as_dirs=
++    while test ! -d "$as_dir"; do
++      as_dirs="$as_dir $as_dirs"
++      as_dir=`(dirname "$as_dir") 2>/dev/null ||
++$as_expr X"$as_dir" : 'X\(.*[^/]\)//*[^/][^/]*/*$' \| \
++         X"$as_dir" : 'X\(//\)[^/]' \| \
++         X"$as_dir" : 'X\(//\)$' \| \
++         X"$as_dir" : 'X\(/\)' \| \
++         .     : '\(.\)' 2>/dev/null ||
++echo X"$as_dir" |
++    sed '/^X\(.*[^/]\)\/\/*[^/][^/]*\/*$/{ s//\1/; q; }
++  	  /^X\(\/\/\)[^/].*/{ s//\1/; q; }
++  	  /^X\(\/\/\)$/{ s//\1/; q; }
++  	  /^X\(\/\).*/{ s//\1/; q; }
++  	  s/.*/./; q'`
++    done
++    test ! -n "$as_dirs" || mkdir $as_dirs
++  fi || { { echo "$as_me:$LINENO: error: cannot create directory \"$ac_dir\"" >&5
++echo "$as_me: error: cannot create directory \"$ac_dir\"" >&2;}
++   { (exit 1); exit 1; }; }; }
++
++  ac_builddir=.
++
++if test "$ac_dir" != .; then
++  ac_dir_suffix=/`echo "$ac_dir" | sed 's,^\.[\\/],,'`
++  # A "../" for each directory in $ac_dir_suffix.
++  ac_top_builddir=`echo "$ac_dir_suffix" | sed 's,/[^\\/]*,../,g'`
++else
++  ac_dir_suffix= ac_top_builddir=
++fi
++
++case $srcdir in
++  .)  # No --srcdir option.  We are building in place.
++    ac_srcdir=.
++    if test -z "$ac_top_builddir"; then
++       ac_top_srcdir=.
++    else
++       ac_top_srcdir=`echo $ac_top_builddir | sed 's,/$,,'`
++    fi ;;
++  [\\/]* | ?:[\\/]* )  # Absolute path.
++    ac_srcdir=$srcdir$ac_dir_suffix;
++    ac_top_srcdir=$srcdir ;;
++  *) # Relative path.
++    ac_srcdir=$ac_top_builddir$srcdir$ac_dir_suffix
++    ac_top_srcdir=$ac_top_builddir$srcdir ;;
++esac
++# Don't blindly perform a `cd "$ac_dir"/$ac_foo && pwd` since $ac_foo can be
++# absolute.
++ac_abs_builddir=`cd "$ac_dir" && cd $ac_builddir && pwd`
++ac_abs_top_builddir=`cd "$ac_dir" && cd ${ac_top_builddir}. && pwd`
++ac_abs_srcdir=`cd "$ac_dir" && cd $ac_srcdir && pwd`
++ac_abs_top_srcdir=`cd "$ac_dir" && cd $ac_top_srcdir && pwd`
++
++
++
++  if test x"$ac_file" != x-; then
++    { echo "$as_me:$LINENO: creating $ac_file" >&5
++echo "$as_me: creating $ac_file" >&6;}
++    rm -f "$ac_file"
++  fi
++  # Let's still pretend it is `configure' which instantiates (i.e., don't
++  # use $as_me), people would be surprised to read:
++  #    /* config.h.  Generated by config.status.  */
++  if test x"$ac_file" = x-; then
++    configure_input=
++  else
++    configure_input="$ac_file.  "
++  fi
++  configure_input=$configure_input"Generated from `echo $ac_file_in |
++                                     sed 's,.*/,,'` by configure."
++
++  # First look for the input files in the build tree, otherwise in the
++  # src tree.
++  ac_file_inputs=`IFS=:
++    for f in $ac_file_in; do
++      case $f in
++      -) echo $tmp/stdin ;;
++      [\\/$]*)
++         # Absolute (can't be DOS-style, as IFS=:)
++         test -f "$f" || { { echo "$as_me:$LINENO: error: cannot find input file: $f" >&5
++echo "$as_me: error: cannot find input file: $f" >&2;}
++   { (exit 1); exit 1; }; }
++         echo $f;;
++      *) # Relative
++         if test -f "$f"; then
++           # Build tree
++           echo $f
++         elif test -f "$srcdir/$f"; then
++           # Source tree
++           echo $srcdir/$f
++         else
++           # /dev/null tree
++           { { echo "$as_me:$LINENO: error: cannot find input file: $f" >&5
++echo "$as_me: error: cannot find input file: $f" >&2;}
++   { (exit 1); exit 1; }; }
++         fi;;
++      esac
++    done` || { (exit 1); exit 1; }
++  sed "/^[ 	]*VPATH[ 	]*=/{
++s/:*\$(srcdir):*/:/;
++s/:*\${srcdir}:*/:/;
++s/:*@srcdir@:*/:/;
++s/^\([^=]*=[ 	]*\):*/\1/;
++s/:*$//;
++s/^[^=]*=[ 	]*$//;
++}
++
++:t
++/@[a-zA-Z_][a-zA-Z_0-9]*@/!b
++s,@configure_input@,$configure_input,;t t
++s,@srcdir@,$ac_srcdir,;t t
++s,@abs_srcdir@,$ac_abs_srcdir,;t t
++s,@top_srcdir@,$ac_top_srcdir,;t t
++s,@abs_top_srcdir@,$ac_abs_top_srcdir,;t t
++s,@builddir@,$ac_builddir,;t t
++s,@abs_builddir@,$ac_abs_builddir,;t t
++s,@top_builddir@,$ac_top_builddir,;t t
++s,@abs_top_builddir@,$ac_abs_top_builddir,;t t
++" $ac_file_inputs | (eval "$ac_sed_cmds") >$tmp/out
++  rm -f $tmp/stdin
++  if test x"$ac_file" != x-; then
++    mv $tmp/out $ac_file
++  else
++    cat $tmp/out
++    rm -f $tmp/out
++  fi
++
++done
++
++#
++# CONFIG_HEADER section.
++#
++
++# These sed commands are passed to sed as "A NAME B NAME C VALUE D", where
++# NAME is the cpp macro being defined and VALUE is the value it is being given.
++#
++# ac_d sets the value in "#define NAME VALUE" lines.
++ac_dA='s,^\([ 	]*\)#\([ 	]*define[ 	][ 	]*\)'
++ac_dB='[ 	].*$,\1#\2'
++ac_dC=' '
++ac_dD=',;t'
++# ac_u turns "#undef NAME" without trailing blanks into "#define NAME VALUE".
++ac_uA='s,^\([ 	]*\)#\([ 	]*\)undef\([ 	][ 	]*\)'
++ac_uB='$,\1#\2define\3'
++ac_uC=' '
++ac_uD=',;t'
++
++for ac_file in : $CONFIG_HEADERS; do test "x$ac_file" = x: && continue
++  # Support "outfile[:infile[:infile...]]", defaulting infile="outfile.in".
++  case $ac_file in
++  - | *:- | *:-:* ) # input from stdin
++        cat >$tmp/stdin
++        ac_file_in=`echo "$ac_file" | sed 's,[^:]*:,,'`
++        ac_file=`echo "$ac_file" | sed 's,:.*,,'` ;;
++  *:* ) ac_file_in=`echo "$ac_file" | sed 's,[^:]*:,,'`
++        ac_file=`echo "$ac_file" | sed 's,:.*,,'` ;;
++  * )   ac_file_in=$ac_file.in ;;
++  esac
++
++  test x"$ac_file" != x- && { echo "$as_me:$LINENO: creating $ac_file" >&5
++echo "$as_me: creating $ac_file" >&6;}
++
++  # First look for the input files in the build tree, otherwise in the
++  # src tree.
++  ac_file_inputs=`IFS=:
++    for f in $ac_file_in; do
++      case $f in
++      -) echo $tmp/stdin ;;
++      [\\/$]*)
++         # Absolute (can't be DOS-style, as IFS=:)
++         test -f "$f" || { { echo "$as_me:$LINENO: error: cannot find input file: $f" >&5
++echo "$as_me: error: cannot find input file: $f" >&2;}
++   { (exit 1); exit 1; }; }
++         echo $f;;
++      *) # Relative
++         if test -f "$f"; then
++           # Build tree
++           echo $f
++         elif test -f "$srcdir/$f"; then
++           # Source tree
++           echo $srcdir/$f
++         else
++           # /dev/null tree
++           { { echo "$as_me:$LINENO: error: cannot find input file: $f" >&5
++echo "$as_me: error: cannot find input file: $f" >&2;}
++   { (exit 1); exit 1; }; }
++         fi;;
++      esac
++    done` || { (exit 1); exit 1; }
++  # Remove the trailing spaces.
++  sed 's/[ 	]*$//' $ac_file_inputs >$tmp/in
++
++  # Handle all the #define templates only if necessary.
++  if grep "^[ 	]*#[ 	]*define" $tmp/in >/dev/null; then
++  # If there are no defines, we may have an empty if/fi
++  :
++  cat >$tmp/defines.sed <<CEOF
++/^[ 	]*#[ 	]*define/!b
++t clr
++: clr
++${ac_dA}PACKAGE_NAME${ac_dB}PACKAGE_NAME${ac_dC}"distcc"${ac_dD}
++${ac_dA}PACKAGE_TARNAME${ac_dB}PACKAGE_TARNAME${ac_dC}"distcc"${ac_dD}
++${ac_dA}PACKAGE_VERSION${ac_dB}PACKAGE_VERSION${ac_dC}"0.12"${ac_dD}
++${ac_dA}PACKAGE_STRING${ac_dB}PACKAGE_STRING${ac_dC}"distcc 0.12"${ac_dD}
++${ac_dA}PACKAGE_BUGREPORT${ac_dB}PACKAGE_BUGREPORT${ac_dC}"mbp@samba.org"${ac_dD}
++${ac_dA}STDC_HEADERS${ac_dB}STDC_HEADERS${ac_dC}1${ac_dD}
++${ac_dA}HAVE_SYS_TYPES_H${ac_dB}HAVE_SYS_TYPES_H${ac_dC}1${ac_dD}
++${ac_dA}HAVE_SYS_STAT_H${ac_dB}HAVE_SYS_STAT_H${ac_dC}1${ac_dD}
++${ac_dA}HAVE_STDLIB_H${ac_dB}HAVE_STDLIB_H${ac_dC}1${ac_dD}
++${ac_dA}HAVE_STRING_H${ac_dB}HAVE_STRING_H${ac_dC}1${ac_dD}
++${ac_dA}HAVE_MEMORY_H${ac_dB}HAVE_MEMORY_H${ac_dC}1${ac_dD}
++${ac_dA}HAVE_STRINGS_H${ac_dB}HAVE_STRINGS_H${ac_dC}1${ac_dD}
++${ac_dA}HAVE_INTTYPES_H${ac_dB}HAVE_INTTYPES_H${ac_dC}1${ac_dD}
++${ac_dA}HAVE_STDINT_H${ac_dB}HAVE_STDINT_H${ac_dC}1${ac_dD}
++${ac_dA}HAVE_UNISTD_H${ac_dB}HAVE_UNISTD_H${ac_dC}1${ac_dD}
++${ac_dA}HAVE_SYS_SIGNAL_H${ac_dB}HAVE_SYS_SIGNAL_H${ac_dC}1${ac_dD}
++${ac_dA}HAVE_IN_PORT_T${ac_dB}HAVE_IN_PORT_T${ac_dC}1${ac_dD}
++${ac_dA}HAVE_SA_FAMILY_T${ac_dB}HAVE_SA_FAMILY_T${ac_dC}1${ac_dD}
++${ac_dA}HAVE_LIBPOPT${ac_dB}HAVE_LIBPOPT${ac_dC}1${ac_dD}
++${ac_dA}HAVE_SETSID${ac_dB}HAVE_SETSID${ac_dC}1${ac_dD}
++${ac_dA}HAVE_FLOCK${ac_dB}HAVE_FLOCK${ac_dC}1${ac_dD}
++${ac_dA}HAVE_LOCKF${ac_dB}HAVE_LOCKF${ac_dC}1${ac_dD}
++${ac_dA}HAVE_HSTRERROR${ac_dB}HAVE_HSTRERROR${ac_dC}1${ac_dD}
++${ac_dA}HAVE_VARARG_MACROS${ac_dB}HAVE_VARARG_MACROS${ac_dC}${ac_dD}
++${ac_dA}GNU_HOST${ac_dB}GNU_HOST${ac_dC}"powerpc-apple-darwin6.1"${ac_dD}
++CEOF
++  sed -f $tmp/defines.sed $tmp/in >$tmp/out
++  rm -f $tmp/in
++  mv $tmp/out $tmp/in
++
++  fi # grep
++
++  # Handle all the #undef templates
++  cat >$tmp/undefs.sed <<CEOF
++/^[ 	]*#[ 	]*undef/!b
++t clr
++: clr
++${ac_uA}PACKAGE_NAME${ac_uB}PACKAGE_NAME${ac_uC}"distcc"${ac_uD}
++${ac_uA}PACKAGE_TARNAME${ac_uB}PACKAGE_TARNAME${ac_uC}"distcc"${ac_uD}
++${ac_uA}PACKAGE_VERSION${ac_uB}PACKAGE_VERSION${ac_uC}"0.12"${ac_uD}
++${ac_uA}PACKAGE_STRING${ac_uB}PACKAGE_STRING${ac_uC}"distcc 0.12"${ac_uD}
++${ac_uA}PACKAGE_BUGREPORT${ac_uB}PACKAGE_BUGREPORT${ac_uC}"mbp@samba.org"${ac_uD}
++${ac_uA}STDC_HEADERS${ac_uB}STDC_HEADERS${ac_uC}1${ac_uD}
++${ac_uA}HAVE_SYS_TYPES_H${ac_uB}HAVE_SYS_TYPES_H${ac_uC}1${ac_uD}
++${ac_uA}HAVE_SYS_STAT_H${ac_uB}HAVE_SYS_STAT_H${ac_uC}1${ac_uD}
++${ac_uA}HAVE_STDLIB_H${ac_uB}HAVE_STDLIB_H${ac_uC}1${ac_uD}
++${ac_uA}HAVE_STRING_H${ac_uB}HAVE_STRING_H${ac_uC}1${ac_uD}
++${ac_uA}HAVE_MEMORY_H${ac_uB}HAVE_MEMORY_H${ac_uC}1${ac_uD}
++${ac_uA}HAVE_STRINGS_H${ac_uB}HAVE_STRINGS_H${ac_uC}1${ac_uD}
++${ac_uA}HAVE_INTTYPES_H${ac_uB}HAVE_INTTYPES_H${ac_uC}1${ac_uD}
++${ac_uA}HAVE_STDINT_H${ac_uB}HAVE_STDINT_H${ac_uC}1${ac_uD}
++${ac_uA}HAVE_UNISTD_H${ac_uB}HAVE_UNISTD_H${ac_uC}1${ac_uD}
++${ac_uA}HAVE_SYS_SIGNAL_H${ac_uB}HAVE_SYS_SIGNAL_H${ac_uC}1${ac_uD}
++${ac_uA}HAVE_IN_PORT_T${ac_uB}HAVE_IN_PORT_T${ac_uC}1${ac_uD}
++${ac_uA}HAVE_SA_FAMILY_T${ac_uB}HAVE_SA_FAMILY_T${ac_uC}1${ac_uD}
++${ac_uA}HAVE_LIBPOPT${ac_uB}HAVE_LIBPOPT${ac_uC}1${ac_uD}
++${ac_uA}HAVE_SETSID${ac_uB}HAVE_SETSID${ac_uC}1${ac_uD}
++${ac_uA}HAVE_FLOCK${ac_uB}HAVE_FLOCK${ac_uC}1${ac_uD}
++${ac_uA}HAVE_LOCKF${ac_uB}HAVE_LOCKF${ac_uC}1${ac_uD}
++${ac_uA}HAVE_HSTRERROR${ac_uB}HAVE_HSTRERROR${ac_uC}1${ac_uD}
++${ac_uA}HAVE_VARARG_MACROS${ac_uB}HAVE_VARARG_MACROS${ac_uC}${ac_uD}
++${ac_uA}GNU_HOST${ac_uB}GNU_HOST${ac_uC}"powerpc-apple-darwin6.1"${ac_uD}
++s,^[ 	]*#[ 	]*undef[ 	][ 	]*[a-zA-Z_][a-zA-Z_0-9]*,/* & */,
++CEOF
++  sed -f $tmp/undefs.sed $tmp/in >$tmp/out
++  rm -f $tmp/in
++  mv $tmp/out $tmp/in
++
++  # Let's still pretend it is `configure' which instantiates (i.e., don't
++  # use $as_me), people would be surprised to read:
++  #    /* config.h.  Generated by config.status.  */
++  if test x"$ac_file" = x-; then
++    echo "/* Generated by configure.  */" >$tmp/config.h
++  else
++    echo "/* $ac_file.  Generated by configure.  */" >$tmp/config.h
++  fi
++  cat $tmp/in >>$tmp/config.h
++  rm -f $tmp/in
++  if test x"$ac_file" != x-; then
++    if cmp -s $ac_file $tmp/config.h 2>/dev/null; then
++      { echo "$as_me:$LINENO: $ac_file is unchanged" >&5
++echo "$as_me: $ac_file is unchanged" >&6;}
++    else
++      ac_dir=`(dirname "$ac_file") 2>/dev/null ||
++$as_expr X"$ac_file" : 'X\(.*[^/]\)//*[^/][^/]*/*$' \| \
++         X"$ac_file" : 'X\(//\)[^/]' \| \
++         X"$ac_file" : 'X\(//\)$' \| \
++         X"$ac_file" : 'X\(/\)' \| \
++         .     : '\(.\)' 2>/dev/null ||
++echo X"$ac_file" |
++    sed '/^X\(.*[^/]\)\/\/*[^/][^/]*\/*$/{ s//\1/; q; }
++  	  /^X\(\/\/\)[^/].*/{ s//\1/; q; }
++  	  /^X\(\/\/\)$/{ s//\1/; q; }
++  	  /^X\(\/\).*/{ s//\1/; q; }
++  	  s/.*/./; q'`
++      { if $as_mkdir_p; then
++    mkdir -p "$ac_dir"
++  else
++    as_dir="$ac_dir"
++    as_dirs=
++    while test ! -d "$as_dir"; do
++      as_dirs="$as_dir $as_dirs"
++      as_dir=`(dirname "$as_dir") 2>/dev/null ||
++$as_expr X"$as_dir" : 'X\(.*[^/]\)//*[^/][^/]*/*$' \| \
++         X"$as_dir" : 'X\(//\)[^/]' \| \
++         X"$as_dir" : 'X\(//\)$' \| \
++         X"$as_dir" : 'X\(/\)' \| \
++         .     : '\(.\)' 2>/dev/null ||
++echo X"$as_dir" |
++    sed '/^X\(.*[^/]\)\/\/*[^/][^/]*\/*$/{ s//\1/; q; }
++  	  /^X\(\/\/\)[^/].*/{ s//\1/; q; }
++  	  /^X\(\/\/\)$/{ s//\1/; q; }
++  	  /^X\(\/\).*/{ s//\1/; q; }
++  	  s/.*/./; q'`
++    done
++    test ! -n "$as_dirs" || mkdir $as_dirs
++  fi || { { echo "$as_me:$LINENO: error: cannot create directory \"$ac_dir\"" >&5
++echo "$as_me: error: cannot create directory \"$ac_dir\"" >&2;}
++   { (exit 1); exit 1; }; }; }
++
++      rm -f $ac_file
++      mv $tmp/config.h $ac_file
++    fi
++  else
++    cat $tmp/config.h
++    rm -f $tmp/config.h
++  fi
++done
++
++{ (exit 0); exit 0; }
+diff -uNbr distcc-0.12/src/Makefile distcc-0.12-built/src/Makefile
+--- distcc-0.12/src/Makefile	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/Makefile	Sat Oct 12 16:41:29 2002
+@@ -0,0 +1,118 @@
++# $Header: /data/cvs/distcc/src/Makefile.am,v 1.11 2002/06/21 09:15:57 mbp Exp $
++
++# I guess you could also have a plain Makefile without dependencies,
++# and have the GNUmakefile just link to that.
++
++## Variables
++
++common_obj = trace.o util.o io.o exec.o arg.o rpc.o tempfile.o bulk.o	\
++help.o filename.o lock.o
++
++distcc_obj = distcc.o clinet.o where.o hosts.o strip.o $(common_obj) 	\
++implicit.o
++
++distccd_obj = daemon.o serve.o srvnet.o dopt.o dparent.o $(common_obj)
++
++check_PROGRAMS = h_exten h_issource h_scanargs h_hosts h_argvtostr	\
++h_strip
++
++h_exten_obj = h_exten.o trace.o util.o arg.o filename.o
++h_issource_obj = h_issource.o trace.o util.o arg.o filename.o
++h_scanargs_obj = h_scanargs.o trace.o util.o arg.o filename.o implicit.o
++h_hosts_obj = h_hosts.o trace.o util.o hosts.o
++h_argvtostr_obj = h_argvtostr.o trace.o util.o arg.o filename.o
++h_strip_obj = h_strip.o trace.o util.o arg.o filename.o strip.o
++
++# You might think that distccd ought to be in sbin, because it's a
++# daemon.  It is a grey area.  However, the Linux Filesystem Hierarchy
++# Standard (FHS 2.2) says that sbin is for programs "used exclusively
++# by the system administrator".  
++
++# distccd will often be used by non-root users, and when we support
++# ssh it will be somewhat important that it be found in their default
++# path.  Therefore on balance it seems better to put it in bin/.  
++
++# Package maintainers can override this if absolutely necessary, but I
++# would prefer that they do not. -- mbp
++
++bin_PROGRAMS = distcc distccd
++
++INSTALL = install
++INSTALL_PROGRAM = install 
++INSTALL_DATA = install -m 444
++INSTALL_SCRIPT = install -m 555
++
++SHELL = /bin/sh
++
++srcdir = .
++top_srcdir = ..
++
++prefix = /sw
++exec_prefix = ${prefix}
++
++bindir = ${exec_prefix}/bin
++sbindir = ${exec_prefix}/sbin
++
++CFLAGS = -I/sw/include -fno-common -W -Wall -Wshadow -Wpointer-arith -Wcast-align -MMD
++LDFLAGS = -L/sw/lib -multiply_defined suppress -prebind
++LIBS = -lpopt
++CC = gcc
++CPP = gcc -E
++CPPFLAGS = -no-cpp-precomp -I/sw/include
++
++## rules 
++all: $(bin_PROGRAMS) $(sbin_PROGRAMS)
++
++check_programs: $(check_PROGRAMS) $(bin_PROGRAMS) $(sbin_PROGRAMS)
++
++
++
++## BUILD targets
++
++distcc: $(distcc_obj)
++	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(distcc_obj) $(LIBS)
++
++distccd: $(distccd_obj)
++	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(distccd_obj) $(LIBS)	
++
++h_exten: $(h_exten_obj)
++	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LIBS)
++
++h_issource: $(h_issource_obj)
++	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LIBS)
++
++h_scanargs: $(h_scanargs_obj)
++	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LIBS)
++
++h_hosts: $(h_hosts_obj)
++	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LIBS)
++
++h_argvtostr: $(h_argvtostr_obj)
++	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LIBS)
++
++h_strip: $(h_strip_obj)
++	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LIBS)
++
++
++## CLEAN targets
++
++clean:
++	rm -f $(bin_PROGRAMS) $(check_PROGRAMS) *.o
++
++distclean: clean
++
++maintainer-clean: clean
++
++
++
++## CHECK targets
++
++# Can't directly check here; you need to run it from the parent directory
++
++
++## INSTALL targets
++install: $(bin_PROGRAMS) $(sbin_PROGRAMS)
++	$(INSTALL) -d $(bindir)
++	$(INSTALL_PROGRAM) $(bin_PROGRAMS) $(bindir)
++
++# we don't have any sbin programs at the moment
+diff -uNbr distcc-0.12/src/arg.d distcc-0.12-built/src/arg.d
+--- distcc-0.12/src/arg.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/arg.d	Sat Oct 12 16:42:28 2002
+@@ -0,0 +1 @@
++arg.o: arg.c config.h distcc.h trace.h io.h util.h exitcode.h
+Binary files distcc-0.12/src/arg.o and distcc-0.12-built/src/arg.o differ
+diff -uNbr distcc-0.12/src/bulk.d distcc-0.12-built/src/bulk.d
+--- distcc-0.12/src/bulk.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/bulk.d	Sat Oct 12 16:42:32 2002
+@@ -0,0 +1 @@
++bulk.o: bulk.c config.h distcc.h trace.h io.h rpc.h bulk.h
+Binary files distcc-0.12/src/bulk.o and distcc-0.12-built/src/bulk.o differ
+diff -uNbr distcc-0.12/src/clinet.d distcc-0.12-built/src/clinet.d
+--- distcc-0.12/src/clinet.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/clinet.d	Sat Oct 12 16:42:19 2002
+@@ -0,0 +1,2 @@
++clinet.o: clinet.c config.h distcc.h trace.h io.h exitcode.h clinet.h \
++  util.h
+Binary files distcc-0.12/src/clinet.o and distcc-0.12-built/src/clinet.o differ
+diff -uNbr distcc-0.12/src/config.h distcc-0.12-built/src/config.h
+--- distcc-0.12/src/config.h	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/config.h	Sat Oct 12 16:38:06 2002
+@@ -0,0 +1,95 @@
++/* src/config.h.  Generated by configure.  */
++/* src/config.h.in.  Generated from configure.ac by autoheader.  */
++
++/* Your gnu-style host triple */
++#define GNU_HOST "powerpc-apple-darwin6.1"
++
++/* Define to 1 if you have the `flock' function. */
++#define HAVE_FLOCK 1
++
++/* Define to 1 if you have the `hstrerror' function. */
++#define HAVE_HSTRERROR 1
++
++/* Define to 1 if you have the <inttypes.h> header file. */
++#define HAVE_INTTYPES_H 1
++
++/* Define to 1 if the system has the type `in_port_t'. */
++#define HAVE_IN_PORT_T 1
++
++/* Define to 1 if you have the `nsl' library (-lnsl). */
++/* #undef HAVE_LIBNSL */
++
++/* Define to 1 if you have the `popt' library (-lpopt). */
++#define HAVE_LIBPOPT 1
++
++/* Define to 1 if you have the `resolv' library (-lresolv). */
++/* #undef HAVE_LIBRESOLV */
++
++/* Define to 1 if you have the `socket' library (-lsocket). */
++/* #undef HAVE_LIBSOCKET */
++
++/* Define to 1 if you have the `lockf' function. */
++#define HAVE_LOCKF 1
++
++/* Define to 1 if you have the <memory.h> header file. */
++#define HAVE_MEMORY_H 1
++
++/* Define to 1 if the system has the type `sa_family_t'. */
++#define HAVE_SA_FAMILY_T 1
++
++/* Define to 1 if you have the `sendfile' function. */
++/* #undef HAVE_SENDFILE */
++
++/* Define to 1 if you have the `setsid' function. */
++#define HAVE_SETSID 1
++
++/* Define to 1 if the system has the type `socklen_t'. */
++/* #undef HAVE_SOCKLEN_T */
++
++/* Define to 1 if you have the <stdint.h> header file. */
++#define HAVE_STDINT_H 1
++
++/* Define to 1 if you have the <stdlib.h> header file. */
++#define HAVE_STDLIB_H 1
++
++/* Define to 1 if you have the <strings.h> header file. */
++#define HAVE_STRINGS_H 1
++
++/* Define to 1 if you have the <string.h> header file. */
++#define HAVE_STRING_H 1
++
++/* Define to 1 if you have the <sys/sendfile.h> header file. */
++/* #undef HAVE_SYS_SENDFILE_H */
++
++/* Define to 1 if you have the <sys/signal.h> header file. */
++#define HAVE_SYS_SIGNAL_H 1
++
++/* Define to 1 if you have the <sys/stat.h> header file. */
++#define HAVE_SYS_STAT_H 1
++
++/* Define to 1 if you have the <sys/types.h> header file. */
++#define HAVE_SYS_TYPES_H 1
++
++/* Define to 1 if you have the <unistd.h> header file. */
++#define HAVE_UNISTD_H 1
++
++/* Define if your cpp has vararg macros */
++#define HAVE_VARARG_MACROS 
++
++/* Define to the address where bug reports for this package should be sent. */
++#define PACKAGE_BUGREPORT "mbp@samba.org"
++
++/* Define to the full name of this package. */
++#define PACKAGE_NAME "distcc"
++
++/* Define to the full name and version of this package. */
++#define PACKAGE_STRING "distcc 0.12"
++
++/* Define to the one symbol short name of this package. */
++#define PACKAGE_TARNAME "distcc"
++
++/* Define to the version of this package. */
++#define PACKAGE_VERSION "0.12"
++
++/* Define to 1 if you have the ANSI C header files. */
++#define STDC_HEADERS 1
+diff -uNbr distcc-0.12/src/daemon.d distcc-0.12-built/src/daemon.d
+--- distcc-0.12/src/daemon.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/daemon.d	Sat Oct 12 16:42:35 2002
+@@ -0,0 +1,2 @@
++daemon.o: daemon.c config.h exitcode.h distcc.h trace.h io.h util.h opt.h \
++  rpc.h tempfile.h
+Binary files distcc-0.12/src/daemon.o and distcc-0.12-built/src/daemon.o differ
+Binary files distcc-0.12/src/distcc and distcc-0.12-built/src/distcc differ
+diff -uNbr distcc-0.12/src/distcc.d distcc-0.12-built/src/distcc.d
+--- distcc-0.12/src/distcc.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/distcc.d	Sat Oct 12 16:42:18 2002
+@@ -0,0 +1,2 @@
++distcc.o: distcc.c config.h distcc.h trace.h io.h rpc.h exitcode.h util.h \
++  clinet.h hosts.h bulk.h tempfile.h strip.h implicit.h exec.h
+Binary files distcc-0.12/src/distcc.o and distcc-0.12-built/src/distcc.o differ
+Binary files distcc-0.12/src/distccd and distcc-0.12-built/src/distccd differ
+diff -uNbr distcc-0.12/src/dopt.d distcc-0.12-built/src/dopt.d
+--- distcc-0.12/src/dopt.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/dopt.d	Sat Oct 12 16:42:38 2002
+@@ -0,0 +1,2 @@
++dopt.o: dopt.c config.h /sw/include/popt.h distcc.h trace.h io.h opt.h \
++  exitcode.h
+Binary files distcc-0.12/src/dopt.o and distcc-0.12-built/src/dopt.o differ
+diff -uNbr distcc-0.12/src/dparent.d distcc-0.12-built/src/dparent.d
+--- distcc-0.12/src/dparent.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/dparent.d	Sat Oct 12 16:42:38 2002
+@@ -0,0 +1,2 @@
++dparent.o: dparent.c config.h exitcode.h distcc.h trace.h io.h util.h \
++  opt.h tempfile.h
+Binary files distcc-0.12/src/dparent.o and distcc-0.12-built/src/dparent.o differ
+diff -uNbr distcc-0.12/src/exec.d distcc-0.12-built/src/exec.d
+--- distcc-0.12/src/exec.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/exec.d	Sat Oct 12 16:42:26 2002
+@@ -0,0 +1,2 @@
++exec.o: exec.c config.h distcc.h trace.h io.h util.h exitcode.h exec.h \
++  lock.h
+Binary files distcc-0.12/src/exec.o and distcc-0.12-built/src/exec.o differ
+diff -uNbr distcc-0.12/src/filename.d distcc-0.12-built/src/filename.d
+--- distcc-0.12/src/filename.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/filename.d	Sat Oct 12 16:42:33 2002
+@@ -0,0 +1 @@
++filename.o: filename.c config.h distcc.h trace.h util.h exitcode.h
+Binary files distcc-0.12/src/filename.o and distcc-0.12-built/src/filename.o differ
+diff -uNbr distcc-0.12/src/help.d distcc-0.12-built/src/help.d
+--- distcc-0.12/src/help.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/help.d	Sat Oct 12 16:42:32 2002
+@@ -0,0 +1 @@
++help.o: help.c config.h distcc.h trace.h
+Binary files distcc-0.12/src/help.o and distcc-0.12-built/src/help.o differ
+diff -uNbr distcc-0.12/src/hosts.d distcc-0.12-built/src/hosts.d
+--- distcc-0.12/src/hosts.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/hosts.d	Sat Oct 12 16:42:20 2002
+@@ -0,0 +1 @@
++hosts.o: hosts.c config.h distcc.h trace.h util.h hosts.h exitcode.h
+Binary files distcc-0.12/src/hosts.o and distcc-0.12-built/src/hosts.o differ
+diff -uNbr distcc-0.12/src/implicit.d distcc-0.12-built/src/implicit.d
+--- distcc-0.12/src/implicit.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/implicit.d	Sat Oct 12 16:42:34 2002
+@@ -0,0 +1 @@
++implicit.o: implicit.c config.h distcc.h trace.h exitcode.h util.h
+Binary files distcc-0.12/src/implicit.o and distcc-0.12-built/src/implicit.o differ
+diff -uNbr distcc-0.12/src/io.d distcc-0.12-built/src/io.d
+--- distcc-0.12/src/io.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/io.d	Sat Oct 12 16:42:25 2002
+@@ -0,0 +1 @@
++io.o: io.c config.h distcc.h trace.h io.h util.h exitcode.h
+Binary files distcc-0.12/src/io.o and distcc-0.12-built/src/io.o differ
+diff -uNbr distcc-0.12/src/lock.d distcc-0.12-built/src/lock.d
+--- distcc-0.12/src/lock.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/lock.d	Sat Oct 12 16:42:34 2002
+@@ -0,0 +1,2 @@
++lock.o: lock.c config.h distcc.h trace.h util.h hosts.h tempfile.h lock.h \
++  io.h
+Binary files distcc-0.12/src/lock.o and distcc-0.12-built/src/lock.o differ
+diff -uNbr distcc-0.12/src/rpc.d distcc-0.12-built/src/rpc.d
+--- distcc-0.12/src/rpc.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/rpc.d	Sat Oct 12 16:42:29 2002
+@@ -0,0 +1 @@
++rpc.o: rpc.c config.h distcc.h trace.h io.h rpc.h
+Binary files distcc-0.12/src/rpc.o and distcc-0.12-built/src/rpc.o differ
+diff -uNbr distcc-0.12/src/serve.d distcc-0.12-built/src/serve.d
+--- distcc-0.12/src/serve.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/serve.d	Sat Oct 12 16:42:35 2002
+@@ -0,0 +1,2 @@
++serve.o: serve.c config.h distcc.h trace.h io.h util.h rpc.h exitcode.h \
++  opt.h tempfile.h bulk.h exec.h
+Binary files distcc-0.12/src/serve.o and distcc-0.12-built/src/serve.o differ
+diff -uNbr distcc-0.12/src/srvnet.d distcc-0.12-built/src/srvnet.d
+--- distcc-0.12/src/srvnet.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/srvnet.d	Sat Oct 12 16:42:37 2002
+@@ -0,0 +1 @@
++srvnet.o: srvnet.c config.h exitcode.h distcc.h trace.h io.h util.h rpc.h
+Binary files distcc-0.12/src/srvnet.o and distcc-0.12-built/src/srvnet.o differ
+diff -uNbr distcc-0.12/src/strip.d distcc-0.12-built/src/strip.d
+--- distcc-0.12/src/strip.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/strip.d	Sat Oct 12 16:42:21 2002
+@@ -0,0 +1 @@
++strip.o: strip.c config.h distcc.h trace.h io.h util.h exitcode.h
+Binary files distcc-0.12/src/strip.o and distcc-0.12-built/src/strip.o differ
+diff -uNbr distcc-0.12/src/tempfile.d distcc-0.12-built/src/tempfile.d
+--- distcc-0.12/src/tempfile.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/tempfile.d	Sat Oct 12 16:42:30 2002
+@@ -0,0 +1 @@
++tempfile.o: tempfile.c config.h distcc.h trace.h util.h tempfile.h
+Binary files distcc-0.12/src/tempfile.o and distcc-0.12-built/src/tempfile.o differ
+diff -uNbr distcc-0.12/src/trace.d distcc-0.12-built/src/trace.d
+--- distcc-0.12/src/trace.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/trace.d	Sat Oct 12 16:42:23 2002
+@@ -0,0 +1 @@
++trace.o: trace.c config.h trace.h
+diff -uNbr distcc-0.12/src/trace.h distcc-0.12-built/src/trace.h
+--- distcc-0.12/src/trace.h	Sun Oct  6 22:51:21 2002
++++ distcc-0.12-built/src/trace.h	Sat Oct 12 16:42:13 2002
+@@ -93,7 +93,7 @@
+ /** Default trace callback that writes to stderr.  Implements
+  * ::rs_trace_fn_t, and may be passed to rs_trace_to(). */
+ void rs_trace_to_file(int level, const char *fn, char const *fmt, va_list va);
+-int rs_trace_fd;
++extern int rs_trace_fd;
+ 
+ 
+ void
+Binary files distcc-0.12/src/trace.o and distcc-0.12-built/src/trace.o differ
+diff -uNbr distcc-0.12/src/util.d distcc-0.12-built/src/util.d
+--- distcc-0.12/src/util.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/util.d	Sat Oct 12 16:42:24 2002
+@@ -0,0 +1 @@
++util.o: util.c config.h distcc.h trace.h io.h util.h exitcode.h
+Binary files distcc-0.12/src/util.o and distcc-0.12-built/src/util.o differ
+diff -uNbr distcc-0.12/src/where.d distcc-0.12-built/src/where.d
+--- distcc-0.12/src/where.d	Wed Dec 31 19:00:00 1969
++++ distcc-0.12-built/src/where.d	Sat Oct 12 16:42:19 2002
+@@ -0,0 +1,2 @@
++where.o: where.c config.h distcc.h trace.h util.h hosts.h tempfile.h \
++  lock.h
+Binary files distcc-0.12/src/where.o and distcc-0.12-built/src/where.o differ
