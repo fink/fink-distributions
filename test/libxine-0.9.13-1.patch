@@ -26,7 +26,7 @@ diff -ruN xine-lib-0.9.13.orig/config.h.in xine-lib-0.9.13/config.h.in
  
 diff -ruN xine-lib-0.9.13.orig/configure xine-lib-0.9.13/configure
 --- xine-lib-0.9.13.orig/configure	2002-08-03 15:00:16.000000000 -0600
-+++ xine-lib-0.9.13/configure	2002-08-06 16:47:46.000000000 -0600
++++ xine-lib-0.9.13/configure	2002-08-11 18:04:05.000000000 -0600
 @@ -3913,7 +3913,7 @@
      #        cross-compilation, but unfortunately the echo tests do not
      #        yet detect zsh echo's removal of \ escapes.  Also zsh mangles
@@ -264,6 +264,328 @@ diff -ruN xine-lib-0.9.13.orig/src/video_out/Makefile.in xine-lib-0.9.13/src/vid
  @HAVE_X11_TRUE@@HAVE_VIDIX_TRUE@vidix_module = xineplug_vo_out_vidix.la
  @HAVE_X11_TRUE@@HAVE_XV_TRUE@xv_module = xineplug_vo_out_xv.la
  @HAVE_X11_TRUE@@HAVE_OPENGL_TRUE@opengl_module = xineplug_vo_out_opengl.la
+diff -ruN xine-lib-0.9.13.orig/src/video_out/video_out_x11.h xine-lib-0.9.13/src/video_out/video_out_x11.h
+--- xine-lib-0.9.13.orig/src/video_out/video_out_x11.h	2002-03-21 11:29:51.000000000 -0700
++++ xine-lib-0.9.13/src/video_out/video_out_x11.h	2002-08-13 09:25:15.000000000 -0600
+@@ -109,6 +109,12 @@
+ /* int *data */
+ #define GUI_DATA_EX_VIDEOWIN_VISIBLE	   5
+ 
++/* void (*data[])(Display*) */
++/* i.e. a pointer to an array of function-pointers
++ * the first is the XLockDisplay replacement
++ * the second is the XUnlockDisplay replacement */
++#define GUI_DATA_EX_CHANGE_LOCK_FUNCTIONS  6
++
+ /* *data contains chosen visual, select a new one or change it to NULL
+  * to indicate the visual to use or that no visual will work */
+ /* XVisualInfo **data */
+diff -ruN xine-lib-0.9.13.orig/src/video_out/video_out_xshm.c xine-lib-0.9.13/src/video_out/video_out_xshm.c
+--- xine-lib-0.9.13.orig/src/video_out/video_out_xshm.c	2002-08-01 09:26:53.000000000 -0600
++++ xine-lib-0.9.13/src/video_out/video_out_xshm.c	2002-08-13 09:25:15.000000000 -0600
+@@ -26,6 +26,9 @@
+  *
+  * xine-specific code by Guenter Bartsch <bartscgr@studbox.uni-stuttgart.de>
+  * 
++ * locking function change support for KDE front end by Mark Thomas
++ * <markbt@users.sourceforge.net> - August 2002
++ *
+  */
+ 
+ #ifdef HAVE_CONFIG_H
+@@ -173,6 +176,9 @@
+ 			int video_width, int video_height, 
+ 			int *dest_width, int *dest_height);
+ 
++  void (*x11_LockDisplay)   (Display *);
++  void (*x11_UnlockDisplay) (Display *);
++
+ } xshm_driver_t;
+ 
+ 
+@@ -404,9 +410,9 @@
+   xshm_driver_t *this = (xshm_driver_t *) vo_img->driver;
+ 
+   if (frame->image) {
+-    XLockDisplay (this->display); 
++    this->x11_LockDisplay (this->display); 
+     dispose_ximage (this, &frame->shminfo, frame->image);
+-    XUnlockDisplay (this->display); 
++    this->x11_UnlockDisplay (this->display); 
+   }
+ 
+   free (frame);
+@@ -627,7 +633,7 @@
+ 	    frame->output_width, frame->output_height);
+ #endif
+ 
+-    XLockDisplay (this->display); 
++    this->x11_LockDisplay (this->display); 
+ 
+     /*
+      * (re-) allocate XImage
+@@ -656,7 +662,7 @@
+     frame->image = create_ximage (this, &frame->shminfo,
+ 				  frame->output_width, frame->output_height);
+ 
+-    XUnlockDisplay (this->display); 
++    this->x11_UnlockDisplay (this->display); 
+ 
+     if (format == IMGFMT_YV12) {
+       frame->vo_frame.pitches[0] = 8*((width + 7) / 8);
+@@ -768,7 +774,7 @@
+ 
+ static void clean_output_area (xshm_driver_t *this) {
+ 
+-  XLockDisplay (this->display);
++  this->x11_LockDisplay (this->display);
+ 
+   XSetForeground (this->display, this->gc, this->black.pixel);
+ 
+@@ -804,7 +810,7 @@
+   
+ #endif
+ 
+-  XUnlockDisplay (this->display);
++  this->x11_UnlockDisplay (this->display);
+ }
+ 
+ static int xshm_redraw_needed (vo_driver_t *this_gen) {
+@@ -913,7 +919,7 @@
+     xoffset  = (this->gui_width - frame->output_width) / 2 + this->gui_x;
+     yoffset  = (this->gui_height - frame->output_height) / 2 + this->gui_y;
+ 
+-    XLockDisplay (this->display);
++    this->x11_LockDisplay (this->display);
+ #ifdef LOG
+     printf ("video_out_xshm: display locked...\n");
+ #endif
+@@ -946,7 +952,7 @@
+       XFlush(this->display);
+     }
+ 
+-    XUnlockDisplay (this->display);
++    this->x11_UnlockDisplay (this->display);
+ 
+   }
+ 
+@@ -1103,7 +1109,7 @@
+       
+       if (xev->count == 0) {
+ 	
+-	XLockDisplay (this->display);
++	this->x11_LockDisplay (this->display);
+ 	
+ 	xoffset  = (this->cur_frame->gui_width  - this->cur_frame->output_width) / 2;
+ 	yoffset  = (this->cur_frame->gui_height - this->cur_frame->output_height) / 2;
+@@ -1145,7 +1151,7 @@
+ 
+ 	XFlush (this->display);
+ 	
+-	XUnlockDisplay (this->display);
++	this->x11_UnlockDisplay (this->display);
+       }
+       
+     }
+@@ -1181,6 +1187,14 @@
+     
+     break;
+ 
++  case GUI_DATA_EX_CHANGE_LOCK_FUNCTIONS:
++  {
++    void (**func)(Display*) = data;
++    this -> x11_LockDisplay = func[0];
++    this -> x11_UnlockDisplay = func[1];
++  }
++  break;
++
+   default:
+     return -1;
+   }
+@@ -1305,6 +1319,9 @@
+   this->gc		    = XCreateGC (this->display, this->drawable,
+ 					 0, NULL);
+ 
++  this->x11_LockDisplay     = XLockDisplay;
++  this->x11_UnlockDisplay   = XUnlockDisplay;
++
+   this->vo_driver.get_capabilities     = xshm_get_capabilities;
+   this->vo_driver.alloc_frame          = xshm_alloc_frame;
+   this->vo_driver.update_frame_format  = xshm_update_frame_format;
+diff -ruN xine-lib-0.9.13.orig/src/video_out/video_out_xv.c xine-lib-0.9.13/src/video_out/video_out_xv.c
+--- xine-lib-0.9.13.orig/src/video_out/video_out_xv.c	2002-07-20 15:46:06.000000000 -0600
++++ xine-lib-0.9.13/src/video_out/video_out_xv.c	2002-08-13 09:25:15.000000000 -0600
+@@ -29,6 +29,9 @@
+  * xine-specific code by Guenter Bartsch <bartscgr@studbox.uni-stuttgart.de>
+  *
+  * overlay support by James Courtier-Dutton <James@superbug.demon.co.uk> - July 2001
++ *
++ * locking function change support for KDE front-end by Mark Thomas
++ * <markbt@users.sourceforge.net> - August 2002
+  */
+ 
+ #ifdef HAVE_CONFIG_H
+@@ -196,6 +199,9 @@
+ 
+   int                use_colorkey;
+   uint32_t           colorkey;
++
++  void (*x11_LockDisplay)   (Display *);
++  void (*x11_UnlockDisplay) (Display *);
+ };
+ 
+ int gX11Fail;
+@@ -219,18 +225,18 @@
+   if (frame->image) {
+     
+     if (this->use_shm) {
+-      XLockDisplay (this->display);
++      this->x11_LockDisplay (this->display);
+       XShmDetach (this->display, &frame->shminfo);
+       XFree (frame->image);
+-      XUnlockDisplay (this->display);
++      this->x11_UnlockDisplay (this->display);
+ 
+       shmdt (frame->shminfo.shmaddr);
+       shmctl (frame->shminfo.shmid, IPC_RMID, NULL);
+     }
+     else {
+-      XLockDisplay (this->display);
++      this->x11_LockDisplay (this->display);
+       XFree (frame->image);
+-      XUnlockDisplay (this->display);
++      this->x11_UnlockDisplay (this->display);
+     }
+   }
+ 
+@@ -450,7 +456,7 @@
+ 
+     /* printf ("video_out_xv: updating frame to %d x %d (ratio=%d, format=%08x)\n",width,height,ratio_code,format); */
+ 
+-    XLockDisplay (this->display);
++    this->x11_LockDisplay (this->display);
+ 
+     /*
+      * (re-) allocate xvimage
+@@ -474,7 +480,7 @@
+     frame->height = height;
+     frame->format = format;
+ 
+-    XUnlockDisplay (this->display);
++    this->x11_UnlockDisplay (this->display);
+   }
+ 
+   frame->ratio_code = ratio_code;
+@@ -494,7 +500,7 @@
+        || (frame->width != this->deinterlace_frame.width)
+        || (frame->height / xvscaling != this->deinterlace_frame.height )
+        || (frame->format != this->deinterlace_frame.format)) {
+-    XLockDisplay (this->display);
++    this->x11_LockDisplay (this->display);
+ 
+     if( this->deinterlace_frame.image )
+       dispose_ximage (this, &this->deinterlace_frame.shminfo,
+@@ -507,7 +513,7 @@
+     this->deinterlace_frame.height = frame->height / xvscaling;
+     this->deinterlace_frame.format = frame->format;
+ 
+-    XUnlockDisplay (this->display);
++    this->x11_UnlockDisplay (this->display);
+   }
+ 
+   
+@@ -584,7 +590,7 @@
+ 
+ static void xv_clean_output_area (xv_driver_t *this) {
+ 
+-  XLockDisplay (this->display);
++  this->x11_LockDisplay (this->display);
+ 
+   XSetForeground (this->display, this->gc, this->black.pixel);
+ 
+@@ -598,7 +604,7 @@
+ 		    this->output_width, this->output_height);
+   }
+   
+-  XUnlockDisplay (this->display);
++  this->x11_UnlockDisplay (this->display);
+ }
+ 
+ /*
+@@ -865,7 +871,7 @@
+      */
+     xv_redraw_needed (this_gen);
+ 
+-    XLockDisplay (this->display);
++    this->x11_LockDisplay (this->display);
+ 
+     if (this->use_shm) {
+       XvShmPutImage(this->display, this->xv_port,
+@@ -887,7 +893,7 @@
+ 
+     XFlush(this->display);
+ 
+-    XUnlockDisplay (this->display);
++    this->x11_UnlockDisplay (this->display);
+     
+   }
+   /*
+@@ -1034,7 +1040,7 @@
+     /* FIXME : take care of completion events */
+     
+     if (this->cur_frame) {
+-      XLockDisplay (this->display);
++      this->x11_LockDisplay (this->display);
+       
+       if (this->use_shm) {
+ 	XvShmPutImage(this->display, this->xv_port,
+@@ -1075,7 +1081,7 @@
+ 
+       XFlush(this->display);
+       
+-      XUnlockDisplay (this->display);
++      this->x11_UnlockDisplay (this->display);
+     }
+   }
+   break;
+@@ -1101,6 +1107,14 @@
+     }
+     break;
+ 
++  case GUI_DATA_EX_CHANGE_LOCK_FUNCTIONS:
++  {
++    void (**func)(Display*) = data;
++    this->x11_LockDisplay = func[0];
++    this->x11_UnlockDisplay = func[1];
++  }
++  break;
++  
+   default:
+     return -1;
+   }
+@@ -1119,11 +1133,11 @@
+     this->deinterlace_frame.image = NULL;
+   }
+ 
+-  XLockDisplay (this->display);
++  this->x11_LockDisplay (this->display);
+   if(XvUngrabPort (this->display, this->xv_port, CurrentTime) != Success) {
+     printf ("video_out_xv: xv_exit: XvUngrabPort() failed.\n");
+   }
+-  XUnlockDisplay (this->display);
++  this->x11_UnlockDisplay (this->display);
+ 
+   for( i=0; i < VO_NUM_RECENT_FRAMES; i++ )
+   {
+@@ -1352,6 +1366,8 @@
+   this->deinterlace_frame.image = NULL;
+   this->use_colorkey      = 0;
+   this->colorkey          = 0;
++  this->x11_LockDisplay   = XLockDisplay;
++  this->x11_UnlockDisplay = XUnlockDisplay;
+ 
+   XAllocNamedColor(this->display,
+ 		   DefaultColormap(this->display, this->screen),
 diff -ruN xine-lib-0.9.13.orig/src/xine-engine/Makefile.in xine-lib-0.9.13/src/xine-engine/Makefile.in
 --- xine-lib-0.9.13.orig/src/xine-engine/Makefile.in	2002-08-03 15:01:32.000000000 -0600
 +++ xine-lib-0.9.13/src/xine-engine/Makefile.in	2002-08-06 09:40:44.000000000 -0600
