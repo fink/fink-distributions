@@ -3,8 +3,8 @@
 use File::Basename;
 use Getopt::Std;
 
-our ($opt_h, $opt_l, $opt_m);
-getopts('hlm:');
+our ($opt_h, $opt_l, $opt_m, $opt_w, $opt_p, $opt_t, $opt_d, $opt_r);
+getopts('hlm:wptdr');
 
 if ($opt_h) {
 	print <<END;
@@ -14,6 +14,11 @@ usage: $0 [-h] [-l] [-m <text>] [directory ...]
 	-l         include trees other than stable/unstable
 	-m <text>  list only packages maintained by someone
 	           matching text <text>
+	-w         conserve white space
+	-p         list package names only (also turns off md5sum check)
+	-t         list and sort by maintainer
+	-d         ignore md5sum check
+	-r         ignore revisions (also turns off md5sum check)
 
 END
 	exit 0;
@@ -22,6 +27,10 @@ END
 my %PACKAGES;
 my @TREES;
 my $prefix;
+
+if (defined $opt_r or defined $opt_p) {
+	$opt_d=1;
+}
 
 if (@ARGV) {
 	@TREES = @ARGV;
@@ -73,16 +82,29 @@ for my $tree (@TREES) {
 								$firstpack = $package;
 							}
 							$package =~ s/\%N/$firstpack/i;
+							my @maints = grep (/^\s*maintainer:\s*(.+?)\s*$/i, @info);
+							$maint = $maints[0];
+							$maint =~ s/^\s*maintainer:\s*//i;
 							if ($packname ne "") {
-								push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, get_treestring($treename, $stable, $file));
-								push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, get_treestring($treename, $stable, $file));
+								if (not defined $opt_t) {
+									push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, get_treestring($treename, $stable, $file));
+									push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, get_treestring($treename, $stable, $file));
+								} else {
+									push(@{$PACKAGES{$maint}->{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, get_treestring($treename, $stable, $file));
+									push(@{$PACKAGES{$maint}->{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, get_treestring($treename, $stable, $file));
+								}
 							}
 							$packname = $package;
 						}
 					}
 					$packname =~ s/\%N/$firstpack/g;
-					push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, get_treestring($treename, $stable, $file));
-					push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, get_treestring($treename, $stable, $file));
+					if (not defined $opt_t) {
+						push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, get_treestring($treename, $stable, $file));
+						push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, get_treestring($treename, $stable, $file));
+					} else {
+						push(@{$PACKAGES{$maint}->{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, get_treestring($treename, $stable, $file));
+						push(@{$PACKAGES{$maint}->{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, get_treestring($treename, $stable, $file));
+					}
 				}
 			} else {
 				warn "unable to open $file: $!\n";
@@ -93,25 +115,73 @@ for my $tree (@TREES) {
 		warn "find failed in tree $treename, skipping: $!\n";
 	}
 }
-
-for my $package (sort keys %PACKAGES) {
-	my $output = $package . ":\n";
-	for my $version (sort keys %{$PACKAGES{$package}->{version}}) {
-		$output .= sprintf('  %-20s ', $version);
-		$output .= join(", ", @{$PACKAGES{$package}->{version}->{$version}});
-		if (%{$PACKAGES{$package}->{md5s}->{$version}} > 1) {
-			$output .= " (md5's don't match)\n";
-			for my $md5sum (sort keys %{$PACKAGES{$package}->{md5s}->{$version}}) {
-				$output .= " " x 27 . $md5sum . ": ";
-				$output .= join(', ', @{$PACKAGES{$package}->{md5s}->{$version}->{$md5sum}});
-				$output .= "\n";
-			}
+if (not defined $opt_t) {
+	for my $package (sort keys %PACKAGES) {
+		if (not defined $opt_p) {
+			$output = $package . ":\n";
 		} else {
-			$output .= "\n";
+			$output = $package . "\n";
+		}
+		if (not defined $opt_p) {
+			for my $version (sort keys %{$PACKAGES{$package}->{version}}) {
+				$output .= sprintf('  %-20s ', $version);
+				$output .= join(", ", @{$PACKAGES{$package}->{version}->{$version}});
+				if (%{$PACKAGES{$package}->{md5s}->{$version}} > 1 and not defined $opt_d) {
+					$output .= " (md5's don't match)\n";
+					for my $md5sum (sort keys %{$PACKAGES{$package}->{md5s}->{$version}}) {
+						$output .= " " x 27 . $md5sum . ": ";
+						$output .= join(', ', @{$PACKAGES{$package}->{md5s}->{$version}->{$md5sum}});
+						$output .= "\n";
+					}
+				} else {
+					$output .= "\n";
+				}
+			}
+		}
+		$output =~ s/\n*$//;
+		if (not defined $opt_w) {
+			print $output, "\n\n";
+		} else {
+			print $output, "\n";
 		}
 	}
-	$output =~ s/\n*$//;
-	print $output, "\n\n";
+} else {
+	for my $maint (sort keys %PACKAGES) {
+		print $maint . ":\n";
+		for my $package (sort keys %{$PACKAGES{$maint}}) {
+			if (not defined $opt_p) {
+				$output = $package . ":\n";
+			} else {
+				$output = $package . "\n";
+			}
+			if (not defined $opt_p) {
+				for my $version (sort keys %{$PACKAGES{$maint}->{$package}->{version}}) {
+					$output .= sprintf('    %-20s ', $version);
+					$output .= join(", ", @{$PACKAGES{$maint}->{$package}->{version}->{$version}});
+					if (%{$PACKAGES{$maint}->{$package}->{md5s}->{$version}} > 1 and not defined $opt_d) {
+						$output .= " (md5's don't match)\n";
+						for my $md5sum (sort keys %{$PACKAGES{$maint}->{$package}->{md5s}->{$version}}) {
+							$output .= " " x 27 . $md5sum . ": ";
+							$output .= join(', ', @{$PACKAGES{$maint}->{$package}->{md5s}->{$version}->{$md5sum}});
+							$output .= "\n";
+						}
+					} else {
+						$output .= "\n";
+					}
+				}
+			}
+			if (not defined $opt_w) {
+				$output .= "\n";
+			}
+			$output =~ s/\n*$//;
+			if (not defined $opt_w) {
+				print $output, "\n\n";
+			} else {
+				print $output, "\n";
+			}
+		}
+		print "\n";
+	}
 }
 
 sub get_verstring {
@@ -119,10 +189,14 @@ sub get_verstring {
 	my $version  = shift;
 	my $revision = shift;
 
-	if ($epoch) {
-		return $epoch . ':' . $version . '-' . $revision;
+	if (not defined $opt_r) {
+		if ($epoch) {
+			return $epoch . ':' . $version . '-' . $revision;
+		} else {
+			return $version . '-' . $revision;
+		}
 	} else {
-		return $version . '-' . $revision;
+		return $version;
 	}
 }
 
@@ -141,3 +215,4 @@ sub get_treestring {
 
 	return $treename . '/' . $stable . $file;
 }
+
