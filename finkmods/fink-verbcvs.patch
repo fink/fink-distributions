@@ -1,0 +1,213 @@
+diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-verbcvs/perlmod/Fink/SelfUpdate.pm
+--- fink/perlmod/Fink/SelfUpdate.pm	2002-12-08 22:29:56.000000000 -0700
++++ fink-verbcvs/perlmod/Fink/SelfUpdate.pm	2002-12-31 14:09:46.000000000 -0700
+@@ -23,7 +23,7 @@
+ package Fink::SelfUpdate;
+ 
+ use Fink::Services qw(&execute &version_cmp &print_breaking
+-                      &prompt &prompt_boolean);
++                      &prompt &prompt_boolean &parse_cvs &cvs_repair);
+ use Fink::Config qw($config $basepath $distribution);
+ use Fink::NetAccess qw(&fetch_url);
+ use Fink::Engine;
+@@ -328,6 +328,7 @@
+ 
+ sub do_direct_cvs {
+   my ($descdir, @sb, $cmd, $username, $msg);
++  my (@lines, $line, @dump);
+ 
+   $descdir = "$basepath/fink";
+   chdir $descdir or die "Can't cd to $descdir: $!\n";
+@@ -351,11 +352,29 @@
+   print "\n";
+   &print_breaking($msg);
+   print "\n";
++  print "Updating package descriptions\n";
+ 
+   $ENV{CVS_RSH} = "ssh";
+-  if (&execute($cmd)) {
+-    die "Updating using CVS failed. Check the error messages above.\n";
+-  }
++
++  open(IN,"$cmd 2>&1 |") or die "Updating using CVS failed: $!\n";
++    while ($line = <IN>) {
++      chomp($line);
++      push(@dump, $line);
++      $msg = &parse_cvs($line); 
++      if (length ($msg) > 2) {
++        if (Fink::Config::verbosity_level() > 0) {
++          &print_breaking($msg);
++        }
++        if ($msg =~ m/conflict/i or $msg =~ m/not in remote repository/i) {
++          push(@lines, $line);
++        }
++      }
++    }
++  close(IN);
++
++  &cvs_repair(\@lines, \@dump);
++
++  print "\n";
+ }
+ 
+ ### update from packages tarball
+diff -ruN fink/perlmod/Fink/Services.pm fink-verbcvs/perlmod/Fink/Services.pm
+--- fink/perlmod/Fink/Services.pm	2002-12-20 10:00:32.000000000 -0700
++++ fink-verbcvs/perlmod/Fink/Services.pm	2002-12-31 15:15:02.000000000 -0700
+@@ -43,7 +43,7 @@
+                     &prompt &prompt_boolean &prompt_selection
+                     &version_cmp &latest_version
+                     &collapse_space &get_term_width
+-                    &file_MD5_checksum);
++                    &file_MD5_checksum &parse_cvs &cvs_repair);
+ }
+ our @EXPORT_OK;
+ 
+@@ -600,5 +600,147 @@
+   return $checksum;
+ }
+ 
++sub parse_cvs {
++  my $line = shift;
++  my $newline = "";
++  my ($cvsaction, $dist, $pkgname, $pkgverrev);
++
++  chomp($line);
++
++  if ($line =~ /^(M|P|U|R|C|\?|A).*\/(unstable|stable)\/.*\/(.*)-(.*-.*)\..*$/) {
++    if ($1 eq "P") {
++      $cvsaction = "modified remotly";
++    } elsif ($1 eq "U") {
++      $cvsaction = "added";
++    } elsif ($1 eq "?") {
++      $cvsaction = "not in remote repository";
++    } elsif ($1 eq "M") {
++      $cvsaction = "modified locally";
++    } elsif ($1 eq "C") {
++      $cvsaction = "conflict";
++    } elsif ($1 eq "A") {
++      $cvsaction = "added locally";
++    } elsif ($1 eq "R") {
++      $cvsaction = "removed locally";
++    } else {
++      return 1;
++    }
++
++    $dist = $2;
++    $pkgname = $3;
++    $pkgverrev = $4;
++
++  } elsif ($line =~ /^cvs\ server\:\ (.*)\ is\ no\ longer\ in\ the\ repository$/) {
++    my $removeline = $1;
++
++    $cvsaction = "remove";
++
++    if ($removeline =~ /^.*\/(unstable|stable)\/.*\/(.*)-(.*-.*)\..*$/) {
++      $dist = $1;
++      $pkgname = $2;
++      $pkgverrev = $3;
++
++      $newline = "";
++    } else {
++      return 1;
++    }
++  } else {
++    return 1;
++  }
++
++  $newline = "  $pkgname ($pkgverrev): $cvsaction in $dist.\n";
++
++  return $newline;
++}
++
++sub cvs_repair {
++  use Fink::Config qw($basepath);
++  require Fink::Config;
++
++  my @lines = @{$_[0]};
++  my @dump = @{$_[1]};
++  my ($line, $numdump, $answer);
++  my (@errors, $numerrors);
++  my (@warns, $numwarns);
++
++  $numerrors = 0;
++  $numwarns = 0;
++  $numdump = 0;
++
++  foreach $line (@lines) {
++    if ($line =~ /^(C|\?) (.*)$/) {
++      if ($1 eq "C") {
++        push(@errors, $2);
++        $numerrors++;
++      } elsif ($1 eq "?") {
++        push(@warns, $2);
++        $numwarns++;
++      }
++    }
++  }
++
++  foreach $line (@dump) {
++    $numdump++;
++  }
++
++  print "\n";
++  print "$numerrors error(s) and $numwarns warning(s) in $numdump line(s).\n";
++
++  if ($numerrors > 0 && Fink::Config::verbosity_level() > 1) {
++    print "\n";
++    print "Errors:\n";
++    foreach $line (@errors) {
++      print "  $line\n";
++    }
++  }
++
++  if ($numwarns > 0 && Fink::Config::verbosity_level() > 1) {
++    print "\n";
++    print "Warnings:\n";
++    foreach $line (@warns) {
++      print "  $line\n";
++    }
++  }
++ 
++  if ($numerrors > 0) {
++    $answer =
++      &prompt_boolean("Would you like to correct the $numerrors error(s)?", 0);
++    if ($answer == 1) {
++      print "Self repairing CVS update:\n";
++      foreach $line (@errors) {
++        if ($line =~ /^.*\/(unstable|stable)\/.*\/(.*)-(.*-.*)\..*$/) { 
++          print "  Relocating $1 version of $2 ($3)\n";
++        }
++        &execute("mv $basepath/fink/$line $basepath/fink/$line.bad");
++      }
++      print "\nSelf repair complete!  Now restarting selfudpate.\n";
++      require Fink::SelfUpdate;
++      Fink::SelfUpdate::check(1);
++    }
++  }
++
++  if ($numdump > 0 && ($numwarns > 0 || $numerrors > 0) &&
++      Fink::Config::verbosity_level() > 0) {
++    $answer =
++      &prompt_selection("Make your choice: ", 1,
++                         { "continue" => "Continue (Ignore Dump)",
++                           "display" => "Display dump to screen",
++                           "save" => "Save dump to a file"},
++                        ( "continue", "display", "save"));
++
++    if ($answer eq "display") {
++      foreach $line (@dump) {
++        print "  $line\n";
++      }
++    } elsif ($answer eq "save") {
++      open (IN, ">/tmp/finkcvs.dump") or die "Can't open file: $!";
++        foreach $line (@dump) {
++          print IN "$line\n";
++        }
++      close(IN); 
++    }
++  }
++}
++
+ ### EOF
+ 1;
