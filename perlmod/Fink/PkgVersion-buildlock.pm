@@ -2744,12 +2744,12 @@ EOF
 	print "Setting build lock...\n";
 	my $debfile = $buildpath.'/'.$lockpkg.'_0-0_'.$debarch.'.deb';
 	my $lock_failed = &execute("dpkg -i $debfile");
-#	rm_f $debfile or
-#		&print_breaking("WARNING: Can't remove binary package file ".
-#						"$debfile. ".
-#						"This is not fatal, but you may want to remove ".
-#						"the directory manually to save disk space. ".
-#						"Continuing with normal procedure.");
+	rm_f $debfile or
+		&print_breaking("WARNING: Can't remove binary package file ".
+						"$debfile. ".
+						"This is not fatal, but you may want to remove ".
+						"the directory manually to save disk space. ".
+						"Continuing with normal procedure.");
 	if ($lock_failed) {
 		die "Can't set build lock for " . $self->get_fullname() . "\n";
 	}
