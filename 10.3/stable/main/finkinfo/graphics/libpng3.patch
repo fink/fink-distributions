@@ -1,0 +1,328 @@
+diff -r -U 3 libpng-1.2.5/png.h libpng-1.2.5p/png.h
+--- libpng-1.2.5/png.h	Thu Oct  3 06:32:26 2002
++++ libpng-1.2.5p/png.h	Tue Aug  3 21:45:21 2004
+@@ -833,7 +833,11 @@
+ typedef png_info FAR * FAR * png_infopp;
+ 
+ /* Maximum positive integer used in PNG is (2^31)-1 */
+-#define PNG_MAX_UINT ((png_uint_32)0x7fffffffL)
++#define PNG_UINT_31_MAX ((png_uint_32)0x7fffffffL)
++#define PNG_UINT_32_MAX (~((png_uint_32)0))
++#define PNG_SIZE_MAX (~((png_size_t)0))
++/* PNG_MAX_UINT is deprecated; use PNG_UINT_31_MAX instead. */
++#define PNG_MAX_UINT PNG_UINT_31_MAX
+ 
+ /* These describe the color_type field in png_info. */
+ /* color type masks */
+@@ -2655,6 +2659,8 @@
+ PNG_EXTERN png_uint_32 png_get_uint_32 PNGARG((png_bytep buf));
+ PNG_EXTERN png_uint_16 png_get_uint_16 PNGARG((png_bytep buf));
+ #endif /* !PNG_READ_BIG_ENDIAN_SUPPORTED */
++PNG_EXTERN png_uint_32 png_get_uint_31 PNGARG((png_structp png_ptr,
++  png_bytep buf));
+ 
+ /* Initialize png_ptr struct for reading, and allocate any other memory.
+  * (old interface - DEPRECATED - use png_create_read_struct instead).
+diff -r -U 3 libpng-1.2.5/pngconf.h libpng-1.2.5p/pngconf.h
+--- libpng-1.2.5/pngconf.h	Thu Oct  3 06:32:27 2002
++++ libpng-1.2.5p/pngconf.h	Tue Aug  3 21:45:29 2004
+@@ -663,6 +663,13 @@
+ #endif
+ #endif /* PNG_1_0_X */
+ 
++#ifndef PNG_USER_WIDTH_MAX
++#  define PNG_USER_WIDTH_MAX 1000000L
++#endif
++#ifndef PNG_USER_HEIGHT_MAX
++#  define PNG_USER_HEIGHT_MAX 1000000L
++#endif
++
+ /* These are currently experimental features, define them if you want */
+ 
+ /* very little testing */
+@@ -1280,6 +1287,7 @@
+ #  define CVT_PTR(ptr) (png_far_to_near(png_ptr,ptr,CHECK))
+ #  define CVT_PTR_NOCHECK(ptr) (png_far_to_near(png_ptr,ptr,NOCHECK))
+ #  define png_strcpy _fstrcpy
++#  define png_strncpy _fstrncpy    /* Added to v 1.2.6 */
+ #  define png_strlen _fstrlen
+ #  define png_memcmp _fmemcmp      /* SJT: added */
+ #  define png_memcpy _fmemcpy
+@@ -1288,6 +1296,7 @@
+ #  define CVT_PTR(ptr)         (ptr)
+ #  define CVT_PTR_NOCHECK(ptr) (ptr)
+ #  define png_strcpy strcpy
++#  define png_strncpy strncpy   /* Added to v 1.2.6 */
+ #  define png_strlen strlen
+ #  define png_memcmp memcmp     /* SJT: added */
+ #  define png_memcpy memcpy
+diff -r -U 3 libpng-1.2.5/pngerror.c libpng-1.2.5p/pngerror.c
+--- libpng-1.2.5/pngerror.c	Thu Oct  3 06:32:27 2002
++++ libpng-1.2.5p/pngerror.c	Tue Aug  3 21:45:22 2004
+@@ -137,7 +137,7 @@
+    {
+       buffer[iout++] = ':';
+       buffer[iout++] = ' ';
+-      png_memcpy(buffer+iout, error_message, 64);
++      png_strncpy(buffer+iout, error_message, 63);
+       buffer[iout+63] = 0;
+    }
+ }
+diff -r -U 3 libpng-1.2.5/pngpread.c libpng-1.2.5p/pngpread.c
+--- libpng-1.2.5/pngpread.c	Thu Oct  3 06:32:28 2002
++++ libpng-1.2.5p/pngpread.c	Tue Aug  3 21:45:22 2004
+@@ -208,7 +208,7 @@
+       }
+ 
+       png_push_fill_buffer(png_ptr, chunk_length, 4);
+-      png_ptr->push_length = png_get_uint_32(chunk_length);
++      png_ptr->push_length = png_get_uint_31(png_ptr,chunk_length);
+       png_reset_crc(png_ptr);
+       png_crc_read(png_ptr, png_ptr->chunk_name, 4);
+       png_ptr->mode |= PNG_HAVE_CHUNK_HEADER;
+@@ -591,6 +591,11 @@
+       png_size_t new_max;
+       png_bytep old_buffer;
+ 
++      if (png_ptr->save_buffer_size > PNG_SIZE_MAX - 
++         (png_ptr->current_buffer_size + 256))
++      {
++        png_error(png_ptr, "Potential overflow of save_buffer");
++      }
+       new_max = png_ptr->save_buffer_size + png_ptr->current_buffer_size + 256;
+       old_buffer = png_ptr->save_buffer;
+       png_ptr->save_buffer = (png_bytep)png_malloc(png_ptr,
+@@ -637,8 +642,7 @@
+       }
+ 
+       png_push_fill_buffer(png_ptr, chunk_length, 4);
+-      png_ptr->push_length = png_get_uint_32(chunk_length);
+-
++      png_ptr->push_length = png_get_uint_31(png_ptr,chunk_length);
+       png_reset_crc(png_ptr);
+       png_crc_read(png_ptr, png_ptr->chunk_name, 4);
+       png_ptr->mode |= PNG_HAVE_CHUNK_HEADER;
+diff -r -U 3 libpng-1.2.5/pngread.c libpng-1.2.5p/pngread.c
+--- libpng-1.2.5/pngread.c	Thu Oct  3 06:32:29 2002
++++ libpng-1.2.5p/pngread.c	Tue Aug  3 21:45:22 2004
+@@ -384,7 +384,7 @@
+       png_uint_32 length;
+ 
+       png_read_data(png_ptr, chunk_length, 4);
+-      length = png_get_uint_32(chunk_length);
++      length = png_get_uint_31(png_ptr,chunk_length);
+ 
+       png_reset_crc(png_ptr);
+       png_crc_read(png_ptr, png_ptr->chunk_name, 4);
+@@ -392,9 +392,6 @@
+       png_debug2(0, "Reading %s chunk, length=%lu.\n", png_ptr->chunk_name,
+          length);
+ 
+-      if (length > PNG_MAX_UINT)
+-         png_error(png_ptr, "Invalid chunk length.");
+-
+       /* This should be a binary subdivision search or a hash for
+        * matching the chunk name rather than a linear search.
+        */
+@@ -673,10 +670,7 @@
+             png_crc_finish(png_ptr, 0);
+ 
+             png_read_data(png_ptr, chunk_length, 4);
+-            png_ptr->idat_size = png_get_uint_32(chunk_length);
+-
+-            if (png_ptr->idat_size > PNG_MAX_UINT)
+-              png_error(png_ptr, "Invalid chunk length.");
++            png_ptr->idat_size = png_get_uint_31(png_ptr,chunk_length);
+ 
+             png_reset_crc(png_ptr);
+             png_crc_read(png_ptr, png_ptr->chunk_name, 4);
+@@ -946,16 +940,13 @@
+ #endif /* PNG_GLOBAL_ARRAYS */
+ 
+       png_read_data(png_ptr, chunk_length, 4);
+-      length = png_get_uint_32(chunk_length);
++      length = png_get_uint_31(png_ptr,chunk_length);
+ 
+       png_reset_crc(png_ptr);
+       png_crc_read(png_ptr, png_ptr->chunk_name, 4);
+ 
+       png_debug1(0, "Reading %s chunk.\n", png_ptr->chunk_name);
+ 
+-      if (length > PNG_MAX_UINT)
+-         png_error(png_ptr, "Invalid chunk length.");
+-
+       if (!png_memcmp(png_ptr->chunk_name, png_IHDR, 4))
+          png_handle_IHDR(png_ptr, info_ptr, length);
+       else if (!png_memcmp(png_ptr->chunk_name, png_IEND, 4))
+@@ -1298,6 +1289,9 @@
+     * PNG file before the first IDAT (image data chunk).
+     */
+    png_read_info(png_ptr, info_ptr);
++
++   if (info_ptr->height > PNG_UINT_32_MAX/sizeof(png_bytep))
++      png_error(png_ptr,"Image is too high to process with png_read_png()");
+ 
+    /* -------------- image transformations start here ------------------- */
+ 
+diff -r -U 3 libpng-1.2.5/pngrtran.c libpng-1.2.5p/pngrtran.c
+--- libpng-1.2.5/pngrtran.c	Thu Oct  3 06:32:29 2002
++++ libpng-1.2.5p/pngrtran.c	Tue Aug  3 21:45:22 2004
+@@ -1889,8 +1889,8 @@
+          /* This changes the data from GG to GGXX */
+          if (flags & PNG_FLAG_FILLER_AFTER)
+          {
+-            png_bytep sp = row + (png_size_t)row_width;
+-            png_bytep dp = sp  + (png_size_t)row_width;
++            png_bytep sp = row + (png_size_t)row_width * 2;
++            png_bytep dp = sp  + (png_size_t)row_width * 2;
+             for (i = 1; i < row_width; i++)
+             {
+                *(--dp) = hi_filler;
+@@ -1907,8 +1907,8 @@
+          /* This changes the data from GG to XXGG */
+          else
+          {
+-            png_bytep sp = row + (png_size_t)row_width;
+-            png_bytep dp = sp  + (png_size_t)row_width;
++            png_bytep sp = row + (png_size_t)row_width * 2;
++            png_bytep dp = sp  + (png_size_t)row_width * 2;
+             for (i = 0; i < row_width; i++)
+             {
+                *(--dp) = *(--sp);
+@@ -1965,8 +1965,8 @@
+          /* This changes the data from RRGGBB to RRGGBBXX */
+          if (flags & PNG_FLAG_FILLER_AFTER)
+          {
+-            png_bytep sp = row + (png_size_t)row_width * 3;
+-            png_bytep dp = sp  + (png_size_t)row_width;
++            png_bytep sp = row + (png_size_t)row_width * 6;
++            png_bytep dp = sp  + (png_size_t)row_width * 2;
+             for (i = 1; i < row_width; i++)
+             {
+                *(--dp) = hi_filler;
+@@ -1987,8 +1987,8 @@
+          /* This changes the data from RRGGBB to XXRRGGBB */
+          else
+          {
+-            png_bytep sp = row + (png_size_t)row_width * 3;
+-            png_bytep dp = sp  + (png_size_t)row_width;
++            png_bytep sp = row + (png_size_t)row_width * 6;
++            png_bytep dp = sp  + (png_size_t)row_width * 2;
+             for (i = 0; i < row_width; i++)
+             {
+                *(--dp) = *(--sp);
+diff -r -U 3 libpng-1.2.5/pngrutil.c libpng-1.2.5p/pngrutil.c
+--- libpng-1.2.5/pngrutil.c	Thu Oct  3 06:32:30 2002
++++ libpng-1.2.5p/pngrutil.c	Tue Aug  3 21:45:22 2004
+@@ -38,6 +38,14 @@
+ #  endif
+ #endif
+ 
++png_uint_32 /* PRIVATE */
++png_get_uint_31(png_structp png_ptr, png_bytep buf)
++{
++   png_uint_32 i = png_get_uint_32(buf);
++   if (i > PNG_UINT_31_MAX)
++     png_error(png_ptr, "PNG unsigned integer out of range.\n");
++   return (i);
++}
+ #ifndef PNG_READ_BIG_ENDIAN_SUPPORTED
+ /* Grab an unsigned 32-bit integer from a buffer in big-endian format. */
+ png_uint_32 /* PRIVATE */
+@@ -579,7 +587,7 @@
+       /* Should be an error, but we can cope with it */
+       png_warning(png_ptr, "Out of place gAMA chunk");
+ 
+-   else if (info_ptr != NULL && (info_ptr->valid & PNG_INFO_gAMA)
++   if (info_ptr != NULL && (info_ptr->valid & PNG_INFO_gAMA)
+ #if defined(PNG_READ_sRGB_SUPPORTED)
+       && !(info_ptr->valid & PNG_INFO_sRGB)
+ #endif
+@@ -660,7 +668,7 @@
+       /* Should be an error, but we can cope with it */
+       png_warning(png_ptr, "Out of place sBIT chunk");
+    }
+-   else if (info_ptr != NULL && (info_ptr->valid & PNG_INFO_sBIT))
++   if (info_ptr != NULL && (info_ptr->valid & PNG_INFO_sBIT))
+    {
+       png_warning(png_ptr, "Duplicate sBIT chunk");
+       png_crc_finish(png_ptr, length);
+@@ -729,7 +737,7 @@
+       /* Should be an error, but we can cope with it */
+       png_warning(png_ptr, "Missing PLTE before cHRM");
+ 
+-   else if (info_ptr != NULL && (info_ptr->valid & PNG_INFO_cHRM)
++   if (info_ptr != NULL && (info_ptr->valid & PNG_INFO_cHRM)
+ #if defined(PNG_READ_sRGB_SUPPORTED)
+       && !(info_ptr->valid & PNG_INFO_sRGB)
+ #endif
+@@ -891,7 +899,7 @@
+       /* Should be an error, but we can cope with it */
+       png_warning(png_ptr, "Out of place sRGB chunk");
+ 
+-   else if (info_ptr != NULL && (info_ptr->valid & PNG_INFO_sRGB))
++   if (info_ptr != NULL && (info_ptr->valid & PNG_INFO_sRGB))
+    {
+       png_warning(png_ptr, "Duplicate sRGB chunk");
+       png_crc_finish(png_ptr, length);
+@@ -977,8 +985,7 @@
+    png_bytep pC;
+    png_charp profile;
+    png_uint_32 skip = 0;
+-   png_uint_32 profile_size = 0;
+-   png_uint_32 profile_length = 0;
++   png_uint_32 profile_size, profile_length;
+    png_size_t slength, prefix_length, data_length;
+ 
+    png_debug(1, "in png_handle_iCCP\n");
+@@ -995,7 +1002,7 @@
+       /* Should be an error, but we can cope with it */
+       png_warning(png_ptr, "Out of place iCCP chunk");
+ 
+-   else if (info_ptr != NULL && (info_ptr->valid & PNG_INFO_iCCP))
++   if (info_ptr != NULL && (info_ptr->valid & PNG_INFO_iCCP))
+    {
+       png_warning(png_ptr, "Duplicate iCCP chunk");
+       png_crc_finish(png_ptr, length);
+@@ -1154,8 +1161,18 @@
+    }
+ 
+    new_palette.nentries = data_length / entry_size;
+-   new_palette.entries = (png_sPLT_entryp)png_malloc(
++   if (new_palette.nentries > PNG_SIZE_MAX / sizeof(png_sPLT_entry))
++   {
++       png_warning(png_ptr, "sPLT chunk too long");
++       return;
++   }
++   new_palette.entries = (png_sPLT_entryp)png_malloc_warn(
+        png_ptr, new_palette.nentries * sizeof(png_sPLT_entry));
++   if (new_palette.entries == NULL)
++   {
++       png_warning(png_ptr, "sPLT chunk requires too much memory");
++       return;
++   }
+ 
+ #ifndef PNG_NO_POINTER_INDEXING
+    for (i = 0; i < new_palette.nentries; i++)
+@@ -1241,7 +1258,8 @@
+          /* Should be an error, but we can cope with it */
+          png_warning(png_ptr, "Missing PLTE before tRNS");
+       }
+-      else if (length > (png_uint_32)png_ptr->num_palette)
++      if (length > (png_uint_32)png_ptr->num_palette ||
++          length > PNG_MAX_PALETTE_LENGTH)
+       {
+          png_warning(png_ptr, "Incorrect tRNS chunk length");
+          png_crc_finish(png_ptr, length);
+diff -r -U 3 libpng-1.2.5/pngset.c libpng-1.2.5p/pngset.c
+--- libpng-1.2.5/pngset.c	Thu Oct  3 06:32:30 2002
++++ libpng-1.2.5p/pngset.c	Tue Aug  3 21:45:29 2004
+@@ -253,6 +253,8 @@
+       png_error(png_ptr, "Image width or height is zero in IHDR");
+    if (width > PNG_MAX_UINT || height > PNG_MAX_UINT)
+       png_error(png_ptr, "Invalid image size in IHDR");
++   if (width > PNG_USER_WIDTH_MAX || height > PNG_USER_HEIGHT_MAX)
++      png_error(png_ptr, "image size exceeds user limits in IHDR");
+ 
+    /* check other values */
+    if (bit_depth != 1 && bit_depth != 2 && bit_depth != 4 &&
