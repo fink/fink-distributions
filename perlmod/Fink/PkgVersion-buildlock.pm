@@ -2764,7 +2764,7 @@ sub clear_buildlock {
 	}
 
 	# clear recorded lock info from fink runtime config
-	$config->set_options('BuildPkg', undef);
+	$config->set_options('BuildLock', undef);
 }
 
 # returns hashref for the ENV to be used while running package scripts
