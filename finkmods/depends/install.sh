@@ -53,7 +53,7 @@ for file in perlmod/Fink/*.pm ; do
   fi
 done
 
-for file in COPYING README INSTALL ; do
+for file in COPYING README INSTALL TODO ; do
   install -c -p -m 644  $file "$basepath/share/doc/fink-depends/"
 done
 

@@ -162,7 +162,7 @@ if (not -d "$basepath/src") {
 
 $script .=
   "tar -cf $basepath/src/fink-depends-$packageversion.tar ".
-  "COPYING INSTALL README ".
+  "COPYING INSTALL README TODO ".
   "ChangeLog VERSION fink-depends.in install.sh setup.sh ".
   "perlmod\n";
 
