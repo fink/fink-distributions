@@ -2740,8 +2740,8 @@ EOF
 		die "can't create package $lockpkg\n";
 	}
 
-	# record lockpkg package-name in fink runtime config
-	$config->set_options('LockPkgs', $lockpkgs);
+	# record PkgVersion object from which we are locked
+	$config->set_options('BuildLock', $self);
 
 	# install $lockpkg (== set lockfile for building $self)
 	print "Setting build lock...\n";
@@ -2763,8 +2763,8 @@ sub clear_buildlock {
 		die "can't remove build lock for " . $self->get_fullname() . "\n";
 	}
 
-	# clear lockpkg info from fink runtime config
-	$config->set_options('LockPkgs', undef);
+	# clear recorded lock info from fink runtime config
+	$config->set_options('BuildPkg', undef);
 }
 
 # returns hashref for the ENV to be used while running package scripts
