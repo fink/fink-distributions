@@ -45,7 +45,7 @@ our @SCANLIST; # list of directories to search
 our %PACKAGES;  # list of packages
 
 # this is the one and only version number
-our $libcheck_version = "0.1.1.cvs";
+our $libcheck_version = "0.1.2.cvs";
 
 END { }       # module clean-up code here (global destructor)
 
@@ -86,19 +86,21 @@ sub has_library {
 
   my @matches;
 
-  open(OTOOL, "otool -L $library 2>/dev/null |") or die "can't run otool: $!\n";
-  # iterate through the output of otool, looking for matches
-  while (<OTOOL>) {
-    chomp();
-    if (/$search_for/) {
-      if ($exclude eq "0") {
-        s/^\s*//;
-        push(@matches, $_);
-      } else {
-        # Need to implement exclude here
-        print "$library has $search_for and $exclude\n";
-        if (&verbosity_level() == 3) {
-          print `otool -L $library | grep \"$search_for\"` . "\n"; 
+  if (-f $library) {
+    open(OTOOL, "otool -L $library 2>/dev/null |") or die "can't run otool: $!\n";
+    # iterate through the output of otool, looking for matches
+    while (<OTOOL>) {
+      chomp();
+      if (/$search_for/) {
+        if ($exclude eq "0") {
+          s/^\s*//;
+          push(@matches, $_);
+        } else {
+          # Need to implement exclude here
+          print "$library has $search_for and $exclude\n";
+          if (&verbosity_level() == 3) {
+            print `otool -L $library | grep \"$search_for\"` . "\n"; 
+          }
         }
       }
     }
@@ -114,6 +116,13 @@ sub check_dirs {
   my (@filelist);
   my ($fullpkglist, $install);
 
+  my $tmplibname = $libname;
+  my $tmpexclude = $exclude;
+
+  # escape dir libnames;
+  $tmplibname =~ s/\//\\\//gs;
+  $tmpexclude =~ s/\//\\\//gs;
+
   for ("bin", "sbin", "lib") {
     # find all subdirectories, populates @SCANLIST
     for my $directory (split(/[\r\n]+/, `find $basepath/$_ -type d 2>/dev/null`)) {
@@ -127,16 +136,16 @@ sub check_dirs {
     # this gets everything in a directory that's not . or ..
     opendir(DIR, "$dir") or die "can't open $dir: $!\n";
     for my $file (grep(!/^\.\.?$/, readdir(DIR))) {
-      next if (-d "$dir/$file"); # skip directories
+      next unless (-f "$dir/$file"); # skip everything but files
       chomp($file);
       $file = "$dir/$file";
-      if (has_library($file, $libname, $exclude)) {
+      if (has_library($file, $tmplibname, $tmpexclude)) {
         my $package = `dpkg --search $file`;
 	$package =~ s/\:.*$//; # strip out everything after the colon
         chomp($package);
         print "- found in $package ($file)\n";
         if (&verbosity_level() == 3) {
-          print `otool -L $file | grep \"$libname\"` . "\n";
+          print `otool -L $file | grep \"$tmplibname\"` . "\n";
         }
         $PACKAGES{$package} = 1;
       }
