@@ -1,9 +1,9 @@
 Package: php4-apache2-ssl
 Version: 4.3.1
-Revision: 2
+Revision: 3
 ###
 Depends: libapache2-ssl-mod-php4 | %N-cgi
-BuildDepends: apr-ssl (>= 0.9.4-4), libtool14, gettext-dev, libiconv-dev, dlcompat-dev, gd2, mysql12-dev, postgresql73-ssl-dev, curl-ssl-dev, expat, libmhash (>= 0.8.18-2), libmcve, libmcrypt, libxml2, libxslt, openldap-ssl-dev (>= 2.1.22-3), uw-imap-c-client-ssl (>= 2002d-3), libsablot-dev, ming, t1lib1, pcre, libpng3, freetype2 | freetype2-hinting, apache2-ssl-dev, unixodbc2 | unixodbc2-nox, gdbm3, net-snmp-ssl (>= 5.0.7-2), net-snmp-ssl-dev (>= 5.0.7-2), db3
+BuildDepends: apr-ssl (>= 0.9.4-4), libtool14, gettext-dev, libiconv-dev, dlcompat-dev, gd2, mysql12-dev, postgresql73-ssl-dev, curl-ssl-dev, expat, libmhash (>= 0.8.18-2), libmcve, libmcrypt, libxml2, libxslt, openldap-ssl-dev (>= 2.1.22-3), uw-imap-c-client-ssl (>= 2002d-3), libsablot-dev, ming, t1lib1, pcre, libpng3, freetype2 | freetype2-hinting, apache2-ssl-dev (>= 2.0.47-5), unixodbc2 | unixodbc2-nox, gdbm3, net-snmp-ssl (>= 5.0.7-2), net-snmp-ssl-dev (>= 5.0.7-2), db3
 Replaces: php4-apache2, php4-apache, php4-apache-ssl
 Conflicts: php4-apache2, php4-apache, php4-apache-ssl
 Provides: php4-ssl
@@ -116,9 +116,6 @@ CompileScript: <<
   mkdir -p cgi-build
   cd cgi-build; ../configure %c --enable-force-cgi-redirect --with-config-file-path=%p/etc/php4/cgi --without-mm --without-mysql --without-pgsql
 
-  ### Fix for gd/freetype
-  # cd apache-build; perl -pi -e 's,#define HAVE_LIBFREETYPE 1,/* #undef HAVE_LIBFREETYPE */,g' main/php_config.h
-
   ### Fix for java build
   perl -pi -e 's,#define HAVE_JAVAVM_JAVAVM_H 1,#undef HAVE_JAVAVM_JAVAVM_H,g' apache-build/main/php_config.h
   cp -R ext/java/* apache-build/ext/java
@@ -181,6 +178,9 @@ InstallScript: <<
   mv %i/include/php %i/include/php4
   mv %i/lib/php %i/lib/php4
 
+  ### fix to keep pkgs the same even if --enable-debug
+  if [ -d %i/lib/php4/20020429-debug ]; then mv %i/lib/php4/20020429-debug %i/lib/php4/20020429; fi
+
   ### Make needed links
   ln -s %p/lib/php4/20020429 %i/lib/php4/libexec
   ln -s %p/lib/php4/20020429/java.so %i/lib/php4/20020429/libphp_java.so
@@ -191,13 +191,13 @@ InstallScript: <<
 ###
 SplitOff: <<
   Package: libapache2-ssl-mod-php4
-  Depends: apache2-ssl, libsablot-shlibs, pcre-shlibs, ming-shlibs, bzip2-shlibs, openssl097-shlibs, dlcompat-shlibs, db3-shlibs
+  Depends: apache2-ssl (>= 2.0.47-5), libsablot-shlibs, pcre-shlibs, ming-shlibs, bzip2-shlibs, openssl097-shlibs, dlcompat-shlibs, db3-shlibs
   Replaces: libapache2-mod-php4, libapache-ssl-mod-php4, libapache-mod-php4
   Conflicts: libapache2-mod-php4, libapache-ssl-mod-php4, libapache-mod-php4
   ConfFiles: %p/etc/php4/apache2/php.ini
   Files: <<
     etc/php4/apache2
-    share/apache2
+    lib/apache2
   <<
   DocFiles: php.ini-dist LICENSE
   Description: Server-side, HTML-embedded scripting language
@@ -218,37 +218,28 @@ SplitOff: <<
   PostInstScript: <<
     MODULENAME=php4
     APXS=%p/sbin/apxs
-    MOD_PREFIX=%p/share/apache2/
-    MODULE=lib$MODULENAME.so
-
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
+    MOD_PREFIX=`$APXS -q LIBEXECDIR`
+    MODULE=$MOD_PREFIX/lib$MODULENAME.so
 
     echo "Enabling mod_$MODULENAME module..."
 
-    $APXS -e -a -S PREFIX=$MOD_PREFIX -n $MODULENAME $MODULE
-    %p/sbin/apachectl restart
+    $APXS -e -a -n $MODULENAME $MODULE
+    %p/sbin/apachectl graceful
   <<
   PreRmScript: <<
-    MODULENAME=php4
-    APXS=%p/sbin/apxs
-    MOD_PREFIX=%p/share/apache2/
-    MODULE=lib$MODULENAME.so
-
     if [ "$1" != "remove" -a "$1" != "purge" ]; then
       exit 0
     fi
 
+    MODULENAME=php4
+    APXS=%p/sbin/apxs
+    MOD_PREFIX=`$APXS -q LIBEXECDIR`
+    MODULE=$MOD_PREFIX/lib$MODULENAME.so
+
     echo "Disabling mod_$MODULENAME module..."
 
-    $APXS -e -A -S PREFIX=$MOD_PREFIX -n $MODULENAME $MODULE
-    %p/sbin/apachectl restart
+    $APXS -e -A -n $MODULENAME $MODULE
+    %p/sbin/apachectl graceful
   <<
 <<
 SplitOff2: <<
@@ -350,15 +341,6 @@ SplitOff5: <<
   PostInstScript: <<
     module=curl
 
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
-
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
         if ! grep -q "^[[:space:]]*extension[[:space:]]*=[[:space:]]*%p/lib/php4/libexec/$module.so" %p/etc/php4/$conf/php.ini; then
@@ -430,15 +412,6 @@ SplitOff6: <<
   <<
   PostInstScript: <<
     module=domxml
-
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
 
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
@@ -512,15 +485,6 @@ SplitOff7: <<
   PostInstScript: <<
     module=gd
 
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
-
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
         if ! grep -q "^[[:space:]]*extension[[:space:]]*=[[:space:]]*%p/lib/php4/libexec/$module.so" %p/etc/php4/$conf/php.ini; then
@@ -591,15 +555,6 @@ SplitOff8: <<
   <<
   PostInstScript: <<
     module=imap
-
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
 
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
@@ -672,15 +627,6 @@ SplitOff9: <<
   PostInstScript: <<
     module=ldap
 
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
-
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
         if ! grep -q "^[[:space:]]*extension[[:space:]]*=[[:space:]]*%p/lib/php4/libexec/$module.so" %p/etc/php4/$conf/php.ini; then
@@ -752,15 +698,6 @@ SplitOff10: <<
   PostInstScript: <<
     module=mcrypt
 
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
-
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
         if ! grep -q "^[[:space:]]*extension[[:space:]]*=[[:space:]]*%p/lib/php4/libexec/$module.so" %p/etc/php4/$conf/php.ini; then
@@ -831,15 +768,6 @@ SplitOff11: <<
   <<
   PostInstScript: <<
     module=mhash
-
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
 
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
@@ -913,15 +841,6 @@ SplitOff12: <<
   PostInstScript: <<
     module=mysql
 
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
-
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
         if ! grep -q "^[[:space:]]*extension[[:space:]]*=[[:space:]]*%p/lib/php4/libexec/$module.so" %p/etc/php4/$conf/php.ini; then
@@ -993,15 +912,6 @@ SplitOff13: <<
   <<
   PostInstScript: <<
     module=odbc
-
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
 
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
@@ -1075,15 +985,6 @@ SplitOff14: <<
   PostInstScript: <<
     module=pgsql
 
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
-
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
         if ! grep -q "^[[:space:]]*extension[[:space:]]*=[[:space:]]*%p/lib/php4/libexec/$module.so" %p/etc/php4/$conf/php.ini; then
@@ -1154,15 +1055,6 @@ SplitOff15: <<
   <<
   PostInstScript: <<
     module=snmp
-
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
 
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
@@ -1239,15 +1131,6 @@ SplitOff16: <<
   PostInstScript: <<
     module=java
 
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
-
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
         if ! grep -q "^[[:space:]]*extension[[:space:]]*=[[:space:]]*%p/lib/php4/libexec/$module.so" %p/etc/php4/$conf/php.ini; then
@@ -1319,15 +1202,6 @@ SplitOff17: <<
   PostInstScript: <<
     module=mcve
 
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
-
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
         if ! grep -q "^[[:space:]]*extension[[:space:]]*=[[:space:]]*%p/lib/php4/libexec/$module.so" %p/etc/php4/$conf/php.ini; then
@@ -1398,15 +1272,6 @@ SplitOff18: <<
   <<
   PostInstScript: <<
     module=pdf
-
-    if [ "$1" != "configure" ]; then
-      exit 0
-    fi
-
-    if [ -n "$2" ]; then
-      # we're upgrading. don't ask again
-      exit 0
-    fi
 
     for conf in apache apache2 cgi; do
       if [ -f %p/etc/php4/$conf/php.ini ]; then
