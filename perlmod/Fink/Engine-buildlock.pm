@@ -202,7 +202,9 @@ sub process {
 	if ($pkgflag) {
 		Fink::Package->require_packages();
 	}
+	$::SIG{INT} = sub { die "User interrupt.\n" };
 	eval { &$proc(@_); };
+	$::SIG{INT} = 'DEFAULT';
 	my $proc_rc = { '$@' => $@, '$?' => $? };  # save for later
 	Fink::PkgVersion->clear_buildlock();       # always clean up
 	if ($proc_rc->{'$@'}) {                    # now deal with eval results
