@@ -90,11 +90,9 @@ sub run_dependscheck {
   foreach $depend (@depends) {
     chomp($depend);
     if ($depend =~ /shlibs$/) {
-      if ($show_shlibs eq "true") {
-        $pkgversion = get_shlibsversion($depend);
-        $depend = $pkgversion;
-        $SHLIBS{$depend} = 1;
-      }
+      $pkgversion = get_shlibsversion($depend);
+      $depend = $pkgversion;
+      $SHLIBS{$depend} = 1;
     } else {
     if ($show_versions eq "true") {
         $pkgversion = get_dependversion($depend);
@@ -114,8 +112,14 @@ sub run_dependscheck {
       print "Has no shlibs depends!\n\n";
     }
   }
-  if (keys %PACKAGES) {    
-    print "Depends: \${SHLIBS_DEPS}, ", join(', ', sort keys %PACKAGES), "\n\n";
+  if (keys %PACKAGES || keys %SHLIBS) {    
+      print "Depends: ";
+    if (keys %SHLIBS) {
+      print "\${SHLIB_DEPS}, ";
+    }
+    if (keys %PACKAGES) {
+      print join(', ', sort keys %PACKAGES), "\n\n";
+    }
   } else {
     print "Has no lib depends!\n\n";
   }
