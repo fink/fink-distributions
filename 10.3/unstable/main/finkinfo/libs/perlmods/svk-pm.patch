@@ -1,0 +1,99 @@
+diff -Naur SVK-0.21/Makefile.PL SVK-0.21-patched/Makefile.PL
+--- SVK-0.21/Makefile.PL	2004-09-16 17:51:47.000000000 +0200
++++ SVK-0.21-patched/Makefile.PL	2004-09-21 23:41:00.000000000 +0200
+@@ -28,6 +28,7 @@
+         'IO::Digest'		=> '0',
+         'SVN::Simple::Edit'     => '0.21',
+         'Date::Parse'           => '0',
++        'File::Type'            => '0',
+ );
+ features(
+     'Localized messages' => [
+@@ -54,14 +55,6 @@
+     ],
+ );
+ 
+-features(
+-    'Automatic mime-type detection' => [
+-	-default => 1,
+-	'File::BaseDir'     => '0',
+-	'File::MimeInfo'    => '0',
+-    ],
+-);
+-
+ include('ExtUtils::AutoInstall');
+ auto_install();
+ 
+diff -Naur SVK-0.21/lib/SVK/Util.pm SVK-0.21-patched/lib/SVK/Util.pm
+--- SVK-0.21/lib/SVK/Util.pm	2004-09-19 22:57:35.000000000 +0200
++++ SVK-0.21-patched/lib/SVK/Util.pm	2004-09-21 23:41:00.000000000 +0200
+@@ -298,8 +298,11 @@
+ 
+ =cut
+ 
+-push @EXPORT_OK, qw( md5 ); # deprecated compatibility API
+-*md5 = *md5_fh;
++{
++    no warnings 'once';
++    push @EXPORT_OK, qw( md5 ); # deprecated compatibility API
++    *md5 = *md5_fh;
++}
+ 
+ sub md5_fh {
+     my $fh = shift;
+@@ -316,19 +319,23 @@
+ =cut
+ 
+ sub mimetype {
+-    no strict 'refs';
+-    no warnings 'redefine';
++    my $fh = shift;
++
++    return 'text/plain' if -z $fh;
+ 
+-    local $@;
+-    my $mimetype = eval {
+-        require File::MimeInfo::Magic;
+-        \&File::MimeInfo::Magic::mimetype;
+-    } || sub { undef };
++    binmode($fh);
++    read $fh, my $data, 16*1024 or return undef;
+ 
+-    *{caller().'::mimetype'} = $mimetype;
+-    *mimetype = $mimetype;
++    require File::Type;
++    my $type = File::Type->checktype_contents($data);
++
++    # On fallback, use the same logic as File::MimeInfo to detect text
++    if ($type eq 'application/octet-stream') {
++        substr($data, 0, 10) =~ m/[\x00-\x07\x09\x0B\x0D-\x1F]/
++            or return 'text/plain';
++    }
+ 
+-    goto &$mimetype;
++    return $type;
+ }
+ 
+ =head3 mimetype_is_text ($mimetype)
+diff -Naur SVK-0.21/t/20add.t SVK-0.21-patched/t/20add.t
+--- SVK-0.21/t/20add.t	2004-09-16 17:51:47.000000000 +0200
++++ SVK-0.21-patched/t/20add.t	2004-09-21 23:41:00.000000000 +0200
+@@ -80,9 +80,6 @@
+ unlink ('A/exe');
+ $svk->revert ('A/exe');
+ ok (_x 'A/exe');
+-SKIP: {
+-
+-skip 'File::MimeInfo not installed', 2 unless eval 'require File::MimeInfo::Magic; 1';
+ 
+ mkdir ('A/mime');
+ overwrite_file ("A/mime/foo.pl", "#!/usr/bin/perl\n");
+@@ -107,7 +104,7 @@
+ 	    'Properties on A/mime/foo.jpg:',
+ 	    '  svn:mime-type: image/jpeg',
+ 	   ]);
+-}
++
+ 
+ $svk->revert ('-R', 'A');
+ 
