@@ -53,16 +53,23 @@ sub get_cpu {
     $TYPE = "Unknown";
   }
 
+  my $truetype;
+  if ($TYPE = "750") {
+    $truetype = "G3";
+  } else {
+    $truetype = $TYPE;
+  }
+
   chomp($NUM=`sysctl hw.ncpu`);
   $NUM =~ s/hw.ncpu = //;
   if ($NUM eq 1 ) {
-    $MODEL = "$ARCH/$TYPE";
+    $MODEL = "$ARCH/$truetype";
   } elsif ($NUM eq 2) {
-    $MODEL="Dual $ARCH/$TYPE";
+    $MODEL="Dual $ARCH/$truetype";
   } elsif ($NUM gt 2) {
-    $MODEL="Multi $ARCH/$TYPE";
+    $MODEL="Multi $ARCH/$truetype";
   } else {
-    $MODEL = "#? $ARCH/$TYPE";
+    $MODEL = "#? $ARCH/$truetype";
   }
 
   chomp($CPU = `ioreg -n $ARCH,$TYPE | grep clock-frequency`);
@@ -220,7 +227,9 @@ sub get_uptime {
   $UPTIME =~ /.*up (.+),.+[0-9]+ user/;
   $DAYS = $1;
   if ($DAYS =~ /.?(.+).?days, (.+):(.+)/) {
-    $UPTIME = sprintf("%sd, %dh, %dm", $1, $2, $3);
+    $UPTIME = sprintf("%dd, %dh, %dm", $1, $2, $3);
+  } elsif ($DAYS =~ /.?(.+).?days, (.+).?hrs/) {
+    $UPTIME = sprintf("%dd, %dh", $1, $2);
   } elsif ($DAYS =~ /.?.?(.+):(.+)/) {
     $UPTIME = sprintf("%dh, %dm", $1, $2);
   } elsif ($DAYS =~ /.?(.+) mins/) {
