@@ -1,0 +1,331 @@
+diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-mirrors/perlmod/Fink/SelfUpdate.pm
+--- fink/perlmod/Fink/SelfUpdate.pm	2002-12-08 22:29:56.000000000 -0700
++++ fink-mirrors/perlmod/Fink/SelfUpdate.pm	2002-12-23 19:11:43.000000000 -0700
+@@ -53,20 +53,21 @@
+ 
+ sub check {
+   my $usecvs = shift || 0;
+-  my ($srcdir, $finkdir, $latest_fink, $installed_version, $answer);
++  my ($srcdir, $mirrordir, $finkdir, $latest_fink, $installed_version, $answer);
+ 
+   $srcdir = "$basepath/src";
+   $finkdir = "$basepath/fink";
++  $mirrordir = "$basepath/lib/fink/mirror";
+ 
+-  if (-d "$finkdir/CVS") {
++  if (-d "$finkdir/CVS" && -d "$mirrordir/CVS") {
+     if ($usecvs) {
+       $answer = 1;
+     } else {
+       print "\n";
+       $answer =
+ 	&prompt_boolean("Your Fink installation is set up to update package ".
+-			"descriptions directly from CVS. Do you want to ".
+-			"use this setup and update now?", 1);
++			"descriptions and mirror lists directly from CVS. Do ".
++			"you want to use this setup and update now?", 1);
+     }
+     if (not $answer) {
+       return;
+@@ -158,19 +159,25 @@
+ ### set up direct cvs
+ 
+ sub setup_direct_cvs {
+-  my ($finkdir, $tempdir, $tempfinkdir);
++  my ($finkdir, $tempdir, $tempfinkdir, $mirrordir, $tempmirrordir);
+   my ($username, $cvsuser, @testlist);
+   my ($use_hardlinks, $cutoff, $cmd);
+-  my ($cmdd);
+-
+-  
++  my ($cmdd, $rel, $linkto);
+ 
+   $username = "root";
+   if (exists $ENV{SUDO_USER}) {
+     $username = $ENV{SUDO_USER};
+   }
+ 
++  # start by creating a temporary directory with the right permissions
++  $finkdir = "$basepath/fink";
++  $mirrordir = "$basepath/lib/fink/mirror";
++  $tempdir = "$finkdir.tmp";
++  $tempfinkdir = "$tempdir/fink";
++  $tempmirrordir = "$tempdir/mirror/mirror";
++
+   print "\n";
++  if (not -d "$finkdir/CVS" && not -d "$mirrordir/CVS") {
+   $username =
+     &prompt("Fink has the capability to run the CVS commands as a ".
+ 	    "normal user. That has some advantages - it uses that ".
+@@ -179,6 +186,19 @@
+ 	    "root. Please specify the user login name that should be ".
+ 	    "used:",
+ 	    $username);
++  } elsif (not -d "$finkdir/CVS") {
++  $username =
++    &prompt("Look like you are semi setup and are missing the package ".
++            "descriptions setup. Please specify the user login name ".
++            "that should be used:",
++            $username);
++  } elsif (not -d "$mirrordir/CVS") {
++  $username =
++    &prompt("Look like you are semi setup and are missing the mirror ".        
++            "lists setup. Please specify the user login name ".
++            "that should be used:",                                    
++            $username);
++  }
+ 
+   # sanity check
+   @testlist = getpwnam($username);
+@@ -195,11 +215,6 @@
+ 	    "anonymous");
+   print "\n";
+ 
+-  # start by creating a temporary directory with the right permissions
+-  $finkdir = "$basepath/fink";
+-  $tempdir = "$finkdir.tmp";
+-  $tempfinkdir = "$tempdir/fink";
+-
+   if (-d $tempdir) {
+     if (&execute("rm -rf $tempdir")) {
+       die "Can't remove left-over temporary directory '$tempdir'\n";
+@@ -244,15 +259,30 @@
+     $cmd = "cvs -z3 -d:ext:$cvsuser\@cvs.sourceforge.net:/cvsroot/fink";
+     $ENV{CVS_RSH} = "ssh";
+   }
+-  $cmdd = "$cmd checkout -d fink dists";
+-  if ($username ne "root") {
+-    $cmdd = "su $username -c '$cmdd'";
+-  }
+-  &print_breaking("Now downloading package descriptions...");
+-  if (&execute($cmdd)) {
+-    die "Downloading package descriptions from CVS failed.\n";
++  unless (-d "$mirrordir/CVS") {
++    $cmdd = "$cmd checkout -d mirror fink";
++    if ($username ne "root") {
++      $cmdd = "su $username -c '$cmdd'";
++    }
++    &print_breaking("Now downloading mirror lists...");
++    if (&execute($cmdd)) {
++      die "Downloading mirror lists from CVS failed.\n";
++    }
++    if (not -d $tempmirrordir) {
++      die "The CVS didn't report an error, but the directory '$tempmirrordir' ".
++        "doesn't exist as expected. Strange.\n";
++    }
+   }
+-  if ($Fink::Config::distribution =~ /10.1/) { #must do a second checkout in this case
++  unless (-d "$finkdir/CVS") {
++    $cmdd = "$cmd checkout -d fink dists";
++    if ($username ne "root") {
++      $cmdd = "su $username -c '$cmdd'";
++    }
++    &print_breaking("Now downloading package descriptions...");
++    if (&execute($cmdd)) {
++      die "Downloading package descriptions from CVS failed.\n";
++    }
++    if ($Fink::Config::distribution =~ /10.1/) { #must do a second checkout in this case
+       chdir "fink" or die "Can't cd to fink\n";
+       $cmdd = "$cmd checkout -d 10.1 packages/dists";
+       if ($username ne "root") {
+@@ -263,54 +293,99 @@
+ 	  die "Downloading package descriptions from CVS failed.\n";
+       }
+       chdir $tempdir or die "Can't cd to $tempdir: $!\n";
++    }
++    if (not -d $tempfinkdir) {
++      die "The CVS didn't report an error, but the directory '$tempfinkdir' ".
++        "doesn't exist as expected. Strange.\n";
++    }
+   }
+-  if (not -d $tempfinkdir) {
+-    die "The CVS didn't report an error, but the directory '$tempfinkdir' ".
+-      "doesn't exist as expected. Strange.\n";
++
++  # merge the old mirrors
++  unless (-d "$mirrordir/CVS") {
++    $cutoff = length($mirrordir)+1;
++    find(sub {
++      if ($_ eq "CVS") {
++        $File::Find::prune = 1;
++        return;
++      }
++      return if (length($File::Find::name) <= $cutoff);
++      $rel = substr($File::Find::name, $cutoff);
++      if (-l and not -e "$tempmirrordir/$rel") {
++        $linkto = readlink($_)
++          or die "Can't read target of symlink $File::Find::name: $!\n";
++        if (&execute("ln -s '$linkto' '$tempmirrordir/$rel'")) {
++          die "Can't create symlink \"$tempmirrordir/$rel\"\n";
++        }
++      } elsif (-d and not -d "$tempmirrordir/$rel") {
++        if (&execute("mkdir '$tempmirrordir/$rel'")) {
++          die "Can't create directory \"$tempmirrordir/$rel\"\n";
++        }
++      } elsif (-f and not -f "$tempmirrordir/$rel") {
++        if ($use_hardlinks) {
++          $cmd = "ln";
++        } else {
++          $cmd = "cp -p"
++        }
++        $cmd .= " '$_' '$tempmirrordir/$rel'";
++        if (&execute($cmd)) {
++          die "Can't copy file \"$tempmirrordir/$rel\"\n";
++        }
++      }
++    }, $mirrordir);
++
++    # switch $tempmirrordir to $mirrordir
++    chdir $basepath or die "Can't cd to $basepath: $!\n";
++    if (&execute("mv $mirrordir $mirrordir.old")) {
++      die "Can't move \"$mirrordir\" out of the way\n";
++    }
++    if (&execute("mv $tempmirrordir $mirrordir")) {
++      die "Can't move new tree \"$tempmirrordir\" into place at \"$mirrordir\". ".
++        "Warning: Your Fink installation is in an inconsistent state now.\n";
++    }
+   }
+ 
+   # merge the old tree
+-  $cutoff = length($finkdir)+1;
+-  find(sub {
+-	 if ($_ eq "CVS") {
+-	   $File::Find::prune = 1;
+-	   return;
+-	 }
+-	 return if (length($File::Find::name) <= $cutoff);
+-	 my $rel = substr($File::Find::name, $cutoff);
+-	 if (-l and not -e "$tempfinkdir/$rel") {
+-	   my $linkto;
+-	   $linkto = readlink($_)
+-	     or die "Can't read target of symlink $File::Find::name: $!\n";
+-           if (&execute("ln -s '$linkto' '$tempfinkdir/$rel'")) {
+-             die "Can't create symlink \"$tempfinkdir/$rel\"\n";
+-           }
+-	 } elsif (-d and not -d "$tempfinkdir/$rel") {
+-	   if (&execute("mkdir '$tempfinkdir/$rel'")) {
+-	     die "Can't create directory \"$tempfinkdir/$rel\"\n";
+-	   }
+-	 } elsif (-f and not -f "$tempfinkdir/$rel") {
+-	   my $cmd;
+-	   if ($use_hardlinks) {
+-	     $cmd = "ln";
+-	   } else {
+-	     $cmd = "cp -p"
+-	   }
+-	   $cmd .= " '$_' '$tempfinkdir/$rel'";
+-           if (&execute($cmd)) {
+-             die "Can't copy file \"$tempfinkdir/$rel\"\n";
+-           }
+-	 }
+-       }, $finkdir);
+-
+-  # switch $tempfinkdir to $finkdir
+-  chdir $basepath or die "Can't cd to $basepath: $!\n";
+-  if (&execute("mv $finkdir $finkdir.old")) {
+-    die "Can't move \"$finkdir\" out of the way\n";
+-  }
+-  if (&execute("mv $tempfinkdir $finkdir")) {
+-    die "Can't move new tree \"$tempfinkdir\" into place at \"$finkdir\". ".
+-      "Warning: Your Fink installation is in an inconsistent state now.\n";
++  unless (-d "$finkdir/CVS") {
++    $cutoff = length($finkdir)+1;
++    find(sub {
++      if ($_ eq "CVS") {
++        $File::Find::prune = 1;
++        return;
++      }
++      return if (length($File::Find::name) <= $cutoff);
++      $rel = substr($File::Find::name, $cutoff);
++      if (-l and not -e "$tempfinkdir/$rel") {
++        $linkto = readlink($_)
++          or die "Can't read target of symlink $File::Find::name: $!\n";
++        if (&execute("ln -s '$linkto' '$tempfinkdir/$rel'")) {
++          die "Can't create symlink \"$tempfinkdir/$rel\"\n";
++        }
++      } elsif (-d and not -d "$tempfinkdir/$rel") {
++        if (&execute("mkdir '$tempfinkdir/$rel'")) {
++          die "Can't create directory \"$tempfinkdir/$rel\"\n";
++        }
++      } elsif (-f and not -f "$tempfinkdir/$rel") {
++        if ($use_hardlinks) {
++          $cmd = "ln";
++        } else {
++          $cmd = "cp -p"
++        }
++        $cmd .= " '$_' '$tempfinkdir/$rel'";
++        if (&execute($cmd)) {
++          die "Can't copy file \"$tempfinkdir/$rel\"\n";
++        }
++      }
++    }, $finkdir);
++
++    # switch $tempfinkdir to $finkdir
++    chdir $basepath or die "Can't cd to $basepath: $!\n";
++    if (&execute("mv $finkdir $finkdir.old")) {
++      die "Can't move \"$finkdir\" out of the way\n";
++    }
++    if (&execute("mv $tempfinkdir $finkdir")) {
++      die "Can't move new tree \"$tempfinkdir\" into place at \"$finkdir\". ".
++        "Warning: Your Fink installation is in an inconsistent state now.\n";
++    }
+   }
+   &execute("rm -rf $tempdir");
+ 
+@@ -327,21 +402,42 @@
+ ### call cvs update
+ 
+ sub do_direct_cvs {
+-  my ($descdir, @sb, $cmd, $username, $msg);
++  my ($descdir, @sb, $cmd, $cmdd, $username, $msg);
+ 
+-  $descdir = "$basepath/fink";
++  $descdir = "$basepath/lib/fink/mirror";
+   chdir $descdir or die "Can't cd to $descdir: $!\n";
+ 
+   @sb = stat("$descdir/CVS");
+   $cmd = "cvs -z3 update -d -P";
++  $msg = "I will now run the cvs command to retrieve the latest mirror ".  
++    "lists. ";
++
++  if ($sb[4] != 0 and $> != $sb[4]) {
++    ($username) = getpwuid($sb[4]);
++    $cmdd = "su $username -c '$cmd'";
++    $msg .= "The 'su' command will be used to run the cvs command as the ".
++      "user '$username'. ";   
++  }
++
++  print "\n";
++  &print_breaking($msg);
++  print "\n";
++
++  $ENV{CVS_RSH} = "ssh";
++  if (&execute($cmdd)) {
++    die "Updating using CVS failed. Check the error messages above.\n";
++  }
++
++  $descdir = "$basepath/fink";
++  chdir $descdir or die "Can't cd to $descdir: $!\n";
++
++  @sb = stat("$descdir/CVS");
+   $msg = "I will now run the cvs command to retrieve the latest package ".
+     "descriptions. ";
+ 
+   if ($sb[4] != 0 and $> != $sb[4]) {
+     ($username) = getpwuid($sb[4]);
+-    $cmd = "su $username -c '$cmd'";
+-    $msg .= "The 'su' command will be used to run the cvs command as the ".
+-      "user '$username'. ";
++    $cmdd = "su $username -c '$cmd'";
+   }
+ 
+   $msg .= "After that, the core packages will be updated right away; ".
+@@ -353,7 +449,7 @@
+   print "\n";
+ 
+   $ENV{CVS_RSH} = "ssh";
+-  if (&execute($cmd)) {
++  if (&execute($cmdd)) {
+     die "Updating using CVS failed. Check the error messages above.\n";
+   }
+ }
