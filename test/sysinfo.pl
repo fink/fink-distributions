@@ -1,4 +1,4 @@
-#$Id: sysinfo.pl,v 1.6 2001/09/29 02:42:13 kc8apf Exp $
+#$Id: sysinfo.pl,v 1.2 2002/08/22 15:18:24 thesin Exp $
 
 #!/usr/bin/perl -w
 
@@ -131,11 +131,14 @@ sub display_info
     #--MEMORY USED--#
     $MEMUSED = `top -l1 | grep PhysMem | cut -d":" -f2 | cut -d"," -f4`;
     chop ($MEMUSED);
-    $MEMUSED =~ / ([0-9]+)([KM]) used$/;
+    $MEMUSED =~ / ([0-9]+)([GKM]) used$/;
     $MEMUSED = $1;
     $MEMUSEDKM = $2;      
     if ($MEMUSEDKM =~ /^K$/) {
        $MEMUSED = $MEMUSED /  1024;
+    };
+    if ($MEMUSEDKM =~ /^G$/) {
+       $MEMUSED = $MEMUSED *  1024;
     };
 
     #--CONNECTION DEVICE--#
