@@ -74,7 +74,7 @@ sub info_help {
   IRC::print "      \002/infohelp\002 - Display this help information\n";
   IRC::print "      \002/enable\002   - Enables an option\n";
   IRC::print "           \002Usage:\002 /enable <option>\n";
-  IRC::print "      \002/disable\002  - Disables and option\n";
+  IRC::print "      \002/disable\002  - Disables an option\n";
   IRC::print "           \002Usage:\002 /disable <option>\n";
   IRC::print "      \002/conf\002     - Change configurations values\n";
   IRC::print "           \002Usage:\002 /conf <variable> <value>\n";
