@@ -1,0 +1,768 @@
+diff -ruN MPlayer-0.90pre4.orig/Gui/skin/skin.c MPlayer-0.90pre4/Gui/skin/skin.c
+--- MPlayer-0.90pre4.orig/Gui/skin/skin.c	Thu Apr 18 15:24:42 2002
++++ MPlayer-0.90pre4/Gui/skin/skin.c	Tue May 21 16:09:41 2002
+@@ -602,6 +602,7 @@
+  setname( skinMPlayerDir,dname );
+  if ( ( skinFile = fopen( fn,"rt" ) ) == NULL )
+   {
++   mp_msg( MSGT_GPLAYER,MSGL_STATUS,"[skin] file ( %s ) not found.\n",fn );
+    setname( skinDirInHome,dname );
+    if ( ( skinFile = fopen( fn,"rt" ) ) == NULL )
+     {
+diff -ruN MPlayer-0.90pre4.orig/Makefile MPlayer-0.90pre4/Makefile
+--- MPlayer-0.90pre4.orig/Makefile	Sat May 11 19:07:24 2002
++++ MPlayer-0.90pre4/Makefile	Tue May 21 16:09:41 2002
+@@ -20,7 +20,11 @@
+ #prefix = /usr/local
+ BINDIR = ${prefix}/bin
+ # BINDIR = /usr/local/bin
++ifeq ($(TARGET_OS), Darwin)
++MANDIR = ${prefix}/share/man
++else
+ MANDIR = ${prefix}/man
++endif
+ 
+ # a BSD compatible 'install' program
+ INSTALL = install
+@@ -51,7 +55,7 @@
+ endif
+ CFLAGS = $(OPTFLAGS) -Ilibmpdemux -Iloader $(VO_INC) $(EXTRA_INC) # -Wall
+ 
+-PARTS = libfame libmpdemux libmpcodecs mp3lib liba52 libmp1e libmpeg2 libavcodec libao2 drivers drivers/syncfb linux postproc input libmpdvdkit
++PARTS = libfame libmpdemux libmpcodecs mp3lib liba52 libmpeg2 libavcodec libao2 drivers linux postproc input libmpdvdkit
+ ifeq ($(VIDIX),yes)
+ PARTS += libdha vidix
+ endif
+diff -ruN MPlayer-0.90pre4.orig/configure MPlayer-0.90pre4/configure
+--- MPlayer-0.90pre4.orig/configure	Mon May 13 14:52:10 2002
++++ MPlayer-0.90pre4/configure	Thu May 23 09:57:17 2002
+@@ -30,13 +30,13 @@
+   echo >> "$TMPLOG"
+   cat "$TMPC" >> "$TMPLOG"
+   echo >> "$TMPLOG"
+-  echo "$_cc $_inc_extra $_ld_static $_ld_extra $TMPC -o $TMPO $@" >> "$TMPLOG"
++  echo "$_cc $CFLAGS $_inc_extra $_ld_static $_ld_extra $TMPC -o $TMPO $@" >> "$TMPLOG"
+   rm -f "$TMPO"
+-  ( "$_cc" $_inc_extra $_ld_static $_ld_extra "$TMPC" -o "$TMPO" "$@" ) >> "$TMPLOG" 2>&1
++  ( "$_cc" $CFLAGS $_inc_extra $_ld_static $_ld_extra "$TMPC" -o "$TMPO" "$@" ) >> "$TMPLOG" 2>&1
+   TMP="$?"
+   echo >> "$TMPLOG"
+-  echo "ldd $TMPO" >> "$TMPLOG"
+-  ( ldd "$TMPO" ) >> "$TMPLOG" 2>&1
++  echo "nm $TMPO" >> "$TMPLOG"
++  ( nm "$TMPO" ) >> "$TMPLOG" 2>&1
+   echo >> "$TMPLOG"
+   return "$TMP"
+ }
+@@ -367,6 +367,10 @@
+   _inc_extra="$_inc_extra -I/usr/local/include"
+ fi
+ 
++if darwin ; then
++  _ld_extra="$_ld_extra -L/usr/lib"
++  _inc_extra="$_inc_extra -I/usr/include"
++fi
+ 
+ # Checking CC version...
+ # gcc-3.0 merges optimizations coming from egcs, pgcc, agcc, ...
+@@ -1357,6 +1361,10 @@
+   # NOTE: needed for SunOS at least
+   _ld_sock="$_ld_sock -lresolv"
+   echores "yes (using $_ld_sock)"
++elif cc_check $_ld_sock -ldnet ; then
++  # NOTE: needed for Darwin at least
++  _ld_sock="$_ld_sock -ldnet"
++  echores "yes (using $_ld_sock)"
+ else
+   echores "no (=> streaming support disabled)"
+   _streaming=no
+@@ -1721,6 +1729,11 @@
+ else
+   _def_shm='#undef HAVE_SHM'
+ fi
++# Darwin Xfree86 has x-shm disabled thus shm has to be disabled
++if darwin ; then
++  _def_shm='#undef HAVE_SHM'
++  _shm='no (not supported by Darwin)'
++fi
+ echores "$_shm"
+ 
+ 
+@@ -2733,7 +2746,7 @@
+ echocheck "DVD support (libmpdvdkit)"
+ if test "$_dvdkit" = auto ; then
+  _dvdkit=no
+- if linux || freebsd || netbsd ; then
++ if linux || freebsd || netbsd || darwin; then
+   test -f "./libmpdvdkit/Makefile" && _dvdkit=yes
+  fi
+ fi
+@@ -2745,7 +2758,7 @@
+   fi
+   _def_dvd_linux='#undef HAVE_LINUX_DVD_STRUCT'
+   _def_dvd_bsd='#undef HAVE_BSD_DVD_STRUCT'
+-  if linux || netbsd || openbsd || bsdos ; then
++  if linux || netbsd || openbsd || bsdos || darwin; then
+     _def_dvd_linux='#define HAVE_LINUX_DVD_STRUCT 1'
+   else
+     if freebsd ; then
+@@ -3105,6 +3118,8 @@
+     cc_check  -lm -lgiconv && _iconv=yes
+   elif bsdos ; then
+     cc_check  -lm -liconv && _iconv=yes
++  elif darwin ; then
++    cc_check  -lm -liconv && _iconv=yes
+   else
+     cc_check -lm && _iconv=yes
+   fi
+@@ -3113,6 +3128,7 @@
+   _def_iconv='#define USE_ICONV 1'
+   freebsd && _ld_iconv='-lgiconv'
+   bsdos && _ld_iconv='-liconv'
++  darwin && _ld_iconv='-liconv'
+ else
+   _def_iconv='#undef USE_ICONV'
+ fi
+@@ -3279,7 +3295,7 @@
+   _xvid=no
+   _divx4linux=no
+   _opendivx=yes
+-  _ld_decore='-Lopendivx -ldecore'
++  _ld_decore='-ldivxdecore'
+   _def_decore='#undef NEW_DECORE'
+   _def_divx='#define USE_DIVX'
+   _def_divx5='#undef DECORE_DIVX5'
+diff -ruN MPlayer-0.90pre4.orig/etc/example.conf MPlayer-0.90pre4/etc/example.conf
+--- MPlayer-0.90pre4.orig/etc/example.conf	Sat May  4 22:46:09 2002
++++ MPlayer-0.90pre4/etc/example.conf	Tue May 21 16:09:41 2002
+@@ -8,13 +8,13 @@
+ ## more flexibly here. See below.
+ ##
+ 
+-# vo=xv			# To specify default video driver (see -vo help for
++vo=gl			# To specify default video driver (see -vo help for
+ 			# list)
+ 
+-# ao=oss		# To specify default audio driver (see -ao help for
++ao=sdl			# To specify default audio driver (see -ao help for
+ 			# list)
+ 
+-fs=yes			# Enlarges movie window to your desktop's size.
++# fs=yes		# Enlarges movie window to your desktop's size.
+ 			# Used by drivers: all
+ 
+ # fsmode=0		# This option workarounds some problems when using
+@@ -27,7 +27,7 @@
+ 			# 2 = old method (0.17a)
+ 			# 3 = ICCCWM patch + Motif method
+ 
+-# vm=no			# Tries to change to a different videomode
++vm=no			# Tries to change to a different videomode
+ 			# Used by drivers: dga2, x11, sdl
+ 
+ # bpp=0			# Force changing display depth.
+@@ -56,7 +56,7 @@
+ ##  and ~/.mplayer/Skin/yourskin)
+ ##
+ 
+-# skin = default
++skin = default
+ 
+ ##
+ ## Multiple languages are available :)
+@@ -123,7 +123,7 @@
+ framedrop 	= yes	# drop frames, when not in sync (slow CPU, videocard,
+ 			# etc)
+ 
+-# vfm		= 5	# use libavcodec video codec family (you know,
++vfm		= 5	# use libavcodec video codec family (you know,
+ 			# opensource DivX for example.. So preferred default on
+ 			# non-x86 boxes)
+ 
+@@ -145,4 +145,4 @@
+ ## Delete this default :)
+ ##
+ 
+-include = /home/gabucino/.mplayer/i_did_not_RTFM_carefully_enough...
++# include = /home/gabucino/.mplayer/i_did_not_RTFM_carefully_enough...
+diff -ruN MPlayer-0.90pre4.orig/libmpcodecs/vd_odivx.c MPlayer-0.90pre4/libmpcodecs/vd_odivx.c
+--- MPlayer-0.90pre4.orig/libmpcodecs/vd_odivx.c	Thu Mar 21 11:59:07 2002
++++ MPlayer-0.90pre4/libmpcodecs/vd_odivx.c	Tue May 21 18:15:26 2002
+@@ -34,7 +34,8 @@
+ LIBVD_EXTERN(odivx)
+ 
+ #ifndef NEW_DECORE
+-#include "opendivx/decore.h"
++#include "divx/decore.h"
++#include "postproc/openpostprocess.h"
+ #include "postproc/postprocess.h"
+ #else
+ #include <decore.h>
+diff -ruN MPlayer-0.90pre4.orig/libmpdvdkit/OSXioctl.h MPlayer-0.90pre4/libmpdvdkit/OSXioctl.h
+--- MPlayer-0.90pre4.orig/libmpdvdkit/OSXioctl.h	Wed Dec 31 17:00:00 1969
++++ MPlayer-0.90pre4/libmpdvdkit/OSXioctl.h	Tue May 21 16:09:41 2002
+@@ -0,0 +1,224 @@
++#ifndef	_DVD_H_
++#define	_DVD_H_
++
++#include <sys/cdefs.h>
++#include <machine/endian.h>
++#include <sys/ioctl.h>
++
++typedef	unsigned char __u8;
++typedef	unsigned short __u16;
++typedef	unsigned int __u32;
++
++/* DVD-ROM Specific ioctls */
++#define DVD_READ_STRUCT		0x5390  /* Read structure */
++#define DVD_WRITE_STRUCT	0x5391  /* Write structure */
++#define DVD_AUTH		0x5392  /* Authentication */
++
++/* DVD struct types */
++#define DVD_STRUCT_PHYSICAL	0x00
++#define DVD_STRUCT_COPYRIGHT	0x01
++#define DVD_STRUCT_DISCKEY	0x02
++#define DVD_STRUCT_BCA		0x03
++#define DVD_STRUCT_MANUFACT	0x04
++
++struct dvd_layer {
++        __u8 book_version       : 4;
++        __u8 book_type          : 4;
++        __u8 min_rate           : 4;
++        __u8 disc_size          : 4;
++        __u8 layer_type         : 4;
++        __u8 track_path         : 1;
++        __u8 nlayers            : 2;
++        __u8 track_density      : 4;
++        __u8 linear_density     : 4;
++        __u8 bca                : 1;
++        __u32 start_sector;
++        __u32 end_sector;
++        __u32 end_sector_l0;
++};
++
++#define DVD_LAYERS      4
++
++struct dvd_physical {
++        __u8 type;
++        __u8 layer_num;
++        struct dvd_layer layer[DVD_LAYERS];
++};
++
++struct dvd_copyright {
++	__u8 type;
++
++	__u8 layer_num;
++	__u8 cpst;
++	__u8 rmi;
++};
++
++struct dvd_disckey {
++	__u8 type;
++
++	unsigned agid           : 2;
++	__u8 value[2048];
++};
++
++struct dvd_bca {
++	__u8 type;
++
++	int len;
++	__u8 value[188];
++};
++
++struct dvd_manufact {
++	__u8 type;
++
++	__u8 layer_num;
++	int len;
++	__u8 value[2048];
++};
++
++typedef union {
++	__u8 type;
++
++	struct dvd_physical     physical;
++	struct dvd_copyright    copyright;
++	struct dvd_disckey      disckey;
++	struct dvd_bca          bca;
++	struct dvd_manufact     manufact;
++} dvd_struct;
++
++/*
++ * DVD authentication ioctl
++ */
++
++/* Authentication states */
++#define DVD_LU_SEND_AGID        0
++#define DVD_HOST_SEND_CHALLENGE 1
++#define DVD_LU_SEND_KEY1        2
++#define DVD_LU_SEND_CHALLENGE   3
++#define DVD_HOST_SEND_KEY2      4
++
++/* Termination states */
++#define DVD_AUTH_ESTABLISHED    5
++#define DVD_AUTH_FAILURE        6
++
++/* Other functions */
++#define DVD_LU_SEND_TITLE_KEY   7
++#define DVD_LU_SEND_ASF         8
++#define DVD_INVALIDATE_AGID     9
++#define DVD_LU_SEND_RPC_STATE   10
++#define DVD_HOST_SEND_RPC_STATE 11
++
++/* State data */
++typedef __u8 dvd_key[5];                /* 40-bit value, MSB is first elem. */
++typedef __u8 dvd_challenge[10]; /* 80-bit value, MSB is first elem. */
++
++struct dvd_lu_send_agid {
++	__u8 type;
++	unsigned agid           : 2;
++};
++
++struct dvd_host_send_challenge {
++	__u8 type;
++	unsigned agid           : 2;
++
++	dvd_challenge chal;
++};
++
++struct dvd_send_key {
++	__u8 type;
++	unsigned agid           : 2;
++
++	dvd_key key;
++};
++
++struct dvd_lu_send_challenge {
++	__u8 type;
++	unsigned agid           : 2;
++
++	dvd_challenge chal;
++};
++
++#define DVD_CPM_NO_COPYRIGHT    0
++#define DVD_CPM_COPYRIGHTED     1
++
++#define DVD_CP_SEC_NONE         0
++#define DVD_CP_SEC_EXIST        1
++
++#define DVD_CGMS_UNRESTRICTED   0
++#define DVD_CGMS_SINGLE         2
++#define DVD_CGMS_RESTRICTED     3
++
++struct dvd_lu_send_title_key {
++	__u8 type;
++	unsigned agid           : 2;
++
++	dvd_key title_key;
++	int lba;
++	unsigned cpm            : 1;
++	unsigned cp_sec         : 1;
++	unsigned cgms           : 2;
++};
++
++struct dvd_lu_send_asf {
++	__u8 type;
++	unsigned agid           : 2;
++
++	unsigned asf            : 1;
++};
++
++struct dvd_host_send_rpcstate {
++	__u8 type;
++	__u8 pdrc;
++};
++
++struct dvd_lu_send_rpcstate {
++	__u8 type               : 2;
++	__u8 vra                : 3;
++	__u8 ucca               : 3;
++	__u8 region_mask;
++	__u8 rpc_scheme;
++};
++
++typedef union {
++	__u8 type;
++
++	struct dvd_lu_send_agid         lsa;
++	struct dvd_host_send_challenge  hsc;
++	struct dvd_send_key             lsk;
++	struct dvd_lu_send_challenge    lsc;
++	struct dvd_send_key             hsk;
++	struct dvd_lu_send_title_key    lstk;
++	struct dvd_lu_send_asf          lsasf;
++	struct dvd_host_send_rpcstate   hrpcs;
++	struct dvd_lu_send_rpcstate     lrpcs;
++} dvd_authinfo;
++
++struct request_sense {
++#if defined(__BIG_ENDIAN_BITFIELD)
++	__u8 valid              : 1;
++	__u8 error_code         : 7;
++#elif defined(__LITTLE_ENDIAN_BITFIELD)
++	__u8 error_code         : 7;
++	__u8 valid              : 1;
++#endif
++	__u8 segment_number;
++#if defined(__BIG_ENDIAN_BITFIELD)
++	__u8 reserved1          : 2;
++	__u8 ili                : 1;
++	__u8 reserved2          : 1;
++	__u8 sense_key          : 4;
++#elif defined(__LITTLE_ENDIAN_BITFIELD)
++	__u8 sense_key          : 4;
++	__u8 reserved2          : 1;
++	__u8 ili                : 1;
++	__u8 reserved1          : 2;
++#endif
++	 __u8 information[4];
++	__u8 add_sense_len;
++	__u8 command_info[4];
++	__u8 asc;
++	__u8 ascq;
++	__u8 fruc;
++	__u8 sks[3];
++	__u8 asb[46];
++};
++#endif /* _DVD_H_ */
+diff -ruN MPlayer-0.90pre4.orig/libmpdvdkit/dvd_reader.c MPlayer-0.90pre4/libmpdvdkit/dvd_reader.c
+--- MPlayer-0.90pre4.orig/libmpdvdkit/dvd_reader.c	Wed May  1 03:29:05 2002
++++ MPlayer-0.90pre4/libmpdvdkit/dvd_reader.c	Tue May 21 16:09:41 2002
+@@ -28,7 +28,7 @@
+ #include <limits.h>
+ #include <dirent.h>
+ 
+-#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__bsdi__)
++#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__bsdi__) || defined(__APPLE__)
+ #define SYS_BSD 1
+ #endif
+ 
+diff -ruN MPlayer-0.90pre4.orig/libmpdvdkit/ioctl.c MPlayer-0.90pre4/libmpdvdkit/ioctl.c
+--- MPlayer-0.90pre4.orig/libmpdvdkit/ioctl.c	Thu May  9 03:06:44 2002
++++ MPlayer-0.90pre4/libmpdvdkit/ioctl.c	Tue May 21 16:09:41 2002
+@@ -69,8 +69,8 @@
+ //#include "config.h"
+ #include "common.h"
+ 
+-#ifdef SYS_DARWIN
+-#   include "MacOSX_dvdioctl/DVDioctl.h"
++#if defined(SYS_DARWIN) || defined(__APPLE__)
++#   include "OSXioctl.h"
+ #endif
+ 
+ #include "ioctl.h"
+@@ -149,7 +149,7 @@
+     *pi_copyright = p_buffer[ 4 ];
+     // s->copyright.rmi = p_buffer[ 5 ];
+ 
+-#elif defined( SYS_DARWIN )
++#elif defined( SYS_DARWIN ) || defined(__APPLE__)
+     *pi_copyright = 1;
+ 
+     i_ret = 0;
+@@ -288,7 +288,7 @@
+ 
+     memcpy( p_key, p_buffer + 4, 2048 );
+ 
+-#elif defined( SYS_DARWIN )
++#elif defined( SYS_DARWIN ) || defined(__APPLE__)
+     i_ret = 0;
+ 
+     memset( p_key, 0x00, 2048 );
+@@ -392,7 +392,7 @@
+ 
+     *pi_agid = p_buffer[ 7 ] >> 6;
+     
+-#elif defined( SYS_DARWIN )
++#elif defined( SYS_DARWIN ) || defined(__APPLE__)
+     INIT_DVDIOCTL( 8 );
+ 
+     dvdioctl.i_keyformat = kCSSAGID;
+@@ -483,7 +483,7 @@
+ 
+     memcpy( p_challenge, p_buffer + 4, 12 );
+     
+-#elif defined( SYS_DARWIN )
++#elif defined( SYS_DARWIN ) || defined(__APPLE__)
+     INIT_DVDIOCTL( 16 );
+ 
+     dvdioctl.i_keyformat = kChallengeKey;
+@@ -589,7 +589,7 @@
+ 
+     *pi_asf = p_buffer[ 7 ] & 1;
+     
+-#elif defined( SYS_DARWIN )
++#elif defined( SYS_DARWIN ) || defined(__APPLE__)
+     INIT_DVDIOCTL( 8 );
+ 
+     dvdioctl.i_keyformat = kASF;
+@@ -695,7 +695,7 @@
+ 
+     memcpy( p_key, p_buffer + 4, 8 );;
+     
+-#elif defined( SYS_DARWIN )
++#elif defined( SYS_DARWIN ) || defined(__APPLE__)
+     INIT_DVDIOCTL( 12 );
+ 
+     dvdioctl.i_keyformat = kKey1;
+@@ -789,7 +789,7 @@
+         i_ret = -1;
+     }
+ 
+-#elif defined( SYS_DARWIN )
++#elif defined( SYS_DARWIN ) || defined(__APPLE__)
+     INIT_DVDIOCTL( 0 );
+ 
+     dvdioctl.i_keyformat = kInvalidateAGID;
+@@ -880,7 +880,7 @@
+ 
+     return 0;
+     
+-#elif defined( SYS_DARWIN )
++#elif defined( SYS_DARWIN ) || defined(__APPLE__)
+     INIT_DVDIOCTL( 16 );
+ 
+     dvdioctl.i_keyformat = kChallengeKey;
+@@ -1010,7 +1010,7 @@
+         return WinSendSSC( i_fd, &ssc );
+     }
+ 
+-#elif defined( SYS_DARWIN )
++#elif defined( SYS_DARWIN ) || defined(__APPLE__)
+     INIT_DVDIOCTL( 12 );
+ 
+     dvdioctl.i_keyformat = kKey2;
+diff -ruN MPlayer-0.90pre4.orig/libvo/vo_sdl.c MPlayer-0.90pre4/libvo/vo_sdl.c
+--- MPlayer-0.90pre4.orig/libvo/vo_sdl.c	Mon Apr 29 03:52:21 2002
++++ MPlayer-0.90pre4/libvo/vo_sdl.c	Thu May 23 08:22:43 2002
+@@ -95,7 +95,7 @@
+ #undef SDL_NOHWSURFACE
+ 
+ /* define to enable surface locks, this might be needed on SMP machines */
+-#undef SDL_ENABLE_LOCKS
++#define SDL_ENABLE_LOCKS
+ 
+ //#define BUGGY_SDL //defined by configure
+ 
+diff -ruN MPlayer-0.90pre4.orig/loader/ldt_keeper.c MPlayer-0.90pre4/loader/ldt_keeper.c
+--- MPlayer-0.90pre4.orig/loader/ldt_keeper.c	Sat Apr 27 16:42:26 2002
++++ MPlayer-0.90pre4/loader/ldt_keeper.c	Tue May 21 16:09:41 2002
+@@ -20,7 +20,7 @@
+ #include <asm/unistd.h>
+ #include <asm/ldt.h>
+ #else
+-#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__OpenBSD__)
++#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__OpenBSD__) 
+ #include <machine/segments.h>
+ #include <machine/sysarch.h>
+ #endif
+@@ -91,12 +91,14 @@
+ #ifdef __cplusplus
+ extern "C"
+ #endif
++#ifndef __APPLE__
+ void Setup_FS_Segment(void)
+ {
+     __asm__ __volatile__(
+ 	"movl %0,%%eax; movw %%ax, %%fs" : : "i" (TEB_SEL)
+     );
+ }
++#endif /* __APPLE__ */
+ 
+ #ifdef __linux__
+ /* XXX: why is this routine from libc redefined here? */
+diff -ruN MPlayer-0.90pre4.orig/loader/wine/winnt.h MPlayer-0.90pre4/loader/wine/winnt.h
+--- MPlayer-0.90pre4.orig/loader/wine/winnt.h	Wed Mar 20 15:31:52 2002
++++ MPlayer-0.90pre4/loader/wine/winnt.h	Tue May 21 16:09:41 2002
+@@ -420,7 +420,7 @@
+ #endif  /* _MIPS_ */
+ 
+ /* PowerPC context definitions */
+-#ifdef __PPC__
++#if defined(__PPC__) || defined(__APPLE__)
+ 
+ #define CONTEXT_CONTROL         0x0001
+ #define CONTEXT_FLOATING_POINT  0x0002
+diff -ruN MPlayer-0.90pre4.orig/mplayer.c MPlayer-0.90pre4/mplayer.c
+--- MPlayer-0.90pre4.orig/mplayer.c	Thu May  9 02:59:07 2002
++++ MPlayer-0.90pre4/mplayer.c	Tue May 21 16:09:41 2002
+@@ -413,7 +413,7 @@
+ {
+ char *conffile;
+ int conffile_fd;
+-if (m_config_parse_config_file(conf, "/etc/mplayer.conf") < 0)
++if (m_config_parse_config_file(conf, "@FINKPREFIX@/etc/mplayer.conf") < 0)
+   exit(1);
+ if ((conffile = get_path("")) == NULL) {
+   mp_msg(MSGT_CPLAYER,MSGL_WARN,MSGTR_NoHomeDir);
+diff -ruN MPlayer-0.90pre4.orig/postproc/openpostprocess.h MPlayer-0.90pre4/postproc/openpostprocess.h
+--- MPlayer-0.90pre4.orig/postproc/openpostprocess.h	Wed Dec 31 17:00:00 1969
++++ MPlayer-0.90pre4/postproc/openpostprocess.h	Thu May 23 11:22:28 2002
+@@ -0,0 +1,100 @@
++/**************************************************************************
++ *                                                                        *
++ * This code has been developed by John Funnell. This software is an      *
++ * implementation of a part of one or more MPEG-4 Video tools as          *
++ * specified in ISO/IEC 14496-2 standard.  Those intending to use this    *
++ * software module in hardware or software products are advised that its  *
++ * use may infringe existing patents or copyrights, and any such use      *
++ * would be at such party's own risk.  The original developer of this     *
++ * software module and his/her company, and subsequent editors and their  *
++ * companies (including Project Mayo), will have no liability for use of  *
++ * this software or modifications or derivatives thereof.                 *
++ *                                                                        *
++ * Project Mayo gives users of the Codec a license to this software       *
++ * module or modifications thereof for use in hardware or software        *
++ * products claiming conformance to the MPEG-4 Video Standard as          *
++ * described in the Open DivX license.                                    *
++ *                                                                        *
++ * The complete Open DivX license can be found at                         *
++ * http://www.projectmayo.com/opendivx/license.php                        *
++ *                                                                        *
++ **************************************************************************/
++/**
++*  Copyright (C) 2001 - Project Mayo
++ *
++ * John Funnell
++ *
++ * DivX Advanced Research Center <darc@projectmayo.com>
++**/
++// postprocess.h //
++
++/* Currently this contains only the deblocking filter.  The vertial    */
++/* deblocking filter operates over eight pixel-wide columns at once.  The  */
++/* horizontal deblocking filter works on four horizontals row at a time. */
++
++/* Picture height must be multiple of 8, width a multiple of 16 */
++
++
++
++#ifndef POSTPROCESS_H
++#define POSTPROCESS_H
++
++
++
++#ifdef WIN32
++#include "portab.h"
++#else
++#include <inttypes.h>
++#endif // WIN32
++
++
++/**** Compile-time options ****/
++
++/* the following parameters allow for some tuning of the postprocessor */
++#define DEBLOCK_HORIZ_USEDC_THR    (28 -  8)
++#define DEBLOCK_VERT_USEDC_THR     (56 - 16)
++
++/* SHOWDECISIONS(_H/_V) enables you to see where the deblocking filter has used DC filtering (black) and default filtering (white) */
++//#define SHOWDECISIONS_H
++//#define SHOWDECISIONS_V
++
++/* When defined, PP_SELF_CHECK causes the postfilter to double check every */
++/* computation it makes.  For development use. */
++//#define PP_SELF_CHECK
++
++/* Type to use for QP. This may depend on the decoder's QP store implementation */
++//#define TSINGHUA
++
++#define QP_STORE_T int
++
++#ifdef TSINGHUA
++#define QP_STORE_T int16_t
++#endif
++
++/*** decore parameter mask ***/
++#define PP_DEBLOCK_Y_H_MASK		0x00ff0000
++#define PP_DEBLOCK_Y_V_MASK		0x0000ff00
++#define PP_DERING_Y_MASK			0x000000ff
++
++/**** Function prototype - entry point for postprocessing ****/
++
++void odivx_postprocess(unsigned char * src[], int src_stride,
++                       unsigned char * dst[], int dst_stride,
++                       int horizontal_size,   int vertical_size,
++                       QP_STORE_T *QP_store,  int QP_stride, int mode);
++
++/**** mode flags to control postprocessing actions ****/
++#define PP_DEBLOCK_Y_H  0x00000001  /* Luma horizontal deblocking   */
++#define PP_DEBLOCK_Y_V  0x00000002  /* Luma vertical deblocking     */
++#define PP_DEBLOCK_C_H  0x00000004  /* Chroma horizontal deblocking */
++#define PP_DEBLOCK_C_V  0x00000008  /* Chroma vertical deblocking   */
++#define PP_DERING_Y     0x00000010  /* Luma deringing               */
++#define PP_DERING_C     0x00000020  /* Chroma deringing             */
++#define PP_DONT_COPY    0x10000000  /* Postprocessor will not copy src -> dst */
++                                    /* instead, it will operate on dst only   */
++
++
++
++
++
++#endif
+diff -ruN MPlayer-0.90pre4.orig/postproc/postprocess.c MPlayer-0.90pre4/postproc/postprocess.c
+--- MPlayer-0.90pre4.orig/postproc/postprocess.c	Sat Jan 19 10:01:03 2002
++++ MPlayer-0.90pre4/postproc/postprocess.c	Thu May 23 20:19:51 2002
+@@ -520,8 +520,61 @@
+ }
+ 
+ #ifdef HAVE_ODIVX_POSTPROCESS
+-#include "../opendivx/postprocess.h"
++#include "openpostprocess.h"
+ int use_old_pp=0;
++
++extern void odivx_postprocess(unsigned char * src[], int src_stride,
++                              unsigned char * dst[], int dst_stride,
++                              int horizontal_size,   int vertical_size,
++                              QP_STORE_T *QP_store,  int QP_stride, int mode) {
++        uint8_t *Y, *U, *V;
++        int x, y;
++
++        if (!(mode & PP_DONT_COPY)) {
++                /* First copy source to destination... */
++                /* luma */
++                for (y=0; y<vertical_size; y++) {
++                        for (x=0; x<horizontal_size; x++) {
++                                (dst[0])[y*dst_stride + x] = (src[0])[y*src_stride + x];
++                        }
++                }
++                /* chroma */
++                for (y=0; y<vertical_size/2; y++) {
++                        for (x=0; x<horizontal_size/2; x++) {
++                                (dst[1])[y*dst_stride/2 + x] = (src[1])[y*src_stride/2 + x];
++                                (dst[2])[y*dst_stride/2 + x] = (src[2])[y*src_stride/2 + x];
++                        }
++                }
++        }
++                                          
++        Y = dst[0];
++        U = dst[1];
++        V = dst[2];
++
++        if (mode & PP_DEBLOCK_Y_H) {
++                deblock_horiz(Y, horizontal_size,   vertical_size,   dst_stride, QP_store, QP_stride, 0);
++        }
++        if (mode & PP_DEBLOCK_Y_V) {
++                deblock_vert( Y, horizontal_size,   vertical_size,   dst_stride, QP_store, QP_stride, 0);
++        }
++        if (mode & PP_DEBLOCK_C_H) {
++                deblock_horiz(U, horizontal_size/2, vertical_size/2, dst_stride, QP_store, QP_stride, 1);
++                deblock_horiz(V, horizontal_size/2, vertical_size/2, dst_stride, QP_store, QP_stride, 1);
++        }
++        if (mode & PP_DEBLOCK_C_V) {
++                deblock_vert( U, horizontal_size/2, vertical_size/2, dst_stride, QP_store, QP_stride, 1);
++                deblock_vert( V, horizontal_size/2, vertical_size/2, dst_stride, QP_store, QP_stride, 1);
++        }
++        if (mode & PP_DERING_Y) {
++                dering(       Y, horizontal_size,   vertical_size,   dst_stride, QP_store, QP_stride, 0);
++        }
++        if (mode & PP_DERING_C) {
++                dering(       U, horizontal_size/2, vertical_size/2, dst_stride, QP_store, QP_stride, 1);
++                dering(       V, horizontal_size/2, vertical_size/2, dst_stride, QP_store, QP_stride, 1);
++        }
++
++}
++
+ #endif
+ 
+ //static void postProcess(uint8_t src[], int srcStride, uint8_t dst[], int dstStride, int width, int height,

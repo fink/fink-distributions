@@ -1,0 +1,187 @@
+diff -ruN fink.orig/fink.in fink.thesin/fink.in
+--- fink.orig/fink.in	Mon Jun 24 09:21:55 2002
++++ fink.thesin/fink.in	Mon Jun 24 11:04:39 2002
+@@ -38,8 +38,8 @@
+ 
+ Getopt::Long::Configure(qw(bundling ignore_case require_order));
+ GetOptions('yes|y' => \$options{dontask},
+-	   'quiet|q' => sub { $options{verbosity}-- },
+-	   'verbose|v' => sub { $options{verbosity}++ },
++	   'quiet|q' => sub { $options{verbosity} = -1 },
++	   'verbose|v' => sub { $options{verbosity} = 3 },
+ #	   'interactive|i' => \$options{interactive},
+ 	   'version|V' => \&show_version,
+ 	   'help|h|?' => \&show_help)
+diff -ruN fink.orig/perlmod/Fink/Config.pm fink.thesin/perlmod/Fink/Config.pm
+--- fink.orig/perlmod/Fink/Config.pm	Mon Jun 24 09:21:53 2002
++++ fink.thesin/perlmod/Fink/Config.pm	Mon Jun 24 11:14:53 2002
+@@ -229,17 +229,29 @@
+   return $default;
+ }
+ 
+-### determine whether verbose mode is on or off
++### determine whether verbose mode is on or off and level -v equals full and 
++### can override
+ 
+ sub is_verbose {
+-  my $verbosity;
++  my ($verbosity, $verblevel);
+ 
++  $verblevel = $config->param("Verbose");
+   $verbosity = get_option("verbosity");
+-  
+-  if ($verbosity != 0) {
+-    return ($verbosity>0)
++ 
++  if ($verbosity == 3 || $verblevel eq "true" || $verblevel eq "high") {
++    ### Sets Verbose mode to Full
++    $verbosity = 3;
++  } elsif ($verbosity != -1 && $verblevel eq "medium") {
++    ### Sets Verbose mode to download and tarballs
++    $verbosity = 2;
++  } elsif ($verbosity != -1 && $verblevel eq "low") {
++    ### Sets Verbose mode to download
++    $verbosity = 1;
++  } else {
++    ### Sets Verbose mode to none
++    $verbosity = 0;
+   }
+-  return $config->param_boolean("Verbose");
++  return $verbosity;
+ }
+ 
+ 
+diff -ruN fink.orig/perlmod/Fink/Configure.pm fink.thesin/perlmod/Fink/Configure.pm
+--- fink.orig/perlmod/Fink/Configure.pm	Mon Jun 24 09:21:53 2002
++++ fink.thesin/perlmod/Fink/Configure.pm	Mon Jun 24 09:30:29 2002
+@@ -65,9 +65,9 @@
+   }
+ 
+   $verbose =
+-    &prompt_boolean("Always print verbose messages?",
+-		    $config->param_boolean("Verbose"));
+-  $config->set_param("Verbose", $verbose ? "true" : "false");
++    &prompt("Enter the level to print verbose messages? (none, low, medium, high)",
++		    $config->param_default("Verbose", "false"));
++  $config->set_param("Verbose", $verbose);
+ 
+ 
+   # proxy settings
+diff -ruN fink.orig/perlmod/Fink/Engine.pm fink.thesin/perlmod/Fink/Engine.pm
+--- fink.orig/perlmod/Fink/Engine.pm	Mon Jun 24 09:21:53 2002
++++ fink.thesin/perlmod/Fink/Engine.pm	Mon Jun 24 11:03:17 2002
+@@ -179,10 +179,10 @@
+   if (Fink::Config::get_option("dontask")) {
+     $cmd .= " --yes";
+   }
+-  if (Fink::Config::get_option("verbosity")>0) {
++  if (Fink::Config::get_option("verbosity") == 3) {
+     $cmd .= " --verbose";
+   }
+-  elsif (Fink::Config::get_option("verbosity")<0) {
++  elsif (Fink::Config::get_option("verbosity") == -1) {
+     $cmd .= " --quiet";
+   }
+   if (Fink::Config::get_option("interactive")) {
+@@ -756,7 +756,7 @@
+   my ($answer, $s);
+   my (%already_rebuilt, %already_activated);
+ 
+-  if (Fink::Config::is_verbose()) {
++  if (Fink::Config::is_verbose() > -1) {
+     $showlist = 1;
+   }
+ 
+diff -ruN fink.orig/perlmod/Fink/NetAccess.pm fink.thesin/perlmod/Fink/NetAccess.pm
+--- fink.orig/perlmod/Fink/NetAccess.pm	Mon Jun 24 09:21:53 2002
++++ fink.thesin/perlmod/Fink/NetAccess.pm	Mon Jun 24 11:24:59 2002
+@@ -214,7 +214,7 @@
+   # check if we have curl
+   if (-x "$basepath/bin/curl" or -x "/usr/bin/curl") {
+     $cmd = "curl -f -L";
+-    if (not Fink::Config::is_verbose()) {
++    if (Fink::Config::is_verbose() == 0) {
+       $cmd .= " -s -S";
+     }
+     if (not $config->param_boolean("ProxyPassiveFTP")) {
+@@ -234,7 +234,7 @@
+   if ((!$cmd or $config->param_default("DownloadMethod") eq "wget") and
+       (-x "$basepath/bin/wget" or -x "/usr/bin/wget")) {
+     $cmd = "wget";
+-    if (Fink::Config::is_verbose()) {
++    if (Fink::Config::is_verbose() > 0) {
+       $cmd .= " --verbose";
+     } else {
+       $cmd .= " --non-verbose";
+@@ -258,7 +258,7 @@
+     if ($config->param_default("DownloadMethod") eq "axelautomirror") {
+       $cmd = "axel -S 1";
+     }
+-    if (Fink::Config::is_verbose()) {
++    if (Fink::Config::is_verbose() > 0) {
+       $cmd .= " --verbose";
+     }
+     if ($file ne &filename($url)) {
+diff -ruN fink.orig/perlmod/Fink/PkgVersion.pm fink.thesin/perlmod/Fink/PkgVersion.pm
+--- fink.orig/perlmod/Fink/PkgVersion.pm	Mon Jun 24 09:21:53 2002
++++ fink.thesin/perlmod/Fink/PkgVersion.pm	Mon Jun 24 11:25:29 2002
+@@ -764,7 +764,7 @@
+   my ($pkgname, $package, $version, $pkgversion);
+   my ($found, @parts, $i, @vlist, $v, @rlist);
+ 
+-  if (not Fink::Config::is_verbose()) {
++  if (Fink::Config::is_verbose() < 3) {
+     $quiet = 1;
+   }
+ 
+@@ -921,7 +921,7 @@
+   $bdir = $self->get_fullname();
+ 
+   $verbosity = "";
+-  if (Fink::Config::is_verbose()) {
++  if (Fink::Config::is_verbose() > 1) {
+     $verbosity = "v";
+   }
+ 
+diff -ruN fink.orig/perlmod/Fink/SelfUpdate.pm fink.thesin/perlmod/Fink/SelfUpdate.pm
+--- fink.orig/perlmod/Fink/SelfUpdate.pm	Mon Jun 24 09:21:53 2002
++++ fink.thesin/perlmod/Fink/SelfUpdate.pm	Mon Jun 24 11:25:09 2002
+@@ -374,7 +374,7 @@
+   }
+ 
+   $verbosity = "";
+-  if (Fink::Config::is_verbose()) {
++  if (Fink::Config::is_verbose() > 1) {
+     $verbosity = "v";
+   }
+   $unpack_cmd = "tar -xz${verbosity}f $pkgtarball";
+diff -ruN fink.orig/perlmod/Fink/Validation.pm fink.thesin/perlmod/Fink/Validation.pm
+--- fink.orig/perlmod/Fink/Validation.pm	Mon Jun 24 09:21:54 2002
++++ fink.thesin/perlmod/Fink/Validation.pm	Mon Jun 24 10:23:54 2002
+@@ -171,7 +171,7 @@
+   my $looks_good = 1;
+   my $error_found = 0;
+ 
+-  if (Fink::Config::is_verbose()) {
++  if (Fink::Config::is_verbose() == 3) {
+     print "Validating package file $filename...\n";
+   }
+   
+@@ -292,7 +292,7 @@
+     print "Error: Length of package description exceeds 60 characters. ($filename)\n";
+     $looks_good = 0;
+   }
+-  elsif (length($value) > 45 and Fink::Config::is_verbose()) {
++  elsif (length($value) > 45 and Fink::Config::is_verbose() == 3) {
+     print "Warning: Length of package description exceeds 45 characters. ($filename)\n";
+     $looks_good = 0;
+   }
+@@ -338,7 +338,7 @@
+     }
+   }
+   
+-  if ($looks_good and Fink::Config::is_verbose()) {
++  if ($looks_good and Fink::Config::is_verbose() == 3) {
+     print "Package looks good!\n";
+   }
+ }
