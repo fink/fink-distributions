@@ -27,6 +27,7 @@ use Fink::Base;
 use Fink::Services qw(&latest_version);
 use Fink::Config qw($basepath);
 use Fink::Package;
+use Fink::PkgVersion;
 
 use strict;
 use warnings;
@@ -78,6 +79,11 @@ sub run_dependscheck {
     return;
   } 
 
+  unless (check_installed($pkgname)) {
+    print "Package \"$pkgname\" NOT installed\n";
+    exit 1;
+  }
+
   print "Scanning ${pkgname} for a list of lib depends\n\n";
   @depends = &check_pkg($pkgname);
 
@@ -117,18 +123,40 @@ sub run_dependscheck {
   return;
 }
 
+### Check if pkg is installed
+sub check_installed {
+  my $pattern = shift;
+  my (@allnames, @selected, $pname, $package, $lversion, $vo);
+
+  Fink::Package->require_packages();
+  @allnames = Fink::Package->list_packages();
+  @selected = ();
+  $pattern = lc quotemeta $pattern;
+  push @selected, grep(/^$pattern$/, @allnames);
+  foreach $pname (sort @selected) {
+    $package = Fink::Package->package_by_name($pname);
+    unless ($package->is_virtual()) {
+      $lversion = &latest_version($package->list_versions());
+      $vo = $package->get_version($lversion);
+      if ($vo->is_installed()) {
+        return 1;
+      }
+    }
+  }
+
+  return 0;
+}
+
 ### Get Depend version
 sub get_dependversion {
-  my ($pattern);
+  my $pattern = shift;
   my ($vo, $lversion, @allnames, @selected, $pname, $package);
 
   Fink::Package->require_packages();
   @allnames = Fink::Package->list_packages();
   @selected = ();
-  while (defined($pattern = shift)) {
-    $pattern = lc quotemeta $pattern;
-    push @selected, grep(/^$pattern$/, @allnames);
-  }
+  $pattern = lc quotemeta $pattern;
+  push @selected, grep(/^$pattern$/, @allnames);
   foreach $pname (sort @selected) {
     $package = Fink::Package->package_by_name($pname);
     $lversion = &latest_version($package->list_versions());
@@ -181,19 +209,7 @@ sub check_pkg {
   while (<DPKG>) {
     chomp();
     next if (-d "$_");			# Drop  directories
-#    if ("$_" =~ /\.dylib/) {		# Check for (.dylib) libs
-      push(@files, $_);
-#    } elsif ("$_" =~ /\.a/) {		# Check for (.a) libs
-#      push(@files, $_);
-#    } elsif ("$_" =~ /\.so/) {		# Check for (.so) libs
-#      push(@files, $_);
-#    } elsif ("$_" =~ /\/bin\//) {	# Check for anything in %p/bin
-#      push(@files, $_);
-#    } elsif ("$_" =~ /\/sbin\//) {	# Check for anything in %p/sbin
-#      push(@files, $_);
-    #} else {				# Drop everything else
-#      next;
-#    }
+    push(@files, $_);			# all other files get checked
   }
   close (DPKG);
 
