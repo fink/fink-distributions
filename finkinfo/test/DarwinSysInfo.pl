@@ -809,10 +809,20 @@ sub get_xmms_info {
 }
 
 sub get_itunes_info {
-  my $get_track = qq(tell application "iTunes"
-        set this_file to the location of current track
-        set this_name to the name of current track
-        set this_time to the time of current track
+  my $get_track = qq(set this_file to ""
+set this_name to ""
+set this_time to ""
+tell application "Finder"
+	if process "iTunes" exists then
+		tell application "iTunes"
+			set this_state to the player state
+			if (this_state is playing) then
+       			 	set this_file to the location of current track
+        			set this_name to the name of current track
+       			 	set this_time to the time of current track
+			end if
+		end tell
+	end if
 end tell
 return this_file & this_name & this_time);
 
@@ -825,10 +835,11 @@ return this_file & this_name & this_time);
   ($song_file, $song_name, $song_time) = split(/, /, $temp);
 
   $song_file =~ s/:/\//g;
-  $song_file = "/Volumes/".$song_file;
+  if ($song_file ne "") {
+  	$song_file = "/Volumes/".$song_file;
+  }
 
   unless (-e $song_file) {
-     IRC::print "\0034Can't find: $song_file!\0034";
      return 1;
   }
 
@@ -866,17 +877,17 @@ sub get_mp4_info {
 
 sub get_song {
   if ($ENABLEXMMS =~ m/true/i) {
-    if (get_xmms_info()) {
-      return 1;
-    }
     $player = "XMMS";
+    if (get_xmms_info()) {
+      return 0;
+    }
   }
 
   if ($ENABLEITUNES =~ m/true/i) {
-    if (get_itunes_info()) {
-      return 1;
-    }
     $player = "iTunes";
+    if (get_itunes_info()) {
+      return 0;
+    }
   }
 
   if ($file_ext =~ m/m4a/i) {
@@ -1044,11 +1055,7 @@ sub display_song {
   if ($out == 1) {
     return 1;
   } elsif (length($out) < 5) {
-    if ($ENABLEXMMS =~ m/true/i) {
-      IRC::print "\0034Must have XMMS running at least!\n";
-    } elsif ($ENABLEITUNES =~ m/true/i) {
-      IRC::print "\0034Must have iTunes running at least!\n";
-    }
+    IRC::print "\0034Must have $player running and playing!\n";
     return 1;
   }
 
