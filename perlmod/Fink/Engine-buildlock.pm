@@ -204,6 +204,8 @@ sub process {
 	}
 	eval { &$proc(@_); };
 	if ($@) {
+		my $locker = Fink::Config::get_option("Buildlock_PkgVersion");
+		$locker->clear_buildlock() if ref $locker;
 		print "Failed: $@";
 		return $? || 1;
 	}
@@ -1754,20 +1756,11 @@ sub real_install {
 					### Double check it didn't already get
 					### installed in an other loop
 					if (!$package->is_installed() || $op == $OP_REBUILD) {
-						$package->set_buildlock();
-						$SIG{__DIE__} =
-							sub {
-								$^S   # skip parser errors and die() in eval{}
-									&&
-								$package->clear_buildlock();
-							};  # clear buildlock if we crash while building
 						$package->phase_unpack();
 						$package->phase_patch();
 						$package->phase_compile();
 						$package->phase_install();
 						$package->phase_build();
-						$SIG{__DIE__} = 'DEFAULT';
-						$package->clear_buildlock();
 					} else {
 						&real_install($OP_BUILD, 0, 1, $package->get_name());
 					}

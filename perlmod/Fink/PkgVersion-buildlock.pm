@@ -2700,13 +2700,18 @@ sub phase_purge_recursive {
 	Fink::Status->invalidate();
 }
 
+# create an exclusive lock for the %f of the parent using dpkg
 sub set_buildlock {
 	my $self = shift;
 
+	# lock is always for parent of family
 	if (exists $self->{parent}) {
 		($self->{parent})->set_buildlock();
 		return;
 	}
+
+	# bootstrapping occurs before we have package-management tools needed for buildlock
+	return if $self->{_bootstrap};
 
 	my $lockpkg_minor = 'fink-buildlock-' . $self->get_fullname();
 	my $lockpkg = $lockpkg_minor . '-' .  strftime "%Y.%m.%d-%H.%M.%S", localtime;
@@ -2776,7 +2781,7 @@ EOF
 						"the directory manually to save disk space. ".
 						"Continuing with normal procedure.");
 
-	# install $lockpkg (== set lockfile for building $self)
+	# install lockpkg (== set lockfile for building ourself)
 	print "Setting build lock...\n";
 	my $debfile = $buildpath.'/'.$lockpkg.'_0-0_'.$debarch.'.deb';
 	my $lock_failed = &execute("dpkg -i $debfile");
@@ -2784,28 +2789,44 @@ EOF
 		&print_breaking("WARNING: Can't remove binary package file ".
 						"$debfile. ".
 						"This is not fatal, but you may want to remove ".
-						"the directory manually to save disk space. ".
+						"the file manually to save disk space. ".
 						"Continuing with normal procedure.");
 	if ($lock_failed) {
 		die "Can't set build lock for " . $self->get_fullname() . "\n";
 	}
+
+	# save ref to ourself in global config so can remove lock if build dies
+	Fink::Config::set_options( { "Buildlock_PkgVersion" => $self } );
 }
 
+# remove the lock created by set_buildlock
 sub clear_buildlock {
 	my $self = shift;
 
+	# lock is always for parent of family
 	if (exists $self->{parent}) {
 		($self->{parent})->clear_buildlock();
 		return;
 	}
+
+	# bootstrapping occurs before we have package-management tools needed for buildlock
+	return if $self->{_bootstrap};
 
 	my $lockpkg = $self->{_lockpkg};
 
 	# remove $lockpkg (== clear lock for building $self)
 	print "Removing build lock...\n";
 	if (&execute("dpkg -r $lockpkg")) {
-		die "Can't remove build lock for " . $self->get_fullname() . "\n";
+		&print_breaking("WARNING: Can't remove package ".
+						"$lockpkg. ".
+						"This is not fatal, but you may want to remove ".
+						"the package manually as it may interfere with ".
+						"further fink operations. ".
+						"Continuing with normal procedure.");
 	}
+
+	# we're gone
+	Fink::Config::set_options( { "Buildlock_PkgVersion" => undef } );
 }
 
 # returns hashref for the ENV to be used while running package scripts
