@@ -1,37 +1,82 @@
 Package: ffmpeg
-Version: 0.4.6
-Revision: 13
+Version: 0.4.8
+Revision: 1
 ###
-Depends: lame-shlibs, libogg-shlibs, libvorbis0-shlibs, imlib2-shlibs, libavcodec1-shlibs
-BuildDepends: lame, libogg, libvorbis0, imlib2, a52dec-dev
+Depends: lame-shlibs, libogg-shlibs, libvorbis0-shlibs, imlib2-shlibs, libavcodec1-shlibs, libavformat1-shlibs, sdl-shlibs, a52dec
+BuildDepends: lame, libogg, libvorbis0, imlib2, sdl, libavcodec1-dev, libavformat1-dev
 ###
 Source: mirror:sourceforge:%n/%n-%v.tar.gz
-Source-MD5: bdd96d28327d3abe02e886c13e633878
+Source-MD5: e00d47614ba1afd99ad2ea387e782dd9
 ###
-PatchScript: sed -e s,@FINKPREFIX@,%p,g %a/%n.patch | patch -p1
+PatchScript: <<
+  ### Fix ffserver conf file location
+  perl -pi -e 's,/etc,%p/etc,g' ffserver.c
+  ### Enable ffserver on darwin
+  perl -pi -e 's,ffserver="no",ffserver="yes",g' configure
+  ### Fix for Imlib2
+  perl -pi -e 's,-lImlib2,-I%p/include -L%p/lib -lImlib2,g' configure
+  ### Lib version fix
+  perl -pi -e 's,dynamiclib,dynamiclib -compatibility_version 1 -current_version 1.4.8 -install_name=%p/lib/\\\$(SLIB_INSTALL),g' configure
+  ### so -> dylib
+  perl -pi -e 's,SLIBSUF=".so",SLIBSUF=".dylib",g' configure
+  ### More fixes for dylib
+  perl -pi -e 's,\$\(SLIBSUF\),.0.4.8\$\(SLIBSUF\),g' Makefile
+  perl -pi -e 's,\$\(SLIBSUF\),.0.4.8\$\(SLIBSUF\),g' libavcodec/Makefile
+  perl -pi -e 's,\$\(SLIBSUF\),.0.4.8\$\(SLIBSUF\),g' libavformat/Makefile
+  perl -pi -e 's,SLIB=,SLIB_INSTALL=\$(SLIBPREF)avcodec.0\$(SLIBSUF)\nSLIB=,g' libavcodec/Makefile
+  perl -pi -e 's,SLIB=,SLIB_INSTALL=\$(SLIBPREF)avformat.0\$(SLIBSUF)\nSLIB=,g' libavformat/Makefile
+  ### libsvformat shared lib linking
+  perl -pi -e 's,PPOBJS=,PPOBJS=\nLIBS+=-L../libavcodec -lavcodec\nEXTRALIBS+=-lmp3lame -lvorbis -lvorbisenc -logg,g' libavformat/Makefile
+  perl -pi -e 's,\$\(EXTRALIBS\),\$\(LIBS\) \$\(EXTRALIBS\),g' libavformat/Makefile
+  ### Not sure why this is needed, but it is for now
+  ### looks like the first endif, ends at the wrong place...should be before
+  ### the second if.
+  perl -pi -e 's,-logg -lvorbis -lvorbisenc,-lmp3lame -logg -lvorbis -lvorbisenc,g' Makefile
+  ### Fix vhook
+  perl -pi -e 's,\+=-bundle -flat_namespace -undefined suppress,=-bundle -avoid-version,g' vhook/Makefile
+  perl -pi -e 's,\$<,\$< -L../libavcodec -lavcodec -L../libavformat -lavformat -L%p/lib,g' vhook/Makefile
+  ### Can't strip libs with ref to dylibs
+  perl -pi -e 's,install -s,install,g' vhook/Makefile
+  perl -pi -e 's,install -s -m 755 \$\(SLIB\) \$\(prefix\)/lib/libavcodec-\$\(VERSION\)\.so,install -m 755 \$\(SLIB\) \$\(prefix\)/lib/\$\(SLIB\),g' libavcodec/Makefile
+  perl -pi -e 's,ln -sf libavcodec-\$\(VERSION\)\.so \$\(prefix\)/lib/libavcodec\.so, ,g' libavcodec/Makefile
+  perl -pi -e 's,ldconfig \|\| true, ,g' libavcodec/Makefile
+  perl -pi -e 's,install -s -m 755 \$\(SLIB\) \$\(prefix\)/lib/libavformat-\$\(VERSION\).so,install -m 755 \$\(SLIB\) \$\(prefix\)/lib/\$\(SLIB\),g' libavformat/Makefile
+  perl -pi -e 's,ln -sf libavformat-\$\(VERSION\)\.so \$\(prefix\)/lib/libavformat\.so, ,g' libavformat/Makefile
+  perl -pi -e 's,ldconfig \|\| true, ,g' libavformat/Makefile
+  ### Fix bin install
+  perl -pi -e 's,"\$\(bindir\)",\$\(prefix\)/bin,g' Makefile
+<<
 ###
 GCC: 3.3
 ###
-DocFiles: COPYING CREDITS Changelog INSTALL README VERSION doc/*
+DocFiles: COPYING CREDITS Changelog INSTALL README doc/*.html doc/*.txt
 ###
-ConfigureParams: --extra-cflags="-no-cpp-precomp -fno-common -I%p/include" --enable-mp3lame --enable-vorbis --enable-a52 --enable-a52bin --enable-shared
+ConfigureParams: --cc=gcc --extra-libs="-L%p/lib" --extra-cflags="-no-cpp-precomp -fomit-frame-pointer -force_cpusubtype_ALL -faltivec -fno-common -I%p/include" --enable-mp3lame --enable-vorbis --enable-a52 --enable-a52bin --enable-shared --mandir=%p/share/man
 ###
 InstallScript: <<
   make install prefix=%i
   install -d %i/etc
   install -m 664 doc/ffserver.conf %i/etc
+  install -d %i/share/man/man1
+  install -m 664 doc/ffserver.1 %i/share/man/man1
+  install -m 664 doc/ffplay.1 %i/share/man/man1
+  install -m 664 doc/ffmpeg.1 %i/share/man/man1
+  ln -sf libavcodec.0.4.8.dylib %i/lib/libavcodec.0.dylib
+  ln -sf libavcodec.0.4.8.dylib %i/lib/libavcodec.dylib
+  ln -sf libavformat.0.4.8.dylib %i/lib/libavformat.0.dylib
+  ln -sf libavformat.0.4.8.dylib %i/lib/libavformat.dylib
 <<
 ###
 SplitOff: <<
   Package: libavcodec1-shlibs
-  Depends: lame-shlibs, libvorbis0-shlibs, a52dec-shlibs
+  Depends: lame-shlibs, libvorbis0-shlibs
   Conflicts: ffmpeg (<< 0.4.6-1)
   Replaces: ffmpeg (<< 0.4.6-1)
   Files: <<
     lib/libavcodec.*.dylib
   <<
   Shlibs: <<
-    %p/lib/libavcodec.1.dylib 1.0.0 libavcodec1-shlibs (>= 0.1.3-1)
+    %p/lib/libavcodec.0.dylib 1.0.0 libavcodec1-shlibs (>= 0.4.6-1)
   <<
   DocFiles: COPYING
 <<
@@ -42,20 +87,50 @@ SplitOff2: <<
   Replaces: ffmpeg (<< 0.4.6-1)
   BuildDependsOnly: true
   Files: <<
-    include/*
+    include/ffmpeg/avcodec.h
     lib/libavcodec.dylib
   <<
   DocFiles: COPYING
 <<
 SplitOff3: <<
+  Package: libavformat1-shlibs
+  Depends: lame-shlibs, libvorbis0-shlibs, libogg-shlibs, libavcodec1-shlibs
+  Files: <<
+    lib/libavformat.*.dylib
+  <<
+  Shlibs: <<
+    %p/lib/libavformat.0.dylib 1.0.0 libformat1-shlibs (>= 0.4.8-1)
+  <<
+  DocFiles: COPYING
+<<
+SplitOff4: <<
+  Package: libavformat1-dev
+  Depends: libavformat1-shlibs
+  BuildDependsOnly: true
+  Files: <<
+    include/ffmpeg/avformat.h
+    lib/libavformat.dylib
+  <<
+  DocFiles: COPYING
+<<
+SplitOff5: <<
+  Package: %N-dev
+  BuildDependsOnly: true
+  Files: <<
+    include/
+  <<
+  DocFiles: COPYING
+<<
+SplitOff6: <<
   Package: %N-server
-  Depends: lame-shlibs, libogg-shlibs, libvorbis0-shlibs, libavcodec1-shlibs, %N, daemonic
+  Depends: lame-shlibs, libogg-shlibs, libvorbis0-shlibs, libavcodec1-shlibs, libavformat1-shlibs, %N, daemonic, a52dec
   Conflicts: ffmpeg (<< 0.4.6-1)
   Replaces: ffmpeg (<< 0.4.6-1)
   ConfFiles: %p/etc/ffserver.conf
   Files: <<
     bin/ffserver
     etc/ffserver.conf
+    share/man/man1/ffserver.1
   <<
   DocFiles: COPYING
   PostInstScript: <<
@@ -93,46 +168,9 @@ DescDetail: <<
   real time in many formats including MPEG1 audio and video, MPEG4, h263,
   ac3, asf, avi, real, mjpeg, and flash.
 
-  Must use ffserver -f %p/etc/ffserver.conf to start ffserver or use
   sudo daemonic enable ffserver
-<<
-DescPort: <<
---- Justin F. Hallett (May 20, 2003) (0.4.6-1)
-- Update to new release
-- Most of the patch file it for shared libs
-- had to set RTLD_NOW=1 in a few locations as Darwin doesn't support it, found
-  fix in /usr/include/http/os.h
-- A few fixes to enable all options
-- Added -lpoll to link line for ffserver
 
---- Justin F. Hallett (May 8, 2002) (0.4.5-2)
-- Removed lib installer portion
-
---- Justin F. Hallett (May 8, 2002) (0.4.5-1)
-- Fixed the usage of install in the main Makefile to use install -c instead
-  of install -s which isn't a valid option in Darwin
-- Also Fixed the install to check for directories and install one file
-  at a time as well as install libav and libavcodec
-- Added getopt.c and getopt1.c to the obj list to satisfy _getopt_long_only
-  and added it to the ffserver link line as well
-- Added -lpoll to the ffserver link line to satisfy _poll also had to
-  add -L$(prefix)/lib to the link line for this to work
-- Added gengetopt (getopt.h) to satisfy ffserver.c
-- Changed extern inline to static inline to fix undefined symbols in:
-  - libav/avio.h for _url_get_packet_size
-  - libav/avio.h for _url_is_streamed
-  - libavcodec/common.h for _av_log2
-  - libavcodec/mpegvideo.h for _get_rl_index
-  - libavcodec/mpglib/mpg123.h for _getbits_fast
-- Fixed libav and libavcodec Makefiles
-  - using ar rc instead of ar rcs since s isn't a valid switch in Darwin
-  - added ranlib -s to a.out libs
-- Fixed main Makefile to use $(CC) instead of gcc
-- Set CFLAGS to use -no-cpp-precomp and needed to add -I%p/include to
-  be able to use sys/libpoll.h
-- Disabled grab support in ConfigureParams since it seemed to be a linux
-  only option *NEEDS TO BE PORTED*
-- Set CC to use cc in ConfigureParams
+  ffplay, currently broken, SDL crash
 <<
 ###
 License: GPL
