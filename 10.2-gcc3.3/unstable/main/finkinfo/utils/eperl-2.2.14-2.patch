@@ -1,0 +1,5484 @@
+diff -Naur eperl-2.2.14.orig/Makefile.PL eperl-2.2.14/Makefile.PL
+--- eperl-2.2.14.orig/Makefile.PL	Fri Jul 10 04:06:41 1998
++++ eperl-2.2.14/Makefile.PL	Sat Mar 16 19:32:56 2002
+@@ -42,7 +42,7 @@
+ 		    sed -e '/^\trm -f */d' <Makefile >Makefile.n && mv Makefile.n Makefile; \\
+ 		    sed -e 's,^CC = .*,CC = $cc,' <Parse/Makefile >Parse/Makefile.n && mv Parse/Makefile.n Parse/Makefile; \\
+ 	fi
+-	cd mod && \$(MAKE) \$(MFLAGS)
++	cd mod && \$(MAKE) \$(MFLAGS) LD_RUN_PATH=
+ 
+ test: all
+ 	cd mod && \$(MAKE) \$(MFLAGS) test
+diff -Naur eperl-2.2.14.orig/Makefile.in eperl-2.2.14/Makefile.in
+--- eperl-2.2.14.orig/Makefile.in	Sun Aug  2 10:03:04 1998
++++ eperl-2.2.14/Makefile.in	Sat Mar 16 19:32:56 2002
+@@ -4,6 +4,9 @@
+ ##
+ @SET_MAKE@
+ 
++top_srcdir      = @top_srcdir@
++srcdir          = @srcdir@
++
+ # ------------------------------------------------
+ #   DEFINITIONS
+ # ------------------------------------------------
+@@ -33,10 +36,12 @@
+ dmalloc  = @dmalloc@
+ 
+ #   installation tools
+-INSTALL         = @INSTALL@
+-INSTALL_PROGRAM = @INSTALL_PROGRAM@
+-INSTALL_DATA    = @INSTALL_DATA@
+-MKDIR           = ./etc/mkdir.sh
++SHTOOL          = $(top_srcdir)/etc/shtool
++INSTALL_PROGRAM = install -c -m 755 -s
++INSTALL_DATA    = install -c -m 644
++MKDIR           = mkdir -p -m 755
++VERSION_TOOL    = $(SHTOOL) version
++FIXPERM         = $(SHTOOL) fixperm
+ CP              = cp
+ 
+ #   installation paths
+@@ -45,7 +50,8 @@
+ bindir          = $(prefix)/bin
+ libsubdir       = @libsubdir@
+ libdir          = $(prefix)/lib$(libsubdir)
+-mandir          = $(prefix)/man/man1
++mandir          = $(prefix)/share/man/man1
++tmpdir          = @tmpdir@
+ 
+ 
+ # ------------------------------------------------
+@@ -53,33 +59,34 @@
+ # ------------------------------------------------
+ 
+ _GETDISTINFO = \
+-    _version=`./etc/newvers -lc -d eperl_version.c`; \
+-    _date=`date '+%y%m%d_%H%M'`
++    _version=`$(VERSION_TOOL) -lc -d short eperl_version.c`; \
++    _date=`date '+%Y%m%d_%H%M'`
+ 
+ _BUILDDIST = \
+     echo "Creating tarball..."; \
+-    gtar --no-recursion -cvf - `find * -depth -print | sort` |\
+-    tardy --user_number=1000  --user_name=rse \
+-          --group_number=1000 --group_name=en \
+-          --prefix=$${_distname} - |\
+-    gzip >$${_tarball}; \
++    find * -depth -print |\
++    sort | xargs tar --no-recursion -cf - |\
++    tarcust --user-name=rse --group-name=en --prefix=$${_distname} \
++            --exclude='.*CVS.*' --exclude='.*\.cvsignore' \
++            --exclude='eperl-.*\.tar\.gz' |\
++    gzip -9 >$${_tarball}; \
+     echo "Done"; \
+     ls -l $${_tarball}
+ 
+ _NEWVERS = \
+-	./etc/newvers -lc -p ePerl $$OPT eperl_version.c; \
+-	V=`./etc/newvers -lc -D eperl_version.c`;\
++	$(VERSION_TOOL) -lc -p ePerl $$OPT eperl_version.c; \
++	V=`$(VERSION_TOOL) -lc -d long eperl_version.c`;\
+ 	sed -e "s/Version .*(.*)/Version $$V/g" <README >README.n && mv README.n README; \
+-	V=`./etc/newvers -lc -d eperl_version.c`;\
++	V=`$(VERSION_TOOL) -lc -d short eperl_version.c`;\
+ 	sed -e "s/@v=(\"[0-9.]*\"/@v=(\"$$V\"/g" <mod/Parse/ePerl.pm >mod/Parse/ePerl.pm.n && mv mod/Parse/ePerl.pm.n mod/Parse/ePerl.pm; \
+ 	sed -e "s/@v=(\"[0-9.]*\"/@v=(\"$$V\"/g" <mod/Apache/ePerl.pm >mod/Apache/ePerl.pm.n && mv mod/Apache/ePerl.pm.n mod/Apache/ePerl.pm
+ 
+ _UPDATEVERS = \
+-	V=`./etc/newvers -lc -d eperl_version.c`;\
+-	./etc/newvers -lc -p ePerl -r $$V eperl_version.c; \
+-	V=`./etc/newvers -lc -D eperl_version.c`;\
++	V=`$(VERSION_TOOL) -lc -d short eperl_version.c`;\
++	$(VERSION_TOOL) -lc -p ePerl -s $$V eperl_version.c; \
++	V=`$(VERSION_TOOL) -lc -d long eperl_version.c`;\
+ 	sed -e "s/Version .*(.*)/Version $$V/g" <README >README.n && mv README.n README; \
+-	V=`./etc/newvers -lc -d eperl_version.c`;\
++	V=`$(VERSION_TOOL) -lc -d short eperl_version.c`;\
+ 	sed -e "s/@v=(\"[0-9.]*\"/@v=(\"$$V\"/g" <mod/Parse/ePerl.pm >mod/Parse/ePerl.pm.n && mv mod/Parse/ePerl.pm.n mod/Parse/ePerl.pm; \
+ 	sed -e "s/@v=(\"[0-9.]*\"/@v=(\"$$V\"/g" <mod/Apache/ePerl.pm >mod/Apache/ePerl.pm.n && mv mod/Apache/ePerl.pm.n mod/Apache/ePerl.pm
+ 
+@@ -88,7 +95,7 @@
+ #   THE DEFAULT TARGET
+ # ------------------------------------------------
+ 
+-all: config eperl eperl.1
++all: eperl eperl.1
+ 
+ 
+ # ------------------------------------------------
+@@ -106,6 +113,8 @@
+ 	rm -f config_ac.h.in
+ 	autoheader configure.in >config_ac.h.in
+ 
++etc/shtool:
++	shtoolize -o $@ install mkdir version echo fixperm
+ 
+ # ------------------------------------------------
+ #   THE RELEASE STUFF (TARGETS)
+@@ -114,18 +123,18 @@
+ release: distclean fixperm
+ 	@$(_GETDISTINFO); \
+ 	_distname="eperl-$${_version}"; \
+-	_tarball="/tmp/$${_distname}.tar.gz"; \
++	_tarball="$(tmpdir)/$${_distname}.tar.gz"; \
+ 	echo "Release Distribution: ePerl Version $$_version"; \
+ 	$(_BUILDDIST); \
+-	mv /tmp/$${_distname}.tar.gz $${_distname}.tar.gz
++	mv $(tmpdir)/$${_distname}.tar.gz $${_distname}.tar.gz
+ 
+ snap: distclean fixperm
+ 	@$(_GETDISTINFO); \
+-	_distname="eperl-$${_version}-SNAP-$${_date}"; \
+-	_tarball="/tmp/$${_distname}.tar.gz"; \
++	_distname="eperl-$${_version}-SNAP"; \
++	_tarball="$(tmpdir)/$${_distname}.tar.gz"; \
+ 	echo "Snap of whole source tree: ePerl Version $$_version as of $${_date}"; \
+ 	$(_BUILDDIST); \
+-	mv /tmp/$${_distname}.tar.gz $${_distname}.tar.gz
++	mv $(tmpdir)/$${_distname}.tar.gz $${_distname}.tar.gz
+ 
+ new-version:
+ 	OPT=-iv; $(_NEWVERS)
+@@ -146,7 +155,7 @@
+ 	OPT=-is; $(_NEWVERS)
+ 
+ new-release:
+-	OPT=-r$(R); $(_NEWVERS)
++	OPT=-s$(R); $(_NEWVERS)
+ 
+ update-version:
+ 	$(_UPDATEVERS)
+@@ -205,10 +214,7 @@
+ 
+ eperl: $(OBJS)
+ 	$(CC) $(LDFLAGS) -o eperl $(OBJS) $(LDLIBS) $(dmalloc)
+-	@if [ "x$(debug)" = xoff ]; then \
+-		strip eperl; \
+-	fi
+-	@ls -l eperl; @SIZE@ eperl
++	@[ "x$(debug)" = xon ] || strip eperl
+ 
+ eperl_main.o: eperl_main.c
+ 	$(CC) $(CFLAGS) -c eperl_main.c
+@@ -279,7 +285,7 @@
+ 	./etc/mkproto eperl_proto.h $(PROTO_SRCS)
+ 
+ fixperm:
+-	./etc/fixperm *
++	$(FIXPERM) *
+ 
+ 
+ # ------------------------------------------------
+@@ -287,13 +293,13 @@
+ # ------------------------------------------------
+ 
+ eperl.1: eperl.pod eperl_version.c
+-	V=`./etc/newvers -l c -D eperl_version.c`; \
+-	sed -e "s|\@V\@|$$V|g" -e "s|\@prefix\@|$(prefix)|" <eperl.pod >/tmp/eperl.pod; \
++	set -e; \
++	V=`$(VERSION_TOOL) -lc -d long eperl_version.c`; \
+ 	pod2man --section=1 \
+ 	        --center="Ralf S. Engelschall" \
+-			--release="EN" \
+-			/tmp/eperl.pod >eperl.1 && \
+-	rm -f /tmp/eperl.pod
++	        --release="EN" \
++	    eperl.pod |\
++	sed -e "s|\@V\@|$$V|g" -e "s|\@prefix\@|$(prefix)|" >$@
+ 
+ 
+ # ------------------------------------------------
+@@ -356,24 +362,15 @@
+ 	-rm -f libeperl.a
+ 	-rm -f core *.core
+ 
+-realclean:
+-	-rm -f $(OBJS)
+-	-rm -f eperl
+-	-rm -f $(SOBJS)
+-	-rm -f libeperl.a
+-	-rm -f core *.core
++realclean: clean
+ 	-rm -f eperl_perl5_sm.h
+ 	-rm -f eperl.1
+ 	-rm -f eperl_readme.[ch]
+ 	-rm -f eperl_license.[ch]
+ 
+-distclean:
+-	-rm -f $(OBJS)
+-	-rm -f eperl
+-	-rm -f $(SOBJS)
+-	-rm -f libeperl.a
+-	-rm -f core *.core
++distclean: clean
+ 	-rm -f eperl_perl5_sm.h
++	-rm -f eperl.1 eperl-*.tar.gz
+ 	-rm -f config_ac.h config_sc.h
+ 	-rm -f config.status config.cache config.log
+ 	-rm -f Makefile
+diff -Naur eperl-2.2.14.orig/README eperl-2.2.14/README
+--- eperl-2.2.14.orig/README	Sun Aug  2 09:22:25 1998
++++ eperl-2.2.14/README	Sat Mar 16 19:32:56 2002
+@@ -17,7 +17,7 @@
+   The documentation and latest release can be found on
+   http://www.engelschall.com/sw/eperl/
+ 
+-  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ 
+   This program is free software; it may be redistributed and/or modified only
+   under the terms of either the Artistic License or the GNU General Public
+diff -Naur eperl-2.2.14.orig/acconfig.h eperl-2.2.14/acconfig.h
+--- eperl-2.2.14.orig/acconfig.h	Fri Jul 10 03:51:33 1998
++++ eperl-2.2.14/acconfig.h	Sat Mar 16 19:32:56 2002
+@@ -2,7 +2,7 @@
+ #define CONFIG_AC_H
+ /*
+ **  config_ac.h -- AUTO configuration header file
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ */
+ 
+ @TOP@
+diff -Naur eperl-2.2.14.orig/aclocal.m4 eperl-2.2.14/aclocal.m4
+--- eperl-2.2.14.orig/aclocal.m4	Sun Aug  2 09:48:38 1998
++++ eperl-2.2.14/aclocal.m4	Sat Mar 16 19:32:56 2002
+@@ -7,426 +7,27 @@
+ dnl #      all defined and used variables are named acl-*
+ dnl #
+ dnl
+-dnl
+-dnl ##########################################################
+-dnl ##
+-dnl ##  support for User Variables 
+-dnl ##
+-dnl ##########################################################
+-dnl
+-define(AC_UVAR_CODE,[dnl
+-if test .[$]ac_with_uvar = .yes; then
+-$1
+-fi
+-])
+-dnl
+-define(AC_UVAR_ANTICODE,[dnl
+-if test .[$]ac_with_uvar = .no; then
+-$1
+-fi
+-])
+-dnl
+-dnl
+-dnl -----------
+-dnl
+-dnl
+-define(AC_UVAR_INIT,[dnl
+-AC_ARG_WITH(uvar,dnl
+-[  --with-uvar             support for Runtime User Variable Setup],
+-ac_with_uvar=yes,
+-ac_with_uvar=no
+-)dnl
+-dnl
+-dnl # because since autoconf 2.3 the following two lines
+-dnl # are at AC_OUTPUT which is to late for us :-(
+-test "x$prefix"      = xNONE && prefix=$ac_default_prefix
+-test "x$exec_prefix" = xNONE && exec_prefix="${prefix}"
+-dnl
+-AC_UVAR_CODE(dnl
+-ac_uvar_editfile=/tmp/usrvar.tmp
+-rm -f $ac_uvar_editfile
+-echo "##" >>$ac_uvar_editfile
+-echo "##  RunTime User Variable Setup" >>$ac_uvar_editfile
+-echo -n "##  GNU autoconf Version " >>$ac_uvar_editfile
+-echo "AC_ACVERSION" >>$ac_uvar_editfile
+-echo "##  created: `date`" >>$ac_uvar_editfile
+-echo "##" >>$ac_uvar_editfile
+-echo "" >>$ac_uvar_editfile
+-)dnl
+-])dnl
+-dnl
+-dnl
+-dnl -----------
+-dnl 
+-define(AC_UVAR_VERB,[dnl
+-AC_UVAR_CODE(dnl
+-cat >>$ac_uvar_editfile <<'EOF'
+-$1dnl
+-EOF
+-)dnl
+-])dnl
+-dnl
+-dnl -----------
+-dnl 
+-define(AC_SET,[dnl
+-$1="$2"
+-AC_SUBST($1) dnl
+-])dnl
+-dnl
+-dnl -----------
+-dnl 
+-define(AC_UVAR_SET,[dnl
+-AC_SET($1, $2) dnl
+-AC_UVAR_CODE(dnl
+-    echo '$1="$2"' >>$ac_uvar_editfile
+-)dnl
+-])dnl
+-dnl 
+-dnl -----------
+-dnl 
+-define(AC_UVAR_SETQUOTE,[dnl
+-AC_SET($1, $2) dnl
+-AC_UVAR_CODE(dnl
+-    echo -n '$1="' >>$ac_uvar_editfile
+-    echo -n "$2" >>$ac_uvar_editfile
+-    echo '"' >>$ac_uvar_editfile
+-)dnl
+-])dnl
+-dnl 
+-dnl -----------
+-dnl 
+-define(AC_UVAR_SETCHK,[dnl
+-if test -z "[$]$1"; then
+-AC_UVAR_SET($1, $2) dnl
+-else
+-if test .[$]$1 = .NONE; then
+-AC_UVAR_SET($1, $2) dnl
+-else
+-AC_SUBST($1)dnl
+-AC_UVAR_CODE(dnl
+-    echo -n '$1="' >>$ac_uvar_editfile
+-    echo -n "[$]$1" >>$ac_uvar_editfile
+-    echo '"' >>$ac_uvar_editfile
+-)dnl
+-fi
+-fi
+-])dnl
+-dnl
+-dnl -----------
+-dnl 
+-define(AC_UVAR_SETCHKQUOTE,[dnl
+-if test -z "[$]$1"; then
+-AC_UVAR_SET($1, $2) dnl
+-else
+-if test .[$]$1 = .NONE; then
+-AC_UVAR_SET($1, $2) dnl
+-else
+-AC_SUBST($1)dnl
+-AC_UVAR_CODE(dnl
+-    echo -n '$1="' >>$ac_uvar_editfile
+-    echo -n "$2" >>$ac_uvar_editfile
+-    echo '"' >>$ac_uvar_editfile
+-)dnl
+-fi
+-fi
+-])dnl
+-dnl
+-dnl -----------
+-dnl
+-define(AC_UVAR_OUTPUT,[dnl
+-AC_UVAR_CODE(dnl
+-cat >>$ac_uvar_editfile <<'EOF'
+-
+-##EOF##
+-EOF
+-if test x$withval = xyes ; then
+-    ${EDITOR-vi} $ac_uvar_editfile
+-    . $ac_uvar_editfile
+-else
+-    if test -r $withval ; then
+-        cp $withval $ac_uvar_editfile
+-        ${EDITOR-vi} $ac_uvar_editfile
+-        . $ac_uvar_editfile
+-        cp $ac_uvar_editfile $withval
+-    else
+-        ${EDITOR-vi} $ac_uvar_editfile
+-        . $ac_uvar_editfile
+-        cp $ac_uvar_editfile $withval
+-    fi
+-fi
+-rm -f $ac_uvar_editfile
+-)dnl
+-])dnl
+-dnl 
+-dnl 
+-dnl
+-dnl ##########################################################
+-dnl ##
+-dnl ##  check for existence of HAVE_SYSEXISTS definitions
+-dnl ##
+-dnl ##########################################################
+-dnl
+-dnl
+-define(AC_EXRC,[dnl
+-dnl -> HAVE_EXRC
+-])dnl
+-dnl
+-dnl
+-dnl
+-dnl ##########################################################
+-dnl ##
+-dnl ##  check for ANSI compiler
+-dnl ##
+-dnl ##  Copyright (C) 1992, 1994 Free Software Foundation, Inc.
+-dnl ##  Francois Pinard <pinard@iro.umontreal.ca>, 1992.
+-dnl ##  Check for function prototypes.  Including a few ideas from
+-dnl ##  Brook G. Milligan <brook@trillium.botany.utexas.edu>.
+-dnl ##
+-dnl ##  taken from shar-4.0's aclocal.m4
+-dnl ##
+-dnl ##########################################################
+-dnl
+-AC_DEFUN(AC_C_PROTOTYPES,
+-[AC_MSG_CHECKING([for function prototypes])
+-AC_CACHE_VAL(ac_cv_c_prototypes,
+-[AC_TRY_LINK([#ifndef __STDC__
+-Syntax Error
+-#endif], [extern int test (int i, double x);
+-struct s1 {int (*f) (int a);};
+-struct s2 {int (*f) (double a);};],
+-  ac_cv_c_prototypes=yes, ac_cv_c_prototypes=no)])dnl
+-AC_MSG_RESULT([$ac_cv_c_prototypes])
+-if test $ac_cv_c_prototypes = yes; then
+-  AC_DEFINE(HAVE_PROTOTYPES)
+-  ANSI_CC=yes
+-else
+-  ANSI_CC=no
+-fi
+-AC_SUBST(ANSI_CC)
+-])dnl
+-dnl
+-dnl
+-dnl ##########################################################
+-dnl ##
+-dnl ##  check for supported system type
+-dnl ##
+-dnl ##########################################################
+-dnl
+-dnl
+-AC_DEFUN(AC_SUPPORTED_CANONICAL_SYSTEM,[dnl
+-AC_REQUIRE([AC_CONFIG_AUX_DIR_DEFAULT])dnl
+-
+-ac_config_sup=$ac_aux_dir/config.sup
+-
+-AC_MSG_CHECKING(for supported host   system type)
+-host=`$ac_config_sup $host_alias`
+-host_cpu=`echo $host | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\1/'`
+-host_vendor=`echo $host | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\2/'`
+-host_os=`echo $host | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\3/'`
+-AC_MSG_RESULT($host)
+-
+-AC_MSG_CHECKING(for supported target system type)
+-target=`$ac_config_sup $target_alias`
+-target_cpu=`echo $target | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\1/'`
+-target_vendor=`echo $target | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\2/'`
+-target_os=`echo $target | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\3/'`
+-AC_MSG_RESULT($target)
+-
+-AC_MSG_CHECKING(for supported build  system type)
+-build=`$ac_config_sup $build_alias`
+-build_cpu=`echo $build | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\1/'`
+-build_vendor=`echo $build | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\2/'`
+-build_os=`echo $build | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\3/'`
+-AC_MSG_RESULT($build)
+-
+-ac_config_hc_dir=config
+-
+-if test -r ${ac_config_hc_dir}/cpu-${host_cpu}.h; then
+-	host_cpu_H=1
+-else
+-	host_cpu_H=0
+-fi
+-if test -r ${ac_config_hc_dir}/cpu-${host_cpu}.c; then
+-	host_cpu_C=1
+-else
+-	host_cpu_C=0
+-fi
+-
+-if test -r ${ac_config_hc_dir}/vendor-${host_vendor}.h; then
+-	host_vendor_H=1
+-else
+-	host_vendor_H=0
+-fi
+-if test -r ${ac_config_hc_dir}/vendor-${host_vendor}.c; then
+-	host_vendor_C=1
+-else
+-	host_vendor_C=0
+-fi
+-
+-if test -r ${ac_config_hc_dir}/os-${host_os}.h; then
+-	host_os_H=1
+-else
+-	host_os_H=0
+-fi
+-if test -r ${ac_config_hc_dir}/os-${host_os}.c; then
+-	host_os_C=1
+-else
+-	host_os_C=0
+-fi
+-AC_SUBST(host_cpu_H)
+-AC_SUBST(host_cpu_C)
+-AC_SUBST(host_vendor_H)
+-AC_SUBST(host_vendor_C)
+-AC_SUBST(host_os_H)
+-AC_SUBST(host_os_C)
+-])dnl
+-dnl
+-dnl
+-dnl
+-define(AC_CONFIG_PARAMS,[dnl
+-
+-AC_MSG_CHECKING(for name of user)
+-confuser="$LOGNAME"
+-AC_MSG_RESULT($confuser)
+-AC_SUBST(confuser)
+-
+-AC_MSG_CHECKING(for name of host)
+-confhost="`uname -n`"
+-AC_MSG_RESULT($confhost)
+-AC_SUBST(confhost)
+-
+-AC_MSG_CHECKING(for current date)
+-confdate="`date`"
+-AC_MSG_RESULT($confdate)
+-AC_SUBST(confdate)
+-
+-])dnl
+-dnl
+-dnl
+-dnl ##########################################################
+-dnl ##
+-dnl ##  check for fixed distribution tree and fix it if needed
+-dnl ##
+-dnl ##########################################################
+-dnl
+-dnl
+-AC_DEFUN(AC_FIX_DIST_TREE,[dnl
+-AC_REQUIRE([AC_CONFIG_AUX_DIR_DEFAULT])dnl
+-
+-ac_fixdist=$ac_aux_dir/fixdist
+-
+-AC_MSG_CHECKING(for fixed distribution)
+-# Make sure we can run fixdist
+-if $ac_fixdist -t >/dev/null 2>&1; then
+-    AC_MSG_RESULT(already fixed tree)
+-else
+-    AC_MSG_RESULT(vanilla tree => fixing...)
+-    $ac_fixdist
+-fi
+-])dnl
+-dnl
+-dnl
+-dnl ##########################################################
+-dnl ##
+-dnl ##  check for generation mode: production or debug
+-dnl ##
+-dnl ##########################################################
+-dnl
+-dnl
+-define(AC_GENMODE,[dnl
+-AC_MSG_CHECKING(genmode)
+-AC_ARG_ENABLE(production,dnl
+-[  --enable-production     to enable procution code and disable debug],
+-GENMODE=production
+-CFLAGS="-O"
+-CXXFLAGS="-O"
+-LDFLAGS="-O"
+-LDXXFLAGS="-O"
+-if test X$GCC = Xyes; then
+-    CFLAGS="$CFLAGS -pipe"
+-    CXXFLAGS="$CXXFLAGS -pipe"
+-fi
+-,
+-GENMODE=debug
+-CFLAGS="-DDEBUG -g"
+-CXXFLAGS="-DDEBUG -g"
+-LDFLAGS="-g"
+-LDXXFLAGS="-g"
+-if test X$GCC = Xyes; then
+-    CFLAGS="$CFLAGS -ggdb3 -pipe"
+-    CXXFLAGS="$CXXFLAGS -ggdb3 -pipe"
+-	LDFLAGS="$LDFLAGS -ggdb3"
+-	LDXXFLAGS="$LDXXFLAGS -ggdb3"
+-fi
+-)dnl
+-AC_SUBST(CFLAGS)
+-AC_SUBST(CXXFLAGS)
+-AC_SUBST(LDFLAGS)
+-AC_SUBST(LDXXFLAGS)
+-AC_SUBST(GENMODE)
+-AC_MSG_RESULT($GENMODE)
+-])dnl
+-dnl
+-dnl
+-dnl ##########################################################
+-dnl ##
+-dnl ##  Startup Message
+-dnl ##
+-dnl ##########################################################
+-dnl
+-define(AC_STARTUP_MSG,[dnl
+-X=`cat Laby/Src/Config/Version.c | sed -e '1,/GNUVersion/d' | head -1 | sed -e 's/^ *"//' | sed -e 's/"; *$//'`
+-AC_MSG_RESULT(Configuring $X)
+-])dnl
+-dnl
+ define(AC_CONFIGURE_PART,[dnl
+ AC_MSG_RESULT()
+-AC_MSG_RESULT(__ $1 __)
++AC_MSG_RESULT(${TERM_BOLD}$1${TERM_NORM})
+ ])dnl
+ dnl
+ dnl ##########################################################
+ dnl ##
+-dnl ##  GNU Make detection
+-dnl ##
+-dnl ##########################################################
+-dnl
+-define(AC_IS_GNU_MAKE,[dnl
+-AC_MSG_CHECKING([whether your default make program is GNU make])
+-if test ".`make -v 2>/dev/null | grep 'GNU Make'`" = . ; then
+-	IS_GNU_MAKE=0
+-	STATIC_MFLAGS=""
+-    AC_MSG_RESULT([no, but that's ok])
+-else
+-	IS_GNU_MAKE=1
+-	STATIC_MFLAGS="--no-print-directory"
+-    AC_MSG_RESULT([yes, fine but overkill])
+-fi
+-AC_SUBST(IS_GNU_MAKE)
+-AC_SUBST(STATIC_MFLAGS)
+-])dnl
+-dnl
+-dnl #######
+-define(AC_INIT_BINSH,
+-[#! /bin/sh
+-#  AAA
+-])
+-dnl
+-dnl ##########################################################
+-dnl ##
+ dnl ##  Built Environment
+ dnl ##
+ dnl ##########################################################
+ dnl
+ define(AC_BUILD_USER,[dnl
+ AC_MSG_CHECKING(for build user)
+-build_user="`$ac_aux_dir/buildinfo -n %u@%h%d`"
++build_user="`$shtool echo -n -e %u@%h%d`"
+ AC_SUBST(build_user)
+ AC_MSG_RESULT($build_user)
+ ])dnl
+ define(AC_BUILD_TIME,[dnl
+ AC_MSG_CHECKING(for build time)
+ build_time_ctime="`date | sed -e 's/\n$//'`"
+-build_time_iso="`$ac_aux_dir/buildinfo -n '%D-%m-%Y'`"
++build_time_iso="`$shtool echo -n -e '%D-%m-%Y'`"
+ AC_MSG_RESULT($build_time_iso)
+ AC_SUBST(build_time_ctime)
+ AC_SUBST(build_time_iso)
+diff -Naur eperl-2.2.14.orig/aclocal.m4.older eperl-2.2.14/aclocal.m4.older
+--- eperl-2.2.14.orig/aclocal.m4.older	Wed Dec 31 19:00:00 1969
++++ eperl-2.2.14/aclocal.m4.older	Sat Mar 16 19:32:57 2002
+@@ -0,0 +1,434 @@
++dnl #
++dnl #  aclocal.m4 -- Local M4 functions for GNU autoconf
++dnl #  Copyright (c) Ralf S. Engelschall, <rse@engelschall.com>
++dnl #
++dnl #  NOTICE:
++dnl #      all defined macros are named AC_*
++dnl #      all defined and used variables are named acl-*
++dnl #
++dnl
++dnl
++dnl ##########################################################
++dnl ##
++dnl ##  support for User Variables 
++dnl ##
++dnl ##########################################################
++dnl
++define(AC_UVAR_CODE,[dnl
++if test .[$]ac_with_uvar = .yes; then
++$1
++fi
++])
++dnl
++define(AC_UVAR_ANTICODE,[dnl
++if test .[$]ac_with_uvar = .no; then
++$1
++fi
++])
++dnl
++dnl
++dnl -----------
++dnl
++dnl
++define(AC_UVAR_INIT,[dnl
++AC_ARG_WITH(uvar,dnl
++[  --with-uvar             support for Runtime User Variable Setup],
++ac_with_uvar=yes,
++ac_with_uvar=no
++)dnl
++dnl
++dnl # because since autoconf 2.3 the following two lines
++dnl # are at AC_OUTPUT which is to late for us :-(
++test "x$prefix"      = xNONE && prefix=$ac_default_prefix
++test "x$exec_prefix" = xNONE && exec_prefix="${prefix}"
++dnl
++AC_UVAR_CODE(dnl
++ac_uvar_editfile=/tmp/usrvar.tmp
++rm -f $ac_uvar_editfile
++echo "##" >>$ac_uvar_editfile
++echo "##  RunTime User Variable Setup" >>$ac_uvar_editfile
++echo -n "##  GNU autoconf Version " >>$ac_uvar_editfile
++echo "AC_ACVERSION" >>$ac_uvar_editfile
++echo "##  created: `date`" >>$ac_uvar_editfile
++echo "##" >>$ac_uvar_editfile
++echo "" >>$ac_uvar_editfile
++)dnl
++])dnl
++dnl
++dnl
++dnl -----------
++dnl 
++define(AC_UVAR_VERB,[dnl
++AC_UVAR_CODE(dnl
++cat >>$ac_uvar_editfile <<'EOF'
++$1dnl
++EOF
++)dnl
++])dnl
++dnl
++dnl -----------
++dnl 
++define(AC_SET,[dnl
++$1="$2"
++AC_SUBST($1) dnl
++])dnl
++dnl
++dnl -----------
++dnl 
++define(AC_UVAR_SET,[dnl
++AC_SET($1, $2) dnl
++AC_UVAR_CODE(dnl
++    echo '$1="$2"' >>$ac_uvar_editfile
++)dnl
++])dnl
++dnl 
++dnl -----------
++dnl 
++define(AC_UVAR_SETQUOTE,[dnl
++AC_SET($1, $2) dnl
++AC_UVAR_CODE(dnl
++    echo -n '$1="' >>$ac_uvar_editfile
++    echo -n "$2" >>$ac_uvar_editfile
++    echo '"' >>$ac_uvar_editfile
++)dnl
++])dnl
++dnl 
++dnl -----------
++dnl 
++define(AC_UVAR_SETCHK,[dnl
++if test -z "[$]$1"; then
++AC_UVAR_SET($1, $2) dnl
++else
++if test .[$]$1 = .NONE; then
++AC_UVAR_SET($1, $2) dnl
++else
++AC_SUBST($1)dnl
++AC_UVAR_CODE(dnl
++    echo -n '$1="' >>$ac_uvar_editfile
++    echo -n "[$]$1" >>$ac_uvar_editfile
++    echo '"' >>$ac_uvar_editfile
++)dnl
++fi
++fi
++])dnl
++dnl
++dnl -----------
++dnl 
++define(AC_UVAR_SETCHKQUOTE,[dnl
++if test -z "[$]$1"; then
++AC_UVAR_SET($1, $2) dnl
++else
++if test .[$]$1 = .NONE; then
++AC_UVAR_SET($1, $2) dnl
++else
++AC_SUBST($1)dnl
++AC_UVAR_CODE(dnl
++    echo -n '$1="' >>$ac_uvar_editfile
++    echo -n "$2" >>$ac_uvar_editfile
++    echo '"' >>$ac_uvar_editfile
++)dnl
++fi
++fi
++])dnl
++dnl
++dnl -----------
++dnl
++define(AC_UVAR_OUTPUT,[dnl
++AC_UVAR_CODE(dnl
++cat >>$ac_uvar_editfile <<'EOF'
++
++##EOF##
++EOF
++if test x$withval = xyes ; then
++    ${EDITOR-vi} $ac_uvar_editfile
++    . $ac_uvar_editfile
++else
++    if test -r $withval ; then
++        cp $withval $ac_uvar_editfile
++        ${EDITOR-vi} $ac_uvar_editfile
++        . $ac_uvar_editfile
++        cp $ac_uvar_editfile $withval
++    else
++        ${EDITOR-vi} $ac_uvar_editfile
++        . $ac_uvar_editfile
++        cp $ac_uvar_editfile $withval
++    fi
++fi
++rm -f $ac_uvar_editfile
++)dnl
++])dnl
++dnl 
++dnl 
++dnl
++dnl ##########################################################
++dnl ##
++dnl ##  check for existence of HAVE_SYSEXISTS definitions
++dnl ##
++dnl ##########################################################
++dnl
++dnl
++define(AC_EXRC,[dnl
++dnl -> HAVE_EXRC
++])dnl
++dnl
++dnl
++dnl
++dnl ##########################################################
++dnl ##
++dnl ##  check for ANSI compiler
++dnl ##
++dnl ##  Copyright (C) 1992, 1994 Free Software Foundation, Inc.
++dnl ##  Francois Pinard <pinard@iro.umontreal.ca>, 1992.
++dnl ##  Check for function prototypes.  Including a few ideas from
++dnl ##  Brook G. Milligan <brook@trillium.botany.utexas.edu>.
++dnl ##
++dnl ##  taken from shar-4.0's aclocal.m4
++dnl ##
++dnl ##########################################################
++dnl
++AC_DEFUN(AC_C_PROTOTYPES,
++[AC_MSG_CHECKING([for function prototypes])
++AC_CACHE_VAL(ac_cv_c_prototypes,
++[AC_TRY_LINK([#ifndef __STDC__
++Syntax Error
++#endif], [extern int test (int i, double x);
++struct s1 {int (*f) (int a);};
++struct s2 {int (*f) (double a);};],
++  ac_cv_c_prototypes=yes, ac_cv_c_prototypes=no)])dnl
++AC_MSG_RESULT([$ac_cv_c_prototypes])
++if test $ac_cv_c_prototypes = yes; then
++  AC_DEFINE(HAVE_PROTOTYPES)
++  ANSI_CC=yes
++else
++  ANSI_CC=no
++fi
++AC_SUBST(ANSI_CC)
++])dnl
++dnl
++dnl
++dnl ##########################################################
++dnl ##
++dnl ##  check for supported system type
++dnl ##
++dnl ##########################################################
++dnl
++dnl
++AC_DEFUN(AC_SUPPORTED_CANONICAL_SYSTEM,[dnl
++AC_REQUIRE([AC_CONFIG_AUX_DIR_DEFAULT])dnl
++
++ac_config_sup=$ac_aux_dir/config.sup
++
++AC_MSG_CHECKING(for supported host   system type)
++host=`$ac_config_sup $host_alias`
++host_cpu=`echo $host | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\1/'`
++host_vendor=`echo $host | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\2/'`
++host_os=`echo $host | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\3/'`
++AC_MSG_RESULT($host)
++
++AC_MSG_CHECKING(for supported target system type)
++target=`$ac_config_sup $target_alias`
++target_cpu=`echo $target | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\1/'`
++target_vendor=`echo $target | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\2/'`
++target_os=`echo $target | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\3/'`
++AC_MSG_RESULT($target)
++
++AC_MSG_CHECKING(for supported build  system type)
++build=`$ac_config_sup $build_alias`
++build_cpu=`echo $build | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\1/'`
++build_vendor=`echo $build | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\2/'`
++build_os=`echo $build | sed 's/^\(.*\)-\(.*\)-\(.*\)$/\3/'`
++AC_MSG_RESULT($build)
++
++ac_config_hc_dir=config
++
++if test -r ${ac_config_hc_dir}/cpu-${host_cpu}.h; then
++	host_cpu_H=1
++else
++	host_cpu_H=0
++fi
++if test -r ${ac_config_hc_dir}/cpu-${host_cpu}.c; then
++	host_cpu_C=1
++else
++	host_cpu_C=0
++fi
++
++if test -r ${ac_config_hc_dir}/vendor-${host_vendor}.h; then
++	host_vendor_H=1
++else
++	host_vendor_H=0
++fi
++if test -r ${ac_config_hc_dir}/vendor-${host_vendor}.c; then
++	host_vendor_C=1
++else
++	host_vendor_C=0
++fi
++
++if test -r ${ac_config_hc_dir}/os-${host_os}.h; then
++	host_os_H=1
++else
++	host_os_H=0
++fi
++if test -r ${ac_config_hc_dir}/os-${host_os}.c; then
++	host_os_C=1
++else
++	host_os_C=0
++fi
++AC_SUBST(host_cpu_H)
++AC_SUBST(host_cpu_C)
++AC_SUBST(host_vendor_H)
++AC_SUBST(host_vendor_C)
++AC_SUBST(host_os_H)
++AC_SUBST(host_os_C)
++])dnl
++dnl
++dnl
++dnl
++define(AC_CONFIG_PARAMS,[dnl
++
++AC_MSG_CHECKING(for name of user)
++confuser="$LOGNAME"
++AC_MSG_RESULT($confuser)
++AC_SUBST(confuser)
++
++AC_MSG_CHECKING(for name of host)
++confhost="`uname -n`"
++AC_MSG_RESULT($confhost)
++AC_SUBST(confhost)
++
++AC_MSG_CHECKING(for current date)
++confdate="`date`"
++AC_MSG_RESULT($confdate)
++AC_SUBST(confdate)
++
++])dnl
++dnl
++dnl
++dnl ##########################################################
++dnl ##
++dnl ##  check for fixed distribution tree and fix it if needed
++dnl ##
++dnl ##########################################################
++dnl
++dnl
++AC_DEFUN(AC_FIX_DIST_TREE,[dnl
++AC_REQUIRE([AC_CONFIG_AUX_DIR_DEFAULT])dnl
++
++ac_fixdist=$ac_aux_dir/fixdist
++
++AC_MSG_CHECKING(for fixed distribution)
++# Make sure we can run fixdist
++if $ac_fixdist -t >/dev/null 2>&1; then
++    AC_MSG_RESULT(already fixed tree)
++else
++    AC_MSG_RESULT(vanilla tree => fixing...)
++    $ac_fixdist
++fi
++])dnl
++dnl
++dnl
++dnl ##########################################################
++dnl ##
++dnl ##  check for generation mode: production or debug
++dnl ##
++dnl ##########################################################
++dnl
++dnl
++define(AC_GENMODE,[dnl
++AC_MSG_CHECKING(genmode)
++AC_ARG_ENABLE(production,dnl
++[  --enable-production     to enable procution code and disable debug],
++GENMODE=production
++CFLAGS="-O"
++CXXFLAGS="-O"
++LDFLAGS="-O"
++LDXXFLAGS="-O"
++if test X$GCC = Xyes; then
++    CFLAGS="$CFLAGS -pipe"
++    CXXFLAGS="$CXXFLAGS -pipe"
++fi
++,
++GENMODE=debug
++CFLAGS="-DDEBUG -g"
++CXXFLAGS="-DDEBUG -g"
++LDFLAGS="-g"
++LDXXFLAGS="-g"
++if test X$GCC = Xyes; then
++    CFLAGS="$CFLAGS -ggdb3 -pipe"
++    CXXFLAGS="$CXXFLAGS -ggdb3 -pipe"
++	LDFLAGS="$LDFLAGS -ggdb3"
++	LDXXFLAGS="$LDXXFLAGS -ggdb3"
++fi
++)dnl
++AC_SUBST(CFLAGS)
++AC_SUBST(CXXFLAGS)
++AC_SUBST(LDFLAGS)
++AC_SUBST(LDXXFLAGS)
++AC_SUBST(GENMODE)
++AC_MSG_RESULT($GENMODE)
++])dnl
++dnl
++dnl
++dnl ##########################################################
++dnl ##
++dnl ##  Startup Message
++dnl ##
++dnl ##########################################################
++dnl
++define(AC_STARTUP_MSG,[dnl
++X=`cat Laby/Src/Config/Version.c | sed -e '1,/GNUVersion/d' | head -1 | sed -e 's/^ *"//' | sed -e 's/"; *$//'`
++AC_MSG_RESULT(Configuring $X)
++])dnl
++dnl
++define(AC_CONFIGURE_PART,[dnl
++AC_MSG_RESULT()
++AC_MSG_RESULT(__ $1 __)
++])dnl
++dnl
++dnl ##########################################################
++dnl ##
++dnl ##  GNU Make detection
++dnl ##
++dnl ##########################################################
++dnl
++define(AC_IS_GNU_MAKE,[dnl
++AC_MSG_CHECKING([whether your default make program is GNU make])
++if test ".`make -v 2>/dev/null | grep 'GNU Make'`" = . ; then
++	IS_GNU_MAKE=0
++	STATIC_MFLAGS=""
++    AC_MSG_RESULT([no, but that's ok])
++else
++	IS_GNU_MAKE=1
++	STATIC_MFLAGS="--no-print-directory"
++    AC_MSG_RESULT([yes, fine but overkill])
++fi
++AC_SUBST(IS_GNU_MAKE)
++AC_SUBST(STATIC_MFLAGS)
++])dnl
++dnl
++dnl #######
++define(AC_INIT_BINSH,
++[#! /bin/sh
++#  AAA
++])
++dnl
++dnl ##########################################################
++dnl ##
++dnl ##  Built Environment
++dnl ##
++dnl ##########################################################
++dnl
++define(AC_BUILD_USER,[dnl
++AC_MSG_CHECKING(for build user)
++build_user="`$ac_aux_dir/buildinfo -n %u@%h%d`"
++AC_SUBST(build_user)
++AC_MSG_RESULT($build_user)
++])dnl
++define(AC_BUILD_TIME,[dnl
++AC_MSG_CHECKING(for build time)
++build_time_ctime="`date | sed -e 's/\n$//'`"
++build_time_iso="`$ac_aux_dir/buildinfo -n '%D-%m-%Y'`"
++AC_MSG_RESULT($build_time_iso)
++AC_SUBST(build_time_ctime)
++AC_SUBST(build_time_iso)
++])dnl
++dnl
+diff -Naur eperl-2.2.14.orig/config_ac.h.in eperl-2.2.14/config_ac.h.in
+--- eperl-2.2.14.orig/config_ac.h.in	Fri Jul 10 03:52:55 1998
++++ eperl-2.2.14/config_ac.h.in	Sat Mar 16 19:32:56 2002
+@@ -3,7 +3,7 @@
+ #define CONFIG_AC_H
+ /*
+ **  config_ac.h -- AUTO configuration header file
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ */
+ 
+ 
+diff -Naur eperl-2.2.14.orig/config_sc.h.in eperl-2.2.14/config_sc.h.in
+--- eperl-2.2.14.orig/config_sc.h.in	Tue Dec 30 02:32:33 1997
++++ eperl-2.2.14/config_sc.h.in	Sat Mar 16 19:32:56 2002
+@@ -9,7 +9,6 @@
+ 
+ #define AC_perl_prog      "@perl_prog@"
+ #define AC_perl_vers      "@perl_vers@"
+-#define AC_perl_vnum      @perl_vnum@
+ #define AC_perl_archlib   "@perl_archlib@"
+ #define AC_perl_libs      "@perl_libs@"
+ #define AC_perl_dla       "@perl_dla@"
+diff -Naur eperl-2.2.14.orig/configure eperl-2.2.14/configure
+--- eperl-2.2.14.orig/configure	Sun Aug  2 09:48:40 1998
++++ eperl-2.2.14/configure	Sat Mar 16 19:33:00 2002
+@@ -1,32 +1,16 @@
+ #! /bin/sh
+ 
+-# From configure.in Revision: 2.0
+-echo "Configuring for ePerl `./etc/newvers -l c -D eperl_version.c`"
+-
+-ac_aux_dir=
+-for ac_dir in etc $srcdir/etc; do
+-  if test -f $ac_dir/install-sh; then
+-    ac_aux_dir=$ac_dir
+-    ac_install_sh="$ac_aux_dir/install-sh -c"
+-    break
+-  elif test -f $ac_dir/install.sh; then
+-    ac_aux_dir=$ac_dir
+-    ac_install_sh="$ac_aux_dir/install.sh -c"
+-    break
+-  fi
+-done
+-if test -z "$ac_aux_dir"; then
+-  { echo "configure: error: can not find install-sh or install.sh in etc $srcdir/etc" 1>&2; exit 1; }
+-fi
+-ac_config_guess=$ac_aux_dir/config.guess
+-ac_config_sub=$ac_aux_dir/config.sub
+-ac_configure=$ac_aux_dir/configure # This should be Cygnus configure.
+-
++# From configure.in Revision: 1.9 
+ 
++shtool=./etc/shtool
++TERM_BOLD=`$shtool echo -e %B 2>/dev/null`
++TERM_NORM=`$shtool echo -e %b 2>/dev/null`
+ 
++EPERL_VERSION="`$shtool version -lc -d long eperl_version.c`"
++echo "${TERM_BOLD}Configuring for ePerl ${EPERL_VERSION}${TERM_NORM}"
+ 
+ # Guess values for system-dependent variables and create Makefiles.
+-# Generated automatically using autoconf version 2.12 
++# Generated automatically using autoconf version 2.13 
+ # Copyright (C) 1992, 93, 94, 95, 96 Free Software Foundation, Inc.
+ #
+ # This configure script is free software; the Free Software Foundation
+@@ -38,7 +22,7 @@
+ # Any additions from configure.in:
+ ac_default_prefix=/usr/local
+ ac_help="$ac_help
+-  --with-perl=PATH        force the usage of a specific installed Perl"
++  --with-perl=PATH        force the usage of a specific Perl 5 interpreter"
+ ac_help="$ac_help
+   --enable-debug          to enable the debugging options for compilation"
+ 
+@@ -79,6 +63,7 @@
+ # Initialize some other variables.
+ subdirs=
+ MFLAGS= MAKEFLAGS=
++SHELL=${CONFIG_SHELL-/bin/sh}
+ # Maximum number of lines to put in a shell here document.
+ ac_max_here_lines=12
+ 
+@@ -362,7 +347,7 @@
+     verbose=yes ;;
+ 
+   -version | --version | --versio | --versi | --vers)
+-    echo "configure generated by autoconf version 2.12"
++    echo "configure generated by autoconf version 2.13"
+     exit 0 ;;
+ 
+   -with-* | --with-*)
+@@ -532,9 +517,11 @@
+ # CFLAGS is not in ac_cpp because -g, -O, etc. are not valid cpp options.
+ ac_cpp='$CPP $CPPFLAGS'
+ ac_compile='${CC-cc} -c $CFLAGS $CPPFLAGS conftest.$ac_ext 1>&5'
+-ac_link='${CC-cc} -o conftest $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS 1>&5'
++ac_link='${CC-cc} -o conftest${ac_exeext} $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS 1>&5'
+ cross_compiling=$ac_cv_prog_cc_cross
+ 
++ac_exeext=
++ac_objext=o
+ if (echo "testing\c"; echo 1,2,3) | grep c >/dev/null; then
+   # Stardent Vistra SVR4 grep lacks -e, says ghazi@caip.rutgers.edu.
+   if (echo -n testing; echo 1,2,3) | sed s/-n/xn/ | grep xn >/dev/null; then
+@@ -551,7 +538,6 @@
+ 
+ 
+ 
+-
+ test "x$prefix" = xNONE && prefix=$ac_default_prefix
+ eval "dir=$prefix"
+ case $dir in
+@@ -560,74 +546,59 @@
+ esac
+ 
+ 
++tmpdir=${TMPDIR-/tmp}
++
+ 
+ 
+ echo "$ac_t""" 1>&6
+-echo "$ac_t""__ CHECK: Configuration of Perl Language __" 1>&6
++echo "$ac_t""${TERM_BOLD}CHECK: Configuration of Perl Language${TERM_NORM}" 1>&6
+ 
+ echo $ac_n "checking for Perl language""... $ac_c" 1>&6
+-echo "configure:570: checking for Perl language" >&5
++echo "configure:558: checking for Perl language" >&5
+ # Check whether --with-perl or --without-perl was given.
+ if test "${with_perl+set}" = set; then
+   withval="$with_perl"
+-  perlprog=$with_perl
+-perlvers=`$perlprog -v | grep version | sed -e 's/.* version //' -e 's/ built.*//' -e 's/ with.*//'`
++  
++perlprog=$with_perl
++perlvers=`$perlprog -e 'printf "%.3f",$]'`
+ 
+ else
+-  TMPFILE=/tmp/x.$$
+-rm -f $TMPFILE
+-touch $TMPFILE
+-c=0
+-for dir in `echo $PATH | sed -e 's/:/ /g'` /tmp; do
++  
++perlvers=
++for dir in `echo $PATH | sed -e 's/:/ /g'` $tmpdir; do
+     for perl in perl5 perl miniperl; do
+          if test -f "$dir/$perl"; then
+              if test -x "$dir/$perl"; then
+-                 perl="$dir/$perl"
+-                 version=`$perl -v | grep version | sed -e 's/.* version //' -e 's/ built.*//' -e 's/ with.*//'`
+-                 versionnum="`echo $version | sed -e 's/\.//g' -e 's/_//g'`"
+-                 versionnum=`expr $versionnum - $c`
+-                 echo "$versionnum $version $perl" >>$TMPFILE
++                 perlprog="$dir/$perl"
++                 if $perlprog -e 'require 5.003'; then
++                     perlvers=`$perlprog -e 'printf "%.3f",$]'`
++                     break 2
++                 fi
+              fi
+          fi
+     done
+-    c=`expr $c + 1`
+ done
+-perlvers="`cat $TMPFILE | sort -u | tail -1 | cut '-d ' -f2`"
+-perlprog="`cat $TMPFILE | sort -u | tail -1 | cut '-d ' -f3`"
+-rm -f $TMPFILE
+ 
+ fi
+ PATH_PERL=$perlprog
+ echo "$ac_t""$perlprog v$perlvers" 1>&6
+-case $perlvers in
+-    5.003* | 5.004* | 5.005* | 5.006* )
+-        ;;
+-    * ) echo ""
+-        echo "Latest Perl found on your system is $perlvers,"
+-        echo "but at least Perl version 5.003 is required."
+-        echo "In case the newer one is not in PATH, just use"
+-        echo "the option --with-perl=/path/to/bin/perl to"
+-        echo "provide the correct executable."
+-        echo ""
+-        { echo "configure: error: Perl version too old" 1>&2; exit 1; } 
+-        ;;
+-esac
+-case $perlvers in
+-    5.00[3-6]_[0-9][0-9] ) 
+-	    perlvnum=`echo $perlvers | sed -e 's/\.//' -e 's/_//'` ;; 
+-    5.00[3-6] ) 
+-	    perlvnum=`echo $perlvers | sed -e 's/\.//' -e 's/$/00/'` ;; 
+-	* ) 
+-	    perlvnum=`echo $perlvers | sed -e 's/\.//' -e 's/_//'` ;; 
+-esac
+-
++if $perlprog -e 'require 5.003'; then
++    :
++else
++    echo ""
++    echo "Latest Perl found on your system is $perlvers,"
++    echo "but at least Perl version 5.003 is required."
++    echo "In case the newer one is not in PATH, just use"
++    echo "the option --with-perl=/path/to/bin/perl to"
++    echo "provide the correct executable."
++    echo ""
++    { echo "configure: error: Perl version too old" 1>&2; exit 1; } 
++fi
+ 
+ 
+ 
+ perl_prog=$perlprog
+ perl_vers=$perlvers
+-perl_vnum=$perlvnum
+-
+ 
+ 
+ if test -f $PATH_PERL; then
+@@ -639,7 +610,7 @@
+ 
+ 
+ echo $ac_n "checking for Perl knowledge of system""... $ac_c" 1>&6
+-echo "configure:643: checking for Perl knowledge of system" >&5
++echo "configure:614: checking for Perl knowledge of system" >&5
+ perl_osname="`$perl_prog -e 'use Config; print $Config{osname}'`";
+ perl_osvers="`$perl_prog -e 'use Config; print $Config{osvers}'`";
+ perl_os="$perl_osname-$perl_osvers"
+@@ -649,7 +620,7 @@
+ echo "$ac_t""$perl_os" 1>&6
+ 
+ echo $ac_n "checking for Perl standard compiler""... $ac_c" 1>&6
+-echo "configure:653: checking for Perl standard compiler" >&5
++echo "configure:624: checking for Perl standard compiler" >&5
+ perl_cc="`$perl_prog -e 'use Config; print $Config{cc}'`";
+ if test ".$CC" = .; then
+     CC=$perl_cc
+@@ -662,13 +633,13 @@
+ 
+ 
+ echo $ac_n "checking for Perl standard optimization flags""... $ac_c" 1>&6
+-echo "configure:666: checking for Perl standard optimization flags" >&5
++echo "configure:637: checking for Perl standard optimization flags" >&5
+ perl_optimize="`$perl_prog -e 'use Config; print $Config{optimize}'`";
+ echo "$ac_t""$perl_optimize" 1>&6
+ 
+ 
+ echo $ac_n "checking for Perl standard compilation flags""... $ac_c" 1>&6
+-echo "configure:672: checking for Perl standard compilation flags" >&5
++echo "configure:643: checking for Perl standard compilation flags" >&5
+ perl_ccflags="`$perl_prog -e 'use Config; print $Config{ccflags}'`";
+ case $perl_os in
+     *hpux*    ) perl_ccflags="$perl_ccflags -Wp,-H32768" ;;
+@@ -678,7 +649,7 @@
+ 
+ 
+ echo $ac_n "checking for Perl standard link flags""... $ac_c" 1>&6
+-echo "configure:682: checking for Perl standard link flags" >&5
++echo "configure:653: checking for Perl standard link flags" >&5
+ perl_ldflags="`$perl_prog -e 'use Config; print $Config{ldflags}'`";
+ case $perl_os in
+     *irix-6.* ) perl_ldflags="$perl_ldflags '-Wl,-woff 85'" ;;
+@@ -687,19 +658,19 @@
+ 
+ 
+ echo $ac_n "checking for Perl library files""... $ac_c" 1>&6
+-echo "configure:691: checking for Perl library files" >&5
++echo "configure:662: checking for Perl library files" >&5
+ perl_libs="`$perl_prog -e 'use Config; print $Config{libs}'`"
+ echo "$ac_t""$perl_libs" 1>&6
+ 
+ 
+ echo $ac_n "checking for Perl architecture directory""... $ac_c" 1>&6
+-echo "configure:697: checking for Perl architecture directory" >&5
++echo "configure:668: checking for Perl architecture directory" >&5
+ perl_archlib="`$perlprog -e 'use Config; print $Config{archlib}'`";
+ echo "$ac_t""$perl_archlib" 1>&6
+ 
+ 
+ echo $ac_n "checking for Perl dynamic loading support""... $ac_c" 1>&6
+-echo "configure:703: checking for Perl dynamic loading support" >&5
++echo "configure:674: checking for Perl dynamic loading support" >&5
+ usedl="`$perlprog -e 'use Config; print $Config{usedl}'`";
+ case $usedl in
+     define )
+@@ -719,7 +690,7 @@
+ echo "$ac_t""$rc" 1>&6
+ 
+ echo $ac_n "checking for Perl dynamic loading compilation flags""... $ac_c" 1>&6
+-echo "configure:723: checking for Perl dynamic loading compilation flags" >&5
++echo "configure:694: checking for Perl dynamic loading compilation flags" >&5
+ perl_cccdlflags="`$perlprog -e 'use Config; print $Config{cccdlflags}'`";
+ case $perl_cccdlflags in
+     " " ) x="none" ;;
+@@ -729,7 +700,7 @@
+ 
+ 
+ echo $ac_n "checking for Perl dynamic loading link flags""... $ac_c" 1>&6
+-echo "configure:733: checking for Perl dynamic loading link flags" >&5
++echo "configure:704: checking for Perl dynamic loading link flags" >&5
+ perl_ccdlflags="`$perlprog -e 'use Config; print $Config{ccdlflags}'`";
+ case $perl_os in
+     *aix* ) perl_ccdlflags="`echo $perl_ccdlflags | sed -e 's;-bE:perl.exp;-bE:${perl_archlib}/CORE/perl.exp;'`" ;;
+@@ -744,18 +715,18 @@
+ 
+ 
+ echo "$ac_t""" 1>&6
+-echo "$ac_t""__ CHECK: System Build Environment __" 1>&6
++echo "$ac_t""${TERM_BOLD}CHECK: System Build Environment${TERM_NORM}" 1>&6
+ 
+ echo $ac_n "checking for build user""... $ac_c" 1>&6
+-echo "configure:751: checking for build user" >&5
+-build_user="`$ac_aux_dir/buildinfo -n %u@%h%d`"
++echo "configure:722: checking for build user" >&5
++build_user="`$shtool echo -n -e %u@%h%d`"
+ 
+ echo "$ac_t""$build_user" 1>&6
+ 
+ echo $ac_n "checking for build time""... $ac_c" 1>&6
+-echo "configure:757: checking for build time" >&5
++echo "configure:728: checking for build time" >&5
+ build_time_ctime="`date | sed -e 's/\n$//'`"
+-build_time_iso="`$ac_aux_dir/buildinfo -n '%D-%m-%Y'`"
++build_time_iso="`$shtool echo -n -e '%D-%m-%Y'`"
+ echo "$ac_t""$build_time_iso" 1>&6
+ 
+ 
+@@ -763,15 +734,16 @@
+ # Extract the first word of "gcc", so it can be a program name with args.
+ set dummy gcc; ac_word=$2
+ echo $ac_n "checking for $ac_word""... $ac_c" 1>&6
+-echo "configure:767: checking for $ac_word" >&5
++echo "configure:738: checking for $ac_word" >&5
+ if eval "test \"`echo '$''{'ac_cv_prog_CC'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   if test -n "$CC"; then
+   ac_cv_prog_CC="$CC" # Let the user override the test.
+ else
+-  IFS="${IFS= 	}"; ac_save_ifs="$IFS"; IFS="${IFS}:"
+-  for ac_dir in $PATH; do
++  IFS="${IFS= 	}"; ac_save_ifs="$IFS"; IFS=":"
++  ac_dummy="$PATH"
++  for ac_dir in $ac_dummy; do
+     test -z "$ac_dir" && ac_dir=.
+     if test -f $ac_dir/$ac_word; then
+       ac_cv_prog_CC="gcc"
+@@ -792,16 +764,17 @@
+   # Extract the first word of "cc", so it can be a program name with args.
+ set dummy cc; ac_word=$2
+ echo $ac_n "checking for $ac_word""... $ac_c" 1>&6
+-echo "configure:796: checking for $ac_word" >&5
++echo "configure:768: checking for $ac_word" >&5
+ if eval "test \"`echo '$''{'ac_cv_prog_CC'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   if test -n "$CC"; then
+   ac_cv_prog_CC="$CC" # Let the user override the test.
+ else
+-  IFS="${IFS= 	}"; ac_save_ifs="$IFS"; IFS="${IFS}:"
++  IFS="${IFS= 	}"; ac_save_ifs="$IFS"; IFS=":"
+   ac_prog_rejected=no
+-  for ac_dir in $PATH; do
++  ac_dummy="$PATH"
++  for ac_dir in $ac_dummy; do
+     test -z "$ac_dir" && ac_dir=.
+     if test -f $ac_dir/$ac_word; then
+       if test "$ac_dir/$ac_word" = "/usr/ucb/cc"; then
+@@ -836,25 +809,61 @@
+   echo "$ac_t""no" 1>&6
+ fi
+ 
++  if test -z "$CC"; then
++    case "`uname -s`" in
++    *win32* | *WIN32*)
++      # Extract the first word of "cl", so it can be a program name with args.
++set dummy cl; ac_word=$2
++echo $ac_n "checking for $ac_word""... $ac_c" 1>&6
++echo "configure:819: checking for $ac_word" >&5
++if eval "test \"`echo '$''{'ac_cv_prog_CC'+set}'`\" = set"; then
++  echo $ac_n "(cached) $ac_c" 1>&6
++else
++  if test -n "$CC"; then
++  ac_cv_prog_CC="$CC" # Let the user override the test.
++else
++  IFS="${IFS= 	}"; ac_save_ifs="$IFS"; IFS=":"
++  ac_dummy="$PATH"
++  for ac_dir in $ac_dummy; do
++    test -z "$ac_dir" && ac_dir=.
++    if test -f $ac_dir/$ac_word; then
++      ac_cv_prog_CC="cl"
++      break
++    fi
++  done
++  IFS="$ac_save_ifs"
++fi
++fi
++CC="$ac_cv_prog_CC"
++if test -n "$CC"; then
++  echo "$ac_t""$CC" 1>&6
++else
++  echo "$ac_t""no" 1>&6
++fi
++ ;;
++    esac
++  fi
+   test -z "$CC" && { echo "configure: error: no acceptable cc found in \$PATH" 1>&2; exit 1; }
+ fi
+ 
+ echo $ac_n "checking whether the C compiler ($CC $CFLAGS $LDFLAGS) works""... $ac_c" 1>&6
+-echo "configure:844: checking whether the C compiler ($CC $CFLAGS $LDFLAGS) works" >&5
++echo "configure:851: checking whether the C compiler ($CC $CFLAGS $LDFLAGS) works" >&5
+ 
+ ac_ext=c
+ # CFLAGS is not in ac_cpp because -g, -O, etc. are not valid cpp options.
+ ac_cpp='$CPP $CPPFLAGS'
+ ac_compile='${CC-cc} -c $CFLAGS $CPPFLAGS conftest.$ac_ext 1>&5'
+-ac_link='${CC-cc} -o conftest $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS 1>&5'
++ac_link='${CC-cc} -o conftest${ac_exeext} $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS 1>&5'
+ cross_compiling=$ac_cv_prog_cc_cross
+ 
+-cat > conftest.$ac_ext <<EOF
+-#line 854 "configure"
++cat > conftest.$ac_ext << EOF
++
++#line 862 "configure"
+ #include "confdefs.h"
++
+ main(){return(0);}
+ EOF
+-if { (eval echo configure:858: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest; then
++if { (eval echo configure:867: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
+   ac_cv_prog_cc_works=yes
+   # If we can't run a trivial program, we are probably using a cross compiler.
+   if (./conftest; exit) 2>/dev/null; then
+@@ -868,18 +877,24 @@
+   ac_cv_prog_cc_works=no
+ fi
+ rm -fr conftest*
++ac_ext=c
++# CFLAGS is not in ac_cpp because -g, -O, etc. are not valid cpp options.
++ac_cpp='$CPP $CPPFLAGS'
++ac_compile='${CC-cc} -c $CFLAGS $CPPFLAGS conftest.$ac_ext 1>&5'
++ac_link='${CC-cc} -o conftest${ac_exeext} $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS 1>&5'
++cross_compiling=$ac_cv_prog_cc_cross
+ 
+ echo "$ac_t""$ac_cv_prog_cc_works" 1>&6
+ if test $ac_cv_prog_cc_works = no; then
+   { echo "configure: error: installation or configuration problem: C compiler cannot create executables." 1>&2; exit 1; }
+ fi
+ echo $ac_n "checking whether the C compiler ($CC $CFLAGS $LDFLAGS) is a cross-compiler""... $ac_c" 1>&6
+-echo "configure:878: checking whether the C compiler ($CC $CFLAGS $LDFLAGS) is a cross-compiler" >&5
++echo "configure:893: checking whether the C compiler ($CC $CFLAGS $LDFLAGS) is a cross-compiler" >&5
+ echo "$ac_t""$ac_cv_prog_cc_cross" 1>&6
+ cross_compiling=$ac_cv_prog_cc_cross
+ 
+ echo $ac_n "checking whether we are using GNU C""... $ac_c" 1>&6
+-echo "configure:883: checking whether we are using GNU C" >&5
++echo "configure:898: checking whether we are using GNU C" >&5
+ if eval "test \"`echo '$''{'ac_cv_prog_gcc'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+@@ -888,7 +903,7 @@
+   yes;
+ #endif
+ EOF
+-if { ac_try='${CC-cc} -E conftest.c'; { (eval echo configure:892: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }; } | egrep yes >/dev/null 2>&1; then
++if { ac_try='${CC-cc} -E conftest.c'; { (eval echo configure:907: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }; } | egrep yes >/dev/null 2>&1; then
+   ac_cv_prog_gcc=yes
+ else
+   ac_cv_prog_gcc=no
+@@ -899,11 +914,15 @@
+ 
+ if test $ac_cv_prog_gcc = yes; then
+   GCC=yes
+-  ac_test_CFLAGS="${CFLAGS+set}"
+-  ac_save_CFLAGS="$CFLAGS"
+-  CFLAGS=
+-  echo $ac_n "checking whether ${CC-cc} accepts -g""... $ac_c" 1>&6
+-echo "configure:907: checking whether ${CC-cc} accepts -g" >&5
++else
++  GCC=
++fi
++
++ac_test_CFLAGS="${CFLAGS+set}"
++ac_save_CFLAGS="$CFLAGS"
++CFLAGS=
++echo $ac_n "checking whether ${CC-cc} accepts -g""... $ac_c" 1>&6
++echo "configure:926: checking whether ${CC-cc} accepts -g" >&5
+ if eval "test \"`echo '$''{'ac_cv_prog_cc_g'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+@@ -918,30 +937,35 @@
+ fi
+ 
+ echo "$ac_t""$ac_cv_prog_cc_g" 1>&6
+-  if test "$ac_test_CFLAGS" = set; then
+-    CFLAGS="$ac_save_CFLAGS"
+-  elif test $ac_cv_prog_cc_g = yes; then
++if test "$ac_test_CFLAGS" = set; then
++  CFLAGS="$ac_save_CFLAGS"
++elif test $ac_cv_prog_cc_g = yes; then
++  if test "$GCC" = yes; then
+     CFLAGS="-g -O2"
+   else
+-    CFLAGS="-O2"
++    CFLAGS="-g"
+   fi
+ else
+-  GCC=
+-  test "${CFLAGS+set}" = set || CFLAGS="-g"
++  if test "$GCC" = yes; then
++    CFLAGS="-O2"
++  else
++    CFLAGS=
++  fi
+ fi
+ 
+ # Extract the first word of "ranlib", so it can be a program name with args.
+ set dummy ranlib; ac_word=$2
+ echo $ac_n "checking for $ac_word""... $ac_c" 1>&6
+-echo "configure:937: checking for $ac_word" >&5
++echo "configure:960: checking for $ac_word" >&5
+ if eval "test \"`echo '$''{'ac_cv_prog_RANLIB'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   if test -n "$RANLIB"; then
+   ac_cv_prog_RANLIB="$RANLIB" # Let the user override the test.
+ else
+-  IFS="${IFS= 	}"; ac_save_ifs="$IFS"; IFS="${IFS}:"
+-  for ac_dir in $PATH; do
++  IFS="${IFS= 	}"; ac_save_ifs="$IFS"; IFS=":"
++  ac_dummy="$PATH"
++  for ac_dir in $ac_dummy; do
+     test -z "$ac_dir" && ac_dir=.
+     if test -f $ac_dir/$ac_word; then
+       ac_cv_prog_RANLIB="ranlib"
+@@ -962,15 +986,16 @@
+ # Extract the first word of "ar", so it can be a program name with args.
+ set dummy ar; ac_word=$2
+ echo $ac_n "checking for $ac_word""... $ac_c" 1>&6
+-echo "configure:966: checking for $ac_word" >&5
++echo "configure:990: checking for $ac_word" >&5
+ if eval "test \"`echo '$''{'ac_cv_prog_AR'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   if test -n "$AR"; then
+   ac_cv_prog_AR="$AR" # Let the user override the test.
+ else
+-  IFS="${IFS= 	}"; ac_save_ifs="$IFS"; IFS="${IFS}:"
+-  for ac_dir in $PATH; do
++  IFS="${IFS= 	}"; ac_save_ifs="$IFS"; IFS=":"
++  ac_dummy="$PATH"
++  for ac_dir in $ac_dummy; do
+     test -z "$ac_dir" && ac_dir=.
+     if test -f $ac_dir/$ac_word; then
+       ac_cv_prog_AR="ar"
+@@ -990,15 +1015,16 @@
+ # Extract the first word of "size", so it can be a program name with args.
+ set dummy size; ac_word=$2
+ echo $ac_n "checking for $ac_word""... $ac_c" 1>&6
+-echo "configure:994: checking for $ac_word" >&5
++echo "configure:1019: checking for $ac_word" >&5
+ if eval "test \"`echo '$''{'ac_cv_prog_SIZE'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   if test -n "$SIZE"; then
+   ac_cv_prog_SIZE="$SIZE" # Let the user override the test.
+ else
+-  IFS="${IFS= 	}"; ac_save_ifs="$IFS"; IFS="${IFS}:"
+-  for ac_dir in $PATH; do
++  IFS="${IFS= 	}"; ac_save_ifs="$IFS"; IFS=":"
++  ac_dummy="$PATH"
++  for ac_dir in $ac_dummy; do
+     test -z "$ac_dir" && ac_dir=.
+     if test -f $ac_dir/$ac_word; then
+       ac_cv_prog_SIZE="size"
+@@ -1020,7 +1046,7 @@
+ esac
+ 
+ echo $ac_n "checking for compilation debug mode""... $ac_c" 1>&6
+-echo "configure:1024: checking for compilation debug mode" >&5
++echo "configure:1050: checking for compilation debug mode" >&5
+ # Check whether --enable-debug or --disable-debug was given.
+ if test "${enable_debug+set}" = set; then
+   enableval="$enable_debug"
+@@ -1050,7 +1076,7 @@
+ 
+ if test "$debug" = "on"; then
+     echo $ac_n "checking for dmalloc library""... $ac_c" 1>&6
+-echo "configure:1054: checking for dmalloc library" >&5
++echo "configure:1080: checking for dmalloc library" >&5
+     dmalloc=""
+     x=no
+     if test -f /sw/include/dmalloc.h; then
+@@ -1070,7 +1096,7 @@
+ fi
+ 
+ echo $ac_n "checking whether ${MAKE-make} sets \${MAKE}""... $ac_c" 1>&6
+-echo "configure:1074: checking whether ${MAKE-make} sets \${MAKE}" >&5
++echo "configure:1100: checking whether ${MAKE-make} sets \${MAKE}" >&5
+ set dummy ${MAKE-make}; ac_make=`echo "$2" | sed 'y%./+-%__p_%'`
+ if eval "test \"`echo '$''{'ac_cv_prog_make_${ac_make}_set'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+@@ -1096,87 +1122,24 @@
+   SET_MAKE="MAKE=${MAKE-make}"
+ fi
+ 
+-# Find a good install program.  We prefer a C program (faster),
+-# so one script is as good as another.  But avoid the broken or
+-# incompatible versions:
+-# SysV /etc/install, /usr/sbin/install
+-# SunOS /usr/etc/install
+-# IRIX /sbin/install
+-# AIX /bin/install
+-# AFS /usr/afsws/bin/install, which mishandles nonexistent args
+-# SVR4 /usr/ucb/install, which tries to use the nonexistent group "staff"
+-# ./install, which can be erroneously created by make from ./install.sh.
+-echo $ac_n "checking for a BSD compatible install""... $ac_c" 1>&6
+-echo "configure:1111: checking for a BSD compatible install" >&5
+-if test -z "$INSTALL"; then
+-if eval "test \"`echo '$''{'ac_cv_path_install'+set}'`\" = set"; then
+-  echo $ac_n "(cached) $ac_c" 1>&6
+-else
+-    IFS="${IFS= 	}"; ac_save_IFS="$IFS"; IFS="${IFS}:"
+-  for ac_dir in $PATH; do
+-    # Account for people who put trailing slashes in PATH elements.
+-    case "$ac_dir/" in
+-    /|./|.//|/etc/*|/usr/sbin/*|/usr/etc/*|/sbin/*|/usr/afsws/bin/*|/usr/ucb/*) ;;
+-    *)
+-      # OSF1 and SCO ODT 3.0 have their own names for install.
+-      for ac_prog in ginstall installbsd scoinst install; do
+-        if test -f $ac_dir/$ac_prog; then
+-	  if test $ac_prog = install &&
+-            grep dspmsg $ac_dir/$ac_prog >/dev/null 2>&1; then
+-	    # AIX install.  It has an incompatible calling convention.
+-	    # OSF/1 installbsd also uses dspmsg, but is usable.
+-	    :
+-	  else
+-	    ac_cv_path_install="$ac_dir/$ac_prog -c"
+-	    break 2
+-	  fi
+-	fi
+-      done
+-      ;;
+-    esac
+-  done
+-  IFS="$ac_save_IFS"
+-
+-fi
+-  if test "${ac_cv_path_install+set}" = set; then
+-    INSTALL="$ac_cv_path_install"
+-  else
+-    # As a last resort, use the slow shell script.  We don't cache a
+-    # path for INSTALL within a source directory, because that will
+-    # break other packages using the cache if that directory is
+-    # removed, or if the path is relative.
+-    INSTALL="$ac_install_sh"
+-  fi
+-fi
+-echo "$ac_t""$INSTALL" 1>&6
+-
+-# Use test -z because SunOS4 sh mishandles braces in ${var-val}.
+-# It thinks the first close brace ends the variable substitution.
+-test -z "$INSTALL_PROGRAM" && INSTALL_PROGRAM='${INSTALL}'
+-
+-test -z "$INSTALL_DATA" && INSTALL_DATA='${INSTALL} -m 644'
+-
+-INSTALL_DATA='${INSTALL} -m 644'
+-INSTALL_PROGRAM="${INSTALL_PROGRAM} -m 755"
+-
+ 
+ 
+ echo "$ac_t""" 1>&6
+-echo "$ac_t""__ CHECK: Characteristic of System Headers and Libraries __" 1>&6
++echo "$ac_t""${TERM_BOLD}CHECK: Characteristic of System Headers and Libraries${TERM_NORM}" 1>&6
+ 
+ echo $ac_n "checking for working const""... $ac_c" 1>&6
+-echo "configure:1169: checking for working const" >&5
++echo "configure:1132: checking for working const" >&5
+ if eval "test \"`echo '$''{'ac_cv_c_const'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   cat > conftest.$ac_ext <<EOF
+-#line 1174 "configure"
++#line 1137 "configure"
+ #include "confdefs.h"
+ 
+ int main() {
+ 
+ /* Ultrix mips cc rejects this.  */
+-typedef int charset[2]; const charset x;
++typedef int charset[2]; const charset x = {0,0};
+ /* SunOS 4.1.1 cc rejects this.  */
+ char const *const *ccp;
+ char **p;
+@@ -1219,7 +1182,7 @@
+ 
+ ; return 0; }
+ EOF
+-if { (eval echo configure:1223: \"$ac_compile\") 1>&5; (eval $ac_compile) 2>&5; }; then
++if { (eval echo configure:1186: \"$ac_compile\") 1>&5; (eval $ac_compile) 2>&5; }; then
+   rm -rf conftest*
+   ac_cv_c_const=yes
+ else
+@@ -1240,7 +1203,7 @@
+ fi
+ 
+ echo $ac_n "checking how to run the C preprocessor""... $ac_c" 1>&6
+-echo "configure:1244: checking how to run the C preprocessor" >&5
++echo "configure:1207: checking how to run the C preprocessor" >&5
+ # On Suns, sometimes $CPP names a directory.
+ if test -n "$CPP" && test -d "$CPP"; then
+   CPP=
+@@ -1255,14 +1218,14 @@
+   # On the NeXT, cc -E runs the code through the compiler's parser,
+   # not just through cpp.
+   cat > conftest.$ac_ext <<EOF
+-#line 1259 "configure"
++#line 1222 "configure"
+ #include "confdefs.h"
+ #include <assert.h>
+ Syntax Error
+ EOF
+ ac_try="$ac_cpp conftest.$ac_ext >/dev/null 2>conftest.out"
+-{ (eval echo configure:1265: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
+-ac_err=`grep -v '^ *+' conftest.out`
++{ (eval echo configure:1228: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
++ac_err=`grep -v '^ *+' conftest.out | grep -v "^conftest.${ac_ext}\$"`
+ if test -z "$ac_err"; then
+   :
+ else
+@@ -1272,14 +1235,31 @@
+   rm -rf conftest*
+   CPP="${CC-cc} -E -traditional-cpp"
+   cat > conftest.$ac_ext <<EOF
+-#line 1276 "configure"
++#line 1239 "configure"
++#include "confdefs.h"
++#include <assert.h>
++Syntax Error
++EOF
++ac_try="$ac_cpp conftest.$ac_ext >/dev/null 2>conftest.out"
++{ (eval echo configure:1245: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
++ac_err=`grep -v '^ *+' conftest.out | grep -v "^conftest.${ac_ext}\$"`
++if test -z "$ac_err"; then
++  :
++else
++  echo "$ac_err" >&5
++  echo "configure: failed program was:" >&5
++  cat conftest.$ac_ext >&5
++  rm -rf conftest*
++  CPP="${CC-cc} -nologo -E"
++  cat > conftest.$ac_ext <<EOF
++#line 1256 "configure"
+ #include "confdefs.h"
+ #include <assert.h>
+ Syntax Error
+ EOF
+ ac_try="$ac_cpp conftest.$ac_ext >/dev/null 2>conftest.out"
+-{ (eval echo configure:1282: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
+-ac_err=`grep -v '^ *+' conftest.out`
++{ (eval echo configure:1262: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
++ac_err=`grep -v '^ *+' conftest.out | grep -v "^conftest.${ac_ext}\$"`
+ if test -z "$ac_err"; then
+   :
+ else
+@@ -1292,6 +1272,8 @@
+ rm -f conftest*
+ fi
+ rm -f conftest*
++fi
++rm -f conftest*
+   ac_cv_prog_CPP="$CPP"
+ fi
+   CPP="$ac_cv_prog_CPP"
+@@ -1301,12 +1283,12 @@
+ echo "$ac_t""$CPP" 1>&6
+ 
+ echo $ac_n "checking for ANSI C header files""... $ac_c" 1>&6
+-echo "configure:1305: checking for ANSI C header files" >&5
++echo "configure:1287: checking for ANSI C header files" >&5
+ if eval "test \"`echo '$''{'ac_cv_header_stdc'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   cat > conftest.$ac_ext <<EOF
+-#line 1310 "configure"
++#line 1292 "configure"
+ #include "confdefs.h"
+ #include <stdlib.h>
+ #include <stdarg.h>
+@@ -1314,8 +1296,8 @@
+ #include <float.h>
+ EOF
+ ac_try="$ac_cpp conftest.$ac_ext >/dev/null 2>conftest.out"
+-{ (eval echo configure:1318: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
+-ac_err=`grep -v '^ *+' conftest.out`
++{ (eval echo configure:1300: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
++ac_err=`grep -v '^ *+' conftest.out | grep -v "^conftest.${ac_ext}\$"`
+ if test -z "$ac_err"; then
+   rm -rf conftest*
+   ac_cv_header_stdc=yes
+@@ -1331,7 +1313,7 @@
+ if test $ac_cv_header_stdc = yes; then
+   # SunOS 4.x string.h does not declare mem*, contrary to ANSI.
+ cat > conftest.$ac_ext <<EOF
+-#line 1335 "configure"
++#line 1317 "configure"
+ #include "confdefs.h"
+ #include <string.h>
+ EOF
+@@ -1349,7 +1331,7 @@
+ if test $ac_cv_header_stdc = yes; then
+   # ISC 2.0.2 stdlib.h does not declare free, contrary to ANSI.
+ cat > conftest.$ac_ext <<EOF
+-#line 1353 "configure"
++#line 1335 "configure"
+ #include "confdefs.h"
+ #include <stdlib.h>
+ EOF
+@@ -1370,7 +1352,7 @@
+   :
+ else
+   cat > conftest.$ac_ext <<EOF
+-#line 1374 "configure"
++#line 1356 "configure"
+ #include "confdefs.h"
+ #include <ctype.h>
+ #define ISLOWER(c) ('a' <= (c) && (c) <= 'z')
+@@ -1381,7 +1363,7 @@
+ exit (0); }
+ 
+ EOF
+-if { (eval echo configure:1385: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest && (./conftest; exit) 2>/dev/null
++if { (eval echo configure:1367: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext} && (./conftest; exit) 2>/dev/null
+ then
+   :
+ else
+@@ -1408,18 +1390,18 @@
+ do
+ ac_safe=`echo "$ac_hdr" | sed 'y%./+-%__p_%'`
+ echo $ac_n "checking for $ac_hdr""... $ac_c" 1>&6
+-echo "configure:1412: checking for $ac_hdr" >&5
++echo "configure:1394: checking for $ac_hdr" >&5
+ if eval "test \"`echo '$''{'ac_cv_header_$ac_safe'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   cat > conftest.$ac_ext <<EOF
+-#line 1417 "configure"
++#line 1399 "configure"
+ #include "confdefs.h"
+ #include <$ac_hdr>
+ EOF
+ ac_try="$ac_cpp conftest.$ac_ext >/dev/null 2>conftest.out"
+-{ (eval echo configure:1422: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
+-ac_err=`grep -v '^ *+' conftest.out`
++{ (eval echo configure:1404: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
++ac_err=`grep -v '^ *+' conftest.out | grep -v "^conftest.${ac_ext}\$"`
+ if test -z "$ac_err"; then
+   rm -rf conftest*
+   eval "ac_cv_header_$ac_safe=yes"
+@@ -1445,12 +1427,12 @@
+ done
+ 
+ echo $ac_n "checking for bool""... $ac_c" 1>&6
+-echo "configure:1449: checking for bool" >&5
++echo "configure:1431: checking for bool" >&5
+ if eval "test \"`echo '$''{'ac_cv_type_bool'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   cat > conftest.$ac_ext <<EOF
+-#line 1454 "configure"
++#line 1436 "configure"
+ #include "confdefs.h"
+ #include <sys/types.h>
+ #if STDC_HEADERS
+@@ -1459,7 +1441,7 @@
+ #endif
+ EOF
+ if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+-  egrep "bool[^a-zA-Z_0-9]" >/dev/null 2>&1; then
++  egrep "(^|[^a-zA-Z_0-9])bool[^a-zA-Z_0-9]" >/dev/null 2>&1; then
+   rm -rf conftest*
+   ac_cv_type_bool=yes
+ else
+@@ -1480,12 +1462,12 @@
+ for ac_func in memmove
+ do
+ echo $ac_n "checking for $ac_func""... $ac_c" 1>&6
+-echo "configure:1484: checking for $ac_func" >&5
++echo "configure:1466: checking for $ac_func" >&5
+ if eval "test \"`echo '$''{'ac_cv_func_$ac_func'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   cat > conftest.$ac_ext <<EOF
+-#line 1489 "configure"
++#line 1471 "configure"
+ #include "confdefs.h"
+ /* System header to define __stub macros and hopefully few prototypes,
+     which can conflict with char $ac_func(); below.  */
+@@ -1508,7 +1490,7 @@
+ 
+ ; return 0; }
+ EOF
+-if { (eval echo configure:1512: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest; then
++if { (eval echo configure:1494: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
+   rm -rf conftest*
+   eval "ac_cv_func_$ac_func=yes"
+ else
+@@ -1535,12 +1517,12 @@
+ for ac_func in seteuid
+ do
+ echo $ac_n "checking for $ac_func""... $ac_c" 1>&6
+-echo "configure:1539: checking for $ac_func" >&5
++echo "configure:1521: checking for $ac_func" >&5
+ if eval "test \"`echo '$''{'ac_cv_func_$ac_func'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   cat > conftest.$ac_ext <<EOF
+-#line 1544 "configure"
++#line 1526 "configure"
+ #include "confdefs.h"
+ /* System header to define __stub macros and hopefully few prototypes,
+     which can conflict with char $ac_func(); below.  */
+@@ -1563,7 +1545,7 @@
+ 
+ ; return 0; }
+ EOF
+-if { (eval echo configure:1567: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest; then
++if { (eval echo configure:1549: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
+   rm -rf conftest*
+   eval "ac_cv_func_$ac_func=yes"
+ else
+@@ -1590,12 +1572,12 @@
+ for ac_func in setegid
+ do
+ echo $ac_n "checking for $ac_func""... $ac_c" 1>&6
+-echo "configure:1594: checking for $ac_func" >&5
++echo "configure:1576: checking for $ac_func" >&5
+ if eval "test \"`echo '$''{'ac_cv_func_$ac_func'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   cat > conftest.$ac_ext <<EOF
+-#line 1599 "configure"
++#line 1581 "configure"
+ #include "confdefs.h"
+ /* System header to define __stub macros and hopefully few prototypes,
+     which can conflict with char $ac_func(); below.  */
+@@ -1618,7 +1600,7 @@
+ 
+ ; return 0; }
+ EOF
+-if { (eval echo configure:1622: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest; then
++if { (eval echo configure:1604: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
+   rm -rf conftest*
+   eval "ac_cv_func_$ac_func=yes"
+ else
+@@ -1645,12 +1627,12 @@
+ for ac_func in strdup
+ do
+ echo $ac_n "checking for $ac_func""... $ac_c" 1>&6
+-echo "configure:1649: checking for $ac_func" >&5
++echo "configure:1631: checking for $ac_func" >&5
+ if eval "test \"`echo '$''{'ac_cv_func_$ac_func'+set}'`\" = set"; then
+   echo $ac_n "(cached) $ac_c" 1>&6
+ else
+   cat > conftest.$ac_ext <<EOF
+-#line 1654 "configure"
++#line 1636 "configure"
+ #include "confdefs.h"
+ /* System header to define __stub macros and hopefully few prototypes,
+     which can conflict with char $ac_func(); below.  */
+@@ -1673,7 +1655,7 @@
+ 
+ ; return 0; }
+ EOF
+-if { (eval echo configure:1677: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest; then
++if { (eval echo configure:1659: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
+   rm -rf conftest*
+   eval "ac_cv_func_$ac_func=yes"
+ else
+@@ -1701,7 +1683,7 @@
+ 
+ 
+ echo "$ac_t""" 1>&6
+-echo "$ac_t""__ RESULT: Sourcefile Substitution __" 1>&6
++echo "$ac_t""${TERM_BOLD}RESULT: Sourcefile Substitution${TERM_NORM}" 1>&6
+ 
+ trap '' 1 2 15
+ cat > confcache <<\EOF
+@@ -1726,7 +1708,7 @@
+ # Ultrix sh set writes to stderr and can't be redirected directly,
+ # and sets the high bit in the cache file unless we assign to the vars.
+ (set) 2>&1 |
+-  case `(ac_space=' '; set) 2>&1` in
++  case `(ac_space=' '; set | grep ac_space) 2>&1` in
+   *ac_space=\ *)
+     # `set' does not quote correctly, so add quotes (double-quote substitution
+     # turns \\\\ into \\, and sed turns \\ into \).
+@@ -1793,7 +1775,7 @@
+     echo "running \${CONFIG_SHELL-/bin/sh} $0 $ac_configure_args --no-create --no-recursion"
+     exec \${CONFIG_SHELL-/bin/sh} $0 $ac_configure_args --no-create --no-recursion ;;
+   -version | --version | --versio | --versi | --vers | --ver | --ve | --v)
+-    echo "$CONFIG_STATUS generated by autoconf version 2.12"
++    echo "$CONFIG_STATUS generated by autoconf version 2.13"
+     exit 0 ;;
+   -help | --help | --hel | --he | --h)
+     echo "\$ac_cs_usage"; exit 0 ;;
+@@ -1802,7 +1784,6 @@
+ done
+ 
+ ac_given_srcdir=$srcdir
+-ac_given_INSTALL="$INSTALL"
+ 
+ trap 'rm -fr `echo "Makefile t/Makefile config_sc.h  config_ac.h" | sed "s/:[^ ]*//g"` conftest*; exit 1' 1 2 15
+ EOF
+@@ -1813,9 +1794,11 @@
+  s/@@/%@/; s/@@/@%/; s/@g\$/%g/' > conftest.subs <<\\CEOF
+ $ac_vpsub
+ $extrasub
++s%@SHELL@%$SHELL%g
+ s%@CFLAGS@%$CFLAGS%g
+ s%@CPPFLAGS@%$CPPFLAGS%g
+ s%@CXXFLAGS@%$CXXFLAGS%g
++s%@FFLAGS@%$FFLAGS%g
+ s%@DEFS@%$DEFS%g
+ s%@LDFLAGS@%$LDFLAGS%g
+ s%@LIBS@%$LIBS%g
+@@ -1835,13 +1818,12 @@
+ s%@infodir@%$infodir%g
+ s%@mandir@%$mandir%g
+ s%@libsubdir@%$libsubdir%g
++s%@tmpdir@%$tmpdir%g
+ s%@PATH_PERL@%$PATH_PERL%g
+ s%@perlprog@%$perlprog%g
+ s%@perlvers@%$perlvers%g
+-s%@perlvnum@%$perlvnum%g
+ s%@perl_prog@%$perl_prog%g
+ s%@perl_vers@%$perl_vers%g
+-s%@perl_vnum@%$perl_vnum%g
+ s%@perl_osname@%$perl_osname%g
+ s%@perl_osvers@%$perl_osvers%g
+ s%@perl_os@%$perl_os%g
+@@ -1864,8 +1846,6 @@
+ s%@debug@%$debug%g
+ s%@dmalloc@%$dmalloc%g
+ s%@SET_MAKE@%$SET_MAKE%g
+-s%@INSTALL_PROGRAM@%$INSTALL_PROGRAM%g
+-s%@INSTALL_DATA@%$INSTALL_DATA%g
+ s%@CPP@%$CPP%g
+ 
+ CEOF
+@@ -1943,10 +1923,6 @@
+     top_srcdir="$ac_dots$ac_given_srcdir" ;;
+   esac
+ 
+-  case "$ac_given_INSTALL" in
+-  [/$]*) INSTALL="$ac_given_INSTALL" ;;
+-  *) INSTALL="$ac_dots$ac_given_INSTALL" ;;
+-  esac
+ 
+   echo creating "$ac_file"
+   rm -f "$ac_file"
+@@ -1962,7 +1938,6 @@
+ s%@configure_input@%$configure_input%g
+ s%@srcdir@%$srcdir%g
+ s%@top_srcdir@%$top_srcdir%g
+-s%@INSTALL@%$INSTALL%g
+ " $ac_file_inputs | (eval "$ac_sed_cmds") > $ac_file
+ fi; done
+ rm -f conftest.s*
+@@ -2085,8 +2060,4 @@
+ chmod +x $CONFIG_STATUS
+ rm -fr confdefs* $ac_clean_files
+ test "$no_create" = yes || ${CONFIG_SHELL-/bin/sh} $CONFIG_STATUS || exit 1
+-
+-echo ""
+-echo "Now please type 'make' to compile. Good luck."
+-echo ""
+ 
+diff -Naur eperl-2.2.14.orig/configure.in eperl-2.2.14/configure.in
+--- eperl-2.2.14.orig/configure.in	Wed Dec 31 03:22:16 1997
++++ eperl-2.2.14/configure.in	Sat Mar 16 19:32:56 2002
+@@ -5,21 +5,25 @@
+ dnl ##  Process this file with ``autoconf'' to produce a configure script.
+ dnl ##
+ 
+-
+ dnl #
+ dnl #   standard autoconf prolog
+ dnl #
+ 
+ AC_PREREQ(2.10)dnl
+-AC_REVISION($Revision: 2.0$)
+-echo "Configuring for ePerl `./etc/newvers -l c -D eperl_version.c`"
++AC_REVISION($Revision: 1.9 $)
++
++shtool=./etc/shtool
++TERM_BOLD=`$shtool echo -e %B 2>/dev/null`
++TERM_NORM=`$shtool echo -e %b 2>/dev/null`
++
++dnl ##  version id
++EPERL_VERSION="`$shtool version -lc -d long eperl_version.c`"
++echo "${TERM_BOLD}Configuring for ePerl ${EPERL_VERSION}${TERM_NORM}"
+ 
+-AC_CONFIG_AUX_DIR(etc)
+ AC_INIT(README)
+ AC_CONFIG_HEADER(config_ac.h)dnl
+ AC_PREFIX_DEFAULT(/usr/local)
+ 
+-
+ dnl #
+ dnl #   libdir adjustment
+ dnl #
+@@ -32,6 +36,8 @@
+ esac
+ AC_SUBST(libsubdir)
+ 
++tmpdir=${TMPDIR-/tmp}
++AC_SUBST(tmpdir)
+ 
+ dnl #
+ dnl #   latest find Perl interpreter
+@@ -40,65 +46,50 @@
+ AC_CONFIGURE_PART(CHECK: Configuration of Perl Language)
+ AC_MSG_CHECKING([for Perl language])
+ AC_ARG_WITH(perl,dnl
+-[  --with-perl=PATH        force the usage of a specific installed Perl],
++[  --with-perl=PATH        force the usage of a specific Perl 5 interpreter],[
++dnl [[
+ perlprog=$with_perl
+-perlvers=`$perlprog -v | grep version | sed -e 's/.* version //' -e 's/ built.*//' -e 's/ with.*//'`
+-,
+-TMPFILE=/tmp/x.$$
+-rm -f $TMPFILE
+-touch $TMPFILE
+-c=0
+-for dir in `echo $PATH | sed -e 's/:/ /g'` /tmp; do
++perlvers=`$perlprog -e 'printf "%.3f",$]'`
++dnl ]
++],[
++perlvers=
++for dir in `echo $PATH | sed -e 's/:/ /g'` $tmpdir; do
+     for perl in perl5 perl miniperl; do
+          if test -f "$dir/$perl"; then
+              if test -x "$dir/$perl"; then
+-                 perl="$dir/$perl"
+-                 version=`$perl -v | grep version | sed -e 's/.* version //' -e 's/ built.*//' -e 's/ with.*//'`
+-                 versionnum="`echo $version | sed -e 's/\.//g' -e 's/_//g'`"
+-                 versionnum=`expr $versionnum - $c`
+-                 echo "$versionnum $version $perl" >>$TMPFILE
++                 perlprog="$dir/$perl"
++                 if $perlprog -e 'require 5.003'; then
++dnl [[
++                     perlvers=`$perlprog -e 'printf "%.3f",$]'`
++dnl ]
++                     break 2
++                 fi
+              fi
+          fi
+     done
+-    c=`expr $c + 1`
+ done
+-perlvers="`cat $TMPFILE | sort -u | tail -1 | cut '-d ' -f2`"
+-perlprog="`cat $TMPFILE | sort -u | tail -1 | cut '-d ' -f3`"
+-rm -f $TMPFILE
+-)dnl
++])dnl
+ PATH_PERL=$perlprog
+ AC_MSG_RESULT([$perlprog v$perlvers])
+-case $perlvers in
+-    5.003* | 5.004* | 5.005* | 5.006* )
+-        ;;
+-    * ) echo ""
+-        echo "Latest Perl found on your system is $perlvers,"
+-        echo "but at least Perl version 5.003 is required."
+-        echo "In case the newer one is not in PATH, just use"
+-        echo "the option --with-perl=/path/to/bin/perl to"
+-        echo "provide the correct executable."
+-        echo ""
+-        AC_ERROR([Perl version too old]) 
+-        ;;
+-esac
+-case $perlvers in
+-    5.00[[3-6]_[0-9][0-9]] ) 
+-	    perlvnum=`echo $perlvers | sed -e 's/\.//' -e 's/_//'` ;; 
+-    5.00[[3-6]] ) 
+-	    perlvnum=`echo $perlvers | sed -e 's/\.//' -e 's/$/00/'` ;; 
+-	* ) 
+-	    perlvnum=`echo $perlvers | sed -e 's/\.//' -e 's/_//'` ;; 
+-esac
++if $perlprog -e 'require 5.003'; then
++    :
++else
++    echo ""
++    echo "Latest Perl found on your system is $perlvers,"
++    echo "but at least Perl version 5.003 is required."
++    echo "In case the newer one is not in PATH, just use"
++    echo "the option --with-perl=/path/to/bin/perl to"
++    echo "provide the correct executable."
++    echo ""
++    AC_ERROR([Perl version too old]) 
++fi
+ AC_SUBST(PATH_PERL)
+ AC_SUBST(perlprog)
+ AC_SUBST(perlvers)
+-AC_SUBST(perlvnum)
+ perl_prog=$perlprog
+ perl_vers=$perlvers
+-perl_vnum=$perlvnum
+ AC_SUBST(perl_prog)
+ AC_SUBST(perl_vers)
+-AC_SUBST(perl_vnum)
+ if test -f $PATH_PERL; then
+     :
+ else
+@@ -256,10 +247,6 @@
+ fi
+ 
+ AC_SET_MAKE
+-AC_PROG_INSTALL
+-INSTALL_DATA='${INSTALL} -m 644'
+-INSTALL_PROGRAM="${INSTALL_PROGRAM} -m 755"
+-
+ 
+ dnl #
+ dnl #   determine system parameters
+@@ -290,9 +277,5 @@
+ config_sc.h dnl
+ ,dnl
+ )dnl
+-
+-echo ""
+-echo "Now please type 'make' to compile. Good luck."
+-echo ""
+ 
+ dnl ##EOF##
+diff -Naur eperl-2.2.14.orig/configure.in.older eperl-2.2.14/configure.in.older
+--- eperl-2.2.14.orig/configure.in.older	Wed Dec 31 19:00:00 1969
++++ eperl-2.2.14/configure.in.older	Sat Mar 16 19:32:57 2002
+@@ -0,0 +1,300 @@
++dnl ##
++dnl ##  configure.in -- GNU autoconf configuration spec
++dnl ##  Copyright (c) Ralf S. Engelschall, <rse@engelschall.com>
++dnl ##
++dnl ##  Process this file with ``autoconf'' to produce a configure script.
++dnl ##
++
++
++dnl #
++dnl #   standard autoconf prolog
++dnl #
++
++AC_PREREQ(2.10)dnl
++AC_REVISION($Revision: 2.0$)
++echo "Configuring for ePerl `./etc/newvers -l c -D eperl_version.c`"
++
++AC_CONFIG_AUX_DIR(etc)
++AC_INIT(README)
++AC_CONFIG_HEADER(config_ac.h)dnl
++AC_PREFIX_DEFAULT(/usr/local)
++
++
++dnl #
++dnl #   libdir adjustment
++dnl #
++
++test "x$prefix" = xNONE && prefix=$ac_default_prefix
++eval "dir=$prefix"
++case $dir in
++    *eperl* ) libsubdir= ;;
++          * ) libsubdir="/eperl" ;;
++esac
++AC_SUBST(libsubdir)
++
++
++dnl #
++dnl #   latest find Perl interpreter
++dnl #
++
++AC_CONFIGURE_PART(CHECK: Configuration of Perl Language)
++AC_MSG_CHECKING([for Perl language])
++AC_ARG_WITH(perl,dnl
++[  --with-perl=PATH        force the usage of a specific installed Perl],
++perlprog=$with_perl
++perlvers=`$perlprog -v | grep 'version\|v[[[[:digit:]]]]' | sed -e 's/.* v\(ersion \)\?//' -e 's/ built.*//' -e 's/ with.*//'`
++,
++TMPFILE=/tmp/x.$$
++rm -f $TMPFILE
++touch $TMPFILE
++c=0
++for dir in `echo $PATH | sed -e 's/:/ /g'` /tmp; do
++    for perl in perl5 perl miniperl; do
++         if test -f "$dir/$perl"; then
++             if test -x "$dir/$perl"; then
++                 perl="$dir/$perl"
++                 version=`$perl -v | grep 'version\|v[[[[:digit:]]]]' | sed -e 's/.* v\(ersion \)\?//' -e 's/ built.*//' -e 's/ with.*//'`
++                 versionnum="`echo $version | sed -e 's/\.//g' -e 's/_//g'`"
++                 versionnum=`expr $versionnum - $c`
++                 echo "$versionnum $version $perl" >>$TMPFILE
++             fi
++         fi
++    done
++    c=`expr $c + 1`
++done
++perlvers="`cat $TMPFILE | sort -u | tail -1 | cut '-d ' -f2`"
++perlprog="`cat $TMPFILE | sort -u | tail -1 | cut '-d ' -f3`"
++rm -f $TMPFILE
++)dnl
++PATH_PERL=$perlprog
++AC_MSG_RESULT([$perlprog v$perlvers])
++case $perlvers in
++    5.003* | 5.004* | 5.005* | 5.6.* )
++        ;;
++    * ) echo ""
++        echo "Latest Perl found on your system is $perlvers,"
++        echo "but at least Perl version 5.003 is required."
++        echo "In case the newer one is not in PATH, just use"
++        echo "the option --with-perl=/path/to/bin/perl to"
++        echo "provide the correct executable."
++        echo ""
++        AC_ERROR([Perl version too old]) 
++        ;;
++esac
++case $perlvers in
++    5.00[[3-5]_[0-9][0-9]] ) 
++	    perlvnum=`echo $perlvers | sed -e 's/\.//' -e 's/_//'` ;; 
++    5.00[[3-5]] ) 
++	    perlvnum=`echo $perlvers | sed -e 's/\.//' -e 's/$/00/'` ;; 
++    5.[[6-9]].[[0-9]] ) 
++	    perlvnum=`echo $perlvers | sed -e 's/\.\(.\)\.\(.\)$/00\10\2/'` ;; 
++	* ) 
++	    perlvnum=`echo $perlvers | sed -e 's/\.//' -e 's/_//'` ;; 
++esac
++AC_SUBST(PATH_PERL)
++AC_SUBST(perlprog)
++AC_SUBST(perlvers)
++AC_SUBST(perlvnum)
++perl_prog=$perlprog
++perl_vers=$perlvers
++perl_vnum=$perlvnum
++AC_SUBST(perl_prog)
++AC_SUBST(perl_vers)
++AC_SUBST(perl_vnum)
++if test -f $PATH_PERL; then
++    :
++else
++    AC_ERROR([required program ``perl'' not found])
++fi
++
++
++dnl #
++dnl #   determine Perl parameters
++dnl #
++
++AC_MSG_CHECKING([for Perl knowledge of system])
++perl_osname="`$perl_prog -e 'use Config; print $Config{osname}'`";
++perl_osvers="`$perl_prog -e 'use Config; print $Config{osvers}'`";
++perl_os="$perl_osname-$perl_osvers"
++AC_SUBST(perl_osname)
++AC_SUBST(perl_osvers)
++AC_SUBST(perl_os)
++AC_MSG_RESULT([$perl_os])
++
++AC_MSG_CHECKING([for Perl standard compiler])
++perl_cc="`$perl_prog -e 'use Config; print $Config{cc}'`";
++if test ".$CC" = .; then
++    CC=$perl_cc
++    export CC
++    AC_MSG_RESULT([$perl_cc])
++else
++    perl_cc=$CC
++    AC_MSG_RESULT([$perl_cc (OVERWRITTEN)])
++fi
++AC_SUBST(perl_cc)
++
++AC_MSG_CHECKING([for Perl standard optimization flags])
++perl_optimize="`$perl_prog -e 'use Config; print $Config{optimize}'`";
++AC_MSG_RESULT([$perl_optimize])
++AC_SUBST(perl_optimize)
++
++AC_MSG_CHECKING([for Perl standard compilation flags])
++perl_ccflags="`$perl_prog -e 'use Config; print $Config{ccflags}'`";
++case $perl_os in
++    *hpux*    ) perl_ccflags="$perl_ccflags -Wp,-H32768" ;;
++    *irix-5.* ) perl_ccflags="`echo $perl_ccflags | sed -e 's/-D_POSIX_SOURCE//'`" ;;
++esac
++AC_MSG_RESULT([$perl_ccflags])
++AC_SUBST(perl_ccflags)
++
++AC_MSG_CHECKING([for Perl standard link flags])
++perl_ldflags="`$perl_prog -e 'use Config; print $Config{ldflags}'`";
++case $perl_os in
++    *irix-6.* ) perl_ldflags="$perl_ldflags '-Wl,-woff 85'" ;;
++esac
++AC_MSG_RESULT([$perl_ldflags])
++AC_SUBST(perl_ldflags)
++
++AC_MSG_CHECKING([for Perl library files])
++perl_libs="`$perl_prog -e 'use Config; print $Config{libs}'`"
++AC_MSG_RESULT([$perl_libs])
++AC_SUBST(perl_libs)
++
++AC_MSG_CHECKING([for Perl architecture directory])
++perl_archlib="`$perlprog -e 'use Config; print $Config{archlib}'`";
++AC_MSG_RESULT([$perl_archlib])
++AC_SUBST(perl_archlib)
++
++AC_MSG_CHECKING([for Perl dynamic loading support])
++usedl="`$perlprog -e 'use Config; print $Config{usedl}'`";
++case $usedl in
++    define )
++        rc=yes
++        AC_DEFINE(HAVE_PERL_DYNALOADER)
++        perl_dla=$perl_archlib/auto/DynaLoader/DynaLoader.a
++        ;;
++    * )
++        rc=no
++        perl_dla=
++        ;;
++esac
++AC_SUBST(perl_dla)
++AC_MSG_RESULT([$rc])
++
++AC_MSG_CHECKING([for Perl dynamic loading compilation flags])
++perl_cccdlflags="`$perlprog -e 'use Config; print $Config{cccdlflags}'`";
++case $perl_cccdlflags in
++    " " ) x="none" ;;
++    * )   x="$perl_cccdlflags" ;;
++esac
++AC_MSG_RESULT([$x])
++AC_SUBST(perl_cccdlflags)
++
++AC_MSG_CHECKING([for Perl dynamic loading link flags])
++perl_ccdlflags="`$perlprog -e 'use Config; print $Config{ccdlflags}'`";
++case $perl_os in
++    *aix* ) perl_ccdlflags="`echo $perl_ccdlflags | sed -e 's;-bE:perl.exp;-bE:${perl_archlib}/CORE/perl.exp;'`" ;;
++esac
++case $perl_ccdlflags in
++    " " ) x="none" ;;
++    * )   x="$perl_ccdlflags" ;;
++esac
++AC_MSG_RESULT([$x])
++AC_SUBST(perl_ccdlflags)
++
++
++dnl #
++dnl #   determine build tools and parameters
++dnl #
++
++AC_CONFIGURE_PART(CHECK: System Build Environment)
++AC_BUILD_USER
++AC_BUILD_TIME
++AC_PROG_CC
++AC_PROG_RANLIB
++AC_PROGRAM_CHECK(AR, ar, ar,)
++AC_PROGRAM_CHECK(SIZE, size, size,)
++case $perl_os in
++    *irix* ) SIZE="$SIZE -B" ;;
++esac
++
++AC_MSG_CHECKING(for compilation debug mode)
++AC_ARG_ENABLE(debug,dnl
++[  --enable-debug          to enable the debugging options for compilation],
++if test ".$ac_cv_prog_gcc" = ".yes"; then
++    CFLAGS="-Wall -g -ggdb3"
++    LDFLAGS="-g -ggdb3"
++else
++    CFLAGS="-g"
++    LDFLAGS="-g"
++fi
++x="enabled"
++debug=on
++AC_DEFINE(DEBUG_ENABLED)
++,
++CFLAGS=""
++LDFLAGS=""
++x=disabled
++debug=off
++)dnl
++AC_SUBST(debug)
++AC_MSG_RESULT([$x])
++
++if test "$debug" = "on"; then
++    AC_MSG_CHECKING(for dmalloc library)
++    dmalloc=""
++    x=no
++    if test -f /sw/include/dmalloc.h; then
++        if test -f /sw/shlib/libdmalloc.a; then
++            AC_DEFINE(HAVE_DMALLOC)
++            CFLAGS="$CFLAGS -I/sw/include"
++            LDFLAGS="$LDFLAGS -L/sw/shlib"
++            dmalloc="-ldmalloc"
++            x=yes
++        fi
++    fi
++    AC_SUBST(dmalloc)
++    AC_MSG_RESULT([$x])
++fi
++
++AC_SET_MAKE
++AC_PROG_INSTALL
++INSTALL_DATA='${INSTALL} -m 644'
++INSTALL_PROGRAM="${INSTALL_PROGRAM} -m 755"
++
++
++dnl #
++dnl #   determine system parameters
++dnl #
++
++AC_CONFIGURE_PART(CHECK: Characteristic of System Headers and Libraries)
++AC_CONST
++AC_STDC_HEADERS
++AC_HAVE_HEADERS(stdio.h stdarg.h stdlib.h string.h ctype.h dnl
++                unistd.h time.h signal.h pwd.h grp.h dnl
++                sys/types.h sys/stat.h sys/param.h dnl
++                sys/socket.h netinet/in.h netdb.h)
++AC_CHECK_TYPE(bool, char)
++AC_CHECK_FUNCS(memmove)
++AC_CHECK_FUNCS(seteuid)
++AC_CHECK_FUNCS(setegid)
++AC_CHECK_FUNCS(strdup)
++
++
++dnl #
++dnl #   finally: source file substitution...
++dnl #
++
++AC_CONFIGURE_PART(RESULT: Sourcefile Substitution)
++AC_OUTPUT(dnl
++Makefile dnl
++t/Makefile dnl
++config_sc.h dnl
++,dnl
++)dnl
++
++echo ""
++echo "Now please type 'make' to compile. Good luck."
++echo ""
++
++dnl ##EOF##
+diff -Naur eperl-2.2.14.orig/eg/demo.func.phtml eperl-2.2.14/eg/demo.func.phtml
+--- eperl-2.2.14.orig/eg/demo.func.phtml	Mon Nov 17 10:00:47 1997
++++ eperl-2.2.14/eg/demo.func.phtml	Sat Mar 16 19:32:56 2002
+@@ -22,8 +22,8 @@
+                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec' );
+     my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = 
+         localtime($time);
+-    my ($str) = sprintf("%s %s %2d %02d:%02d:%02d 19%s%s",
+-         $dow[$wday], $moy[$mon], $mday, $hour, $min, $sec, $year, 
++    my ($str) = sprintf("%s %s %2d %02d:%02d:%02d %s%s",
++         $dow[$wday], $moy[$mon], $mday, $hour, $min, $sec, $year+1900, 
+          $isdst ?  " DST" : "");
+     return $str;
+ }
+diff -Naur eperl-2.2.14.orig/eperl_config.c eperl-2.2.14/eperl_config.c
+--- eperl-2.2.14.orig/eperl_config.c	Fri Jul 10 03:50:11 1998
++++ eperl-2.2.14/eperl_config.c	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+diff -Naur eperl-2.2.14.orig/eperl_config.h eperl-2.2.14/eperl_config.h
+--- eperl-2.2.14.orig/eperl_config.h	Fri Jul 10 03:51:58 1998
++++ eperl-2.2.14/eperl_config.h	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+diff -Naur eperl-2.2.14.orig/eperl_debug.c eperl-2.2.14/eperl_debug.c
+--- eperl-2.2.14.orig/eperl_debug.c	Fri Jul 10 03:50:17 1998
++++ eperl-2.2.14/eperl_debug.c	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+@@ -51,7 +51,8 @@
+     va_start(ap, str);
+     if (fDebug) {
+         if ((fp = fopen(cpDebugFile, "a")) != NULL) {
+-            vsprintf(buf, str, ap);
++            vsnprintf(buf, sizeof(buf), str, ap);
++            buf[sizeof(buf)-1] = '\0';
+             fprintf(fp, "%s", buf);
+             fclose(fp);
+         }
+diff -Naur eperl-2.2.14.orig/eperl_getopt.c eperl-2.2.14/eperl_getopt.c
+--- eperl-2.2.14.orig/eperl_getopt.c	Fri Jul 10 03:50:20 1998
++++ eperl-2.2.14/eperl_getopt.c	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+diff -Naur eperl-2.2.14.orig/eperl_getopt.h eperl-2.2.14/eperl_getopt.h
+--- eperl-2.2.14.orig/eperl_getopt.h	Fri Jul 10 03:52:02 1998
++++ eperl-2.2.14/eperl_getopt.h	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+diff -Naur eperl-2.2.14.orig/eperl_global.h eperl-2.2.14/eperl_global.h
+--- eperl-2.2.14.orig/eperl_global.h	Mon Jul 27 04:39:30 1998
++++ eperl-2.2.14/eperl_global.h	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+@@ -89,10 +89,8 @@
+ /*
+ **  Shortcuts for string comparisons
+ */
+-#define stringEQ(s1,s2)    strcmp(s1,s2)   == 0
+-#define stringNE(s1,s2)    strcmp(s1,s2)   != 0
+-#define stringEQn(s1,s2,n) strcmp(s1,s2,n) == 0
+-#define stringNEn(s1,s2,n) strcmp(s1,s2,n) != 0
++#define stringEQ(s1,s2)    (s1 != NULL && s2 != NULL && strcmp(s1,s2) == 0)
++#define stringNE(s1,s2)    (s1 != NULL && s2 != NULL && strcmp(s1,s2) != 0)
+ 
+ #endif /* EPERL_GLOBAL_H */
+ /*EOF*/
+diff -Naur eperl-2.2.14.orig/eperl_http.c eperl-2.2.14/eperl_http.c
+--- eperl-2.2.14.orig/eperl_http.c	Mon Jul 27 03:16:14 1998
++++ eperl-2.2.14/eperl_http.c	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+@@ -37,33 +37,53 @@
+ #include "eperl_global.h"
+ #include "eperl_proto.h"
+ 
++#define _EPERL_VERSION_C_AS_HEADER_
++#include "eperl_version.c"
++#undef  _EPERL_VERSION_C_AS_HEADER_
+ 
+ /*
+ **  
+ **  print a standard HTTP reponse of header lines
+ **
+ */
+-void HTTP_PrintResponseHeaders(char *cpBuf)
++char *HTTP_PrintResponseHeaders(char *cpBuf)
+ {
+     char *cp;
+ 
+-    if ((cp = getenv("SERVER_PROTOCOL")) == NULL)
+-        cp = "HTTP/1.0";
+-    printf("%s 200 OK\n", cp);
++    if ((strncmp(cpBuf, "HTTP/1.0 ", 9) == 0
++        || (strncmp(cpBuf, "HTTP/1.1 ", 9) == 0))
++        && (cpBuf[9] >= '1' && cpBuf[9] <= '5')
++        && (cpBuf[10] >= '0' && cpBuf[10] <= '9')
++        && (cpBuf[11] >= '0' && cpBuf[11] <= '9')
++        && (cpBuf[12] == ' ')
++        && ((cp = strchr(cpBuf + 12, '\n')) != NULL)) {
++        /* found HTTP status code */
++        if (*(cp-1) == '\r') {
++            *(cp-1) = '\0';
++        }
++        *cp++ = '\0';
++        printf("%s\r\n", cpBuf);
++        cpBuf = cp;
++    } else {
++        /* no HTTP status code */
++        if ((cp = getenv("SERVER_PROTOCOL")) == NULL)
++            cp = "HTTP/1.0";
++        printf("%s 200 OK\r\n", cp);
++    }
+ 
+     if (!HTTP_HeaderLineExists(cpBuf, "Server")) {
+         if ((cp = getenv("SERVER_SOFTWARE")) == NULL)
+             cp = "unknown-server/0.0";
+-        printf("Server: %s %s Perl/%s\n", cp, ePerl_WebID, AC_perl_vers);
++        printf("Server: %s %s Perl/%s\r\n", cp, eperl_version.v_web, AC_perl_vers);
+     }
+ 
+     if (!HTTP_HeaderLineExists(cpBuf, "Date"))
+-        printf("Date: %s\n", WebTime());
++        printf("Date: %s\r\n", WebTime());
+ 
+     if (!HTTP_HeaderLineExists(cpBuf, "Connection"))
+-        printf("Connection: close\n");
++        printf("Connection: close\r\n");
+ 
+-    return;
++    return cpBuf;
+ }
+ 
+ /*
+@@ -242,7 +262,8 @@
+     if (cps == NUL) 
+         strcpy(file, "/");
+     else 
+-        strcpy(file, cps);
++        strncpy(file, cps, sizeof(file));
++    file[sizeof(file)-1] = NUL;
+     return file;
+ }
+ 
+@@ -254,7 +275,7 @@
+     struct hostent *he;
+     struct sockaddr_in sar;
+     struct protoent *pe;
+-    char cmd[1024];
++    char *cmd;
+     char buf[1024];
+     char newurl[8192];
+     char *host;
+@@ -292,13 +313,19 @@
+         return NULL;
+ 
+     /* form the HTTP/1.0 request */
+-    sprintf(cmd, "GET %s HTTP/1.0\n", file);
+-    sprintf(cmd+strlen(cmd), "Host: %s:%s\n", host, port);
+-    sprintf(cmd+strlen(cmd), "User-Agent: %s\n", ePerl_WebID);
+-    sprintf(cmd+strlen(cmd), "\n");
++    cmd = malloc(64 + strlen(file) + strlen(host) +
++                      strlen(port) + strlen(eperl_version.v_web));
++    if (cmd == NULL)
++        return NULL;
++    /* cmd has enough space */
++    sprintf(cmd, "GET %s HTTP/1.0\r\n", file);
++    sprintf(cmd+strlen(cmd), "Host: %s:%s\r\n", host, port);
++    sprintf(cmd+strlen(cmd), "User-Agent: %s\r\n", eperl_version.v_web);
++    sprintf(cmd+strlen(cmd), "\r\n");
+ 
+     /* send the request */
+     write(s, cmd, strlen(cmd));
++    free(cmd);
+ 
+     /* convert the file descriptor to a FILE pointer */
+     fp = fdopen(s, "r");
+@@ -330,7 +357,8 @@
+                     for (cp2 = cp; *cp2 != ' ' && *cp2 != '\t' && *cp2 != '\n' && *cp2 != NUL; cp2++)
+                         ;
+                     *cp2 = NUL;
+-                    strcpy(newurl, cp);
++                    strncpy(newurl, cp, sizeof(newurl));
++                    newurl[sizeof(newurl)-1] = NUL;
+                     break;
+                 }
+             }
+diff -Naur eperl-2.2.14.orig/eperl_logo.c eperl-2.2.14/eperl_logo.c
+--- eperl-2.2.14.orig/eperl_logo.c	Sun Mar 30 05:24:48 1997
++++ eperl-2.2.14/eperl_logo.c	Sat Mar 16 19:32:56 2002
+@@ -1,7 +1,7 @@
+ /* eperl_logo.gif.c -- automatically generated by bin2c */
+ 
+ int  ePerl_LOGO_size   = 6805;
+-char ePerl_LOGO_data[] = {
++unsigned char ePerl_LOGO_data[] = {
+ 0x47,0x49,0x46,0x38,0x39,0x61,0xf1,0x00,0x6c,0x00,0xf7,0x00,0x00,0x00,0x00,
+ 0x00,0x00,0x00,0x33,0x00,0x00,0x66,0x00,0x00,0x99,0x00,0x00,0xcc,0x00,0x00,
+ 0xff,0x00,0x33,0x00,0x00,0x33,0x33,0x00,0x33,0x66,0x00,0x33,0x99,0x00,0x33,
+diff -Naur eperl-2.2.14.orig/eperl_main.c eperl-2.2.14/eperl_main.c
+--- eperl-2.2.14.orig/eperl_main.c	Mon Jul 27 05:24:18 1998
++++ eperl-2.2.14/eperl_main.c	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+@@ -40,6 +40,10 @@
+ #include "eperl_perl5.h"
+ #include "eperl_proto.h"
+ 
++#define _EPERL_VERSION_C_AS_HEADER_
++#include "eperl_version.c"
++#undef  _EPERL_VERSION_C_AS_HEADER_
++
+ int mode = MODE_UNKNOWN;
+ 
+ char *allowed_file_ext[]   = LIST_OF_ALLOWED_FILE_EXT;
+@@ -56,7 +60,8 @@
+     char *cp;
+ 
+     va_start(ap, str);
+-    vsprintf(ca, str, ap);
++    vsnprintf(ca, sizeof(ca), str, ap);
++    ca[sizeof(ca)-1] = NUL;
+ 
+     IO_restore_stdout();
+     IO_restore_stderr();
+@@ -64,7 +69,7 @@
+     if (mode == MODE_CGI || mode == MODE_NPHCGI) {
+         if (mode == MODE_NPHCGI)
+             HTTP_PrintResponseHeaders("");
+-        printf("Content-Type: text/html\n\n");
++        printf("Content-Type: text/html\r\n\r\n");
+         printf("<html>\n");
+         printf("<head>\n");
+         printf("<title>ePerl: ERROR: %s</title>\n", ca);
+@@ -80,7 +85,7 @@
+         printf("<td><img src=\"%s/logo.gif\" alt=\"Embedded Perl 5 Language\"></td>\n", cp);
+         printf("</tr>\n");
+         printf("<tr>\n");
+-        printf("<td align=right><b>Version %s</b></td>\n", ePerl_Version);
++        printf("<td align=right><b>Version %s</b></td>\n", eperl_version.v_short);
+         printf("</tr>\n");
+         printf("</table>\n");
+         printf("<p>\n");
+@@ -133,9 +138,9 @@
+ 
+ void give_version(void)
+ {
+-    fprintf(stdout, "%s\n", ePerl_Hello);
++    fprintf(stdout, "%s\n", eperl_version.v_tex);
+     fprintf(stdout, "\n");
+-    fprintf(stdout, "Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>\n");
++    fprintf(stdout, "Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>\n");
+     fprintf(stdout, "\n");
+     fprintf(stdout, "This program is distributed in the hope that it will be useful,\n");
+     fprintf(stdout, "but WITHOUT ANY WARRANTY; without even the implied warranty of\n");
+@@ -172,7 +177,7 @@
+ {
+     if (mode == MODE_NPHCGI)
+         HTTP_PrintResponseHeaders("");
+-    printf("Content-Type: image/gif\n\n");
++    printf("Content-Type: image/gif\r\n\r\n");
+     fwrite(ePerl_LOGO_data, ePerl_LOGO_size, 1, stdout);
+ }
+ 
+@@ -180,7 +185,7 @@
+ {
+     if (mode == MODE_NPHCGI)
+         HTTP_PrintResponseHeaders("");
+-    printf("Content-Type: image/gif\n\n");
++    printf("Content-Type: image/gif\r\n\r\n");
+     fwrite(ePerl_POWERED_data, ePerl_POWERED_size, 1, stdout);
+ }
+ 
+@@ -328,6 +333,7 @@
+     char *cp;
+     static PerlInterpreter *my_perl = NULL; 
+     struct stat st;
++    char *cpOut0 = NULL;
+     char *cpOut = NULL;
+     int size;
+     struct passwd *pw;
+@@ -521,7 +527,8 @@
+ 
+         /*  determine whether pure CGI or NPH-CGI mode */ 
+         if ((cp = getenv("SCRIPT_FILENAME")) != NULL) { 
+-            strcpy(ca, cp);
++            strncpy(ca, cp, sizeof(ca));
++            ca[sizeof(ca)-1] = NUL;
+             if ((cp = strrchr(ca, '/')) != NULL) 
+                 *cp++ = NUL;
+             else 
+@@ -536,7 +543,8 @@
+         }
+ 
+         /* set the command line for ``ps'' output */
+-        sprintf(ca, "%s %s [%sCGI/SSSL]", argv[0], source, mode == MODE_NPHCGI ? "NPH-" : "");
++        snprintf(ca, sizeof(ca), "%s %s [%sCGI/SSSL]", argv[0], source, mode == MODE_NPHCGI ? "NPH-" : "");
++        ca[sizeof(ca)-1] = NUL;
+         argv[0] = strdup(ca);
+     }
+     /*
+@@ -581,7 +589,8 @@
+ 
+         /*  determine whether pure CGI or NPH-CGI mode */ 
+         if ((cp = getenv("SCRIPT_FILENAME")) != NULL) { 
+-            strcpy(ca, cp);
++            strncpy(ca, cp, sizeof(ca));
++            ca[sizeof(ca)-1] = NUL;
+             if ((cp = strrchr(ca, '/')) != NULL) 
+                 *cp++ = NUL;
+             else 
+@@ -596,7 +605,8 @@
+         }
+ 
+         /* set the command line for ``ps'' output */
+-        sprintf(ca, "%s %s [%sCGI/stand-alone]", argv[0], source, mode == MODE_NPHCGI ? "NPH-" : "");
++        snprintf(ca, sizeof(ca), "%s %s [%sCGI/stand-alone]", argv[0], source, mode == MODE_NPHCGI ? "NPH-" : "");
++        ca[sizeof(ca)-1] = NUL;
+         argv[0] = strdup(ca);
+     }
+     /*
+@@ -836,7 +846,8 @@
+                     dir_home = getcwd(NULL, 1024);
+ 
+                     /* determine physical dir of file */
+-                    strcpy(dir_tmp, source);
++                    strncpy(dir_tmp, source, sizeof(dir_tmp));
++                    dir_tmp[sizeof(dir_tmp)-1] = NUL;
+                     if ((cp = strrchr(dir_tmp, '/')) == NULL) {
+                         if (DO_FOR_FAILED_STEP == STOP_AND_ERROR) {
+                             PrintError(mode, source, NULL, NULL, "Invalid script ``%s'': no absolute path", source);
+@@ -943,8 +954,9 @@
+         cpPort = getenv("SERVER_PORT");
+         if (stringEQ(cpPort, "80"))
+             cpPort = NULL;
+-        sprintf(ca, "http://%s%s%s%s", 
++        snprintf(ca, sizeof(ca), "http://%s%s%s%s", 
+                 cpHost, cpPort != NULL ? ":" : "", cpPort != NULL ? cpPort : "", cpPath);
++        ca[sizeof(ca)-1] = NUL;
+         env = mysetenv(env, "SCRIPT_SRC_URL", "%s", ca);
+         env = mysetenv(env, "SCRIPT_SRC_URL_FILE", "%s", filename(ca));
+         env = mysetenv(env, "SCRIPT_SRC_URL_DIR", "%s", dirname(ca));
+@@ -966,14 +978,15 @@
+         env = mysetenv(env, "SCRIPT_SRC_OWNER", "%s", pw->pw_name);
+     else
+         env = mysetenv(env, "SCRIPT_SRC_OWNER", "unknown-uid-%d", st.st_uid);
+-    env = mysetenv(env, "VERSION_INTERPRETER", "%s", ePerl_WebID);
++    env = mysetenv(env, "VERSION_INTERPRETER", "%s", eperl_version.v_web);
+     env = mysetenv(env, "VERSION_LANGUAGE", "Perl/%s", AC_perl_vers);
+ 
+     /* optionally run the ePerl preprocessor */
+     if (fPP) {
+         /* switch to directory where script stays */
+         getcwd(cwd, MAXPATHLEN);
+-        strcpy(sourcedir, source);
++        strncpy(sourcedir, source, sizeof(sourcedir));
++        sourcedir[sizeof(sourcedir)-1] = NUL;
+         for (cp = sourcedir+strlen(sourcedir); cp > sourcedir && *cp != '/'; cp--)
+             ;
+         *cp = NUL;
+@@ -996,7 +1009,8 @@
+     cpScript = cpBuf2;
+ 
+     /* write buffer to temporary script file */
+-    strcpy(perlscript, mytmpfile("ePerl.script"));
++    strncpy(perlscript, mytmpfile("ePerl.script"), sizeof(perlscript));
++    perlscript[sizeof(perlscript)-1] = NUL;
+ #ifndef DEBUG_ENABLED
+     unlink(perlscript);
+ #endif
+@@ -1025,7 +1039,8 @@
+ 
+     /* open a file for Perl's STDOUT channel
+        and redirect stdout to the new channel */
+-    strcpy(perlstdout, mytmpfile("ePerl.stdout"));
++    strncpy(perlstdout, mytmpfile("ePerl.stdout"), sizeof(perlstdout));
++    perlstdout[sizeof(perlstdout)-1] = NUL;
+ #ifndef DEBUG_ENABLED
+     unlink(perlstdout);
+ #endif
+@@ -1037,7 +1052,8 @@
+ 
+     /* open a file for Perl's STDERR channel 
+        and redirect stderr to the new channel */
+-    strcpy(perlstderr, mytmpfile("ePerl.stderr"));
++    strncpy(perlstderr, mytmpfile("ePerl.stderr"), sizeof(perlstderr));
++    perlstderr[sizeof(perlstderr)-1] = NUL;
+ #ifndef DEBUG_ENABLED
+     unlink(perlstderr);
+ #endif
+@@ -1053,11 +1069,10 @@
+     /* perl_destruct_level = 1; */
+ 
+     /*  initialise the Perl Locale environment  */
+-#if AC_perl_vnum < 500400
+-    perl_init_i18nl14n(1); /* Perl 5.003 or lower */
+-#else
+-    perl_init_i18nl10n(1); /* Perl 5.004 or higher */
+-#endif
++    /*  Macro defined in eperl_perl5.h */
++    /*  No more needed with Perl 5.6
++    perl_init_i18nl10n(1);
++    */
+ 
+     /*  create command line...  */
+     myargc = 0;
+@@ -1118,7 +1133,8 @@
+         if (mode == MODE_FILTER)
+             getcwd(cwd, MAXPATHLEN);
+         /* determine dir of source file and switch to it */
+-        strcpy(sourcedir, source);
++        strncpy(sourcedir, source, sizeof(sourcedir));
++        sourcedir[sizeof(sourcedir)-1] = NUL;
+         for (cp = sourcedir+strlen(sourcedir); cp > sourcedir && *cp != '/'; cp--)
+             ;
+         *cp = NUL;
+@@ -1126,10 +1142,10 @@
+     }
+ 
+     /*  Set the previously remembered Perl 5 scalars (option -d) */
+-    Perl5_SetRememberedScalars();
++    Perl5_SetRememberedScalars(aTHX);
+ 
+     /*  Force unbuffered I/O */
+-    Perl5_ForceUnbufferedStdout();
++    Perl5_ForceUnbufferedStdout(aTHX);
+ 
+     /*  NOW IT IS TIME to evaluate/execute the script!!! */
+     rc = perl_run(my_perl);
+@@ -1156,6 +1172,7 @@
+         PrintError(mode, source, NULL, NULL, "Cannot open STDOUT file `%s' for reading", perlstdout);
+         CU(mode == MODE_FILTER ? EX_IOERR : EX_OK);
+     }
++    cpOut0 = cpOut; /* cpOut will move by HTTP_PrintResponseHeaders() later */
+     stat(perlstdout, &st);
+ 
+     /* ok, now recover the stdout and stderr and
+@@ -1166,14 +1183,17 @@
+     /*  if we are running as a NPH-CGI/1.1 script
+         we had to provide the HTTP reponse headers ourself */
+     if (mode == MODE_NPHCGI) {
+-        HTTP_PrintResponseHeaders(cpOut);
++        char *p = HTTP_PrintResponseHeaders(cpOut);
++        /* HTTP_PrintResponseHeader will skip HTTP status line */
++        nOut -= (p - cpOut); /* adjust length */
++        cpOut = p; /* points top of HTTP response header */
+ 
+         /* if there are no HTTP header lines, we print a basic
+            Content-Type header which should be ok */
+         if (!HTTP_HeadersExists(cpOut)) {
+-            printf("Content-Type: text/html\n");
+-            printf("Content-Length: %d\n", nOut);
+-            printf("\n");
++            printf("Content-Type: text/html\r\n");
++            printf("Content-Length: %d\r\n", nOut);
++            printf("\r\n");
+         }
+     }
+     else if (mode == MODE_CGI) {
+@@ -1237,8 +1257,8 @@
+         free(cpBuf);
+     if (cpBuf2)
+         free(cpBuf2);
+-    if (cpOut)
+-        free(cpOut);
++    if (cpOut0)
++        free(cpOut0);
+ 
+     /* remove temporary files */
+ #ifndef DEBUG_ENABLED
+diff -Naur eperl-2.2.14.orig/eperl_parse.c eperl-2.2.14/eperl_parse.c
+--- eperl-2.2.14.orig/eperl_parse.c	Fri Jul 10 03:50:48 1998
++++ eperl-2.2.14/eperl_parse.c	Sat Mar 16 19:33:02 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+@@ -66,7 +66,8 @@
+     va_list ap;
+ 
+     va_start(ap, str);
+-    vsprintf(ePerl_ErrorString, str, ap);
++    vsnprintf(ePerl_ErrorString, sizeof(ePerl_ErrorString), str, ap);
++    ePerl_ErrorString[sizeof(ePerl_ErrorString)-1] = NUL;
+     va_end(ap);
+     return;
+ }
+@@ -79,6 +80,7 @@
+     return ePerl_ErrorString;
+ }
+ 
++#if 0 /* unsafe ? */
+ /*
+ **  fprintf for internal buffer 
+ */
+@@ -91,10 +93,26 @@
+     va_end(ap);
+     return cpOut+strlen(cpOut);
+ }
++#else /* safe version */
++char *ePerl_fnprintf(char *cpOut, int *n, char *str, ...)
++{
++    va_list ap;
++
++    if (*n <= 0) { abort(); } /* hope NEVER */
++    va_start(ap, str);
++    vsnprintf(cpOut, *n, str, ap);
++    cpOut[*n - 1] = NUL;
++    va_end(ap);
++    *n -= strlen(cpOut);
++    if (*n <= 0) { abort(); } /* hope NEVER */
++    return cpOut+strlen(cpOut);
++}
++#endif
+ 
+ /*
+ **  fwrite for internal buffer 
+ */
++#if 0 /* unsafe */
+ char *ePerl_fwrite(char *cpBuf, int nBuf, int cNum, char *cpOut)
+ {
+     char *cp;
+@@ -106,7 +124,24 @@
+     *cp = NUL;
+     return cp;
+ }
++#else /* safe */
++char *ePerl_fnwrite(char *cpBuf, int nBuf, int cNum, char *cpOut, int *cpOutLen)
++{
++    char *cp;
++    int n;
+ 
++    n = nBuf*cNum;
++    if (*cpOutLen < n) { abort(); }
++    (void)strncpy(cpOut, cpBuf, n);
++    cpOut[*cpOutLen - 1] = NUL;
++    cp = cpOut + n;
++    *cp = NUL;
++    *cpOutLen -= n;
++    return cp;
++}
++#endif
++
++#if 0 /* unsafe */
+ /*
+ **  fwrite for internal buffer WITH character escaping
+ */
+@@ -129,6 +164,29 @@
+     *cpO = NUL;
+     return cpO;
+ }
++#else /* safe */
++char *ePerl_Efnwrite(char *cpBuf, int nBuf, int cNum, char *cpOut, int *n)
++{
++    char *cpI;
++    char *cpO;
++
++    if (*n <= 0) { abort(); }
++    for (cpI = cpBuf, cpO = cpOut; cpI < (cpBuf+(nBuf*cNum)); ) {
++        switch (*cpI) {
++            case '"':  *cpO++ = '\\'; *cpO++ = *cpI++; *n -= 2;    break;
++            case '@':  *cpO++ = '\\'; *cpO++ = *cpI++; *n -= 2;    break;
++            case '$':  *cpO++ = '\\'; *cpO++ = *cpI++; *n -= 2;    break;
++            case '\\': *cpO++ = '\\'; *cpO++ = *cpI++; *n -= 2;    break;
++            case '\t': *cpO++ = '\\'; *cpO++ = 't'; cpI++; *n -= 2;break;
++            case '\n': *cpO++ = '\\'; *cpO++ = 'n'; cpI++; *n -= 2;break;
++            default: *cpO++ = *cpI++; *n -= 1;
++        }
++        if (*n <= 0) { abort(); }
++    }
++    *cpO = NUL;
++    return cpO;
++}
++#endif
+ 
+ 
+ /*
+@@ -247,6 +305,7 @@
+     { NULL, NUL }
+ };
+ 
++#if 0 /* unsafe */
+ char *ePerl_Cfwrite(char *cpBuf, int nBuf, int cNum, char *cpOut)
+ {
+     char *cpI;
+@@ -278,6 +337,42 @@
+     *cpO = NUL;
+     return cpO;
+ }
++#else /* safe */
++char *ePerl_Cfnwrite(char *cpBuf, int nBuf, int cNum, char *cpOut, int *cpOutLen)
++{
++    char *cpI;
++    char *cpO;
++    int i;
++    int n;
++    char *cpE;
++
++    if (*cpOutLen <= 0) { abort(); }
++    cpI = cpBuf;
++    cpO = cpOut;
++    cpE = cpBuf+(nBuf*cNum);
++    while (cpI < cpE) {
++        if (*cpI == '&') {
++            for (i = 0; html2char[i].h != NULL; i++) {
++                n = strlen(html2char[i].h);
++                if (cpI+1+n+1 < cpE) {
++                    if (*(cpI+1+n) == ';') {
++                        if (strncmp(cpI+1, html2char[i].h, n) == 0) {
++                            *cpO++ = html2char[i].c;
++                            if (--*cpOutLen <= 0) { abort(); }
++                            cpI += 1+n+1;
++                            continue;
++                        }
++                    }
++                }
++            }
++        }
++        *cpO++ = *cpI++;
++        if (--*cpOutLen <= 0) { abort(); }
++    }
++    *cpO = NUL;
++    return cpO;
++}
++#endif
+ 
+ 
+ /*
+@@ -332,6 +427,8 @@
+ 
+     cp = (char *)malloc(n+1);
+     strncpy(cp, buf, n);
++    /*  Add NUL in case n<strlen(buf) */
++    cp[n] = NUL;
+     return cp;
+ }
+ 
+@@ -344,6 +441,7 @@
+     char *rc;
+     char *cpOutBuf = NULL;
+     char *cpOut = NULL;
++    int cpOutLen = 0;
+     char *cps, *cpe;
+     char *cps2, *cpe2;
+     int nBuf;
+@@ -369,6 +467,7 @@
+         CU(NULL);
+     }
+     cpOut = cpOutBuf;
++    cpOutLen = n;
+ 
+     /* now step through the file and convert it to legal Perl code.
+        This is a bit complicated because we have to make sure that
+@@ -393,25 +492,25 @@
+                 while (cps2 < cpEND && (cpe2 = strnchr(cps2, '\n', cpEND-cps2)) != NULL) {
+                     if (ePerl_line_continuation && cps < cpe2 && *(cpe2-1) == '\\') {
+                         if (cpe2-1-cps2 > 0) {
+-                            cpOut = ePerl_fprintf(cpOut, "print \"");
+-                            cpOut = ePerl_Efwrite(cps2, cpe2-1-cps2, 1, cpOut);
+-                            cpOut = ePerl_fprintf(cpOut, "\";");
++                            cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "print \"");
++                            cpOut = ePerl_Efnwrite(cps2, cpe2-1-cps2, 1, cpOut, &cpOutLen);
++                            cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "\";");
+                         }
+-                        cpOut = ePerl_fprintf(cpOut, "\n");
++                        cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "\n");
+                     }
+                     else {
+-                        cpOut = ePerl_fprintf(cpOut, "print \"");
+-                        cpOut = ePerl_Efwrite(cps2, cpe2-cps2, 1, cpOut);
+-                        cpOut = ePerl_fprintf(cpOut, "\\n\";\n");
++                        cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "print \"");
++                        cpOut = ePerl_Efnwrite(cps2, cpe2-cps2, 1, cpOut, &cpOutLen);
++                        cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "\\n\";\n");
+                     }
+                     cps2 = cpe2+1;
+                 }
+                 /* then do the remainder which is not
+                    finished by a newline */
+                 if (cpEND > cps2) {
+-                    cpOut = ePerl_fprintf(cpOut, "print \"");
+-                    cpOut = ePerl_Efwrite(cps2, cpEND-cps2, 1, cpOut);
+-                    cpOut = ePerl_fprintf(cpOut, "\";");
++                    cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "print \"");
++                    cpOut = ePerl_Efnwrite(cps2, cpEND-cps2, 1, cpOut, &cpOutLen);
++                    cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "\";");
+                 }
+             }
+             break; /* and break the whole processing step */
+@@ -428,30 +527,30 @@
+                 while ((cpe2 = strnchr(cps2, '\n', cpe-cps2)) != NULL) {
+                     if (ePerl_line_continuation && cps < cpe2 && *(cpe2-1) == '\\') {
+                         if (cpe2-1-cps2 > 0) {
+-                            cpOut = ePerl_fprintf(cpOut, "print \"");
+-                            cpOut = ePerl_Efwrite(cps2, cpe2-1-cps2, 1, cpOut);
+-                            cpOut = ePerl_fprintf(cpOut, "\";");
++                            cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "print \"");
++                            cpOut = ePerl_Efnwrite(cps2, cpe2-1-cps2, 1, cpOut, &cpOutLen);
++                            cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "\";");
+                         }
+-                        cpOut = ePerl_fprintf(cpOut, "\n");
++                        cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "\n");
+                     }
+                     else {
+-                        cpOut = ePerl_fprintf(cpOut, "print \"");
+-                        cpOut = ePerl_Efwrite(cps2, cpe2-cps2, 1, cpOut);
+-                        cpOut = ePerl_fprintf(cpOut, "\\n\";\n");
++                        cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "print \"");
++                        cpOut = ePerl_Efnwrite(cps2, cpe2-cps2, 1, cpOut, &cpOutLen);
++                        cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "\\n\";\n");
+                     }
+                     cps2 = cpe2+1;
+                 }
+                 if (cpe > cps2) {
+-                    cpOut = ePerl_fprintf(cpOut, "print \"");
+-                    cpOut = ePerl_Efwrite(cps2, cpe-cps2, 1, cpOut);
+-                    cpOut = ePerl_fprintf(cpOut, "\";");
++                    cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "print \"");
++                    cpOut = ePerl_Efnwrite(cps2, cpe-cps2, 1, cpOut, &cpOutLen);
++                    cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "\";");
+                 }
+             }
+ 
+             /* just output a leading space to make
+                the -x display more readable. */
+             if (cpOut > cpOutBuf && *(cpOut-1) != '\n') 
+-                cpOut = ePerl_fprintf(cpOut, " ");
++                cpOut = ePerl_fnprintf(cpOut, &cpOutLen, " ");
+ 
+             /* skip the start delimiter */
+             cps = cpe+strlen(ePerl_begin_delimiter);
+@@ -460,7 +559,7 @@
+              * e.g. <:=$var:>
+              */
+             if (*cps == '=') {
+-                cpOut = ePerl_fprintf(cpOut, "print ");
++                cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "print ");
+                 cps++;
+             }
+ 
+@@ -493,16 +592,16 @@
+             /* pass through the ePerl block without changes! */
+             if (cpe2 > cps) { 
+                 if (ePerl_convert_entities == TRUE)
+-                    cpOut = ePerl_Cfwrite(cps, cpe2-cps, 1, cpOut);
++                    cpOut = ePerl_Cfnwrite(cps, cpe2-cps, 1, cpOut, &cpOutLen);
+                 else
+-                    cpOut = ePerl_fwrite(cps, cpe2-cps, 1, cpOut);
++                    cpOut = ePerl_fnwrite(cps, cpe2-cps, 1, cpOut, &cpOutLen);
+ 
+                 /* be smart and automatically add a semicolon
+                    if not provided at the end of the ePerl block.
+                    But know the continuation indicator "_". */
+                 if ((*(cpe2-1) != ';') &&
+                     (*(cpe2-1) != '_')   )
+-                    cpOut = ePerl_fprintf(cpOut, ";");
++                    cpOut = ePerl_fnprintf(cpOut, &cpOutLen, ";");
+                 if (*(cpe2-1) == '_') 
+                     cpOut = cpOut - 1;
+             }
+@@ -510,13 +609,13 @@
+             /* end preserve newlines for correct line numbers */
+             for ( ; cpe2 <= cpe; cpe2++)
+                 if (*cpe2 == '\n')
+-                    cpOut = ePerl_fprintf(cpOut, "\n");
++                    cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "\n");
+ 
+             /* output a trailing space to make
+                the -x display more readable when
+                no newlines have finished the block. */
+             if (cpOut > cpOutBuf && *(cpOut-1) != '\n') 
+-                cpOut = ePerl_fprintf(cpOut, " ");
++                cpOut = ePerl_fnprintf(cpOut, &cpOutLen, " ");
+ 
+             /* and adjust the current position to the first character
+                after the end delimiter */
+@@ -533,7 +632,7 @@
+                 if (cps < cpEND)
+                     cps++;
+                 /* but preserve the newline in the script */
+-                cpOut = ePerl_fprintf(cpOut, "\n");
++                cpOut = ePerl_fnprintf(cpOut, &cpOutLen, "\n");
+             }
+         }
+     }
+diff -Naur eperl-2.2.14.orig/eperl_perl5.c eperl-2.2.14/eperl_perl5.c
+--- eperl-2.2.14.orig/eperl_perl5.c	Sun Aug  2 10:33:55 1998
++++ eperl-2.2.14/eperl_perl5.c	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+@@ -41,14 +41,14 @@
+ 
+ #ifdef HAVE_PERL_DYNALOADER
+ 
+-extern void boot_DynaLoader _((CV* cv));
++extern void boot_DynaLoader _((pTHX_ CV* cv));
+ 
+ /*
+ **
+ **  the Perl XS init function for dynamic library loading
+ **
+ */
+-void Perl5_XSInit(void)
++void Perl5_XSInit(pTHX)
+ {
+    char *file = __FILE__;
+    /* dXSUB_SYS; */
+@@ -64,13 +64,10 @@
+ **  Force Perl to use unbuffered I/O
+ **
+ */
+-void Perl5_ForceUnbufferedStdout(void)
++void Perl5_ForceUnbufferedStdout(pTHX)
+ {
+-#if AC_perl_vnum < 500476
+-    IoFLAGS(GvIOp(defoutgv)) |= IOf_FLUSH; /* $|=1 */
+-#else
++    dTHR;
+     IoFLAGS(GvIOp(PL_defoutgv)) |= IOf_FLUSH; /* $|=1 */
+-#endif
+     return;
+ }
+ 
+@@ -84,9 +81,13 @@
+     char ca[1024];
+     char *cp;
+ 
+-    strcpy(ca, str);
++    strncpy(ca, str, 1023);
++    ca[1023] = NUL;
+     cp = strchr(ca, '=');
+-    *cp++ = '\0';
++    if (cp != NULL)
++        *cp++ = '\0';
++    else
++        cp = "";
+     return mysetenv(env, ca, cp);
+ }
+ 
+@@ -95,11 +96,12 @@
+ **  sets a Perl scalar variable
+ **
+ */
+-void Perl5_SetScalar(char *pname, char *vname, char *vvalue)
++void Perl5_SetScalar(pTHX_ char *pname, char *vname, char *vvalue)
+ {
++    dTHR;
+     ENTER;
+-    save_hptr(&curstash); 
+-    curstash = gv_stashpv(pname, TRUE);
++    save_hptr(&PL_curstash); 
++    PL_curstash = gv_stashpv(pname, TRUE);
+     sv_setpv(perl_get_sv(vname, TRUE), vvalue);
+     LEAVE;
+     return;
+@@ -131,17 +133,21 @@
+     return;
+ }
+ 
+-void Perl5_SetRememberedScalars(void) 
++void Perl5_SetRememberedScalars(pTHX) 
+ {
+     char ca[1024];
+     char *cp;
+     int i;
+ 
+     for (i = 0; Perl5_RememberedScalars[i] != NULL; i++) {
+-        strcpy(ca, Perl5_RememberedScalars[i]);
++        strncpy(ca, Perl5_RememberedScalars[i], 1023);
++        ca[1023] = NUL;
+         cp = strchr(ca, '=');
+-        *cp++ = '\0';
+-        Perl5_SetScalar("main", ca, cp);
++        if (cp != NULL)
++            *cp++ = '\0';
++        else
++            cp = "";
++        Perl5_SetScalar(aTHX_ "main", ca, cp);
+     }
+ }
+ 
+diff -Naur eperl-2.2.14.orig/eperl_perl5.h eperl-2.2.14/eperl_perl5.h
+--- eperl-2.2.14.orig/eperl_perl5.h	Fri Jul 10 03:52:13 1998
++++ eperl-2.2.14/eperl_perl5.h	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+@@ -38,28 +38,75 @@
+ 
+ /*  first include the standard Perl 
+     includes designed for embedding   */
++#define PERL_NO_GET_CONTEXT     /* for efficiency reasons, see perlguts(3) */
+ #include <EXTERN.h>
+ #include <perl.h>                 
+ 
++#ifndef dTHR
++#  ifdef WIN32
++#       define dTHR extern int Perl___notused
++#  else
++#       define dTHR extern int errno
++#  endif
++#endif
++
++#ifndef aTHX
++#  define aTHX
++#  define aTHX_
++#  define pTHX void
++#  define pTHX_
++#endif
+ 
+ /*  try to adjust for PerlIO handling  */
+ #ifdef USE_PERLIO
+-#undef  fwrite
+-#define fwrite(buf,size,count,f) PerlIO_write(f,buf,size*count)
++#  undef  fwrite
++#  define fwrite(buf,size,count,f) PerlIO_write(f,buf,size*count)
+ #endif
+ 
+-
+ /*  define the I/O type string for verbosity */
+ #ifdef USE_PERLIO
+-#ifdef USE_SFIO
+-#define PERL_IO_LAYER_ID "PerlIO/SfIO"
++#  ifdef USE_SFIO
++#    define PERL_IO_LAYER_ID "PerlIO/SfIO"
++#  else
++#    define PERL_IO_LAYER_ID "PerlIO/StdIO"
++#  endif
+ #else
+-#define PERL_IO_LAYER_ID "PerlIO/StdIO"
++#  define PERL_IO_LAYER_ID "Raw/StdIO"
++#endif
++
++#if (PERL_VERSION < 4) || ((PERL_VERSION == 4) && (PERL_SUBVERSION <= 5))
++#  define PL_curstash curstash
++#endif
++
++#ifndef WITH_THR
++#  define PL_defoutgv defoutgv
+ #endif
++
++/*  
++  Initialization of locales when building a new Perl interpreter.
++     Perl 5.003 calls perl_init_i18nl14n
++     Perl 5.004 and 5.005 call perl_init_i18nl10n
++     In Perl 5.6.0 this routine is already called by perl_construct
++*/
++#ifndef perl_init_i18nl10n
++#  define perl_init_i18nl10n perl_init_i18nl14n
+ #else
+-#define PERL_IO_LAYER_ID "Raw/StdIO"
++#  if (PERL_REVISION > 5) || ((PERL_REVISION == 5) && (PERL_VERSION >= 6))
++#    undef perl_init_i18nl10n
++#    define perl_init_i18nl10n(a)
++#  endif
+ #endif
+ 
++/* eperl_perl5.c */
++/*  These prototypes can no longer be included in eperl_proto.h because
++    pTHX argument has been introduced in Perl 5.6.0  */
++extern void Perl5_XSInit(pTHX);
++extern void Perl5_ForceUnbufferedStdout(pTHX);
++extern char **Perl5_SetEnvVar(char **env, char *str);
++extern void Perl5_SetScalar(pTHX_ char *pname, char *vname, char *vvalue);
++extern char *Perl5_RememberedScalars[1024];
++extern void Perl5_RememberScalar(char *str);
++extern void Perl5_SetRememberedScalars(pTHX);
+ 
+ #endif /* EPERL_PERL5_H */
+ /*EOF*/
+diff -Naur eperl-2.2.14.orig/eperl_powered.c eperl-2.2.14/eperl_powered.c
+--- eperl-2.2.14.orig/eperl_powered.c	Fri Jun 20 07:30:01 1997
++++ eperl-2.2.14/eperl_powered.c	Sat Mar 16 19:32:56 2002
+@@ -1,7 +1,7 @@
+ /* eperl_powered.gif.c -- automatically generated by bin2c */
+ 
+ int  ePerl_POWERED_size   = 4379;
+-char ePerl_POWERED_data[] = {
++unsigned char ePerl_POWERED_data[] = {
+ 0x47,0x49,0x46,0x38,0x39,0x61,0x78,0x00,0x46,0x00,0xe6,0x00,0x00,0x00,0x00,
+ 0x00,0x16,0x0d,0x00,0x1c,0x15,0x06,0x0c,0x0c,0x10,0x18,0x18,0x19,0x23,0x1b,
+ 0x09,0x31,0x29,0x16,0x1f,0x1f,0x20,0x31,0x31,0x30,0x42,0x37,0x1e,0x45,0x3c,
+diff -Naur eperl-2.2.14.orig/eperl_pp.c eperl-2.2.14/eperl_pp.c
+--- eperl-2.2.14.orig/eperl_pp.c	Fri Jul 10 03:51:09 1998
++++ eperl-2.2.14/eperl_pp.c	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+@@ -47,7 +47,8 @@
+     va_list ap;
+ 
+     va_start(ap, str);
+-    vsprintf(ePerl_PP_ErrorString, str, ap);
++    vsnprintf(ePerl_PP_ErrorString, sizeof(ePerl_PP_ErrorString), str, ap);
++    ePerl_PP_ErrorString[sizeof(ePerl_PP_ErrorString)-1] = NUL;
+     va_end(ap);
+     return;
+ }
+@@ -113,7 +114,8 @@
+             if (fp == NULL) {
+                 /* we have to try in all include directories! */
+                 for (i = 0; cppINC[i] != NULL; i++) {
+-                    sprintf(caName, "%s/%s", cppINC[i], cpInput);
++                    snprintf(caName, sizeof(caName), "%s/%s", cppINC[i], cpInput);
++                    caName[sizeof(caName)-1] = NUL;
+                     if ((fp = fopen(caName, "r")) != NULL)
+                         break;
+                 }
+@@ -191,6 +193,7 @@
+             }
+             cpOutBuf = cp2;
+             strncpy(cpOutBuf+nOut, cps, cp-cps);
++            *(cpOutBuf+nOutBuf-1) = NUL;
+             nOut += i;
+ 
+             /* 
+@@ -253,7 +256,7 @@
+                 }
+ 
+                 /* copy the filename and skip to end of line */
+-                for (i = 0; cps < cpEND && 
++                for (i = 0; i < sizeof(caName) && cps < cpEND && 
+                             (*cps != ' ' && *cps != '\t' && 
+                              *cps != '>' && *cps != '"'  &&
+                              *cps != '\n'                  );  )
+@@ -269,7 +272,7 @@
+                     return NULL;
+ 
+                 /* make it secure by removing all begin/end delimiters!! */
+-                if ((cp2 = (char *)malloc(strlen(cp))) == NULL)
++                if ((cp2 = (char *)malloc(strlen(cp)*9/8)) == NULL)
+                     return NULL;
+                 l1 = strlen(ePerl_begin_delimiter);
+                 l2 = strlen(ePerl_end_delimiter);
+@@ -278,6 +281,11 @@
+                         cp3 += l1;
+                     else if (strncasecmp(cp3, ePerl_end_delimiter, l2) == 0)
+                         cp3 += l2;
++                    else if (strncmp(cp3, "#include", 8) == 0) {
++                        /*  Replace all occurences of #include by #sinclude */
++                        strcpy(cp4, "#sinclude");
++                        cp4 += 9;
++                    }
+                     else
+                         *cp4++ = *cp3++;
+                 }
+@@ -301,13 +309,14 @@
+                 }
+ 
+                 /* copy the argument and create replacement string */
+-                for (i = 0; cps < cpEND && *cps != '\n'; )
++                for (i = 0; i < sizeof(caArg) && cps < cpEND && *cps != '\n'; )
+                     caArg[i++] = *cps++;
+                 caArg[i++] = NUL;
+                 if (*cps == '\n')
+                     cps++;
+-                sprintf(caStr, "%s if (%s) { _%s//\n", 
++                snprintf(caStr, sizeof(caStr), "%s if (%s) { _%s//\n", 
+                         ePerl_begin_delimiter, caArg, ePerl_end_delimiter);
++                caStr[sizeof(caStr)-1] = NUL;
+                 cp = caStr;
+             }
+             else if (strncmp(cp, "#elsif", 6) == 0) {
+@@ -326,13 +335,14 @@
+                 }
+ 
+                 /* copy the argument and create replacement string */
+-                for (i = 0; cps < cpEND && *cps != '\n'; )
++                for (i = 0; i < sizeof(caArg) && cps < cpEND && *cps != '\n'; )
+                     caArg[i++] = *cps++;
+                 caArg[i++] = NUL;
+                 if (*cps == '\n')
+                     cps++;
+-                sprintf(caStr, "%s } elsif (%s) { _%s//\n", 
++                snprintf(caStr, sizeof(caStr), "%s } elsif (%s) { _%s//\n", 
+                         ePerl_begin_delimiter, caArg, ePerl_end_delimiter);
++                caStr[sizeof(caStr)-1] = NUL;
+                 cp = caStr;
+             }
+             else if (strncmp(cp, "#else", 5) == 0) {
+@@ -348,8 +358,9 @@
+                     cps++;
+ 
+                 /* create replacement string */
+-                sprintf(caStr, "%s } else { _%s//\n", 
++                snprintf(caStr, sizeof(caStr), "%s } else { _%s//\n", 
+                         ePerl_begin_delimiter, ePerl_end_delimiter);
++                caStr[sizeof(caStr)-1] = NUL;
+                 cp = caStr;
+             }
+             else if (strncmp(cp, "#endif", 6) == 0) {
+@@ -365,8 +376,9 @@
+                     cps++;
+ 
+                 /* create replacement string */
+-                sprintf(caStr, "%s } _%s//\n", 
++                snprintf(caStr, sizeof(caStr), "%s } _%s//\n", 
+                         ePerl_begin_delimiter, ePerl_end_delimiter);
++                caStr[sizeof(caStr)-1] = NUL;
+                 cp = caStr;
+             }
+             else if (strncmp(cp, "#c", 2) == 0) {
+@@ -396,7 +408,8 @@
+                 return NULL;
+             }
+             cpOutBuf = cp2;
+-            strcpy(cpOutBuf+nOut, cp);
++            strncpy(cpOutBuf+nOut, cp, nOutBuf - nOut);
++            *(cpOutBuf+nOutBuf-1) = NUL;
+             nOut += i;
+ 
+             continue;
+@@ -413,7 +426,8 @@
+                 return NULL;
+             }
+             cpOutBuf = cp2;
+-            strcpy(cpOutBuf+nOut, cps);
++            strncpy(cpOutBuf+nOut, cps, nOutBuf - nOut);
++            *(cpOutBuf+nOutBuf-1) = NUL;
+ 
+             break;
+         }
+diff -Naur eperl-2.2.14.orig/eperl_proto.h eperl-2.2.14/eperl_proto.h
+--- eperl-2.2.14.orig/eperl_proto.h	Fri Jul 10 03:52:24 1998
++++ eperl-2.2.14/eperl_proto.h	Sat Mar 16 19:33:02 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+@@ -57,15 +57,6 @@
+ extern struct option options[];
+ extern int main(int argc, char **argv, char **env);
+ 
+-/* eperl_perl5.c */
+-extern void Perl5_XSInit(void);
+-extern void Perl5_ForceUnbufferedStdout(void);
+-extern char **Perl5_SetEnvVar(char **env, char *str);
+-extern void Perl5_SetScalar(char *pname, char *vname, char *vvalue);
+-extern char *Perl5_RememberedScalars[1024];
+-extern void Perl5_RememberScalar(char *str);
+-extern void Perl5_SetRememberedScalars(void);
+-
+ /* eperl_parse.c */
+ extern char *ePerl_begin_delimiter;
+ extern char *ePerl_end_delimiter;
+@@ -75,13 +66,19 @@
+ extern void ePerl_SetError(char *str, ...);
+ extern char *ePerl_GetError(void);
+ extern char *ePerl_fprintf(char *cpOut, char *str, ...);
++extern char *ePerl_fnprintf(char *cpOut, int *n, char *str, ...);
+ extern char *ePerl_fwrite(char *cpBuf, int nBuf, int cNum, char *cpOut);
++extern char *ePerl_fnwrite(char *cpBuf, int nBuf, int cNum, char *cpOut, int *cpOutLen);
+ extern char *ePerl_Efwrite(char *cpBuf, int nBuf, int cNum, char *cpOut);
++extern char *ePerl_Efnwrite(char *cpBuf, int nBuf, int cNum, char *cpOut, int *n);
+ extern char *ePerl_Cfwrite(char *cpBuf, int nBuf, int cNum, char *cpOut);
++extern char *ePerl_Cfnwrite(char *cpBuf, int nBuf, int cNum, char *cpOut, int *cpOutLen);
+ extern char *strnchr(char *buf, char chr, int n);
+ extern char *strnstr(char *buf, char *str, int n);
+ extern char *strncasestr(char *buf, char *str, int n);
++#ifndef _INC_PERL_XSUB_H
+ extern char *strndup(char *buf, int n);
++#endif
+ extern char *ePerl_Bristled2Plain(char *cpBuf);
+ 
+ /* eperl_pp.c */
+@@ -111,7 +108,7 @@
+ extern char *abspath(char *path);
+ 
+ /* eperl_http.c */
+-extern void HTTP_PrintResponseHeaders(char *cpBuf);
++extern char *HTTP_PrintResponseHeaders(char *cpBuf);
+ extern void HTTP_StripResponseHeaders(char **cpBuf, int *nBuf);
+ extern int HTTP_IsHeaderLine(char *cp1, char *cp2);
+ extern int HTTP_HeadersExists(char *cpBuf);
+@@ -127,13 +124,6 @@
+ /* eperl_config.c */
+ 
+ /* eperl_version.c */
+-extern char ePerl_Version[];
+-extern char ePerl_Hello[];
+-extern char ePerl_GNUVersion[];
+-extern char ePerl_WhatID[];
+-extern char ePerl_RCSIdentID[];
+-extern char ePerl_WebID[];
+-extern char ePerl_PlainID[];
+ 
+ /* eperl_readme.c */
+ extern char *ePerl_README;
+@@ -143,11 +133,11 @@
+ 
+ /* eperl_logo.c */
+ extern int ePerl_LOGO_size;
+-extern char ePerl_LOGO_data[];
++extern unsigned char ePerl_LOGO_data[];
+ 
+ /* eperl_powered.c */
+ extern int ePerl_POWERED_size;
+-extern char ePerl_POWERED_data[];
++extern unsigned char ePerl_POWERED_data[];
+ /*_END_PROTO_*/
+ 
+ #endif /* EPERL_PROTO_H */
+diff -Naur eperl-2.2.14.orig/eperl_readme.c eperl-2.2.14/eperl_readme.c
+--- eperl-2.2.14.orig/eperl_readme.c	Sun Aug  2 09:22:29 1998
++++ eperl-2.2.14/eperl_readme.c	Sat Mar 16 19:32:56 2002
+@@ -20,7 +20,7 @@
+ "  The documentation and latest release can be found on\n"\
+ "  http://www.engelschall.com/sw/eperl/\n"\
+ "\n"\
+-"  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>\n"\
++"  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>\n"\
+ "\n"\
+ "  This program is free software; it may be redistributed and/or modified only\n"\
+ "  under the terms of either the Artistic License or the GNU General Public\n"\
+diff -Naur eperl-2.2.14.orig/eperl_security.h eperl-2.2.14/eperl_security.h
+--- eperl-2.2.14.orig/eperl_security.h	Fri Jul 10 03:52:30 1998
++++ eperl-2.2.14/eperl_security.h	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+@@ -58,7 +58,7 @@
+ #define SETUID_NEEDS_VALID_OWNER_UID     TRUE
+ #define SETUID_NEEDS_VALID_OWNER_GID     TRUE
+ #define SETUID_NEEDS_BELOW_OWNER_HOME    TRUE
+-#define LIST_OF_ALLOWED_CALLER_UID       { "nobody", "root", NULL }
++#define LIST_OF_ALLOWED_CALLER_UID       { "nobody", "root", "www-data", NULL }
+ 
+ /* 
+  * Action when a SetUID security check failed.
+diff -Naur eperl-2.2.14.orig/eperl_sys.c eperl-2.2.14/eperl_sys.c
+--- eperl-2.2.14.orig/eperl_sys.c	Mon Jul 27 04:41:34 1998
++++ eperl-2.2.14/eperl_sys.c	Sat Mar 16 19:32:56 2002
+@@ -15,7 +15,7 @@
+ **
+ **  ======================================================================
+ **
+-**  Copyright (c) 1996,1997,1998 Ralf S. Engelschall <rse@engelschall.com>
++**  Copyright (c) 1996,1997,1998,1999 Ralf S. Engelschall <rse@engelschall.com>
+ **
+ **  This program is free software; it may be redistributed and/or modified
+ **  only under the terms of either the Artistic License or the GNU General
+@@ -37,12 +37,16 @@
+ #include "eperl_global.h"
+ #include "eperl_proto.h"
+ 
++char * getenv ();
+ 
+ /*
+ **
+ **  own setenv() function which works with Perl
+ **
+ */
++
++extern char **environ;
++
+ char **mysetenv(char **env, char *var, char *str, ...)
+ {
+     va_list ap;
+@@ -51,14 +55,15 @@
+     char *cp;
+     int i;
+     char **envN;
+-    extern char **environ;
+     static int stillcalled = FALSE;
+     int replaced = FALSE;
+ 
+     /*  create the key=val string  */
+     va_start(ap, str);
+-    vsprintf(ca, str, ap);
+-    sprintf(ca2, "%s=%s", var, ca);
++    vsnprintf(ca, sizeof(ca), str, ap);
++    ca[sizeof(ca)-1] = NUL;
++    snprintf(ca2, sizeof(ca2), "%s=%s", var, ca);
++    ca2[sizeof(ca2)-1] = NUL;
+     cp = strdup(ca2);
+ 
+     /*  now duplicate the old structure  */
+@@ -77,8 +82,8 @@
+     /*  add the new entry if not replaced */
+     if (!replaced) {
+         envN[i++] = cp;
+-        envN[i++] = NULL;
+     }
++    envN[i] = NULL;
+ 
+     /*  set the libc/exec variable which Perl uses */
+     if (stillcalled) 
+@@ -205,10 +210,15 @@
+ char *mytmpfile(char *id)
+ {
+     char ca[1024];
+-    char *cp;
++    char *cp, *tmpdir;
+     int i;
+ 
+-    sprintf(ca, "/tmp/%s.%d.tmp%d", id, (int)getpid(), mytmpfilecnt++);
++    tmpdir = getenv ("TMPDIR");
++    if (tmpdir == (char *) NULL)
++        tmpdir="/tmp";
++
++    snprintf(ca, sizeof(ca), "%s/%s.%d.tmp%d", tmpdir, id, (int)getpid(), mytmpfilecnt++);
++    ca[sizeof(ca)-1] = NUL;
+     cp = strdup(ca);
+     for (i = 0; mytmpfiles[i] != NULL; i++)
+         ;
+@@ -239,8 +249,8 @@
+     char timestr[128];
+ 
+     tm = localtime(t);
+-    sprintf(timestr, "%02d-%02d-19%02d %02d:%02d",
+-                      tm->tm_mday, tm->tm_mon+1, tm->tm_year,
++    sprintf(timestr, "%02d-%02d-%04d %02d:%02d",
++                      tm->tm_mday, tm->tm_mon+1, tm->tm_year+1900,
+                       tm->tm_hour, tm->tm_min);
+     return strdup(timestr);
+ }
+@@ -257,13 +267,14 @@
+     FILE *fp = NULL;
+     char *cpBuf = NULL;
+     int nBuf;
+-    char tmpfile[256];
++    char tmpfile[256], *ptr_tmpfile;
+     int usetmp = 0;
+     int c;
+ 
+     if (stringEQ(filename, "-")) {
+         /* file is given on stdin */
+-        sprintf(tmpfile, "/tmp/eperl.tmp.%d", (int)getpid());
++        ptr_tmpfile = mytmpfile("ePerl.source");
++        sprintf(tmpfile, "%s", ptr_tmpfile);
+         if ((fp = fopen(tmpfile, "w")) == NULL) {
+             ePerl_SetError("Cannot open temporary source file %s for writing", tmpfile);
+             CU(NULL);
+@@ -384,7 +395,8 @@
+             ;
+         if (cp == path+1)
+             cp--;
+-        strcpy(file, cp);
++        strncpy(file, cp, sizeof(file));
++        file[sizeof(file)-1] = '\0';
+         return file;
+     }
+ }
+@@ -397,7 +409,8 @@
+     if (path[strlen(path)-1] == '/')
+         return path;
+     else {
+-        strcpy(dir, path);
++        strncpy(dir, path, sizeof(dir));
++        dir[sizeof(dir)-1] = '\0';
+         for (cp = dir+strlen(dir); cp > dir && *(cp-1) != '/'; cp--)
+             ;
+         *cp = NUL;
+@@ -423,9 +436,12 @@
+         /* restore cwd */
+         chdir(cwd);
+         /* add file part again */
+-        if (apath[strlen(apath)-1] != '/')
+-            strcpy(apath+strlen(apath), "/");
+-        strcpy(apath+strlen(apath), path);
++        if (apath[strlen(apath)-1] != '/') {
++            strncpy(apath+strlen(apath), "/", sizeof(apath)-strlen(apath));
++            apath[sizeof(apath)-1] = '\0';
++        }
++        strncpy(apath+strlen(apath), path, sizeof(apath)-strlen(apath));
++        apath[sizeof(apath)-1] = '\0';
+         return apath;
+     }
+ }
+diff -Naur eperl-2.2.14.orig/eperl_version.c eperl-2.2.14/eperl_version.c
+--- eperl-2.2.14.orig/eperl_version.c	Sun Aug  2 09:22:23 1998
++++ eperl-2.2.14/eperl_version.c	Sat Mar 16 19:32:56 2002
+@@ -1,30 +1,46 @@
+-/* !! This file was automatically generated by NEWVERS !! */
++/*
++**  eperl_version.c -- Version Information for ePerl (syntax: C/C++)
++**  [automatically generated and maintained by GNU shtool]
++*/
++
++#ifdef _EPERL_VERSION_C_AS_HEADER_
++
++#ifndef _EPERL_VERSION_C_
++#define _EPERL_VERSION_C_
++
++#define EPERL_VERSION 0x20220E
++
++typedef struct {
++    const int   v_hex;
++    const char *v_short;
++    const char *v_long;
++    const char *v_tex;
++    const char *v_gnu;
++    const char *v_web;
++    const char *v_sccs;
++    const char *v_rcs;
++} eperl_version_t;
++
++extern eperl_version_t eperl_version;
++
++#endif /* _EPERL_VERSION_C_ */
++
++#else /* _EPERL_VERSION_C_AS_HEADER_ */
++
++#define _EPERL_VERSION_C_AS_HEADER_
++#include "eperl_version.c"
++#undef  _EPERL_VERSION_C_AS_HEADER_
++
++eperl_version_t eperl_version = {
++    0x20220E,
++    "2.2.14",
++    "2.2.14 (02-Aug-1998)",
++    "This is ePerl, Version 2.2.14 (02-Aug-1998)",
++    "ePerl 2.2.14 (02-Aug-1998)",
++    "ePerl/2.2.14",
++    "@(#)ePerl 2.2.14 (02-Aug-1998)",
++    "$Id: ePerl 2.2.14 (02-Aug-1998) $"
++};
+ 
+-/* for logfiles, etc. */
+-char ePerl_Version[] =
+-    "2.2.14 (02-08-1998)";
+-
+-/* interactive 'hello' string to identify us to the user */
+-char ePerl_Hello[] = 
+-    "This is ePerl Version 2.2.14 (02-08-1998)";
+-
+-/* a GNU --version output */
+-char ePerl_GNUVersion[] =
+-    "ePerl Version 2.2.14";
+-
+-/* a UNIX what(1) id string */
+-char ePerl_WhatID[] =
+-    "@(#)ePerl Version 2.2.14 (02-08-1998)";
+-
+-/* a RCS ident(1) id string */
+-char ePerl_RCSIdentID[] =
+-    "$Id: ePerl 2.2.14 02-08-1998 $";
+-
+-/* a WWW id string */
+-char ePerl_WebID[] =
+-    "ePerl/2.2.14";
+-
+-/* a plain id string */
+-char ePerl_PlainID[] =
+-    "2.2.14";
++#endif /* _EPERL_VERSION_C_AS_HEADER_ */
+ 
+diff -Naur eperl-2.2.14.orig/etc/asc2c eperl-2.2.14/etc/asc2c
+--- eperl-2.2.14.orig/etc/asc2c	Tue Jan  7 08:36:49 1997
++++ eperl-2.2.14/etc/asc2c	Sat Mar 16 19:32:56 2002
+@@ -1,4 +1,6 @@
+-#!/sw/bin/perl
++:
++eval 'exec perl -S $0 ${1+"$@"}'
++    if $running_under_some_shell;
+ ##
+ ##  asc2c -- convert an ASCII file into a statically initialised
+ ##           C array of characters
+diff -Naur eperl-2.2.14.orig/etc/bin2c eperl-2.2.14/etc/bin2c
+--- eperl-2.2.14.orig/etc/bin2c	Tue Jan  7 09:20:22 1997
++++ eperl-2.2.14/etc/bin2c	Sat Mar 16 19:32:56 2002
+@@ -1,4 +1,6 @@
+-#!/sw/bin/perl
++:
++eval 'exec perl -S $0 ${1+"$@"}'
++    if $running_under_some_shell;
+ ##
+ ##  bin2c -- convert an binary file into a statically initialised
+ ##           C array of characters
+@@ -25,7 +27,7 @@
+ print OUTC "/* $filein.c -- automatically generated by bin2c */\n";
+ print OUTC "\n";
+ print OUTC "int  ${name}_size   = " . $size . ";\n";
+-print OUTC "char ${name}_data[] = {\n";
++print OUTC "unsigned char ${name}_data[] = {\n";
+ 
+ $i = 1;
+ while (read(IN, $c, 1)) {
+@@ -46,7 +48,7 @@
+ #print OUTH "#ifndef __$filename\n";
+ #print OUTH "#define __$filename\n";
+ #print OUTH "\n";
+-#print OUTH "extern char *$name;\n";
++#print OUTH "extern unsigned char *$name;\n";
+ #print OUTH "\n";
+ #print OUTH "#endif /* __$filename */\n";
+ 
+diff -Naur eperl-2.2.14.orig/etc/mkproto eperl-2.2.14/etc/mkproto
+--- eperl-2.2.14.orig/etc/mkproto	Mon Jul 14 13:12:33 1997
++++ eperl-2.2.14/etc/mkproto	Sat Mar 16 19:32:56 2002
+@@ -1,4 +1,6 @@
+-#!/sw/bin/perl
++:
++eval 'exec perl -S $0 ${1+"$@"}'
++    if $running_under_some_shell;
+ 
+ $header = $ARGV[0];
+ shift @ARGV;
+diff -Naur eperl-2.2.14.orig/etc/newvers eperl-2.2.14/etc/newvers
+--- eperl-2.2.14.orig/etc/newvers	Sat Apr  4 07:31:28 1998
++++ eperl-2.2.14/etc/newvers	Sat Mar 16 19:32:56 2002
+@@ -182,7 +182,7 @@
+                     bplevel=0
+                     ;;
+             esac
+-            date=`date '+%d-%m-19%y'`
++            date=`date '+%d-%m-%Y'`
+         fi
+ 
+     else
+@@ -191,7 +191,7 @@
+         revision=5
+         bptype=b
+         bplevel=0
+-        date=`date '+%d-%m-19%y'`
++        date=`date '+%d-%m-%Y'`
+     fi
+ else
+     #   take given version
+@@ -200,7 +200,7 @@
+     revision=`echo $VERSION | awk -F: '{ print $2 }'`
+     bptype=`echo $VERSION | awk -F: '{ print $3 }'`
+     bplevel=`echo $VERSION | awk -F: '{ print $4 }'`
+-    date=`date '+%d-%m-19%y'`
++    date=`date '+%d-%m-%Y'`
+ fi
+ 
+ if [ $REPORT = YES ]; then
+@@ -215,7 +215,7 @@
+ fi
+ 
+ #   create date string
+-year=`date '+19%y'`
++year=`date '+%Y'`
+ month=`date '+%m'`
+ day=`date '+%d'`
+ 
+diff -Naur eperl-2.2.14.orig/etc/shtool eperl-2.2.14/etc/shtool
+--- eperl-2.2.14.orig/etc/shtool	Wed Dec 31 19:00:00 1969
++++ eperl-2.2.14/etc/shtool	Sat Mar 16 19:32:57 2002
+@@ -0,0 +1,1104 @@
++#!/bin/sh
++##
++##  GNU shtool -- The GNU Portable Shell Tool
++##  Copyright (c) 1994-2000 Ralf S. Engelschall <rse@engelschall.com>
++##
++##  See http://www.gnu.org/software/shtool/ for more information.
++##  See ftp://ftp.gnu.org/gnu/shtool/ for latest version.
++##
++##  Version:  1.5.1 (29-Jul-2000)
++##  Contents: 5/17 available modules
++##
++
++##
++##  This program is free software; you can redistribute it and/or modify
++##  it under the terms of the GNU General Public License as published by
++##  the Free Software Foundation; either version 2 of the License, or
++##  (at your option) any later version.
++##
++##  This program is distributed in the hope that it will be useful,
++##  but WITHOUT ANY WARRANTY; without even the implied warranty of
++##  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
++##  General Public License for more details.
++##
++##  You should have received a copy of the GNU General Public License
++##  along with this program; if not, write to the Free Software
++##  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307,
++##  USA, or contact Ralf S. Engelschall <rse@engelschall.com>.
++##
++##  Notice: Given that you include this file verbatim into your own
++##  source tree, you are justified in saying that it remains separate
++##  from your package, and that this way you are simply just using GNU
++##  shtool. So, in this situation, there is no requirement that your
++##  package itself is licensed under the GNU General Public License in
++##  order to take advantage of GNU shtool.
++##
++
++##
++##  Usage: shtool [<options>] [<cmd-name> [<cmd-options>] [<cmd-args>]]
++##
++##  Available commands:
++##    echo       Print string with optional construct expansion
++##    install    Install a program, script or datafile
++##    mkdir      Make one or more directories
++##    fixperm    Fix file permissions inside a source tree
++##    version    Maintain a version information file
++##
++##  Not available commands (because module was not built-in):
++##    mdate      Pretty-print modification time of a file or dir
++##    table      Pretty-print a field-separated list as a table
++##    prop       Display progress with a running propeller
++##    move       Move files with simultaneous substitution
++##    mkln       Make link with calculation of relative paths
++##    mkshadow   Make a shadow tree through symbolic links
++##    tarball    Roll distribution tarballs
++##    guessos    Simple operating system guesser
++##    arx        Extended archive command
++##    slo        Separate linker options by library class
++##    scpp       Sharing C Pre-Processor
++##    path       Deal with program paths
++##
++
++if [ $# -eq 0 ]; then
++    echo "$0:Error: invalid command line" 1>&2
++    echo "$0:Hint:  run \`$0 -h' for usage" 1>&2
++    exit 1
++fi
++if [ ".$1" = ".-h" -o ".$1" = ".--help" ]; then
++    echo "This is GNU shtool, version 1.5.1 (29-Jul-2000)"
++    echo "Copyright (c) 1994-2000 Ralf S. Engelschall <rse@engelschall.com>"
++    echo "Report bugs to <bug-shtool@gnu.org>"
++    echo ''
++    echo "Usage: shtool [<options>] [<cmd-name> [<cmd-options>] [<cmd-args>]]" 
++    echo ''
++    echo 'Available global <options>:'
++    echo '  -v, --version   display shtool version information'
++    echo '  -h, --help      display shtool usage help page (this one)'
++    echo '  -d, --debug     display shell trace information'
++    echo '  -r, --recreate  recreate this shtool script via shtoolize'
++    echo ''
++    echo 'Available <cmd-name> [<cmd-options>] [<cmd-args>]:'
++    echo '  echo     [-n] [-e] [<str> ...]'
++    echo '  install  [-v] [-t] [-c] [-C] [-s] [-m<mode>] [-o<owner>] [-g<group>]'
++    echo '           [-e<ext>] <file> [<file> ...] <path>'
++    echo '  mkdir    [-t] [-f] [-p] [-m<mode>] <dir> [<dir> ...]'
++    echo '  fixperm  [-v] [-t] <path> [<path> ...]'
++    echo '  version  [-l<lang>] [-n<name>] [-p<prefix>] [-s<version>] [-e]'
++    echo '           [-i<knob>] [-d<type>] <file>'
++    echo ''
++    echo 'Not available <cmd-name> (because module was not built-in):'
++    echo '  mdate    [-n] [-z] [-s] [-d] [-f<str>] [-o<spec>] <path>'
++    echo '  table    [-F<sep>] [-w<width>] [-c<cols>] [-s<strip>] <str><sep><str>...'
++    echo '  prop     [-p<str>]'
++    echo '  move     [-v] [-t] [-e] [-p] <src-file> <dst-file>'
++    echo '  mkln     [-t] [-f] [-s] <src-path> [<src-path> ...] <dst-path>'
++    echo '  mkshadow [-v] [-t] [-a] <src-dir> <dst-dir>'
++    echo '  tarball  [-t] [-v] [-o <tarball>] [-c <prog>] [-d <dir>] [-u'
++    echo '           <user>] [-g <group>] [-e <pattern>] <path> [<path> ...]'
++    echo '  guessos  '
++    echo '  arx      [-t] [-C<cmd>] <op> <archive> [<file> ...]'
++    echo '  slo      [-p<str>] -- -L<dir> -l<lib> [-L<dir> -l<lib> ...]'
++    echo '  scpp     [-v] [-p] [-f<filter>] [-o<ofile>] [-t<tfile>] [-M<mark>]'
++    echo '           [-D<dname>] [-C<cname>] <file> [<file> ...]'
++    echo '  path     [-s] [-r] [-d] [-b] [-m] [-p<path>] <str> [<str> ...]'
++    echo ''
++    exit 0
++fi
++if [ ".$1" = ".-v" -o ".$1" = ."--version" ]; then
++    echo "GNU shtool 1.5.1 (29-Jul-2000)"
++    exit 0
++fi
++if [ ".$1" = ".-r" -o ".$1" = ."--recreate" ]; then
++    shtoolize -oetc/shtool echo install mkdir fixperm version
++    exit 0
++fi
++if [ ".$1" = ".-d" -o ".$1" = ."--debug" ]; then
++    shift
++    set -x
++fi
++name=`echo "$0" | sed -e 's;.*/\([^/]*\)$;\1;' -e 's;-sh$;;' -e 's;\.sh$;;'`
++case "$name" in
++    echo|install|mkdir|fixperm|version )
++        #   implicit tool command selection
++        tool="$name"
++        ;;
++    * )
++        #   explicit tool command selection
++        tool="$1"
++        shift
++        ;;
++esac
++arg_spec=""
++opt_spec=""
++gen_tmpfile=no
++
++##
++##  DISPATCH INTO SCRIPT PROLOG
++##
++
++case $tool in
++    echo )
++        str_tool="echo"
++        str_usage="[-n] [-e] [<str> ...]"
++        arg_spec="0+"
++        opt_spec="n.e."
++        opt_n=no
++        opt_e=no
++        ;;
++    install )
++        str_tool="install"
++        str_usage="[-v] [-t] [-c] [-C] [-s] [-m<mode>] [-o<owner>] [-g<group>] [-e<ext>] <file> [<file> ...] <path>"
++        arg_spec="2+"
++        opt_spec="v.t.c.C.s.m:o:g:e:"
++        opt_v=no
++        opt_t=no
++        opt_c=no
++        opt_C=no
++        opt_s=no
++        opt_m=""
++        opt_o=""
++        opt_g=""
++        opt_e=""
++        ;;
++    mkdir )
++        str_tool="mkdir"
++        str_usage="[-t] [-f] [-p] [-m<mode>] <dir> [<dir> ...]"
++        arg_spec="1+"
++        opt_spec="t.f.p.m:"
++        opt_t=no
++        opt_f=no
++        opt_p=no
++        opt_m=""
++        ;;
++    fixperm )
++        str_tool="fixperm"
++        str_usage="[-v] [-t] <path> [<path> ...]"
++        arg_spec="1+"
++        opt_spec="v.t."
++        opt_v=no
++        opt_t=no
++        ;;
++    version )
++        str_tool="version"
++        str_usage="[-l<lang>] [-n<name>] [-p<prefix>] [-s<version>] [-e] [-i<knob>] [-d<type>] <file>"
++        arg_spec="1="
++        opt_spec="l:n:p:s:i:e.d:"
++        opt_l="txt"
++        opt_n="unknown"
++        opt_p=""
++        opt_s=""
++        opt_e="no"
++        opt_i=""
++        opt_d="short"
++        ;;
++    -* )
++        echo "$0:Error: unknown option \`$tool'" 2>&1
++        echo "$0:Hint:  run \`$0 -h' for usage" 2>&1
++        exit 1
++        ;;
++    * )
++        echo "$0:Error: unknown command \`$tool'" 2>&1
++        echo "$0:Hint:  run \`$0 -h' for usage" 2>&1
++        exit 1
++        ;;
++esac
++
++##
++##  COMMON UTILITY CODE
++##
++
++#   determine name of tool
++if [ ".$tool" != . ]; then
++    #   used inside shtool script
++    toolcmd="$0 $tool"
++    toolcmdhelp="shtool $tool"
++    msgprefix="shtool:$tool"
++else
++    #   used as standalone script
++    toolcmd="$0"
++    toolcmdhelp="sh $0"
++    msgprefix="$str_tool"
++fi
++
++#   parse argument specification string
++eval `echo $arg_spec |\
++      sed -e 's/^\([0-9]*\)\([+=]\)/arg_NUMS=\1; arg_MODE=\2/'`
++
++#   parse option specification string
++eval `echo h.$opt_spec |\
++      sed -e 's/\([a-zA-Z0-9]\)\([.:+]\)/opt_MODE_\1=\2;/g'`
++
++#   interate over argument line
++opt_PREV=''
++while [ $# -gt 0 ]; do
++    #   special option stops processing
++    if [ ".$1" = ".--" ]; then
++        shift
++        break
++    fi
++
++    #   determine option and argument
++    opt_ARG_OK=no
++    if [ ".$opt_PREV" != . ]; then
++        #   merge previous seen option with argument
++        opt_OPT="$opt_PREV"
++        opt_ARG="$1"
++        opt_ARG_OK=yes
++        opt_PREV=''
++    else
++        #   split argument into option and argument
++        case "$1" in
++            -[a-zA-Z0-9]*)
++                eval `echo "x$1" |\
++                      sed -e 's/^x-\([a-zA-Z0-9]\)/opt_OPT="\1";/' \
++                          -e 's/";\(.*\)$/"; opt_ARG="\1"/'`
++                ;;
++            -[a-zA-Z0-9])
++                opt_OPT=`echo "x$1" | cut -c3-`
++                opt_ARG=''
++                ;;
++            *)
++                break
++                ;;
++        esac
++    fi
++
++    #   eat up option
++    shift
++
++    #   determine whether option needs an argument
++    eval "opt_MODE=\$opt_MODE_${opt_OPT}"
++    if [ ".$opt_ARG" = . -a ".$opt_ARG_OK" != .yes ]; then
++        if [ ".$opt_MODE" = ".:" -o ".$opt_MODE" = ".+" ]; then
++            opt_PREV="$opt_OPT"
++            continue
++        fi
++    fi
++
++    #   process option
++    case $opt_MODE in
++        '.' )
++            #   boolean option
++            eval "opt_${opt_OPT}=yes"
++            ;;
++        ':' )
++            #   option with argument (multiple occurances override)
++            eval "opt_${opt_OPT}=\"\$opt_ARG\""
++            ;;
++        '+' )
++            #   option with argument (multiple occurances append)
++            eval "opt_${opt_OPT}=\"\$opt_${opt_OPT} \$opt_ARG\""
++            ;;
++        * )
++            echo "$msgprefix:Error: unknown option: \`-$opt_OPT'" 1>&2
++            echo "$msgprefix:Hint:  run \`$toolcmdhelp -h' or \`man shtool' for details" 1>&2
++            exit 1
++            ;;
++    esac
++done
++if [ ".$opt_PREV" != . ]; then
++    echo "$msgprefix:Error: missing argument to option \`-$opt_PREV'" 1>&2
++    echo "$msgprefix:Hint:  run \`$toolcmdhelp -h' or \`man shtool' for details" 1>&2
++    exit 1
++fi
++
++#   process help option
++if [ ".$opt_h" = .yes ]; then
++    echo "Usage: $toolcmdhelp $str_usage"
++    exit 0
++fi
++
++#   complain about incorrect number of arguments
++case $arg_MODE in
++    '=' )
++        if [ $# -ne $arg_NUMS ]; then
++            echo "$msgprefix:Error: invalid number of arguments (exactly $arg_NUMS expected)" 1>&2
++            echo "$msgprefix:Hint:  run \`$toolcmd -h' or \`man shtool' for details" 1>&2
++            exit 1
++        fi
++        ;;
++    '+' )
++        if [ $# -lt $arg_NUMS ]; then
++            echo "$msgprefix:Error: invalid number of arguments (at least $arg_NUMS expected)" 1>&2
++            echo "$msgprefix:Hint:  run \`$toolcmd -h' or \`man shtool' for details" 1>&2
++            exit 1
++        fi
++        ;;
++esac
++
++#   establish a temporary file on request
++if [ ".$gen_tmpfile" = .yes ]; then
++    if [ ".$TMPDIR" != . ]; then
++        tmpdir="$TMPDIR"
++    elif [ ".$TEMPDIR" != . ]; then
++        tmpdir="$TEMPDIR"
++    else
++        tmpdir="/tmp"
++    fi
++    tmpfile="$tmpdir/.shtool.$$"
++    rm -f $tmpfile >/dev/null 2>&1
++    touch $tmpfile
++fi
++
++##
++##  DISPATCH INTO SCRIPT BODY
++##
++
++case $tool in
++
++echo )
++    ##
++    ##  echo -- Print string with optional construct expansion
++    ##  Copyright (c) 1998-2000 Ralf S. Engelschall <rse@engelschall.com>
++    ##  Originally written for WML as buildinfo
++    ##
++    
++    text="$*"
++    
++    #   check for broken escape sequence expansion
++    seo=''
++    bytes=`echo '\1' | wc -c | awk '{ printf("%s", $1); }'`
++    if [ ".$bytes" != .3 ]; then
++        bytes=`echo -E '\1' | wc -c | awk '{ printf("%s", $1); }'`
++        if [ ".$bytes" = .3 ]; then
++            seo='-E'
++        fi
++    fi
++    
++    #   check for existing -n option (to suppress newline)
++    minusn=''
++    bytes=`echo -n 123 2>/dev/null | wc -c | awk '{ printf("%s", $1); }'`
++    if [ ".$bytes" = .3 ]; then
++        minusn='-n'
++    fi
++    
++    #   determine terminal bold sequence
++    term_bold='' 
++    term_norm=''
++    if [ ".$opt_e" = .yes -a ".`echo $text | egrep '%[Bb]'`" != . ]; then
++        case $TERM in
++            #   for the most important terminal types we directly know the sequences
++            xterm|xterm*|vt220|vt220*)
++                term_bold=`awk 'BEGIN { printf("%c%c%c%c", 27, 91, 49, 109); }' </dev/null 2>/dev/null`
++                term_norm=`awk 'BEGIN { printf("%c%c%c", 27, 91, 109); }' </dev/null 2>/dev/null`
++                ;;
++            vt100|vt100*)
++                term_bold=`awk 'BEGIN { printf("%c%c%c%c%c%c", 27, 91, 49, 109, 0, 0); }' </dev/null 2>/dev/null`
++                term_norm=`awk 'BEGIN { printf("%c%c%c%c%c", 27, 91, 109, 0, 0); }' </dev/null 2>/dev/null`
++                ;;
++            #   for all others, we try to use a possibly existing `tput' or `tcout' utility
++            * )
++                paths=`echo $PATH | sed -e 's/:/ /g'`
++                for tool in tput tcout; do
++                    for dir in $paths; do
++                        if [ -r "$dir/$tool" ]; then
++                            for seq in bold md smso; do # 'smso' is last
++                                bold="`$dir/$tool $seq 2>/dev/null`"
++                                if [ ".$bold" != . ]; then
++                                    term_bold="$bold"
++                                    break
++                                fi
++                            done
++                            if [ ".$term_bold" != . ]; then
++                                for seq in sgr0 me rmso reset; do # 'reset' is last
++                                    norm="`$dir/$tool $seq 2>/dev/null`"
++                                    if [ ".$norm" != . ]; then
++                                        term_norm="$norm"
++                                        break
++                                    fi
++                                done
++                            fi
++                            break
++                        fi
++                    done
++                    if [ ".$term_bold" != . -a ".$term_norm" != . ]; then
++                        break;
++                    fi
++                done
++                ;;
++        esac
++        if [ ".$term_bold" = . -o ".$term_norm" = . ]; then
++            echo "$msgprefix:Warning: unable to determine terminal sequence for bold mode" 1>&2
++        fi
++    fi
++    
++    #   determine user name
++    username=''
++    if [ ".$opt_e" = .yes -a ".`echo $text | egrep '%[uU]'`" != . ]; then
++        username="$LOGNAME"
++        if [ ".$username" = . ]; then
++            username="$USER"
++            if [ ".$username" = . ]; then
++                username="`(whoami) 2>/dev/null |\
++                           awk '{ printf("%s", $1); }'`"
++                if [ ".$username" = . ]; then
++                    username="`(who am i) 2>/dev/null |\
++                               awk '{ printf("%s", $1); }'`"
++                    if [ ".$username" = . ]; then
++                        username='unknown'
++                    fi
++                fi
++            fi
++        fi
++    fi
++    
++    #   determine user id
++    userid=''
++    if [ ".$opt_e" = .yes -a ".`echo $text | egrep '%U'`" != . ]; then
++        userid="`(id -u) 2>/dev/null`"
++        if [ ".$userid" = . ]; then
++            str="`(id) 2>/dev/null`"
++            if [ ".`echo $str | grep '^uid[ 	]*=[ 	]*[0-9]*('`" != . ]; then
++                userid=`echo $str | sed -e 's/^uid[ 	]*=[ 	]*//' -e 's/(.*//'`
++            fi
++            if [ ".$userid" = . ]; then
++                userid=`egrep "^${username}:" /etc/passwd 2>/dev/null | \
++                        sed -e 's/[^:]*:[^:]*://' -e 's/:.*$//'`
++                if [ ".$userid" = . ]; then
++                    userid=`(ypcat passwd) 2>/dev/null |
++                            egrep "^${username}:" | \
++                            sed -e 's/[^:]*:[^:]*://' -e 's/:.*$//'`
++                    if [ ".$userid" = . ]; then
++                        userid='?'
++                    fi
++                fi
++            fi
++        fi
++    fi
++    
++    #   determine host name
++    hostname=''
++    if [ ".$opt_e" = .yes -a ".`echo $text | egrep '%h'`" != . ]; then
++        hostname="`(uname -n) 2>/dev/null |\
++                   awk '{ printf("%s", $1); }'`"
++        if [ ".$hostname" = . ]; then
++            hostname="`(hostname) 2>/dev/null |\
++                       awk '{ printf("%s", $1); }'`"
++            if [ ".$hostname" = . ]; then
++                hostname='unknown'
++            fi
++        fi
++        case $hostname in
++            *.* )
++                domainname=".`echo $hostname | cut -d. -f2-`"
++                hostname="`echo $hostname | cut -d. -f1`"
++                ;;
++        esac
++    fi
++    
++    #   determine domain name
++    domainname=''
++    if [ ".$opt_e" = .yes -a ".`echo $text | egrep '%d'`" != . ]; then
++        if [ ".$domainname" = . ]; then
++            if [ -f /etc/resolv.conf ]; then
++                domainname="`egrep '^[ 	]*domain' /etc/resolv.conf | head -1 |\
++                             sed -e 's/.*domain//' \
++                                 -e 's/^[ 	]*//' -e 's/^ *//' -e 's/^	*//' \
++                                 -e 's/^\.//' -e 's/^/./' |\
++                             awk '{ printf("%s", $1); }'`"
++                if [ ".$domainname" = . ]; then
++                    domainname="`egrep '^[ 	]*search' /etc/resolv.conf | head -1 |\
++                                 sed -e 's/.*search//' \
++                                     -e 's/^[ 	]*//' -e 's/^ *//' -e 's/^	*//' \
++                                     -e 's/ .*//' -e 's/	.*//' \
++                                     -e 's/^\.//' -e 's/^/./' |\
++                                 awk '{ printf("%s", $1); }'`"
++                fi
++            fi
++        fi
++    fi
++    
++    #   determine current time
++    time_day=''
++    time_month=''
++    time_year=''
++    time_monthname=''
++    if [ ".$opt_e" = .yes -a ".`echo $text | egrep '%[DMYm]'`" != . ]; then
++        time_day=`date '+%d'`
++        time_month=`date '+%m'`
++        time_year=`date '+%Y' 2>/dev/null`
++        if [ ".$time_year" = . ]; then
++            time_year=`date '+%y'`
++            case $time_year in
++                [5-9][0-9]) time_year="19$time_year" ;;
++                [0-4][0-9]) time_year="20$time_year" ;;
++            esac
++        fi
++        case $time_month in
++            1|01) time_monthname='Jan' ;;
++            2|02) time_monthname='Feb' ;;
++            3|03) time_monthname='Mar' ;;
++            4|04) time_monthname='Apr' ;;
++            5|05) time_monthname='May' ;;
++            6|06) time_monthname='Jun' ;;
++            7|07) time_monthname='Jul' ;;
++            8|08) time_monthname='Aug' ;;
++            9|09) time_monthname='Sep' ;;
++              10) time_monthname='Oct' ;;
++              11) time_monthname='Nov' ;;
++              12) time_monthname='Dec' ;;
++        esac
++    fi
++    
++    #   expand special ``%x'' constructs
++    if [ ".$opt_e" = .yes ]; then
++        text=`echo $seo "$text" |\
++              sed -e "s/%B/${term_bold}/g" \
++                  -e "s/%b/${term_norm}/g" \
++                  -e "s/%u/${username}/g" \
++                  -e "s/%U/${userid}/g" \
++                  -e "s/%h/${hostname}/g" \
++                  -e "s/%d/${domainname}/g" \
++                  -e "s/%D/${time_day}/g" \
++                  -e "s/%M/${time_month}/g" \
++                  -e "s/%Y/${time_year}/g" \
++                  -e "s/%m/${time_monthname}/g" 2>/dev/null`
++    fi
++    
++    #   create output
++    if [ .$opt_n = .no ]; then
++        echo $seo "$text"
++    else
++        #   the harder part: echo -n is best, because
++        #   awk may complain about some \xx sequences.
++        if [ ".$minusn" != . ]; then
++            echo $seo $minusn "$text"
++        else
++            echo dummy | awk '{ printf("%s", TEXT); }' TEXT="$text"
++        fi
++    fi
++    ;;
++
++install )
++    ##
++    ##  install -- Install a program, script or datafile
++    ##  Copyright (c) 1997-2000 Ralf S. Engelschall <rse@engelschall.com>
++    ##  Originally written for shtool
++    ##
++    
++    #   determine source(s) and destination 
++    argc=$#
++    srcs=""
++    while [ $# -gt 1 ]; do
++        srcs="$srcs $1"
++        shift
++    done
++    dstpath="$1"
++    
++    #   type check for destination
++    dstisdir=0
++    if [ -d $dstpath ]; then
++        dstpath=`echo "$dstpath" | sed -e 's:/$::'`
++        dstisdir=1
++    fi
++    
++    #   consistency check for destination
++    if [ $argc -gt 2 -a $dstisdir = 0 ]; then
++        echo "$msgprefix:Error: multiple sources require destination to be directory" 1>&2
++        exit 1
++    fi
++    
++    #   iterate over all source(s)
++    for src in $srcs; do
++        dst=$dstpath
++    
++        #  If destination is a directory, append the input filename
++        if [ $dstisdir = 1 ]; then
++            dstfile=`echo "$src" | sed -e 's;.*/\([^/]*\)$;\1;'`
++            dst="$dst/$dstfile"
++        fi
++    
++        #  Add a possible extension to src and dst
++        if [ ".$opt_e" != . ]; then
++            src="$src$opt_e"
++            dst="$dst$opt_e"
++        fi
++    
++        #  Check for correct arguments
++        if [ ".$src" = ".$dst" ]; then
++            echo "$msgprefix:Warning: source and destination are the same - skipped" 1>&2
++            continue
++        fi
++        if [ -d "$src" ]; then
++            echo "$msgprefix:Warning: source \`$src' is a directory - skipped" 1>&2
++            continue
++        fi
++    
++        #  Make a temp file name in the destination directory
++        dsttmp=`echo $dst |\
++                sed -e 's;[^/]*$;;' -e 's;\(.\)/$;\1;' -e 's;^$;.;' \
++                    -e "s;\$;/#INST@$$#;"`
++    
++        #  Verbosity
++        if [ ".$opt_v" = .yes ]; then
++            echo "$src -> $dst" 1>&2
++        fi
++    
++        #  Copy or move the file name to the temp name
++        #  (because we might be not allowed to change the source)
++        if [ ".$opt_C" = .yes ]; then
++            opt_c=yes
++        fi
++        if [ ".$opt_c" = .yes ]; then
++            if [ ".$opt_t" = .yes ]; then
++                echo "cp $src $dsttmp" 1>&2
++            fi
++            cp $src $dsttmp || exit $?
++        else
++            if [ ".$opt_t" = .yes ]; then
++                echo "mv $src $dsttmp" 1>&2
++            fi
++            mv $src $dsttmp || exit $?
++        fi
++    
++        #  Adjust the target file
++        #  (we do chmod last to preserve setuid bits)
++        if [ ".$opt_s" = .yes ]; then
++            if [ ".$opt_t" = .yes ]; then
++                echo "strip $dsttmp" 1>&2
++            fi
++            strip $dsttmp || exit $?
++        fi
++        if [ ".$opt_o" != . ]; then
++            if [ ".$opt_t" = .yes ]; then
++                echo "chown $opt_o $dsttmp" 1>&2
++            fi
++            chown $opt_o $dsttmp || exit $?
++        fi
++        if [ ".$opt_g" != . ]; then
++            if [ ".$opt_t" = .yes ]; then
++                echo "chgrp $opt_g $dsttmp" 1>&2
++            fi
++            chgrp $opt_g $dsttmp || exit $?
++        fi
++        if [ ".$opt_m" != . ]; then
++            if [ ".$opt_t" = .yes ]; then
++                echo "chmod $opt_m $dsttmp" 1>&2
++            fi
++            chmod $opt_m $dsttmp || exit $?
++        fi
++    
++        #   Determine whether to do a quick install
++        #   (has to be done _after_ the strip was already done)
++        quick=no
++        if [ ".$opt_C" = .yes ]; then
++            if [ -r $dst ]; then
++                if cmp -s $src $dst; then
++                    quick=yes
++                fi
++            fi
++        fi
++    
++        #   Finally install the file to the real destination
++        if [ $quick = yes ]; then
++            if [ ".$opt_t" = .yes ]; then
++                echo "rm -f $dsttmp" 1>&2
++            fi
++            rm -f $dsttmp
++        else
++            if [ ".$opt_t" = .yes ]; then
++                echo "rm -f $dst && mv $dsttmp $dst" 1>&2
++            fi
++            rm -f $dst && mv $dsttmp $dst
++        fi
++    done
++    ;;
++
++mkdir )
++    ##
++    ##  mkdir -- Make one or more directories
++    ##  Copyright (c) 1996-2000 Ralf S. Engelschall <rse@engelschall.com>
++    ##  Originally written for public domain by Noah Friedman <friedman@prep.ai.mit.edu>
++    ##  Cleaned up and enhanced for shtool
++    ##
++    
++    errstatus=0
++    for p in ${1+"$@"}; do
++        #   if the directory already exists...
++        if [ -d "$p" ]; then
++            if [ ".$opt_f" = .no ] && [ ".$opt_p" = .no ]; then
++                echo "$msgprefix:Error: directory already exists: $p" 1>&2
++                errstatus=1
++                break
++            else
++                continue
++            fi
++        fi
++        #   if the directory has to be created...
++        if [ ".$opt_p" = .no ]; then
++            if [ ".$opt_t" = .yes ]; then
++                echo "mkdir $p" 1>&2
++            fi
++            mkdir $p || errstatus=$?
++        else
++            #   the smart situation
++            set fnord `echo ":$p" |\
++                       sed -e 's/^:\//%/' \
++                           -e 's/^://' \
++                           -e 's/\// /g' \
++                           -e 's/^%/\//'`
++            shift
++            pathcomp=''
++            for d in ${1+"$@"}; do
++                pathcomp="$pathcomp$d"
++                case "$pathcomp" in
++                    -* ) pathcomp="./$pathcomp" ;;
++                esac
++                if [ ! -d "$pathcomp" ]; then
++                    if [ ".$opt_t" = .yes ]; then
++                        echo "mkdir $pathcomp" 1>&2
++                    fi
++                    mkdir $pathcomp || errstatus=$?
++                    if [ ".$opt_m" != . ]; then
++                        if [ ".$opt_t" = .yes ]; then
++                            echo "chmod $opt_m $pathcomp" 1>&2
++                        fi
++                        chmod $opt_m $pathcomp || errstatus=$?
++                    fi
++                fi
++                pathcomp="$pathcomp/"
++            done
++        fi
++    done
++    exit $errstatus
++    ;;
++
++fixperm )
++    ##
++    ##  fixperm -- Fix file permissions inside a source tree
++    ##  Copyright (c) 1996-2000 Ralf S. Engelschall <rse@engelschall.com>
++    ##  Originally written for ePerl
++    ##
++    
++    paths="$*"
++    
++    #   check whether the test command supports the -x option
++    if [ -x /bin/sh ] 2>/dev/null; then
++        minusx="-x"
++    else
++        minusx="-r"
++    fi
++    
++    #   iterate over paths
++    for p in $paths; do
++        for file in `find $p -depth -print`; do
++            if [ -f $file ]; then
++                if [ $minusx $file ]; then
++                    if [ ".$opt_v" = .yes ]; then
++                        echo "-rwxrwxr-x $file" 2>&1
++                    fi
++                    if [ ".$opt_t" = .yes ]; then
++                        echo "chmod 775 $file" 2>&1
++                    fi
++                    chmod 775 $file
++                else
++                    if [ ".$opt_v" = .yes ]; then
++                        echo "-rw-rw-r-- $file" 2>&1
++                    fi
++                    if [ ".$opt_t" = .yes ]; then
++                        echo "chmod 664 $file" 2>&1
++                    fi
++                    chmod 664 $file
++                fi
++                continue
++            fi
++            if [ -d $file ]; then
++                if [ ".$opt_v" = .yes ]; then
++                    echo "drwxrwxr-x $file" 2>&1
++                fi
++                if [ ".$opt_t" = .yes ]; then
++                    echo "chmod 775 $file" 2>&1
++                fi
++                chmod 775 $file
++                continue
++            fi
++            if [ ".$opt_v" = .yes ]; then
++                echo "?????????? $file" 2>&1
++            fi
++        done
++    done
++    ;;
++
++version )
++    ##
++    ##  version -- Maintain a version information file
++    ##  Copyright (c) 1994-2000 Ralf S. Engelschall <rse@engelschall.com>
++    ##  Originally written for ePerl, rewritten from scratch for shtool
++    ##
++    
++    file="$1"
++    
++    #   determine prefix and name
++    name="$opt_n"
++    prefix="$opt_p"
++    
++    #   determine current version
++    triple="$opt_s"
++    if [ ".$triple" != . ]; then
++        #   use given triple
++        if [ ".`echo $triple | grep '[0-9]*.[0-9]*[sabp.][0-9]*'`" = . ]; then
++            echo "$msgprefix:Error: invalid argument to option \`-s': \`$opt_s'" 1>&2
++            exit 1
++        fi
++        eval `echo $triple |\
++              sed -e 's%\([0-9]*\)\.\([0-9]*\)\([sabp.]\)\([0-9]*\).*%\
++              ver="\1";rev="\2";typ="\3";lev="\4"%'`
++        tim=calc
++    elif [ -r $file ]; then
++        #   determine triple from given file
++        eval `grep 'Version [0-9]*.[0-9]*[sabp.][0-9]* ([0-9]*-[a-zA-Z]*-[0-9]*)' $file |\
++              head -1 | sed -e 's%.*Version \([0-9]*\)\.\([0-9]*\)\([sabp.]\)\([0-9]*\) (\([0-9]*-[a-zA-Z]*-[0-9]*\)).*%\
++              ver="\1";rev="\2";typ="\3";lev="\4";tim="\5"%'`
++    else
++        #   intialise to first version
++        ver=0
++        rev=1
++        typ=.
++        lev=0
++        tim=calc
++    fi
++    
++    #   determine new version in batch
++    if [ ".$opt_i" != . ]; then
++        case $opt_i in
++            v ) ver=`expr $ver + 1`
++                rev=0
++                lev=0
++                ;;
++            r ) rev=`expr $rev + 1`
++                lev=0
++                ;;
++            l ) lev=`expr $lev + 1`
++                ;;
++            * ) echo "$msgprefix:Error: invalid argument to option \`-i': \`$opt_i'" 1>&2
++                exit 1
++                ;;
++        esac
++        tim=calc
++    fi
++    
++    #   determine new version interactively
++    if [ ".$opt_e" = .yes ]; then
++        echo "old version: ${ver}.${rev}${typ}${lev}"
++        while [ 1 ]; do
++            echo dummy | awk '{ printf("new version: "); }'
++            read triple
++            case $triple in
++                [0-9]*.[0-9]*[sabp.][0-9]* ) 
++                    ;;
++                * ) echo "$msgprefix:Error: invalid version string entered: \`$triple'" 1>&2
++                    continue
++                    ;;
++            esac
++            break
++        done
++        eval `echo $triple |\
++              sed -e 's%^\([0-9]*\)\.\([0-9]*\)\([sabp.]\)\([0-9]*\)$%\
++              ver="\1";rev="\2";typ="\3";lev="\4"%'`
++        tim=calc
++    fi
++    
++    #   determine hexadecimal and libtool value of version
++    case $typ in
++        a     ) typnum=0;  levnum=$lev ;;
++        b     ) typnum=1;  levnum=$lev ;;
++        p | . ) typnum=2;  levnum=$lev ;;
++        s     ) typnum=15; levnum=255  ;; # snapshots are special
++    esac
++    hex=`echo "$ver:$rev:$typnum:$levnum" |\
++         awk -F: '{ printf("0x%x%02x%1x%02x", $1, $2, $3, $4); }' |\
++         tr 'abcdef' 'ABCDEF'`
++    ltv=`echo "$ver:$rev:$typnum:$levnum" |\
++         awk -F: '{ printf("%d:%d", $1*10 + $2, $3*10 + $4); }'`
++    
++    #   determine date
++    if [ ".$tim" = .calc ]; then
++        day=`date '+%d'`
++        month=`date '+%m'`
++        year=`date '+%Y' 2>/dev/null`
++        if [ ".$time_year" = . ]; then
++            year=`date '+%y'`
++            case $year in
++                [5-9][0-9]) year="19$year" ;;
++                [0-4][0-9]) year="20$year" ;;
++            esac
++        fi
++        case $month in
++            1|01) month='Jan' ;;
++            2|02) month='Feb' ;;
++            3|03) month='Mar' ;;
++            4|04) month='Apr' ;;
++            5|05) month='May' ;;
++            6|06) month='Jun' ;;
++            7|07) month='Jul' ;;
++            8|08) month='Aug' ;;
++            9|09) month='Sep' ;;
++              10) month='Oct' ;;
++              11) month='Nov' ;;
++              12) month='Dec' ;;
++        esac
++        tim="${day}-${month}-${year}"
++    fi
++    
++    #   perform result actions
++    mode=show
++    if [ ".$opt_i" != . ]; then
++        mode=edit
++    elif [ ".$opt_e" = .yes ]; then
++        mode=edit
++    elif [ ".$opt_s" != . ]; then
++        mode=edit
++    fi
++    if [ ".$mode" = .show ]; then
++        #   just display the current version
++        case $opt_d in
++            short )
++                echo "${ver}.${rev}${typ}${lev}"
++                ;;
++            long )
++                echo "${ver}.${rev}${typ}${lev} ($tim)"
++                ;;
++            libtool )
++                echo "${ltv}"
++                ;;
++            hex )
++                echo "${hex}"
++                ;;
++            * ) echo "$msgprefix:Error: invalid argument to option \`-d': \`$opt_d'" 1>&2
++                exit 1
++                ;;
++        esac
++    else 
++        #   update the version file
++    
++        #   pre-generate various strings
++        triple="${ver}.${rev}${typ}${lev}"
++        vHex="$hex"
++        vShort="${triple}"
++        vLong="${triple} (${tim})"
++        vTeX="This is ${name}, Version ${triple} (${tim})"
++        vGNU="${name} ${triple} (${tim})"
++        vWeb="${name}/${triple}"
++        vSCCS="@(#)${name} ${triple} (${tim})"
++        vRCS="\$Id: ${name} ${triple} (${tim}) \$"
++    
++        #   determine string out of filename
++        #   (do NOT try to optimize this in any way because of portability)
++        filestr=`echo $file |\
++                 tr 'abcdefghijklmnopqrstuvwxyz./%+' \
++                    'ABCDEFGHIJKLMNOPQRSTUVWXYZ____' | sed -e 's/-/_/g'`
++    
++        #   generate uppercase prefix
++        prefixupper=`echo $prefix |\
++                     tr 'abcdefghijklmnopqrstuvwxyz' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'`
++        
++        #   create the version file according the the selected language
++        echo "new version: ${vLong}"
++    
++        cp /dev/null $file
++        case $opt_l in
++            txt )
++                echo >>$file ""
++                echo >>$file "  ${file} -- Version Information for ${name} (syntax: Text)"
++                echo >>$file "  [automatically generated and maintained by GNU shtool]"
++                echo >>$file ""
++                echo >>$file "  $vTeX"
++                echo >>$file ""
++                ;;
++            c )
++                echo >>$file "/*"
++                echo >>$file "**  ${file} -- Version Information for ${name} (syntax: C/C++)"
++                echo >>$file "**  [automatically generated and maintained by GNU shtool]"
++                echo >>$file "*/"
++                echo >>$file ""
++                echo >>$file "#ifdef _${filestr}_AS_HEADER_"
++                echo >>$file ""
++                echo >>$file "#ifndef _${filestr}_"
++                echo >>$file "#define _${filestr}_"
++                echo >>$file ""
++                echo >>$file "#define ${prefixupper}VERSION ${vHex}"
++                echo >>$file ""
++                echo >>$file "typedef struct {"
++                echo >>$file "    const int   v_hex;"
++                echo >>$file "    const char *v_short;"
++                echo >>$file "    const char *v_long;"
++                echo >>$file "    const char *v_tex;"
++                echo >>$file "    const char *v_gnu;"
++                echo >>$file "    const char *v_web;"
++                echo >>$file "    const char *v_sccs;"
++                echo >>$file "    const char *v_rcs;"
++                echo >>$file "} ${prefix}version_t;"
++                echo >>$file ""
++                echo >>$file "extern ${prefix}version_t ${prefix}version;"
++                echo >>$file ""
++                echo >>$file "#endif /* _${filestr}_ */"
++                echo >>$file ""
++                echo >>$file "#else /* _${filestr}_AS_HEADER_ */"
++                echo >>$file ""
++                echo >>$file "#define _${filestr}_AS_HEADER_"
++                echo >>$file "#include \"${file}\""
++                echo >>$file "#undef  _${filestr}_AS_HEADER_"
++                echo >>$file ""
++                echo >>$file "${prefix}version_t ${prefix}version = {"
++                echo >>$file "    ${vHex},"
++                echo >>$file "    \"${vShort}\","
++                echo >>$file "    \"${vLong}\","
++                echo >>$file "    \"${vTeX}\","
++                echo >>$file "    \"${vGNU}\","
++                echo >>$file "    \"${vWeb}\","
++                echo >>$file "    \"${vSCCS}\","
++                echo >>$file "    \"${vRCS}\""
++                echo >>$file "};"
++                echo >>$file ""
++                echo >>$file "#endif /* _${filestr}_AS_HEADER_ */"
++                echo >>$file ""
++                ;;
++            perl )
++                echo >>$file "##"
++                echo >>$file "##  ${file} -- Version Information for ${name} (syntax: Perl)"
++                echo >>$file "##  [automatically generated and maintained by GNU shtool]"
++                echo >>$file "##"
++                echo >>$file ""
++                echo >>$file "my \$${prefix}version = {"
++                echo >>$file "    'v_hex'   => ${vHex},"
++                echo >>$file "    'v_short' => \"${vShort}\","
++                echo >>$file "    'v_long'  => \"${vLong}\","
++                echo >>$file "    'v_tex'   => \"${vTeX}\","
++                echo >>$file "    'v_gnu'   => \"${vGNU}\","
++                echo >>$file "    'v_web'   => \"${vWeb}\","
++                echo >>$file "    'v_sccs'  => \"${vSCCS}\","
++                echo >>$file "    'v_rcs'   => \"\\${vRCS}/\""
++                echo >>$file "};"
++                echo >>$file ""
++                echo >>$file "1;"
++                echo >>$file ""
++                ;;
++            python )
++                echo >>$file "##"
++                echo >>$file "##  ${file} -- Version Information for ${name} (syntax: Python)"
++                echo >>$file "##  [automatically generated and maintained by GNU shtool]"
++                echo >>$file "##"
++                echo >>$file ""
++                echo >>$file "class ${prefix}version:"
++                echo >>$file "    v_hex       = ${vHex}"
++                echo >>$file "    v_short     = \"${vShort}\""
++                echo >>$file "    v_long      = \"${vLong}\""
++                echo >>$file "    v_tex       = \"${vTeX}\""
++                echo >>$file "    v_gnu       = \"${vGNU}\""
++                echo >>$file "    v_web       = \"${vWeb}\""
++                echo >>$file "    v_sccs      = \"${vSCCS}\""
++                echo >>$file "    v_rcs       = \"${vRCS}\""
++                echo >>$file ""
++                ;;
++            * ) echo "$msgprefix:Error: invalid argument to option \`-l': \`$opt_l'" 1>&2
++                exit 1
++                ;;
++        esac
++    fi
++    ;;
++
++esac
++
++exit 0
++
++##EOF##
+diff -Naur eperl-2.2.14.orig/mod/Apache/ePerl.pm eperl-2.2.14/mod/Apache/ePerl.pm
+--- eperl-2.2.14.orig/mod/Apache/ePerl.pm	Sun Aug  2 09:22:28 1998
++++ eperl-2.2.14/mod/Apache/ePerl.pm	Sat Mar 16 19:32:57 2002
+@@ -127,8 +127,8 @@
+                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec' );
+     my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) =
+         localtime($time);
+-    my ($str) = sprintf("%s %s %2d %02d:%02d:%02d 19%s%s",
+-                        $dow[$wday], $moy[$mon], $mday, $hour, $min, $sec, $year,
++    my ($str) = sprintf("%s %s %2d %02d:%02d:%02d %s%s",
++                        $dow[$wday], $moy[$mon], $mday, $hour, $min, $sec, $year+1900,
+                         $isdst ?  " DST" : "");
+     return $str;
+ }
+@@ -136,8 +136,8 @@
+     my ($time) = @_;
+     my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) =
+         localtime($time);
+-    my ($str) = sprintf("%02d-%02d-19%02d %02d:%02d",
+-                        $mday, $mon+1, $year, $hour, $min);
++    my ($str) = sprintf("%02d-%02d-%04d %02d:%02d",
++                        $mday, $mon+1, $year+1900, $hour, $min);
+     return $str;
+ }
+ 
+diff -Naur eperl-2.2.14.orig/t/05-mode_nphcgi.t eperl-2.2.14/t/05-mode_nphcgi.t
+--- eperl-2.2.14.orig/t/05-mode_nphcgi.t	Thu Aug 21 10:44:05 1997
++++ eperl-2.2.14/t/05-mode_nphcgi.t	Sat Mar 16 19:32:57 2002
+@@ -13,13 +13,13 @@
+ );
+ 
+ $testfile1b = &TEST::tmpfile(<<"EOT"
+-HTTP/1.0 200 OK
+-Server: XXXX
+-Date: XXXX
+-Connection: close
+-Content-Type: text/html
+-Content-Length: 27
+-
++HTTP/1.0 200 OK\r
++Server: XXXX\r
++Date: XXXX\r
++Connection: close\r
++Content-Type: text/html\r
++Content-Length: 27\r
++\r
+ some stuff
+ some more stuff
+ EOT
+@@ -31,13 +31,13 @@
+ EOT
+ );
+ $testfile3 = &TEST::tmpfile(<<"EOT"
+-HTTP/1.0 200 OK
+-Server: XXXX
+-Date: XXXX
+-Connection: close
+-Content-Type: text/html
+-Content-Length: 35
+-
++HTTP/1.0 200 OK\r
++Server: XXXX\r
++Date: XXXX\r
++Connection: close\r
++Content-Type: text/html\r
++Content-Length: 35\r
++\r
+ some stuff
+ foo bar
+ some more stuff
+@@ -46,14 +46,14 @@
+ 
+ #   test for working forced NPH-CGI mode
+ $tempfile1 = &TEST::tmpfile;
+-$rc = &TEST::system("../eperl -m n $testfile1 | sed -e 's/^Server:.*/Server: XXXX/' -e 's/^Date:.*/Date: XXXX/' >$tempfile1");
++$rc = &TEST::system("../eperl -m n $testfile1 | sed -e 's/^Server:.*/Server: XXXX/' -e 's/^Date:.*/Date: XXXX/' >$tempfile1");
+ print ($rc == 0 ? "ok\n" : "not ok\n");
+ $rc = &TEST::system("cmp $testfile1b $tempfile1");
+ print ($rc == 0 ? "ok\n" : "not ok\n");
+ 
+ #   test for working implicit CGI mode
+ $tempfile2 = &TEST::tmpfile;
+-$rc = &TEST::system("PATH_TRANSLATED=$testfile1; export PATH_TRANSLATED; GATEWAY_INTERFACE=CGI/1.1; export GATEWAY_INTERFACE; ../eperl -m n | sed -e 's/^Server:.*/Server: XXXX/' -e 's/^Date:.*/Date: XXXX/' >$tempfile2");
++$rc = &TEST::system("PATH_TRANSLATED=$testfile1; export PATH_TRANSLATED; GATEWAY_INTERFACE=CGI/1.1; export GATEWAY_INTERFACE; ../eperl -m n | sed -e 's/^Server:.*/Server: XXXX/' -e 's/^Date:.*/Date: XXXX/' >$tempfile2");
+ print ($rc == 0 ? "ok\n" : "not ok\n");
+ $rc = &TEST::system("cmp $testfile1b $tempfile2");
+ print ($rc == 0 ? "ok\n" : "not ok\n");
+@@ -64,7 +64,7 @@
+ 
+ #   test if filter mode actually works for embedded Perl 5 blocks
+ $tempfile3 = &TEST::tmpfile;
+-&TEST::system("../eperl -m n $testfile2 | sed -e 's/^Server:.*/Server: XXXX/' -e 's/^Date:.*/Date: XXXX/' >$tempfile3");
++&TEST::system("../eperl -m n $testfile2 | sed -e 's/^Server:.*/Server: XXXX/' -e 's/^Date:.*/Date: XXXX/' >$tempfile3");
+ $rc = &TEST::system("cmp $tempfile3 $testfile3");
+ print ($rc == 0 ? "ok\n" : "not ok\n");
+ 
