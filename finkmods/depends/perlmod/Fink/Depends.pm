@@ -27,7 +27,7 @@ use Fink::Base;
 use Fink::Services qw(&latest_version);
 use Fink::Package;
 use Fink::PkgVersion;
-use Fink::Shlibs;
+use Fink::Depends2;
 
 use strict;
 use warnings;
@@ -59,7 +59,7 @@ sub run_dependscheck {
   my $self = shift;
   my $pkgname = shift;
   if ($pkgname eq "index") {
-    Fink::Shlibs->require_shlibs();
+    Fink::Depends2->require_shlibs();
     exit 0;
   }
   my (@depends, $depend);
@@ -120,7 +120,7 @@ sub get_shlibs_dep {
   my $pattern = shift;
   my $dep;
 
-  $dep = Fink::Shlibs->get_shlib($pattern);
+  $dep = Fink::Depends2->get_shlib($pattern);
 
   return $dep;
 }
@@ -156,7 +156,7 @@ sub check_pkg {
         $_ =~ s/[\s|\t]+$//;
         $deb = "";
         if (length($_) > 1) {
-          $deb = Fink::Shlibs->get_shlib($_);
+          $deb = Fink::Depends2->get_shlib($_);
           if (length($deb) > 1) {
             push(@depends, $deb);
           } else {
