@@ -109,15 +109,15 @@ umask oct("022");
 print "Copying...\n";
 
 if (not -d "$basepath/fink/debs") {
-  &execute("mkdir -p $basepath/fink/debs");
+  &execute("/bin/mkdir -p -m755 $basepath/fink/debs");
 }
 
-if (&execute("cp -f README $basepath/fink/")) {
+if (&execute("/bin/cp -f README $basepath/fink/; /bin/chmod 644 $basepath/fink/README")) {
   print "ERROR: Can't copy README file.\n";
   exit 1;
 }
 
-if (&execute("cp -f VERSION $basepath/fink/")) {
+if (&execute("/bin/cp -f VERSION $basepath/fink/; /bin/chmod 644 $basepath/fink/VERSION")) {
   print "ERROR: Can't copy VERSION file.\n";
   exit 1;
 }
@@ -138,12 +138,12 @@ sub wanted {
   if (-f and not /^[\.#]/ and (/\.info$/ or /\.patch$/)) {
     $dir = $basepath."/fink/".$File::Find::dir;
     if (not -d $dir) {
-      if (&execute("mkdir -p $dir")) {
+      if (&execute("/bin/mkdir -p -m755 $dir")) {
 	print "ERROR: Can't copy package descriptions.\n";
 	exit 1;
       }
     }
-    if (&execute("cp -f $_ $dir/")) {
+    if (&execute("/bin/cp -f $_ $dir/; /bin/chmod 644 $dir/$_")) {
       print "ERROR: Can't copy package descriptions.\n";
       exit 1;
     }
