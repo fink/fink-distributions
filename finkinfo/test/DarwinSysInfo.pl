@@ -381,6 +381,8 @@ sub get_cpu {
   my $truetype;
   if ($TYPE eq "750") {
     $truetype = "G3";
+  } elsif ($TYPE eq "970") {
+    $truetype = "G5";
   } else {
     $truetype = $TYPE;
   }
@@ -398,9 +400,9 @@ sub get_cpu {
   }
 
   chomp($CPU = `ioreg -n $ARCH,$TYPE | grep '"clock-frequency" ='`);
-  if ($CPU =~ /.*[<](.+)[>].*/) {
+  if ($CPU =~ /\s*[<](.+)[>]\s*/) {
     $CPU = hex($1)/1000000;
-    if ($CPU gt 999) {
+    if (int($CPU) > 999) {
       $CPU = sprintf("%.0fGHz", $CPU/1000);
     } else {
       $CPU = sprintf("%.0fMHz", $CPU);
