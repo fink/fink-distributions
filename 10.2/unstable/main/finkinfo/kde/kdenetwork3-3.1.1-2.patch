@@ -1,0 +1,2281 @@
+
+--- certmanager/certificatewizard.ui	29 Oct 2002 17:40:08 -0000	1.1.1.3
++++ certmanager/certificatewizard.ui	29 Mar 2003 03:21:38 -0000	1.2
+@@ -1,4 +1,4 @@
+-<!DOCTYPE UI><UI version="3.0" stdsetdef="1">
++<!DOCTYPE UI><UI version="3.1" stdsetdef="1">
+ <class>CertificateWizard</class>
+ <widget class="QWizard">
+     <property name="name">
+@@ -8,8 +8,8 @@
+         <rect>
+             <x>0</x>
+             <y>0</y>
+-            <width>444</width>
+-            <height>354</height>
++            <width>438</width>
++            <height>375</height>
+         </rect>
+     </property>
+     <property name="caption">
+@@ -208,12 +208,6 @@
+             <property name="name">
+                 <cstring>unnamed</cstring>
+             </property>
+-            <property name="margin">
+-                <number>11</number>
+-            </property>
+-            <property name="spacing">
+-                <number>6</number>
+-            </property>
+             <widget class="QLabel" row="0" column="0">
+                 <property name="name">
+                     <cstring>TextLabel4</cstring>
+@@ -343,6 +337,14 @@
+                             <cstring>caEmailED</cstring>
+                         </property>
+                     </widget>
++                    <widget class="QCheckBox" row="2" column="0" rowspan="1" colspan="2">
++                        <property name="name">
++                            <cstring>brokenCA</cstring>
++                        </property>
++                        <property name="text">
++                            <string>Add email to DN in request for broken CAs</string>
++                        </property>
++                    </widget>
+                 </grid>
+             </widget>
+         </grid>
+@@ -433,4 +435,9 @@
+     <slot access="protected">slotGenerateCertificate()</slot>
+ </slots>
+ <layoutdefaults spacing="6" margin="11"/>
++<includehints>
++    <includehint>kurlrequester.h</includehint>
++    <includehint>klineedit.h</includehint>
++    <includehint>kpushbutton.h</includehint>
++</includehints>
+ </UI>
+--- certmanager/certificatewizardimpl.cpp	3 Oct 2002 00:42:53 -0000	1.1.1.2
++++ certmanager/certificatewizardimpl.cpp	29 Mar 2003 03:21:38 -0000	1.2
+@@ -12,6 +12,9 @@
+ #include <qlineedit.h>
+ #include <qtextedit.h>
+ #include <qpushbutton.h>
++#include <qcheckbox.h>
++
++#include <iostream.h>
+ 
+ extern CryptPlugWrapper* pWrapper;
+ 
+@@ -103,10 +106,56 @@
+         certParms += countryED->text();
+         bFirst = false;
+     }
++    if ( brokenCA->isChecked() ){
++	// a broken CA is described as a CA that requires an Email tag
++	// for X509v1 certificate requests. As the cryptplug stuff
++	// implements X509v3, we need to pass the number encoded already
++	// and also convert the QLineEdit 16 bit output to 8 bit first. 
++	// Then convert it to hex and put it tinto the certParms string:
++	QString emailstr=QString(emailED->text().ascii());
++	const unsigned short *chars = emailstr.ucs2();
++	QString hexString;
++	for(unsigned int i = 0; i < emailstr.length(); i++){
++		hexString.append("\\");
++		hexString.append(QString::number(chars[i], 16));
++	}
++	if( !bFirst )
++		certParms += ',';
++
++        /* Actually this encoding is not correct because the gpgsm API
++         says that an RFC-2253 encoding is to be used.  Due to wrong
++         encoding created by libksba the actual encoding is not RFC
++         conform but a hack which assumes that the argument is a kind
++         of string and libksba decides for itself what kind of ASN.1
++         type to use (printable-string or utf8-string).  Fortunately
++         we can easily discriminate between that bad encoding and
++         regular encoding based on the fact that the regular encoding
++         does not start with a byte that can represent a printable
++         character - well, at least for email addresses this is true.
++
++         The other compatible and regular choice we have, is to encode
++         it in a regular way; i.e as defined by rfc-2253 with regular
++         quoting (note, the SHOULD in the RFC is only relevant for the
++         DER -> RFC-2253 encoding direction).  I'd vote for that
++         because UCS-2 converting to UTF-8 is pretty simple and the
++         quoting rules can basically be ignored and simple
++         backslashquoting used for all characters.  An Email address of
++         <foo@bar> would then be encoded as:
++
++           1.2.840.113549.1.9.1=\66\6F\6F\40\62\61\72
++
++         I am not firm with Qt classes, so I won't do that but use the
++         irregular way. -- wk@gnupg.org */
++
++        certParms += QString("1.2.840.113549.1.9.1=%1").arg(hexString);
++        bFirst = false;
++    }
+     certParms += '\n';
+     certParms += QString( "name-email: %1\n" ).arg( emailED->text() );
+     certParms += "</GnupgKeyParms>\n";
+-
++    
++	cout << certParms.utf8() << endl;
++    
+     QApplication::setOverrideCursor( Qt::waitCursor );
+     if( !pWrapper->requestDecentralCertificate( certParms.utf8(),
+                                                   &generatedKey,
+--- kget/droptarget.cpp	3 Mar 2003 03:24:45 -0000	1.1.1.8
++++ kget/droptarget.cpp	29 Mar 2003 03:21:39 -0000	1.2
+@@ -172,7 +172,11 @@
+ {
+     b_sticky = !b_sticky;
+     popupMenu->setItemChecked(pop_sticky, b_sticky);
++    updateStickyState();
++}
+ 
++void DropTarget::updateStickyState()
++{
+     if (b_sticky)
+     {
+         KWin::setState(winId(), NET::SkipTaskbar | NET::StaysOnTop | NET::Sticky);
+--- kget/droptarget.h	4 Jan 2003 20:00:59 -0000	1.1.1.5
++++ kget/droptarget.h	29 Mar 2003 03:21:39 -0000	1.2
+@@ -42,6 +42,8 @@
+     DropTarget();
+     ~DropTarget();
+ 
++    void updateStickyState();
++
+ protected:
+     virtual void resizeEvent(QResizeEvent *);
+ 
+--- kget/kmainwidget.cpp	13 Mar 2003 21:14:40 -0000	1.1.1.10
++++ kget/kmainwidget.cpp	29 Mar 2003 03:21:39 -0000	1.2
+@@ -2,7 +2,7 @@
+ *                                kmainwidget.cpp
+ *                             -------------------
+ *
+-*    Revision     : $Id: kmainwidget.cpp,v 1.65.2.7 2003/03/08 11:36:21 pfeiffer Exp $
++*    Revision     : $Id: kmainwidget.cpp,v 1.65.2.8 2003/03/17 11:51:16 pfeiffer Exp $
+ *    begin        : Tue Jan 29 2002
+ *    copyright    : (C) 2002 by Patrick Charbonnier
+ *                 : Based On Caitoo v.0.7.3 (c) 1998 - 2000, Matej Koss
+@@ -1818,10 +1818,13 @@
+     sDebugIn << endl;
+ #endif
+ 
+-    if (m_paDropTarget->isChecked())
++    if (m_paDropTarget->isChecked()) {
+         kdrop->show();
+-    else
++        kdrop->updateStickyState();
++    }
++    else {
+         kdrop->hide();
++    }
+ 
+ 
+ #ifdef _DEBUG
+--- kmail/kmacctexppop.cpp	29 Oct 2002 17:40:48 -0000	1.1.1.6
++++ kmail/kmacctexppop.cpp	29 Mar 2003 03:21:40 -0000	1.2
+@@ -532,6 +532,9 @@
+       "work properly."));
+     }
+ 
++    // An attempt to work around buggy pop servers, these seem to be popular.
++    if (uidsOfNextSeenMsgs.isEmpty())
++        uidsOfNextSeenMsgs = uidsOfSeenMsgs;
+     //check if filter on server
+     if (mFilterOnServer == true) {
+       QStringList::Iterator hids = idsOfMsgsPendingDownload.begin();
+--- kmail/kmacctimap.cpp	3 Mar 2003 03:24:54 -0000	1.1.1.9
++++ kmail/kmacctimap.cpp	29 Mar 2003 03:21:40 -0000	1.2
+@@ -551,10 +551,13 @@
+ //-----------------------------------------------------------------------------
+ void KMAcctImap::slotUpdateFolderList()
+ {
+-  QStringList strList;
+-  mMailCheckFolders.clear();
+-  kernel->imapFolderMgr()->createFolderList(&strList, &mMailCheckFolders,
+-    mFolder->child(), QString::null, false);
++  if (mFolder && mFolder->child())
++  {
++    QStringList strList;
++    mMailCheckFolders.clear();
++    kernel->imapFolderMgr()->createFolderList(&strList, &mMailCheckFolders,
++        mFolder->child(), QString::null, false);
++  }
+ }
+ 
+ //-----------------------------------------------------------------------------
+--- kmail/kmacctimap.h	3 Mar 2003 03:24:54 -0000	1.1.1.6
++++ kmail/kmacctimap.h	29 Mar 2003 03:21:40 -0000	1.2
+@@ -243,7 +243,7 @@
+   KIO::Slave *mSlave;
+   KIO::MetaData mSlaveConfig;
+   QPtrList<KMImapJob> mJobList;
+-  KMFolderImap *mFolder;
++  QGuardedPtr<KMFolderImap> mFolder;
+   int mCountUnread, mCountLastUnread;
+   int mCountRemainChecks;
+   QPtrList<QGuardedPtr<KMFolder> > mOpenFolders;
+--- kmail/kmcomposewin.cpp	13 Mar 2003 21:14:50 -0000	1.1.1.14
++++ kmail/kmcomposewin.cpp	29 Mar 2003 03:21:40 -0000	1.11
+@@ -1857,10 +1857,7 @@
+     innerBodyPart.setBodyEncoded( body );
+     DwBodyPart* innerDwPart = theMessage.createDWBodyPart( &innerBodyPart );
+     innerDwPart->Assemble();
+-    // insert an empty line before the first body part because some broken MTAs
+-    // seem to add an empty line if it's not present and this would break the
+-    // signature (cf. bug 55629)
+-    body  = "\n--";
++    body  = "--";
+     body +=     boundaryCStr;
+     body +=                 "\n";
+     body += innerDwPart->AsString().c_str();
+@@ -2631,11 +2628,7 @@
+ 
+       QCString mainStr;
+ 
+-      // insert an empty line before the first body part because some broken
+-      // MTAs seem to add an empty line if it's not present and this would
+-      // break the signature of a message which contains this message as
+-      // attachment (cf. bug 55629)
+-      mainStr  = "\n--";
++      mainStr  = "--";
+       mainStr +=       boundaryCStr;
+ 
+       if( structuring.data.includeCleartext && (0 < clearCStr.length()) ) {
+--- kmail/kmfolder.cpp	3 Mar 2003 03:24:57 -0000	1.1.1.8
++++ kmail/kmfolder.cpp	29 Mar 2003 03:21:40 -0000	1.2
+@@ -1454,7 +1454,8 @@
+ void KMFolder::setStatus(int idx, KMMsgStatus status)
+ {
+   KMMsgBase *msg = getMsgBase(idx);
+-  msg->setStatus(status, idx);
++  if( msg )
++    msg->setStatus(status, idx);
+ }
+ 
+ void KMFolder::setRDict(KMMsgDictREntry *rentry) {
+--- kmail/kmfoldermgr.cpp	20 Nov 2002 02:56:49 -0000	1.1.1.5
++++ kmail/kmfoldermgr.cpp	29 Mar 2003 03:21:40 -0000	1.2
+@@ -1,5 +1,4 @@
+ // kmfoldermgr.cpp
+-// $Id: kmfoldermgr.cpp,v 1.74 2002/11/14 22:05:42 mutz Exp $
+ 
+ #ifdef HAVE_CONFIG_H
+ 	#include <config.h>
+--- kmail/kmmessage.cpp	3 Mar 2003 03:25:00 -0000	1.1.1.11
++++ kmail/kmmessage.cpp	29 Mar 2003 03:21:40 -0000	1.2
+@@ -81,6 +81,7 @@
+     mTransferInProgress(false),
+     mDecodeHTML(false),
+     mCodec(0),
++    mAutoDetectCodec(true),
+     mUnencryptedMsg(0)
+ {
+ }
+@@ -102,6 +103,7 @@
+   if( other.mMsg )
+     mMsg = new DwMessage( *(other.mMsg) );
+   mCodec = other.mCodec;
++  mAutoDetectCodec = other.mAutoDetectCodec;
+   mDecodeHTML = other.mDecodeHTML;
+   mIsComplete = false;//other.mIsComplete;
+   mTransferInProgress = other.mTransferInProgress;
+@@ -166,6 +168,7 @@
+   mNeedsAssembly = FALSE;
+   mMsg = new DwMessage;
+   mCodec = 0;
++  mAutoDetectCodec = true;
+   mDecodeHTML = FALSE;
+   mIsComplete = FALSE;
+   mTransferInProgress = FALSE;
+@@ -188,6 +191,7 @@
+   mNeedsAssembly = FALSE;
+   mMsg = new DwMessage;
+   mCodec = 0;
++  mAutoDetectCodec = true;
+   mDecodeHTML = FALSE;
+   mIsComplete = FALSE;
+   mTransferInProgress = FALSE;
+@@ -686,6 +690,7 @@
+ void KMMessage::parseTextStringFromDwPart( DwBodyPart * mainBody,
+ 					   DwBodyPart * firstBodyPart,
+                                            QCString& parsedString,
++                                           const QTextCodec*& codec,
+                                            bool& isHTML ) const
+ {
+   // get a valid CryptPlugList
+@@ -721,7 +726,7 @@
+   kdDebug(5006) << "\n\n======= KMMessage::parseTextStringFromDwPart()   -    "
+                 << QString( curNode ? "text part found!\n" : "sorry, no text node!\n" ) << endl;
+   if( curNode ) {
+-    isHTML = DwMime::kSubtypeHtml == curNode->type();
++    isHTML = DwMime::kSubtypeHtml == curNode->subType();
+     // now parse the TEXT message part we want to quote
+     KMReaderWin::parseObjectTree( 0,
+                                   &parsedString,
+@@ -730,6 +735,7 @@
+                                   true,
+                                   false,
+                                   true );
++    codec = curNode->msgPart().codec();
+   }
+   kdDebug(5006) << "\n\n======= KMMessage::parseTextStringFromDwPart()   -    parsed string:\n\""
+                 << QString( parsedString + "\"\n\n" ) << endl;
+@@ -744,128 +750,58 @@
+ {
+   QString result;
+   QString headerStr;
+-  QRegExp reNL("\\n");
+   QString indentStr;
+-  int i;
+-  bool clearSigned = false;
+-
+-  QTextCodec *codec = mCodec;
+-  if (!codec)
+-  {
+-    QCString cset = charset();
+-    if (!cset.isEmpty())
+-      codec = KMMsgBase::codecForName(cset);
+-    if (!codec) codec = kernel->networkCodec();
+-  }
+ 
+   indentStr = formatString(aIndentStr);
+   headerStr = formatString(aHeaderStr);
+ 
+-
+-  QCString parsedString;
+-  bool isHTML = false;
+-
+   // Quote message. Do not quote mime message parts that are of other
+   // type than "text".
+-  if (numBodyParts() == 0 || !selection.isEmpty() ) {
+-    if( !selection.isEmpty() ) {
+-      result = selection;
+-    } else {
++  if( !selection.isEmpty() ) {
++    result = selection;
++  }
++  else {
++    QCString parsedString;
++    bool isHTML = false;
++    bool clearSigned = false;
++    const QTextCodec* codec = 0;
+ 
++    if( numBodyParts() == 0 ) {
+       DwBodyPart * mainBody = 0;
+       DwBodyPart * firstBodyPart = getFirstDwBodyPart();
+       if( !firstBodyPart ) {
+         mainBody = new DwBodyPart(((KMMessage*)this)->asDwString(), 0);
+ 	mainBody->Parse();
+       }
+-      parseTextStringFromDwPart( mainBody, firstBodyPart, parsedString, isHTML );
+-
+-      if( !parsedString.isEmpty() ) {
+-
+-        Kpgp::Module* pgp = Kpgp::Module::getKpgp();
+-        assert(pgp != 0);
+-
+-        QPtrList<Kpgp::Block> pgpBlocks;
+-        QStrList nonPgpBlocks;
+-        if( allowDecryption &&
+-            Kpgp::Module::prepareMessageForDecryption( parsedString,
+-                                                       pgpBlocks, nonPgpBlocks ) )
+-        {
+-          // Only decrypt/strip off the signature if there is only one OpenPGP
+-          // block in the message
+-          if( pgpBlocks.count() == 1 )
+-          {
+-            Kpgp::Block* block = pgpBlocks.first();
+-            if( ( block->type() == Kpgp::PgpMessageBlock ) ||
+-                ( block->type() == Kpgp::ClearsignedBlock ) )
+-            {
+-                if( block->type() == Kpgp::PgpMessageBlock )
+-                // try to decrypt this OpenPGP block
+-                block->decrypt();
+-                else
+-                {
+-                // strip off the signature
+-                block->verify();
+-                clearSigned = true;
+-                }
+-
+-                result = codec->toUnicode( nonPgpBlocks.first() )
+-                    + codec->toUnicode( block->text() )
+-                    + codec->toUnicode( nonPgpBlocks.last() );
+-            }
+-          }
+-        }
+-      }
+-      if( result.isEmpty() )
+-        result = codec->toUnicode( parsedString );
+-      if( mDecodeHTML && isHTML )
+-      {
+-        KHTMLPart htmlPart;
+-        htmlPart.setOnlyLocalReferences(true);
+-        htmlPart.setMetaRefreshEnabled(false);
+-        htmlPart.setPluginsEnabled(false);
+-        htmlPart.setJScriptEnabled(false);
+-        htmlPart.setJavaEnabled(false);
+-        htmlPart.begin();
+-        htmlPart.write(result);
+-        htmlPart.end();
+-        htmlPart.selectAll();
+-        result = htmlPart.selectedText();
+-      }
++      parseTextStringFromDwPart( mainBody, firstBodyPart, parsedString, codec,
++                                 isHTML );
++    }
++    else {
++      DwBodyPart *dwPart = getFirstDwBodyPart();
++      if( dwPart )
++        parseTextStringFromDwPart( 0, dwPart, parsedString, codec, isHTML );
+     }
+ 
+-    // Remove blank lines at the beginning
+-    for( i = 0; i < (int)result.length() && result[i] <= ' '; i++ );
+-    while (i > 0 && result[i-1] == ' ') i--;
+-    result.remove(0,i);
+-
+-    if (aStripSignature)
+-        stripSignature(result, clearSigned);
+-
+-    result.replace(reNL, '\n' + indentStr);
+-    result = indentStr + result + '\n';
+-
+-    if (sSmartQuote)
+-      smartQuote(result, sWrapCol);
+-
+-  } else {
+-    result = "";
+-
+-    DwBodyPart *dwPart = getFirstDwBodyPart();
+-    if( dwPart )
+-      parseTextStringFromDwPart( 0, dwPart, parsedString, isHTML );
++    if( !mAutoDetectCodec )
++      codec = mCodec;
++    if( !codec ) {
++      QCString cset = charset();
++      if( !cset.isEmpty() )
++        codec = KMMsgBase::codecForName( cset );
++      if( !codec )
++        codec = kernel->networkCodec();
++    }
+ 
+-    if( !parsedString.isEmpty() )
+-    {
++    if( !parsedString.isEmpty() ) {
+       Kpgp::Module* pgp = Kpgp::Module::getKpgp();
+       assert(pgp != 0);
+-      QString part;
+ 
+       QPtrList<Kpgp::Block> pgpBlocks;
+       QStrList nonPgpBlocks;
+       if( allowDecryption &&
+           Kpgp::Module::prepareMessageForDecryption( parsedString,
+-                                                     pgpBlocks, nonPgpBlocks ) )
++                                                     pgpBlocks,
++                                                     nonPgpBlocks ) )
+       {
+         // Only decrypt/strip off the signature if there is only one OpenPGP
+         // block in this message part
+@@ -875,43 +811,59 @@
+           if( ( block->type() == Kpgp::PgpMessageBlock ) ||
+               ( block->type() == Kpgp::ClearsignedBlock ) )
+           {
+-            if( block->type() == Kpgp::PgpMessageBlock )
++            if( block->type() == Kpgp::PgpMessageBlock ) {
+               // try to decrypt this OpenPGP block
+               block->decrypt();
+-            else
+-            {
++            }
++            else {
+               // strip off the signature
+               block->verify();
+               clearSigned = true;
+             }
+ 
+-            part = codec->toUnicode( nonPgpBlocks.first() )
+-                 + codec->toUnicode( block->text() )
+-                 + codec->toUnicode( nonPgpBlocks.last() );
++            result = codec->toUnicode( nonPgpBlocks.first() )
++                   + codec->toUnicode( block->text() )
++                   + codec->toUnicode( nonPgpBlocks.last() );
+           }
+         }
+       }
+-      if( part.isEmpty() )
+-      {
+-        // part = codec->toUnicode( msgPart.bodyDecoded() );
+-        //	    debug ("part\n" + part ); inexplicably crashes -sanders
+-        part = codec->toUnicode( parsedString );
+-      }
+-
+-      if (aStripSignature)
+-        stripSignature(part, clearSigned);
++      if( result.isEmpty() )
++        result = codec->toUnicode( parsedString );
++    }
+ 
+-      part.replace(reNL, '\n' + indentStr);
+-      part = indentStr + part + '\n';
+-      if (sSmartQuote)
+-        smartQuote(part, sWrapCol);
+-      result += part;
++    if( !result.isEmpty() && mDecodeHTML && isHTML ) {
++      KHTMLPart htmlPart;
++      htmlPart.setOnlyLocalReferences( true );
++      htmlPart.setMetaRefreshEnabled( false );
++      htmlPart.setPluginsEnabled( false );
++      htmlPart.setJScriptEnabled( false );
++      htmlPart.setJavaEnabled( false );
++      htmlPart.begin();
++      htmlPart.write( result );
++      htmlPart.end();
++      htmlPart.selectAll();
++      result = htmlPart.selectedText();
+     }
++
++    if( aStripSignature )
++      stripSignature( result, clearSigned );
+   }
+ 
+-  QCString c = QString(headerStr + result).utf8();
++  // Remove blank lines at the beginning:
++  // 1. find first non space, non linebreak character
++  int i = result.find( QRegExp( "[^\\s]" ) );
++  // 2. find the start of the current line
++  i = result.findRev( "\n", i );
++  if( i >= 0 )
++    result.remove( 0, (uint)i );
++
++  result.replace( "\n", '\n' + indentStr );
++  result = indentStr + result + '\n';
++
++  if( sSmartQuote )
++    smartQuote( result, sWrapCol );
+ 
+-  return c;
++  return QString( headerStr + result ).utf8();
+ }
+ 
+ //-----------------------------------------------------------------------------
+--- kmail/kmmessage.h	3 Mar 2003 03:25:00 -0000	1.1.1.6
++++ kmail/kmmessage.h	29 Mar 2003 03:21:40 -0000	1.2
+@@ -191,6 +191,7 @@
+   virtual void parseTextStringFromDwPart( DwBodyPart * mainBody,
+ 					  DwBodyPart * firstBodyPart,
+                                           QCString& parsedString,
++                                          const QTextCodec*& codec,
+                                           bool& isHTML ) const;
+ 
+   /** Returns message body with quoting header and indented by the
+@@ -556,12 +557,12 @@
+   virtual void setCharset(const QCString& aStr);
+ 
+   /** Get the charset the user selected for the message to display */
+-  virtual QTextCodec* codec(void) const
++  virtual const QTextCodec* codec(void) const
+   { return mCodec; }
+ 
+   /** Set the charset the user selected for the message to display */
+-  virtual void setCodec(QTextCodec* aCodec)
+-  { mCodec = aCodec; }
++  virtual void setCodec( const QTextCodec* aCodec, bool autoDetect )
++  { mCodec = aCodec; mAutoDetectCodec = autoDetect; }
+ 
+   /** Allow decoding of HTML for quoting */
+   void setDecodeHTML(bool aDecodeHTML)
+@@ -649,7 +650,8 @@
+   bool       mNeedsAssembly, mIsComplete, mTransferInProgress, mDecodeHTML;
+   static int sHdrStyle;
+   static QString sForwardStr;
+-  QTextCodec* mCodec;
++  const QTextCodec* mCodec;
++  bool mAutoDetectCodec;
+ 
+   QString mFileName;
+   off_t mFolderOffset;
+--- kmail/kmreaderwin.cpp	13 Mar 2003 21:14:57 -0000	1.1.1.13
++++ kmail/kmreaderwin.cpp	29 Mar 2003 03:21:40 -0000	1.2
+@@ -433,12 +433,11 @@
+             resultString = cstr;
+             if( !reader ) {
+               bDone = true;
+-            } else if( reader->mAttachmentStyle == InlineAttmnt ||
+-                       (reader->mAttachmentStyle == SmartAttmnt &&
+-                        !curNode->isAttachment()) ||
+-                       (reader->mAttachmentStyle == IconicAttmnt &&
+-                        reader->mIsFirstTextPart) ||
+-                       showOneMimePart )
++            } else if( reader->mIsFirstTextPart
++                       || reader->mAttachmentStyle == InlineAttmnt
++                       || ( reader->mAttachmentStyle == SmartAttmnt
++                            && curNode->hasContentDispositionInline() )
++                       || showOneMimePart )
+             {
+               reader->mIsFirstTextPart = false;
+               if( reader->htmlMail() ) {
+@@ -501,17 +500,46 @@
+ kdDebug(5006) << "default " << endl;
+               QCString cstr( curNode->msgPart().bodyDecoded() );
+ //              resultingRawData += cstr;
+-              if( !reader || reader->mAttachmentStyle == InlineAttmnt ||
+-                 (reader->mAttachmentStyle == SmartAttmnt &&
+-                  !curNode->isAttachment()) ||
+-                  (reader->mAttachmentStyle == IconicAttmnt &&
+-                   reader->mIsFirstTextPart) ||
+-                   showOneMimePart )
++              if( !reader
++                  || reader->mIsFirstTextPart
++                  || reader->mAttachmentStyle == InlineAttmnt
++                  || ( reader->mAttachmentStyle == SmartAttmnt
++                       && curNode->hasContentDispositionInline() )
++                  || showOneMimePart )
+               {
+-                if (reader) reader->mIsFirstTextPart = false;
+-                if( reader && curNode->isAttachment() && !showOneMimePart )
+-                  reader->queueHtml("<br><hr><br>");
+-                if( reader ){
++                if( reader ) {
++                  if( !reader->mIsFirstTextPart && !showOneMimePart ) {
++                    QString label = curNode->msgPart().fileName();
++                    if( label.isEmpty() )
++                      label = curNode->msgPart().name();
++                    if( label.isEmpty() )
++                      label = "unnamed";
++                    label = KMMessage::quoteHtmlChars( label, true );
++
++                    QString comment = curNode->msgPart().contentDescription();
++                    comment = KMMessage::quoteHtmlChars( comment, true );
++
++                    QString fileName =
++                      reader->writeMessagePartToTempFile( &curNode->msgPart(),
++                                                          curNode->nodeId() );
++
++                    QString htmlStr;
++                    QString dir = ( QApplication::reverseLayout() ? "rtl" : "ltr" );
++
++                    htmlStr += "<table cellspacing=\"1\" class=\"textAtm\">"
++                               "<tr class=\"textAtmH\"><td dir=\"" + dir + "\">";
++                    if( !fileName.isEmpty() )
++                      htmlStr += "<a href=\"" + QString("file:")
++                               + KURL::encode_string( fileName ) + "\">"
++                               + label + "</a>";
++                    else
++                      htmlStr += label;
++                    if( !comment.isEmpty() )
++                      htmlStr += "<br>" + comment;
++                    htmlStr += "</td></tr><tr class=\"textAtmB\"><td>";
++
++                    reader->queueHtml( htmlStr );
++                  }
+                   // process old style not-multipart Mailman messages to
+                   // enable verification of the embedded messages' signatures
+                   if( DwMime::kSubtypePlain == curNode_replacedSubType &&
+@@ -639,6 +667,10 @@
+                                           curNode->trueFromAddress(),
+                                           inlineSignatureState,
+                                           inlineEncryptionState );
++                  if( !reader->mIsFirstTextPart && !showOneMimePart ) {
++                    reader->queueHtml( "</td></tr></table>" );
++                  }
++                  reader->mIsFirstTextPart = false;
+                 }
+                 resultString = cstr;
+                 bDone = true;
+@@ -996,9 +1028,11 @@
+           switch( curNode_replacedSubType ){
+           case DwMime::kSubtypeRfc822: {
+ kdDebug(5006) << "RfC 822" << endl;
+-              if( reader && reader->mAttachmentStyle != InlineAttmnt &&
+-                  (reader->mAttachmentStyle != SmartAttmnt ||
+-                   curNode->isAttachment()) && !showOneMimePart)
++              if( reader
++                  && reader->mAttachmentStyle != InlineAttmnt
++                  && ( reader->mAttachmentStyle != SmartAttmnt
++                       || !curNode->hasContentDispositionInline() )
++                  && !showOneMimePart )
+                  break;
+ 
+               if( curNode->mChild ) {
+@@ -1367,20 +1401,17 @@
+         break;
+       }
+ 
+-      if( !bDone && reader &&
+-          ( reader->mAttachmentStyle != HideAttmnt || 
+-            ( curNode && !curNode->isAttachment() ) || 
+-            showOneMimePart ) ) {
++      if( !bDone
++          && reader
++          && ( reader->mAttachmentStyle != HideAttmnt
++               || showOneMimePart 
++               || !curNode->mRoot /* message is an attachment */ ) ) {
+         bool asIcon = true;
+         if (showOneMimePart)
+         {
+-          asIcon = ( curNode->msgPart().contentDisposition().find("inline") < 0 );
+-        }
+-        else if (bNeverDisplayInline)
+-        {
+-          asIcon = true;
++          asIcon = !curNode->hasContentDispositionInline();
+         }
+-        else
++        else if (!bNeverDisplayInline)
+         {
+           switch (reader->mAttachmentStyle)
+           {
+@@ -1391,7 +1422,7 @@
+               asIcon = FALSE;
+               break;
+             case SmartAttmnt:
+-              asIcon = ( curNode->msgPart().contentDisposition().find("inline") < 0 );
++              asIcon = !curNode->hasContentDispositionInline();
+               break;
+             case HideAttmnt: {
+               // the node is the message! show it!
+@@ -1399,10 +1430,12 @@
+             }
+           }
+         }
+-        bool forcedIcon = !isImage && curNode->type() != DwMime::kTypeText;
+-        if (forcedIcon) asIcon = TRUE;
++        // neither image nor text -> show as icon
++        if (!isImage && curNode->type() != DwMime::kTypeText)
++          asIcon = TRUE;
+         if( asIcon ) {
+-          if (!forcedIcon || reader->mAttachmentStyle != HideAttmnt)
++          if( reader->mAttachmentStyle != HideAttmnt
++              || showOneMimePart )
+             reader->writePartIcon(&curNode->msgPart(), curNode->nodeId());
+         } else if (isImage) {
+           reader->mInlineImage = true;
+@@ -2204,7 +2237,7 @@
+   mLastStatus = (aMsg) ? aMsg->status() : KMMsgStatusUnknown;
+   if (aMsg)
+   {
+-    aMsg->setCodec(mCodec);
++    aMsg->setCodec(mCodec, mAutoDetectEncoding);
+     aMsg->setDecodeHTML(htmlMail());
+   }
+ 
+@@ -2447,7 +2480,7 @@
+ 
+   if (!mCodec)
+     mCodec = QTextCodec::codecForName("iso8859-1");
+-  msg->setCodec(mCodec);
++  msg->setCodec(mCodec, mAutoDetectEncoding);
+ 
+ 
+ //      QString( "table.rfc822 { width: 100%; "
+@@ -2482,6 +2515,8 @@
+ 
+ 
+   QColorGroup cg = kapp->palette().active();
++  QString fgColor = mPrinting ? QString("#000000") : c1.name();
++  QString bgColor = mPrinting ? QString("#FFFFFF") : c4.name();
+   queueHtml("<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 "
+ 	    "Transitional//EN\">\n<html><head><title></title>"
+ 	    "<style type=\"text/css\">" +
+@@ -2491,8 +2526,8 @@
+       : QString("body { font-family: \"%1\"; font-size: %2px; "
+         "color: %3; background-color: %4; }\n")
+         .arg( mBodyFamily ).arg( pointsToPixel(fntSize) )
+-        .arg( mPrinting ? "#000000" : c1.name() )
+-        .arg( mPrinting ? "#FFFFFF" : c4.name() ) ) +
++        .arg( fgColor )
++        .arg( bgColor ) ) +
+     ((mPrinting) ? QString("a { color: #000000; text-decoration: none; }")
+       : QString("a { color: %1; ").arg(c2.name()) +
+         "text-decoration: none; }" + // just playing
+@@ -2507,21 +2542,28 @@
+         .arg( cPgpEncrB.name() ) +
+ 
+         QString( "table.rfc822 { width: 100%; "
+-                 "border-top-style: solid; "
+-                 "border-top-width: 1px; "
+-                 "border-top-color: black; "
+-                 "border-left-style: solid; "
+-                 "border-left-width: 1px; "
+-                 "border-left-color: black; "
+-                 "border-bottom-style: solid; "
+-                 "border-bottom-width: 1px; "
+-                 "border-bottom-color: black; "
+-                 "border-right-style: hidden; "
+-                 "border-right-width: 0px; "
+-                 "padding: 0px; } \n" ) +
++                 "background-color: %1; "
++                 "border: solid 1px black; "
++                 "margin-top: 10pt; "
++                 "margin-bottom: 10pt; } \n" )
++        .arg( bgColor ) +
+         QString( "tr.rfc822H { font-weight: bold; }\n" ) +
+         QString( "tr.rfc822B { font-weight: normal; }\n" ) +
+ 
++        QString( "table.textAtm { width: 100%; "
++                 "background-color: %1; "
++                 "border-width: 0px; "
++                 "margin-top: 10pt; "
++                 "margin-bottom: 10pt; } \n" )
++        .arg( fgColor ) +
++        QString( "tr.textAtmH { background-color: %1; "
++                 "font-weight: normal; }\n" )
++        .arg( bgColor ) +
++        QString( "tr.textAtmB { background-color: %1; "
++                 "font-weight: normal; }\n" )
++        .arg( bgColor ) +
++        QString( "tr.textAtmH td { padding: 3px; }\n"
++                 "tr.textAtmB td { padding: 3px; }\n" ) +
+ 
+         QString( "table.signOkKeyOk { width: 100%; background-color: %1; "
+                  "border-width: 0px; }\n" )
+@@ -4552,81 +4594,107 @@
+ }
+ 
+ 
++//-----------------------------------------------------------------------------
++QString KMReaderWin::writeMessagePartToTempFile( const KMMessagePart* aMsgPart,
++                                                 int aPartNum )
++{
++  QString fileName = aMsgPart->fileName();
++  if( fileName.isEmpty() )
++    fileName = aMsgPart->name();
++
++  //--- Sven's save attachments to /tmp start ---
++  KTempFile *tempFile = new KTempFile( QString::null,
++                                       "." + QString::number( aPartNum ) );
++  tempFile->setAutoDelete( true );
++  QString fname = tempFile->name();
++  delete tempFile;
++
++  if( ::access( QFile::encodeName( fname ), W_OK ) != 0 )
++    // Not there or not writable
++    if( ::mkdir( QFile::encodeName( fname ), 0 ) != 0
++        || ::chmod( QFile::encodeName( fname ), S_IRWXU ) != 0 )
++      fname = QString::null; //failed create
++
++  if( !fname.isNull() ) {
++    mTempDirs.append( fname );
++    // strip off a leading path
++    int slashPos = fileName.findRev( '/' );
++    if( -1 != slashPos )
++      fileName = fileName.mid( slashPos + 1 );
++    if( fileName.isEmpty() )
++      fileName = "unnamed";
++    fname += "/" + fileName;
++
++    if( kByteArrayToFile( aMsgPart->bodyDecodedBinary(), fname, false, false,
++                          false ) )
++      mTempFiles.append( fname );
++    else
++      fname = QString::null;
++  }
++
++  return fname;
++}
++
+ 
+ //-----------------------------------------------------------------------------
+-void KMReaderWin::writePartIcon(KMMessagePart* aMsgPart, int aPartNum,
+-  bool quiet)
++void KMReaderWin::writePartIcon( KMMessagePart* aMsgPart, int aPartNum,
++                                 bool quiet )
+ {
+   QString iconName, href, label, comment, contDisp;
+-  QString fileName;
+ 
+-  if(aMsgPart == 0) {
++  if( aMsgPart == 0 ) {
+     kdDebug(5006) << "writePartIcon: aMsgPart == 0\n" << endl;
+     return;
+   }
+ 
+   kdDebug(5006) << "writePartIcon: PartNum: " << aPartNum << endl;
+ 
++  label = aMsgPart->fileName();
++  if( label.isEmpty() )
++    label = aMsgPart->name();
++  if( label.isEmpty() )
++    label = "unnamed";
++  label = KMMessage::quoteHtmlChars( label, true );
++
+   comment = aMsgPart->contentDescription();
+   comment = KMMessage::quoteHtmlChars( comment, true );
+ 
+-  fileName = aMsgPart->fileName();
+-  if (fileName.isEmpty()) fileName = aMsgPart->name();
+-  label = KMMessage::quoteHtmlChars( fileName, true );
+-
+-//--- Sven's save attachments to /tmp start ---
+-  KTempFile *tempFile = new KTempFile(QString::null,
+-    "." + QString::number(aPartNum));
+-  tempFile->setAutoDelete(true);
+-  QString fname = tempFile->name();
+-  delete tempFile;
+-
+-  bool ok = true;
++  QString fileName = writeMessagePartToTempFile( aMsgPart, aPartNum );
+ 
+-  if (access(QFile::encodeName(fname), W_OK) != 0) // Not there or not writable
+-    if (mkdir(QFile::encodeName(fname), 0) != 0
+-      || chmod (QFile::encodeName(fname), S_IRWXU) != 0)
+-        ok = false; //failed create
+-
+-  if (ok)
+-  {
+-    mTempDirs.append(fname);
+-    //fileName.replace(QRegExp("[/\"\']"),"");
+-    // strip off a leading path
+-    int slashPos = fileName.findRev( '/' );
+-    if( -1 != slashPos )
+-      fileName = fileName.mid( slashPos + 1 );
+-    if (fileName.isEmpty()) fileName = "unnamed";
+-    fname += "/" + fileName;
+-
+-    if (!kByteArrayToFile(aMsgPart->bodyDecodedBinary(), fname, false, false, false))
+-      ok = false;
+-    mTempFiles.append(fname);
+-  }
+-  if (ok)
+-  {
+-    href = QString("file:")+KURL::encode_string(fname);
++  if( !fileName.isEmpty() ) {
++    href = QString("file:") + KURL::encode_string( fileName );
+     //debug ("Wrote attachment to %s", href.data());
+   }
+   else {
+-    //--- Sven's save attachments to /tmp end ---
+-    href = QString("part://%1").arg(aPartNum+1);
++    href = QString("part://%1").arg( aPartNum + 1 );
+   }
+ 
+   // sven: for viewing images inline
+-  if (mInlineImage)
++  if( mInlineImage )
+     iconName = href;
+-  else
+-    iconName = aMsgPart->iconName();
+-  if (iconName.right(14)=="mime_empty.png")
+-  {
+-    aMsgPart->magicSetType();
++  else {
+     iconName = aMsgPart->iconName();
++    if( iconName.right( 14 ) == "mime_empty.png" ) {
++      aMsgPart->magicSetType();
++      iconName = aMsgPart->iconName();
++    }
+   }
+-  if (!quiet)
+-    queueHtml("<table><tr><td><a href=\"" + href + "\"><img src=\"" +
+-                   iconName + "\" border=\"0\">" + label +
+-                   "</a></td></tr></table>" + comment + "<br>");
++
++  if( !quiet )
++    if( mInlineImage )
++      // show the filename of the image below the embedded image
++      queueHtml( "<div><a href=\"" + href + "\">"
++                 "<img src=\"" + iconName + "\" border=\"0\"></a>"
++                 "</div>"
++                 "<div><a href=\"" + href + "\">" + label + "</a>"
++                 "</div>"
++                 "<div>" + comment + "</div><br>" );
++    else
++      // show the filename next to the image
++      queueHtml( "<div><a href=\"" + href + "\"><img src=\"" +
++                 iconName + "\" border=\"0\">" + label +
++                 "</a></div>"
++                 "<div>" + comment + "</div><br>" );
+ }
+ 
+ 
+--- kmail/kmreaderwin.h	3 Mar 2003 03:25:02 -0000	1.1.1.7
++++ kmail/kmreaderwin.h	29 Mar 2003 03:21:40 -0000	1.2
+@@ -364,6 +364,12 @@
+     string. May contain body parts. */
+   virtual void writeHTMLStr(const QString& aStr);
+ 
++  /** Writes the given message part to a temporary file and returns the
++      name of this file or QString::null if writing failed.
++  */
++  QString writeMessagePartToTempFile( const KMMessagePart* msgPart,
++                                      int partNumber );
++
+   /** Create a nice icon with comment and name for the given
+     body part, appended to the HTML view. Content type and subtype
+     are set afterwards if they were not before. */
+--- kmail/linklocator.h	10 Jul 2002 05:15:29 -0000	1.1.1.1
++++ kmail/linklocator.h	29 Mar 2003 03:21:40 -0000	1.2
+@@ -33,7 +33,6 @@
+  * where more control is needed.
+  *
+  * @short Identifies URLs and email addresses embedded in plaintext.
+- * @version $Id: linklocator.h,v 1.1 2002/04/22 01:33:44 davec Exp $
+  * @author Dave Corrie <kde@davecorrie.com>
+  */
+ class LinkLocator
+--- kmail/main.cpp	13 Mar 2003 21:14:58 -0000	1.1.1.8
++++ kmail/main.cpp	29 Mar 2003 03:21:40 -0000	1.2
+@@ -178,9 +178,9 @@
+     if (!to.isEmpty())
+       to += ", ";
+      if (strncasecmp(args->arg(i),"mailto:",7)==0)
+-       to += args->arg(i);
++       to += args->url(i).path();
+      else
+-       to += args->arg(i);
++       to += QString::fromLocal8Bit( args->arg(i) );
+      mailto = true;
+   }
+ 
+--- kmail/partNode.cpp	3 Mar 2003 03:25:04 -0000	1.1.1.6
++++ kmail/partNode.cpp	29 Mar 2003 03:21:40 -0000	1.2
+@@ -1,6 +1,4 @@
+ /*
+-  $Id: partNode.cpp,v 1.25.2.1 2003/02/15 16:21:00 kloecker Exp $
+-
+   a node in a MIME tree.
+ 
+   Copyright (C) 2002 by Klarälvdalens Datakonsult AB
+@@ -368,11 +366,24 @@
+ 
+ bool partNode::isAttachment() const
+ {
+-  if (!dwPart())
+-	  return false;
++  if( !dwPart() )
++    return false;
++  DwHeaders& headers = dwPart()->Headers();
++  if( headers.HasContentDisposition() )
++    return ( headers.ContentDisposition().DispositionType()
++             == DwMime::kDispTypeAttachment );
++  else
++    return false;
++}
++
++bool partNode::hasContentDispositionInline() const
++{
++  if( !dwPart() )
++    return false;
+   DwHeaders& headers = dwPart()->Headers();
+   if( headers.HasContentDisposition() )
+-    return (headers.ContentDisposition().DispositionType() == DwMime::kDispTypeAttachment);
++    return ( headers.ContentDisposition().DispositionType()
++             == DwMime::kDispTypeInline );
+   else
+     return false;
+ }
+--- kmail/partNode.h	3 Mar 2003 03:25:04 -0000	1.1.1.5
++++ kmail/partNode.h	29 Mar 2003 03:21:40 -0000	1.2
+@@ -1,6 +1,4 @@
+ /*
+-  $Id: partNode.h,v 1.12.2.1 2003/02/15 16:21:00 kloecker Exp $
+-
+   a node in a MIME tree.
+ 
+   Copyright (C) 2002 by Klarälvdalens Datakonsult AB
+@@ -277,6 +275,8 @@
+     }
+ 
+     bool isAttachment() const;
++
++    bool hasContentDispositionInline() const;
+ 
+     const QString& trueFromAddress() const;
+ 
+--- kmailcvt/filter_plain.cxx	14 Aug 2002 19:13:56 -0000	1.1.1.2
++++ kmailcvt/filter_plain.cxx	14 Aug 2002 19:36:48 -0000	1.3
+@@ -24,7 +24,6 @@
+ #include <kfiledialog.h>
+ #include <kdirlister.h>
+ #include <qregexp.h>
+-#include <libgen.h>
+ #include <qdir.h>
+ 
+ #include "filter_plain.hxx"
+--- knewsticker/knewsticker.upd	25 Jun 2002 03:12:39 -0000	1.1.1.1
++++ knewsticker/knewsticker.upd	29 Mar 2003 03:21:43 -0000	1.2
+@@ -6,4 +6,8 @@
+ Id=KNewsTicker-0.2-Rename-KDE3
+ File=knewstickerappletrc,knewsticker_appletrc
+ AllGroups
++# Update for KDE 3.1, yet another anming scheme.
++Id=KNewsTicker-0.2-Rename-KDE3.1
++File=knewsticker_appletrc,knewsticker_panelappletrc
++AllGroups
+ # End of file
+--- knewsticker/newsscroller.cpp	10 Jul 2002 05:15:52 -0000	1.1.1.2
++++ knewsticker/newsscroller.cpp	29 Mar 2003 03:21:43 -0000	1.2
+@@ -180,7 +180,7 @@
+ 				" the list of news sources?</p><p>Press 'Yes' to add the news source to"
+ 				" the list, press 'No' to cancel and close this dialog.</p>")
+ 					.arg(newSourceUrl)) == KMessageBox::Yes) {
+-			KConfig cfg(QString::fromLatin1("knewsticker_appletrc"), false, false);
++			KConfig cfg(QString::fromLatin1("knewsticker_panelappletrc"), false, false);
+ 			ConfigAccess configFrontend(&cfg);
+ 			QStringList newsSources = configFrontend.newsSources();
+ 
+--- knewsticker/kcmnewsticker/kcmnewsticker.cpp	29 Oct 2002 17:41:08 -0000	1.1.1.4
++++ knewsticker/kcmnewsticker/kcmnewsticker.cpp	29 Mar 2003 03:21:43 -0000	1.2
+@@ -78,13 +78,7 @@
+ 	nsd.maxArticles = text(2).toUInt();
+ 	nsd.icon = m_icon;
+ 	nsd.isProgram = m_isProgram;
+-	for (unsigned int i = 0; i < DEFAULT_SUBJECTS; i++) {
+-		NewsSourceBase::Subject subject = static_cast<NewsSourceBase::Subject>(i);
+-		if (m_parent->text(0) == NewsSourceBase::subjectText(subject)) {
+-			nsd.subject = subject;
+-			break;
+-		}
+-	}
++	nsd.subject = m_subject;
+ 	return nsd;
+ }
+ 
+@@ -97,6 +91,7 @@
+ 
+ 	m_icon = nsd.icon;
+ 	m_isProgram = nsd.isProgram;
++	m_subject = nsd.subject;
+ 	m_newsIconMgr->getIcon(m_icon);
+ }
+ 
+@@ -524,6 +519,28 @@
+ 
+ void KCMNewsTicker::slotModifyNewsSource(const NewsSourceBase::Data &nsd)
+ {
++	if (m_modifyItem->data().subject != nsd.subject) {
++		QListViewItem *parentItem = m_modifyItem->parentItem();
++		parentItem->takeItem(m_modifyItem);
++		if (parentItem->childCount() == 0)
++			delete parentItem;
++
++		CategoryItem *catItem = 0L;
++
++		for (QListViewItemIterator it(m_child->lvNewsSources); it.current(); it++) {
++			if (it.current()->text(0) == NewsSourceBase::subjectText(nsd.subject)) {
++				catItem = static_cast<CategoryItem *>(it.current());
++				break;
++			}
++		}
++
++		if (!catItem)
++			catItem = new CategoryItem(m_child->lvNewsSources,
++			                           NewsSourceBase::subjectText(nsd.subject));
++
++		catItem->insertItem(m_modifyItem);
++	}
++
+ 	m_modifyItem->setData(nsd);
+ 
+ 	// FIXME: Only emit changed(true) in case nsd != m_modifyItem->data()
+--- knewsticker/kcmnewsticker/kcmnewsticker.h	25 Jun 2002 03:12:39 -0000	1.1.1.1
++++ knewsticker/kcmnewsticker/kcmnewsticker.h	29 Mar 2003 03:21:43 -0000	1.2
+@@ -44,6 +44,8 @@
+ 		void setData(const NewsSourceBase::Data &);
+ 
+ 		void setOn(bool);
++
++		QListViewItem *parentItem() { return QCheckListItem::parent(); }
+ 	
+ 	signals:
+ 		void toggled();
+@@ -54,6 +56,7 @@
+ 	private:
+ 		QString      m_icon;
+ 		bool         m_isProgram;
++		NewsSourceBase::Subject m_subject;
+ 		CategoryItem *m_parent;
+ 		NewsIconMgr  *m_newsIconMgr;
+ };
+--- kpf/src/WebServer.cpp	15 Jan 2003 05:14:48 -0000	1.1.1.6
++++ kpf/src/WebServer.cpp	27 Nov 2002 02:26:50 -0000	1.5
+@@ -230,8 +230,13 @@
+         fd,
+         SOL_SOCKET,
+         SO_REUSEADDR,
+-        ( char* )&on,
+-        sizeof( on ) );
++        reinterpret_cast<const void *>(&on),
++#ifdef __osf__
++        (size_t) sizeof(on)
++#else
++	(socklen_t) sizeof(on)
++#endif
++      );
+ 
+     on = 0;
+ 
+@@ -240,8 +245,13 @@
+         fd,
+         SOL_SOCKET,
+         SO_LINGER,
+-        ( char* ) &on,
+-        sizeof( on ) );
++        reinterpret_cast<const void *>(&on),
++#ifdef __osf__
++        (size_t) sizeof(on)
++#else
++        (socklen_t) sizeof(on)
++#endif
++      );
+ 
+     Server * s = new Server(d->root, d->followSymlinks, fd, this);
+ 
+--- krdc/krdc.cpp	3 Mar 2003 03:25:39 -0000	1.1.1.5
++++ krdc/krdc.cpp	29 Mar 2003 03:21:43 -0000	1.2
+@@ -19,7 +19,6 @@
+ #include "toolbar.h"
+ #include "fullscreentoolbar.h"
+ #include "krdc.h"
+-#include "vidmode.h"
+ #include <kdebug.h>
+ #include <kapplication.h>
+ #include <kcombobox.h>
+@@ -78,7 +77,7 @@
+   m_quality(q),
+   m_encodings(encodings),
+   m_isFullscreen(wm),
+-  m_oldResolution(0),
++  m_oldResolution(),
+   m_fullscreenMinimized(false),
+   m_wasScaling(false)
+ {
+@@ -376,10 +375,11 @@
+ 	m_view->enableScaling(false);
+ 	hide();
+ 	m_oldResolution = vidmodeFullscreenSwitch(qt_xdisplay(), 
++						  m_desktopWidget.screenNumber(this),
+ 						  m_view->width(),
+ 						  m_view->height(),
+ 						  x, y);
+-	if (m_oldResolution != 0)
++	if (m_oldResolution.valid)
+ 		m_fullscreenResolution = QSize(x, y);
+ 	else
+ 		m_fullscreenResolution = QApplication::desktop()->size();
+@@ -423,7 +423,7 @@
+ 	m_ftAutoHide = !m_ftAutoHide;
+ 	setFsToolbarAutoHide(!m_ftAutoHide);
+ 
+-	if (m_oldResolution)
++	if (m_oldResolution.valid)
+ 		grabInput(qt_xdisplay(), winId());
+ 	m_view->grabKeyboard();
+ }
+@@ -440,10 +440,10 @@
+ 	m_view->enableScaling(scaling);
+ 
+ 	m_view->releaseKeyboard();
+-	if (m_oldResolution) {
++	if (m_oldResolution.valid) {
+ 		ungrabInput(qt_xdisplay());
+ 		vidmodeNormalSwitch(qt_xdisplay(), m_oldResolution);
+-		m_oldResolution = 0;
++		m_oldResolution = Resolution();
+ 	}
+ 
+ 	if (m_fsToolbar) {
+@@ -506,11 +506,11 @@
+ 	KWin::clearState(winId(), NET::StaysOnTop);
+ 
+ 	m_view->releaseKeyboard();
+-	if (m_oldResolution)
++	if (m_oldResolution.valid)
+ 		ungrabInput(qt_xdisplay());
+ 
+ 	vidmodeNormalSwitch(qt_xdisplay(), m_oldResolution);
+-	m_oldResolution = 0;
++	m_oldResolution = Resolution();
+ 	showNormal();
+ 	showMinimized();
+ 	m_fullscreenMinimized = true;
+@@ -524,10 +524,11 @@
+ 	m_fullscreenMinimized = false;
+ 	int x, y;
+ 	m_oldResolution = vidmodeFullscreenSwitch(qt_xdisplay(), 
++						  m_desktopWidget.screenNumber(this),
+ 						  m_view->width(),
+ 						  m_view->height(),
+ 						  x, y);
+-	if (m_oldResolution != 0)
++	if (m_oldResolution.valid)
+ 		m_fullscreenResolution = QSize(x, y);
+ 	else
+ 		m_fullscreenResolution = QApplication::desktop()->size();
+@@ -535,7 +536,7 @@
+ 	showFullScreen();
+ 	setGeometry(0, 0, m_fullscreenResolution.width(), 
+ 		    m_fullscreenResolution.height());
+-	if (m_oldResolution)
++	if (m_oldResolution.valid)
+ 		grabInput(qt_xdisplay(), winId());
+ 	m_view->grabKeyboard();
+ 	KWin::setState(winId(), NET::StaysOnTop);
+@@ -646,13 +647,13 @@
+ 	if (d.width() < s.width()) {
+ 		if (x == 0)
+ 			m_scrollView->scrollBy(-BUMP_SCROLL_CONSTANT, 0);
+-		else if (x >= d.width()-1)
++		else if (x == d.width()-1)
+ 			m_scrollView->scrollBy(BUMP_SCROLL_CONSTANT, 0);
+ 	}
+ 	if (d.height() < s.height()) {
+ 		if (y == 0)
+ 			m_scrollView->scrollBy(0, -BUMP_SCROLL_CONSTANT);
+-		else if (y >= d.height()-1)
++		else if (y == d.height()-1)
+ 			m_scrollView->scrollBy(0, BUMP_SCROLL_CONSTANT);
+ 	}
+ 
+--- krdc/krdc.h	29 Oct 2002 17:41:25 -0000	1.1.1.3
++++ krdc/krdc.h	29 Mar 2003 03:21:44 -0000	1.2
+@@ -25,8 +25,10 @@
+ #include <qrect.h>
+ #include <qtimer.h> 
+ #include <qpixmap.h>
++#include <qdesktopwidget.h>
+ #include "kvncview.h"
+ #include "kfullscreenpanel.h"
++#include "vidmode.h"
+ 
+ enum WindowMode {
+ 	WINDOW_MODE_AUTO,
+@@ -57,6 +59,7 @@
+                                            //     (invalid in normal mode)
+ 	QPixmap m_pinup, m_pindown;        // fs toolbar imaged for autohide button
+ 	QWidget *m_toolbar;                // toolbar in normal mode (0 in fs mode)
++	QDesktopWidget m_desktopWidget;
+ 
+ 	static const int TOOLBAR_AUTOHIDE_TIMEOUT = 2000;
+ 	bool m_ftAutoHide; // if true auto hide in fs is activated
+@@ -72,7 +75,7 @@
+ 	AppData m_appData;   // various config stuff, used before connection
+ 
+ 	WindowMode m_isFullscreen;    // fs/normal state
+-	unsigned int m_oldResolution; // conatins encoded res before fs
++	Resolution m_oldResolution;   // conatins encoded res before fs
+ 	bool m_fullscreenMinimized;   // true if minimized from fs
+ 	QSize m_fullscreenResolution; // xvidmode size (valid only in fs)
+ 	QRect m_oldWindowGeometry;    // geometry before switching to fullscreen
+--- krdc/rfbproto.h	20 Nov 2002 02:57:22 -0000	1.1.1.3
++++ krdc/rfbproto.h	20 Nov 2002 03:11:12 -0000	1.4
+@@ -43,6 +43,9 @@
+  *      messages have to be explained by comments.
+  */
+ 
++#ifndef RFBPROTO_H
++#define RFBPROTO_H
++
+ #include "vnctypes.h"
+ 
+ /*****************************************************************************
+@@ -833,3 +836,5 @@
+     rfbPointerEventMsg pe;
+     rfbClientCutTextMsg cct;
+ } rfbClientToServerMsg;
++
++#endif
+--- krdc/vidmode.cpp	10 Jul 2002 05:20:18 -0000	1.1.1.1
++++ krdc/vidmode.cpp	29 Mar 2003 03:21:44 -0000	1.2
+@@ -26,9 +26,9 @@
+ 
+ #ifdef HAVE_VIDMODE_EXTENSION
+ 
+-void vidmodeNormalSwitch(Display *dpy, int oldResolution)
++void vidmodeNormalSwitch(Display *dpy, Resolution oldResolution)
+ {
+-	if (!oldResolution)
++	if (!oldResolution.valid)
+ 		return;
+ 
+ 	XF86VidModeModeInfo **modes;
+@@ -38,13 +38,14 @@
+ 	if (!XF86VidModeQueryExtension(dpy, &eventB, &errorB))
+ 		return;
+ 
+-	XF86VidModeGetAllModeLines(dpy,0,&modecount, &modes);
++	XF86VidModeGetAllModeLines(dpy,oldResolution.screen,&modecount, &modes);
+ 	for (int i = 0; i < modecount; i++) {
+ 		int w = (*modes[i]).hdisplay;
+ 		int h = (*modes[i]).vdisplay;
+ 
+-		if (((w << 16) + h) == oldResolution) {
+-			XF86VidModeSwitchToMode(dpy,0,modes[i]);
++		if ((oldResolution.width == w) &&
++		    (oldResolution.height == h)) {
++			XF86VidModeSwitchToMode(dpy,oldResolution.screen,modes[i]);
+ 			XFlush(dpy);
+ 			XF86VidModeSetViewPort(dpy,DefaultScreen(dpy),0,0);
+ 			XFlush(dpy);
+@@ -53,7 +54,8 @@
+ 	}
+ }
+ 
+-int vidmodeFullscreenSwitch(Display *dpy, int sw, int sh, int &nx, int &ny)
++Resolution vidmodeFullscreenSwitch(Display *dpy, int screen, 
++				   int sw, int sh, int &nx, int &ny)
+ {
+ 	XF86VidModeModeInfo **modes;
+ 	int modecount;
+@@ -61,16 +63,19 @@
+ 	int bestw, besth;
+ 	int eventB, errorB;
+ 
++	if (screen < 0)
++		return Resolution();
++
+ 	if (!XF86VidModeQueryExtension(dpy, &eventB, &errorB))
+-		return 0;
++		return Resolution();
+ 
+-	XF86VidModeGetAllModeLines(dpy,0,&modecount, &modes);
++	XF86VidModeGetAllModeLines(dpy,screen,&modecount, &modes);
+ 	int cw = (*modes[0]).hdisplay;
+ 	int ch = (*modes[0]).vdisplay;
+ 	nx = cw;
+ 	ny = ch;
+ 	if ((cw == sw) && (ch == sh))
+-		return 0;
++		return Resolution();
+ 	bool foundLargeEnoughRes = (cw>=sw) && (ch>=sh);
+ 	bestw = cw;
+ 	besth = ch;
+@@ -110,15 +115,15 @@
+ 	}
+ 
+ 	if (bestmode == -1)
+-		return 0;
++		return Resolution();
+ 
+ 	nx = bestw;
+ 	ny = besth;
+-	XF86VidModeSwitchToMode(dpy,0,modes[bestmode]);	
+-	XF86VidModeSetViewPort(dpy,DefaultScreen(dpy),0,0);
++	XF86VidModeSwitchToMode(dpy,screen,modes[bestmode]);	
++	XF86VidModeSetViewPort(dpy,screen,0,0);
+ 	XFlush(dpy);
+ 
+-	return (cw << 16) + ch;
++	return Resolution(cw, ch, screen);
+ }
+ 
+ #else
+--- krdc/vidmode.h	10 Jul 2002 05:20:18 -0000	1.1.1.1
++++ krdc/vidmode.h	29 Mar 2003 03:21:44 -0000	1.2
+@@ -15,9 +15,26 @@
+  *                                                                         *
+  ***************************************************************************/
+ 
++#ifndef VIDMODE_H
++#define VIDMODE_H
+ 
+-void vidmodeNormalSwitch(Display *dpy, int oldResolution);
+-int vidmodeFullscreenSwitch(Display *dpy, int sw, int sh, int &nx, int &ny);
++struct Resolution {
++  Resolution(int w, int h, int s) :
++    valid(true), width(w), height(h), screen(s) {
++  }
++  Resolution() :
++    valid(false), width(0), height(0), screen(0) {
++  }
++  bool valid;
++  int width;
++  int height;
++  int screen;
++};
++
++void vidmodeNormalSwitch(Display *dpy, Resolution oldResolution);
++Resolution vidmodeFullscreenSwitch(Display *dpy, int screen, int sw, int sh, int &nx, int &ny);
+ 
+ void grabInput(Display *dpy, unsigned int winId);
+ void ungrabInput(Display *dpy);
++
++#endif
+--- krdc/vnctypes.h	14 Aug 2002 19:12:45 -0000	1.1.1.2
++++ krdc/vnctypes.h	17 Aug 2002 17:34:19 -0000	1.4
+@@ -30,7 +30,6 @@
+ 
+ #include <X11/Xmd.h>
+ 
+-
+ typedef struct {
+   int shareDesktop; /* bool */
+   int viewOnly; /* bool */
+--- krdc/vncviewer.h	14 Aug 2002 19:12:46 -0000	1.1.1.2
++++ krdc/vncviewer.h	17 Aug 2002 17:34:19 -0000	1.4
+@@ -177,4 +177,5 @@
+ #if(defined __cplusplus)
+ }
+ #endif
+-#endif
++
++#endif /* VNCVIEWER_H */
+--- krfb/kinetd/Makefile.am	29 Oct 2002 17:41:27 -0000	1.1.1.4
++++ krfb/kinetd/Makefile.am	29 Mar 2003 03:21:44 -0000	1.10
+@@ -5,15 +5,14 @@
+ 
+ kded_kinetd_la_SOURCES = kinetd.cpp kinetd.skel
+ kded_kinetd_la_LDFLAGS  = $(all_libraries) -module -avoid-version
+-kded_kinetd_la_LIBADD   = ../srvloc/libsrvloc.la $(LIB_KIO) 
++kded_kinetd_la_LIBADD   = $(top_builddir)/krfb/srvloc/libsrvloc.la $(LIB_KIO) -lkdeui -lDCOP
+ 
+ # Services
+ kde_servicetypes_DATA = kinetdmodule.desktop
+ kdeddir = $(kde_servicesdir)/kded
+ kded_DATA = kinetd.desktop
+ 
+-EXTRA_DIST = $(kded_kinetd_la_SOURCES)\
+-             $(kded_DATA) \
++EXTRA_DIST = $(kded_DATA) \
+              $(kde_servicetypes_DATA) \
+ 	     eventsrc README.debugging
+ 
+--- krfb/libvncserver/httpd.c	29 Oct 2002 17:41:38 -0000	1.1.1.2
++++ krfb/libvncserver/httpd.c	29 Mar 2003 03:21:45 -0000	1.2
+@@ -116,7 +116,7 @@
+     fd_set fds;
+     struct timeval tv;
+     struct sockaddr_in addr;
+-    socklen_t addrlen = sizeof(addr);
++    size_t addrlen = sizeof(addr);
+ 
+     if (!rfbScreen->httpDir)
+ 	return;
+@@ -199,7 +199,7 @@
+ httpProcessInput(rfbScreenInfoPtr rfbScreen)
+ {
+     struct sockaddr_in addr;
+-    socklen_t addrlen = sizeof(addr);
++    size_t addrlen = sizeof(addr);
+     char fullFname[256];
+     char *fname;
+     unsigned int maxFnameLen;
+--- krfb/libvncserver/main.c	3 Mar 2003 03:25:47 -0000	1.1.1.3
++++ krfb/libvncserver/main.c	29 Mar 2003 03:21:45 -0000	1.2
+@@ -323,7 +323,7 @@
+     int client_fd;
+     struct sockaddr_in peer;
+     rfbClientPtr cl;
+-    socklen_t len;
++    size_t len;
+ 
+     if (rfbScreen->inetdSock != -1) {
+        cl = rfbNewClient(rfbScreen, rfbScreen->inetdSock);
+--- krfb/libvncserver/rfb.h	3 Mar 2003 03:25:48 -0000	1.1.1.4
++++ krfb/libvncserver/rfb.h	3 Mar 2003 03:31:57 -0000	1.5
+@@ -31,6 +31,8 @@
+ {
+ #endif
+ 
++typedef unsigned int socklen_t;
++
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+--- krfb/libvncserver/rfbserver.c	3 Mar 2003 03:25:48 -0000	1.1.1.3
++++ krfb/libvncserver/rfbserver.c	29 Mar 2003 03:21:45 -0000	1.2
+@@ -200,7 +200,7 @@
+     rfbClientIteratorPtr iterator;
+     rfbClientPtr cl,cl_;
+     struct sockaddr_in addr;
+-    socklen_t addrlen = sizeof(struct sockaddr_in);
++    size_t addrlen = sizeof(struct sockaddr_in);
+     int i;
+ 
+     cl = (rfbClientPtr)calloc(sizeof(rfbClientRec),1);
+--- krfb/libvncserver/sockets.c	3 Mar 2003 03:25:48 -0000	1.1.1.3
++++ krfb/libvncserver/sockets.c	29 Mar 2003 03:21:45 -0000	1.2
+@@ -183,7 +183,7 @@
+     fd_set fds;
+     struct timeval tv;
+     struct sockaddr_in addr;
+-    socklen_t addrlen = sizeof(addr);
++    size_t addrlen = sizeof(addr);
+     char buf[6];
+     const int one = 1;
+     int sock;
+RCS file: krfb/srvloc/inet_ntop.c
+diff -N krfb/srvloc/inet_ntop.c
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ krfb/srvloc/inet_ntop.c	23 Aug 2002 21:19:36 -0000	1.1
+@@ -0,0 +1,195 @@
++/*
++ * Copyright (c) 1996-1999 by Internet Software Consortium.
++ *
++ * Permission to use, copy, modify, and distribute this software for any
++ * purpose with or without fee is hereby granted, provided that the above
++ * copyright notice and this permission notice appear in all copies.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS" AND INTERNET SOFTWARE CONSORTIUM DISCLAIMS
++ * ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES
++ * OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL INTERNET SOFTWARE
++ * CONSORTIUM BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL
++ * DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR
++ * PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
++ * ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
++ * SOFTWARE.
++ */
++
++#if defined(LIBC_SCCS) && !defined(lint)
++static const char rcsid[] = "$Id: inet_ntop.c,v 1.1 2002/08/23 21:19:36 ranger Exp $";
++#endif /* LIBC_SCCS and not lint */
++
++/*#include "port_before.h"*/
++
++#include <sys/param.h>
++#include <sys/types.h>
++#include <sys/socket.h>
++
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#include <arpa/nameser.h>
++
++#include <errno.h>
++#include <stdio.h>
++#include <string.h>
++
++/*#include "port_after.h"*/
++
++#define NS_INT16SZ      2
++#define NS_IN6ADDRSZ   16
++ 
++#ifdef SPRINTF_CHAR
++# define SPRINTF(x) strlen(sprintf/**/x)
++#else
++# define SPRINTF(x) ((size_t)sprintf x)
++#endif
++
++/*
++ * WARNING: Don't even consider trying to compile this on a system where
++ * sizeof(int) < 4.  sizeof(int) > 4 is fine; all the world's not a VAX.
++ */
++
++static const char *inet_ntop4 __P((const u_char *src, char *dst, size_t size));
++static const char *inet_ntop6 __P((const u_char *src, char *dst, size_t size));
++
++/* char *
++ * inet_ntop(af, src, dst, size)
++ *	convert a network format address to presentation format.
++ * return:
++ *	pointer to presentation format address (`dst'), or NULL (see errno).
++ * author:
++ *	Paul Vixie, 1996.
++ */
++const char *
++inet_ntop(int af, const void *src, char *dst, size_t size)
++{
++	switch (af) {
++	case AF_INET:
++		return (inet_ntop4(src, dst, size));
++	case AF_INET6:
++		return (inet_ntop6(src, dst, size));
++	default:
++		errno = EAFNOSUPPORT;
++		return (NULL);
++	}
++	/* NOTREACHED */
++}
++
++/* const char *
++ * inet_ntop4(src, dst, size)
++ *	format an IPv4 address
++ * return:
++ *	`dst' (as a const)
++ * notes:
++ *	(1) uses no statics
++ *	(2) takes a u_char* not an in_addr as input
++ * author:
++ *	Paul Vixie, 1996.
++ */
++static const char *
++inet_ntop4(const u_char *src, char *dst, size_t size)
++{
++	static const char fmt[] = "%u.%u.%u.%u";
++	char tmp[sizeof "255.255.255.255"];
++
++	if (SPRINTF((tmp, fmt, src[0], src[1], src[2], src[3])) >= size) {
++		errno = ENOSPC;
++		return (NULL);
++	}
++	strcpy(dst, tmp);
++	return (dst);
++}
++
++/* const char *
++ * inet_ntop6(src, dst, size)
++ *	convert IPv6 binary address into presentation (printable) format
++ * author:
++ *	Paul Vixie, 1996.
++ */
++static const char *
++inet_ntop6(const u_char *src, char *dst, size_t size)
++{
++	/*
++	 * Note that int32_t and int16_t need only be "at least" large enough
++	 * to contain a value of the specified size.  On some systems, like
++	 * Crays, there is no such thing as an integer variable with 16 bits.
++	 * Keep this in mind if you think this function should have been coded
++	 * to use pointer overlays.  All the world's not a VAX.
++	 */
++	char tmp[sizeof "ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255"], *tp;
++	struct { int base, len; } best, cur;
++	u_int words[NS_IN6ADDRSZ / NS_INT16SZ];
++	int i;
++
++	/*
++	 * Preprocess:
++	 *	Copy the input (bytewise) array into a wordwise array.
++	 *	Find the longest run of 0x00's in src[] for :: shorthanding.
++	 */
++	memset(words, '\0', sizeof words);
++	for (i = 0; i < NS_IN6ADDRSZ; i++)
++		words[i / 2] |= (src[i] << ((1 - (i % 2)) << 3));
++	best.base = -1;
++	cur.base = -1;
++	for (i = 0; i < (NS_IN6ADDRSZ / NS_INT16SZ); i++) {
++		if (words[i] == 0) {
++			if (cur.base == -1)
++				cur.base = i, cur.len = 1;
++			else
++				cur.len++;
++		} else {
++			if (cur.base != -1) {
++				if (best.base == -1 || cur.len > best.len)
++					best = cur;
++				cur.base = -1;
++			}
++		}
++	}
++	if (cur.base != -1) {
++		if (best.base == -1 || cur.len > best.len)
++			best = cur;
++	}
++	if (best.base != -1 && best.len < 2)
++		best.base = -1;
++
++	/*
++	 * Format the result.
++	 */
++	tp = tmp;
++	for (i = 0; i < (NS_IN6ADDRSZ / NS_INT16SZ); i++) {
++		/* Are we inside the best run of 0x00's? */
++		if (best.base != -1 && i >= best.base &&
++		    i < (best.base + best.len)) {
++			if (i == best.base)
++				*tp++ = ':';
++			continue;
++		}
++		/* Are we following an initial run of 0x00s or any real hex? */
++		if (i != 0)
++			*tp++ = ':';
++		/* Is this address an encapsulated IPv4? */
++		if (i == 6 && best.base == 0 &&
++		    (best.len == 6 || (best.len == 5 && words[5] == 0xffff))) {
++			if (!inet_ntop4(src+12, tp, sizeof tmp - (tp - tmp)))
++				return (NULL);
++			tp += strlen(tp);
++			break;
++		}
++		tp += SPRINTF((tp, "%x", words[i]));
++	}
++	/* Was it a trailing run of 0x00's? */
++	if (best.base != -1 && (best.base + best.len) == 
++	    (NS_IN6ADDRSZ / NS_INT16SZ))
++		*tp++ = ':';
++	*tp++ = '\0';
++
++	/*
++	 * Check for overflow, copy, and we're done.
++	 */
++	if ((size_t)(tp - tmp) > size) {
++		errno = ENOSPC;
++		return (NULL);
++	}
++	strcpy(dst, tmp);
++	return (dst);
++}
+--- krfb/srvloc/kinetaddr.cpp	3 Mar 2003 03:25:49 -0000	1.1.1.4
++++ krfb/srvloc/kinetaddr.cpp	29 Mar 2003 03:21:45 -0000	1.8
+@@ -4,7 +4,7 @@
+  *  based on code from KInetSocketAddress:
+  *    Copyright (C) 2000,2001 Thiago Macieira <thiagom@mail.com>
+  *
+- *  $Id: kinetaddr.cpp,v 1.4.2.1 2003/01/21 21:15:28 tjansen Exp $
++ *  $Id: kinetaddr.cpp,v 1.4.2.3 2003/03/25 19:37:17 tjansen Exp $
+  *
+  *  This library is free software; you can redistribute it and/or
+  *  modify it under the terms of the GNU Library General Public
+@@ -28,12 +28,21 @@
+ 
+ #include <limits.h>
+ #include <string.h>
++#include <sys/types.h>
++#include <sys/socket.h>
+ 
+ #include <kdebug.h>
+ #include <klocale.h>
+ #include "kinetaddr.h"
+ #include <netdb.h>
+ 
++#include <sys/types.h> 
++#include <sys/socket.h> 
++#include <netinet/in.h> 
++#include <arpa/inet.h> 
++#include <arpa/nameser.h> 
++#include <resolv.h>
++
+ #ifdef sun
+ #include <sys/socket.h>
+ #endif
+@@ -129,15 +138,13 @@
+ 	return &d->in;
+ }
+ 
+-const struct in6_addr *KInetAddress::addressV6() const {
+ #ifdef AF_INET6
++const struct in6_addr *KInetAddress::addressV6() const {
+ 	if (d->sockfamily != AF_INET6)
+ 		return 0;
+ 	return &d->in6;
+-#else
+-	return 0;
+-#endif
+ }
++#endif
+ 
+ QString KInetAddress::nodeName() const
+ {
+--- ksirc/Makefile.am	5 Nov 2002 02:44:24 -0000	1.1.1.6
++++ ksirc/Makefile.am	12 Jan 2003 18:00:03 -0000	1.11
+@@ -17,17 +17,16 @@
+ testview_LDADD = kstextview.lo $(LIB_KDEUI)
+ testview_LDFLAGS = $(all_libraries) $(KDE_RPATH)
+ 
+-lib_LTLIBRARIES = ksirc.la
++lib_LTLIBRARIES = ksirc.la libksirc_main.la
+ 
+ noinst_PROGRAMS = getdate
+ 
+ # Which sources should be compiled for ksirc.
+ 
+-ksirc_la_SOURCES = \
++libksirc_main_la_SOURCES = \
+ 	toplevel.cpp \
+ 	charSelector.cpp \
+ 	chanButtons.cpp \
+-	ksirc.cpp \
+ 	alistbox.cpp \
+ 	ahistlineedit.cpp \
+ 	iocontroller.cpp \
+@@ -57,8 +56,7 @@
+         colorpicker.cpp
+ 
+ # the library search path
+-ksirc_la_LDFLAGS = $(all_libraries) -module -avoid-version
+-ksirc_la_COMPILE_FIRST = cdate.h
++libksirc_main_la_LDFLAGS = $(all_libraries) -avoid-version
+ 
+ all_ksirc_libraries = \
+ 	./KSPrefs/libksprefs.la \
+@@ -68,10 +66,20 @@
+ 
+ # the libraries to link against. Be aware of the order. First the libraries,
+ # that depend on the following ones.
+-ksirc_la_LIBADD   = $(all_ksirc_libraries)
++libksirc_main_la_LIBADD   = $(all_ksirc_libraries) -lkdecore -lkdeui $(LIB_QT)
++
++ksirc_la_COMPILE_FIRST = cdate.h
++ksirc_la_SOURCES = ksirc_la_main.cpp
++ksirc_la_LIBADD  = libksirc_main.la
++ksirc_la_LDFLAGS = $(all_libraries) $(KDE_RPATH) -module -avoid-version
++
++ksirc_la_main.cpp: ksirc.cpp
++	cat ksirc.cpp > ksirc_la_main.cpp
++
++ksirc.cpp: cdate.h
+ 
+-ksirc_SOURCES = dummy.cpp
+-ksirc_LDADD = ksirc.la
++ksirc_SOURCES = ksirc.cpp
++ksirc_LDADD = libksirc_main.la
+ ksirc_LDFLAGS = $(all_libraries) $(KDE_RPATH)
+ 
+ kdoc:
+--- ktalkd/ktalkd/includ.h	15 Jan 2003 05:16:18 -0000	1.1.1.3
++++ ktalkd/ktalkd/includ.h	4 Mar 2003 04:21:29 -0000	1.2
+@@ -37,6 +37,7 @@
+ #include <config.h>
+ #endif
+ 
++#include <stdint.h>
+ #include <sys/types.h>
+ #include <sys/socket.h>
+ 
+--- ktalkd/ktalkd/prot_talkd.h	3 Mar 2003 03:25:58 -0000	1.1.1.2
++++ ktalkd/ktalkd/prot_talkd.h	4 Mar 2003 04:21:30 -0000	1.2
+@@ -54,6 +54,7 @@
+  * stream connection through which the conversation takes place.
+  */
+ 
++#include <stdint.h>
+ #include <sys/types.h>
+ 
+ /*
+--- ktalkd/ktalkd/machines/answmach.cpp	4 Jan 2003 20:03:10 -0000	1.1.1.2
++++ ktalkd/ktalkd/machines/answmach.cpp	4 Jan 2003 20:08:04 -0000	1.3
+@@ -32,6 +32,10 @@
+  *
+  */
+ 
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
+ #include "answmach.h"
+ 
+ #include <stdio.h>
+--- ktalkd/ktalkd/machines/forwmach.cpp	4 Jan 2003 20:03:11 -0000	1.1.1.2
++++ ktalkd/ktalkd/machines/forwmach.cpp	4 Jan 2003 20:08:04 -0000	1.3
+@@ -31,6 +31,9 @@
+  * (BSD License, from kdelibs/doc/common/bsd-license.html)
+  */
+ 
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
+ #include "../includ.h"
+ #include "forwmach.h"
+ #include <stdio.h>
+--- kxmlrpc/Makefile.am	3 Oct 2002 00:44:41 -0000	1.1.1.2
++++ kxmlrpc/Makefile.am	29 Nov 2002 19:01:21 -0000	1.5
+@@ -1,21 +1,31 @@
+ # Makefile for kxmlrpcd.
+ # Written by Kurt Granroth using tons of KDE Makefiles as examples
+ 
++METASOURCES      = AUTO
+ INCLUDES         = $(all_includes)
+ 
+ bin_PROGRAMS     = kxmlrpcd
+-kxmlrpcd_LDADD   = kxmlrpcd.la
++kxmlrpcd_LDADD   = libkxmlrpcd_main.la
+ kxmlrpcd_LDFLAGS = $(all_libraries) $(KDE_RPATH)
+-kxmlrpcd_SOURCES = dummy.cpp
++kxmlrpcd_SOURCES = kxmlrpcd_main.cpp
+ 
+-lib_LTLIBRARIES        = kxmlrpcd.la
++kxmlrpcd_main.cpp: stub_main.cpp
++	cat stub_main.cpp > kxmlrpcd_main.cpp
++
++lib_LTLIBRARIES        = kxmlrpcd.la libkxmlrpcd_main.la
+ kde_module_LTLIBRARIES = kcm_xmlrpcd.la
+ 
+-kxmlrpcd_la_LIBADD  = $(LIB_KSYCOCA)
+-kxmlrpcd_la_LDFLAGS = $(all_libraries) -module -avoid-version 
+-kxmlrpcd_la_SOURCES = kxmlrpcserver.cpp kxmlrpcparser.cpp \
++libkxmlrpcd_main_la_LIBADD  = $(LIB_KSYCOCA) $(LIB_QT) -lkdecore -lDCOP
++libkxmlrpcd_main_la_LDFLAGS = $(all_libraries) -avoid-version 
++libkxmlrpcd_main_la_SOURCES = kxmlrpcserver.cpp kxmlrpcparser.cpp \
+ 	kxmlrpcdaemon.cpp kxmlrpcutil.cpp
+-kxmlrpcd_la_METASOURCES = AUTO
++
++kxmlrpcd_la_LIBADD  = libkxmlrpcd_main.la
++kxmlrpcd_la_LDFLAGS = $(all_libraries) -avoid-version -module
++kxmlrpcd_la_SOURCES = kxmlrpcd_la_main.cpp
++
++kxmlrpcd_la_main.cpp: stub_main.cpp
++	cat stub_main.cpp > kxmlrpcd_la_main.cpp
+ 
+ kcm_xmlrpcd_la_LIBADD = $(LIB_KDECORE)
+ kcm_xmlrpcd_la_LDFLAGS = $(all_libraries) $(KDE_PLUGIN) -module
+@@ -28,6 +38,3 @@
+ 
+ messages: rc.cpp
+ 	$(XGETTEXT) *.cpp -o $(podir)/kxmlrpcd.pot
+-
+-dummy.cpp:
+-	echo > dummy.cpp
+--- kxmlrpc/kxmlrpcdaemon.cpp	25 Jun 2002 03:12:42 -0000	1.1.1.1
++++ kxmlrpc/kxmlrpcdaemon.cpp	29 Nov 2002 19:01:21 -0000	1.2
+@@ -358,7 +358,8 @@
+    { 0, 0, 0 }
+ };
+ 
+-int main(int argc, char **argv)
++extern "C" int kdemain(int, char**);
++int kdemain(int argc, char **argv)
+ {
+     KAboutData about("kxmlrpcd", I18N_NOOP("KXmlRpc Daemon"),
+                      version, description, KAboutData::License_BSD);
+RCS file: kxmlrpc/stub_main.cpp
+diff -N kxmlrpc/stub_main.cpp
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ kxmlrpc/stub_main.cpp	29 Nov 2002 19:01:21 -0000	1.1
+@@ -0,0 +1,28 @@
++/*
++ *
++ * Copyright (c) 2001 Nick Hudson <skrll@netbsd.org>
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
++ * AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
++ * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ */
++extern "C" int kdemain(int, char* []);
++
++int main( int argc, char* argv[] )
++{
++        return kdemain(argc, argv);
++}
++
+--- lanbrowsing/lisa/main.cpp	25 Jun 2002 03:12:43 -0000	1.1.1.1
++++ lanbrowsing/lisa/main.cpp	29 Mar 2003 03:21:46 -0000	1.2
+@@ -43,10 +43,10 @@
+ void printVersion()
+ {
+    const char * versionInfo=\
+-   "\nThis is the LAN Information Server LISa "MYVERSION"\n"\
+-   "It is free software according the GNU General Public License\n"\
+-   "Copyright (c) 2000 by Alexander Neundorf\n"\
+-   "email: neundorf@kde.org\n";
++   "\r\nThis is the LAN Information Server LISa "MYVERSION"\r\n"\
++   "It is free software according the GNU General Public License\r\n"\
++   "Copyright (c) 2000-2003 by Alexander Neundorf\r\n"\
++   "email: neundorf@kde.org\r\n";
+    std::cout<<versionInfo<<std::endl;
+ };
+ 
+@@ -60,6 +60,7 @@
+       "-K, --kde2         deprecated\n"\
+       "                   lisa now looks always first for $(HOME)/.lisarc, then for /etc/lisarc\n"\
+       "-c, --config=FILE  read this and no other configuration file\n"\
++      "-q, --quiet        start quiet without the greeting message\n"\
+       "-p, --port PORTNR  start the server on this portnumber\n"\
+       "                   if you use this LISa won't be able to\n"\
+       "                   cooperate with other LISa's in the network\n"\
+@@ -141,6 +142,7 @@
+ static struct option const long_opts[] =
+ {
+   {"version", no_argument, 0, 'v'},
++  {"quiet", no_argument, 0, 'q'},
+   {"unix", no_argument, 0, 'u'},
+   {"kde1", no_argument, 0, 'k'},
+   {"kde2", no_argument, 0, 'K'},
+@@ -153,6 +155,7 @@
+ 
+ int main(int argc, char** argv)
+ {
++   int quiet(0);
+    int c(0);
+    int configStyle(UNIXCONFIGSTYLE);
+    MyString configFile;
+@@ -160,9 +163,9 @@
+ 
+ //I thought this would be the way to check wether long options are supported...
+ #ifdef GNU_GETOPT 
+-   while ((c=getopt_long(argc, argv, "vukKc:h", long_opts, 0))!=-1)
++   while ((c=getopt_long(argc, argv, "vqukKc:h", long_opts, 0))!=-1)
+ #else
+-   while ((c=getopt(argc, argv, "vukKc:h"))!=-1)
++   while ((c=getopt(argc, argv, "vqukKc:h"))!=-1)
+ #endif
+ 
+    {
+@@ -175,6 +178,9 @@
+          printVersion();
+          exit(0);
+          break;
++      case 'q':
++         quiet=1;
++         break;
+ 
+       case 'u':
+       case 'k':
+@@ -221,7 +227,7 @@
+    {
+       std::cout<<"could not fork()"<<std::endl;
+       exit(0);
+-   };
++   }
+    //we will only read/write to/from this socket in the child process
+    int rawSocket=socket(AF_INET,SOCK_RAW,IPPROTO_ICMP);
+    if (rawSocket==-1)
+@@ -229,7 +235,7 @@
+       std::cout<<"could not create raw socket, root privileges required"<<std::endl;
+       std::cout<<"take a look at the README for more information"<<std::endl;
+       exit(0);
+-   };
++   }
+    int bufferSize(60*1024);
+    int on(1);
+    setsockopt(rawSocket, SOL_SOCKET, SO_RCVBUF, (char*)&bufferSize,
+@@ -260,9 +266,12 @@
+    netmanager.readConfig();
+    if (netmanager.prepare())
+    {
+-      printVersion();
+-      std::cout<<"\nrunning on port "<<portToUse<<"\nHave fun ! :-)"<<std::endl;
++      if (!quiet)
++      {
++         printVersion();
++         std::cout<<"\nrunning on port "<<portToUse<<"\nHave fun ! :-)"<<std::endl;
++      }
+       netmanager.run();
+-   };
++   }
+    getDebug()<<"main: server finished"<<std::endl;
+ }
+--- lanbrowsing/lisa/strictmain.cpp	25 Jun 2002 03:12:43 -0000	1.1.1.1
++++ lanbrowsing/lisa/strictmain.cpp	29 Mar 2003 03:21:46 -0000	1.2
+@@ -44,10 +44,10 @@
+ void printVersion()
+ {
+    const char * versionInfo=\
+-   "\nThis is the restricted LAN Information Server resLISa "MYVERSION"\n"\
+-   "It is free software according the GNU General Public License\n"\
+-   "Copyright (c) 2000 by Alexander Neundorf\n"\
+-   "email: neundorf@kde.org\n";
++   "\r\nThis is the restricted LAN Information Server resLISa "MYVERSION"\r\n"\
++   "It is free software according the GNU General Public License\r\n"\
++   "Copyright (c) 2000-2003 by Alexander Neundorf\r\n"\
++   "email: neundorf@kde.org\r\n";
+    std::cout<<versionInfo<<std::endl;
+ };
+ 
+@@ -61,6 +61,7 @@
+       "-K, --kde2         deprecated\n"\
+       "                   reslisa now always looks first for $(HOME)/.reslisarc, then for /etc/reslisarc\"\n"\
+       "-c, --config=FILE  read this and no other configuration file\n"\
++      "-q, --quiet        start quiet without the greeting message\n"\
+       "-h, --help         you are currently reading it ;-)\n";
+       std::cout<<usageInfo<<std::endl;
+ //I thought this would be the way to check wether long options are supported...
+@@ -135,6 +136,7 @@
+ static struct option const long_opts[] =
+ {
+   {"version", no_argument, 0, 'v'},
++  {"quiet", no_argument, 0, 'q'},
+   {"unix", no_argument, 0, 'u'},
+   {"kde1", no_argument, 0, 'k'},
+   {"kde2", no_argument, 0, 'K'},
+@@ -146,6 +148,7 @@
+ 
+ int main(int argc, char** argv)
+ {
++   int quiet(0);
+    int c(0);
+    int configStyle(UNIXCONFIGSTYLE);
+    MyString configFile;
+@@ -153,9 +156,9 @@
+ 
+ //I thought this would be the way to check wether long options are supported...
+ #ifdef GNU_GETOPT
+-   while ((c=getopt_long(argc, argv, "vukKc:h", long_opts, 0))!=-1)
++   while ((c=getopt_long(argc, argv, "vqukKc:h", long_opts, 0))!=-1)
+ #else
+-   while ((c=getopt(argc, argv, "vukKc:h"))!=-1)
++   while ((c=getopt(argc, argv, "vqukKc:h"))!=-1)
+ #endif
+    {
+       char **endp(0);
+@@ -167,7 +170,9 @@
+          printVersion();
+          exit(0);
+          break;
+-
++      case 'q':
++         quiet=1;
++         break;
+       case 'u':
+       case 'k':
+       case 'K':
+@@ -241,7 +246,8 @@
+    netmanager.readConfig();
+    if (netmanager.prepare())
+    {
+-      printVersion();
++      if (!quiet)
++         printVersion();
+       netmanager.run();
+    };
+    getDebug()<<"main: server finished"<<std::endl;
+--- libkdenetwork/Makefile.am	15 Jan 2003 05:16:05 -0000	1.1.1.5
++++ libkdenetwork/Makefile.am	29 Mar 2003 16:23:07 -0000
+@@ -1,4 +1,4 @@
+-KDE_CXXFLAGS = $(USE_RTTI)
++KDE_CXXFLAGS = $(USE_RTTI) $(NOOPT_CXXFLAGS)
+ INCLUDES= $(all_includes)
+ SUBDIRS = . pics4kmail pics4knode 
+ 
+@@ -43,8 +43,7 @@
+ 
+ libkdenetwork_la_LDFLAGS = $(all_libraries) -no-undefined -version-info 2:0
+ noinst_HEADERS = kpgpbase.h
+-
+-libkdenetwork_la_LIBADD = $(LIB_KDEUI)
++libkdenetwork_la_LIBADD = $(LIB_KDEUI) $(LIB_POLL)
+ 
+ METASOURCES = AUTO
+ 
+--- libkdenetwork/kfoldertree.cpp	3 Mar 2003 03:26:02 -0000	1.1.1.6
++++ libkdenetwork/kfoldertree.cpp	29 Mar 2003 03:21:46 -0000	1.2
+@@ -102,8 +102,12 @@
+   mUnread = aUnread;
+   
+   QString unread = QString::null;
+-  if (mUnread == 0) unread = "-";
+-  else unread.setNum(mUnread);
++  if (mUnread == 0)
++    unread = "- ";
++  else {
++    unread.setNum(mUnread);
++    unread += " ";
++  }
+ 
+   setText( static_cast<KFolderTree*>(listView())->unreadIndex(), 
+       unread );
+@@ -117,8 +121,12 @@
+   mTotal = aTotal;
+ 
+   QString total = QString::null;
+-  if (mTotal == 0) total = "-";
+-  else total.setNum(mTotal);
++  if (mTotal == 0)
++    total = "- ";
++  else {
++    total.setNum(mTotal);
++    total += " ";
++  }
+ 
+   setText( static_cast<KFolderTree*>(listView())->totalIndex(), 
+       total );
+--- mimelib/mimelib/config.h	25 Jun 2002 03:12:43 -0000	1.1.1.1
++++ mimelib/mimelib/config.h	25 Jun 2002 03:14:13 -0000	1.2
+@@ -35,7 +35,7 @@
+ #   define DW_WIN32
+ #endif
+ 
+-#if defined(__unix__) || defined(__unix) || defined(_AIX) || defined(__NetBSD__)
++#if defined(__unix__) || defined(__unix) || defined(_AIX) || defined(__NetBSD__) || defined(__MACH__)
+ #   define DW_UNIX
+ #endif
+ 
