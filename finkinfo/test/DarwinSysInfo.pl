@@ -412,11 +412,7 @@ sub get_cpu {
 
 sub get_mem {
   chomp($MEMTOTAL = `sysctl hw.physmem`);
-  if ($MEMTOTAL =~ /^hw.physmem =/) {
-    $MEMTOTAL =~ s/hw.physmem = //;
-  } else {
-    $MEMTOTAL =~ s/hw.physmem: //;
-  }
+  $MEMTOTAL =~ s/hw.physmem[ =|:] //;
 
   chomp($MEMUSED = `top -l1 | grep PhysMem`);
   $MEMUSED =~ /.*[,](.+)([GKM]) used.*/;
