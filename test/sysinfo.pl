@@ -121,7 +121,7 @@ sub display_info
     $HEXCPU = `ioreg -n $ARCH,$TYPE | grep clock-frequency | cut -d"<" -f2 | cut -d">" -f1`;
     chop($HEXCPU);
     $HEXCPU = hex($HEXCPU) / 1000000;
-    $CPU = $HEXCPU;
+    $CPU = sprintf("%.0f", $HEXCPU);
 
     #--TOTAL MEMORY--#
     $MEMTOTAL = `sysctl hw.physmem | cut -d" " -f3`;
