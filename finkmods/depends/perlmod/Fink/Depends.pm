@@ -113,13 +113,14 @@ sub run_dependscheck {
     }
   }
   if (keys %PACKAGES || keys %SHLIBS) {    
-      print "Depends: ";
+    print "Depends: ";
     if (keys %SHLIBS) {
       print "\${SHLIB_DEPS}, ";
     }
     if (keys %PACKAGES) {
-      print join(', ', sort keys %PACKAGES), "\n\n";
+      print join(', ', sort keys %PACKAGES);
     }
+    print "\n\n";
   } else {
     print "Has no lib depends!\n\n";
   }
