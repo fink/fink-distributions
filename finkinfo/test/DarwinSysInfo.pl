@@ -15,7 +15,7 @@ my $BASEPATH;
 my $UNAME;
 my ($ARCH, $TYPE, $MODEL, $NUM, $CPU);
 my ($MEMTOTAL, $MEMUSED, $MEMGKM, $MEMPERCENT);
-my ($DEV1TYPE, $PACKIN1, $PACKOUT1);
+my ($DEV1TYPE, $PACKIN1, $PACKOUT1, $PPPIN, $PPPOUT);
 my ($DEV2TYPE, $PACKIN2, $PACKOUT2);
 my $RES;
 my ($HDDTOTAL, $HDDUSED, $HDDCOUNT);
@@ -33,7 +33,7 @@ if (-d "$ENV{HOME}/.xchat2") {
 } else {
   $configfile = "$ENV{HOME}/darwininfo.conf";
 }
-my $version = "0.4.0";
+my $version = "0.4.1";
 my $scriptname = "Darwin SysInfo";
 
 IRC::print "\n\0034Loading\003\002 $scriptname $version Script\002\n";
@@ -381,8 +381,6 @@ sub get_cpu {
   my $truetype;
   if ($TYPE eq "750") {
     $truetype = "G3";
-  } elsif ($TYPE eq "970") {
-    $truetype = "G5";
   } else {
     $truetype = $TYPE;
   }
@@ -400,9 +398,9 @@ sub get_cpu {
   }
 
   chomp($CPU = `ioreg -n $ARCH,$TYPE | grep '"clock-frequency" ='`);
-  if ($CPU =~ /\s*\<(.+)\>\s*/) {
+  if ($CPU =~ /.*[<](.+)[>].*/) {
     $CPU = hex($1)/1000000;
-    if (int($CPU) > 999) {
+    if ($CPU gt 999) {
       $CPU = sprintf("%.0fGHz", $CPU/1000);
     } else {
       $CPU = sprintf("%.0fMHz", $CPU);
@@ -449,6 +447,19 @@ sub get_mem {
 }
 
 sub get_ppp {
+  $PPPIN = `netstat -i -n -b | grep $PPP | head -n1 | awk '{print \$6}'`;
+  if ($PPPIN < 1024**3) {
+    $PPPIN = sprintf("%.02f",$PPPIN / 1024**2)."MB";
+  } else {
+    $PPPIN = sprintf("%.02f", $PPPIN / 1024**3)."GB";
+  }
+
+  $PPPOUT = `netstat -i -n -b | grep $PPP | head -n1 | awk '{print \$9}'`;
+  if ($PPPOUT < 1024**3) {
+    $PPPOUT = sprintf("%.02f",$PPPOUT / 1024**2)."MB";
+  } else {
+    $PPPOUT = sprintf("%.02f", $PPPOUT / 1024**3)."GB";
+  }
 }
 
 sub get_net {
@@ -596,6 +607,9 @@ sub build_output {
   }
   if ($ENABLEDEV2 =~ m/true/i) {
     $out .= " \002|\002 $DEV2TYPE: In: \002$PACKIN2\002 Out: \002$PACKOUT2\002";
+  }
+  if ($ENABLEPPP =~ m/true/i) {
+    $out .= " \002|\002 $PPPNAME: In: \002$PPPIN\002 Out: \002$PPPOUT\002";
   }
 }
 
