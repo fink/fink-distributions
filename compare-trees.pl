@@ -4,12 +4,16 @@ use File::Basename;
 
 my %PACKAGES;
 my @TREES;
+my $prefix;
 
 if (@ARGV) {
 	@TREES = @ARGV;
 } else {
 	if (opendir(DIR, dirname($0))) {
-		@TREES = grep(!/^\.\.?$/, readdir(DIR));
+		$prefix = dirname($0);
+		for my $dir (grep(!/^\.\.?$/, readdir(DIR))) {
+			push(@TREES, $prefix . '/' . $dir);
+		}
 	} else {
 		die "couldn't read from " . dirname($0) . ": $!\n";
 	}
@@ -45,21 +49,21 @@ for my $tree (@TREES) {
 						}
 						$package =~ s/\%N/$firstpack/i;
 						if ($packname ne "") {
-							push(@{$PACKAGES{$packname}->{get_verstring($epoch, $version, $revision)}}, $tree . '/' . $stable);
+							push(@{$PACKAGES{$packname}->{get_verstring($epoch, $version, $revision)}}, $treename . '/' . $stable);
 						}
 						$packname = $package;
 					}
 				}
 				close(INFO);
 				$packname =~ s/\%N/$firstpack/g;
-				push(@{$PACKAGES{$packname}->{get_verstring($epoch, $version, $revision)}}, $tree . '/' . $stable);
+				push(@{$PACKAGES{$packname}->{get_verstring($epoch, $version, $revision)}}, $treename . '/' . $stable);
 			} else {
 				warn "unable to open $file: $!\n";
 			}
 		}
 		close(FIND);
 	} else {
-		warn "find failed in tree $tree, skipping: $!\n";
+		warn "find failed in tree $treename, skipping: $!\n";
 	}
 }
 
