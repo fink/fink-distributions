@@ -13,24 +13,29 @@ my $DEV = "en0";		## EtherNet
 my $DEVNAME = "EtherNet";	## EtherNet
 my $DEV2 = "en1";		## AirPort
 my $DEVNAME2 = "AirPort";	## AirPort
+my $BASEPATH = "/sw";		## Base Fink Path
 
 # DON'T TOUCH BELLOW THIS POINT
 # -----------------------------------------------------------------
 
 my $out;
 my $UNAME;
-my $ARCH, $TYPE, $MODEL, $NUM, $CPU;
-my $MEMTOTAL, $MEMUSED, $MEMGKM, $MEMPERCENT;
-my $DEVTYPE, $DEVTYPE2, $PACKIN, $PACKIN2, $PACKOUT, $PACKOUT2;
+my ($ARCH, $TYPE, $MODEL, $NUM, $CPU);
+my ($MEMTOTAL, $MEMUSED, $MEMGKM, $MEMPERCENT);
+my ($DEVTYPE, $DEVTYPE2, $PACKIN, $PACKIN2, $PACKOUT, $PACKOUT2);
 my $RES;
-my $HDDTOTAL, $HDDUSED, $HDDCOUNT;
+my ($HDDTOTAL, $HDDUSED, $HDDCOUNT);
 my $PROCS;
 my $UPTIME;
+my ($OSX, $OSXVERS, $OSXBUILD);
+my ($FINKVERS, $DISTVERS, $FINKPKGS, $FINKTREE);
+my ($DEVTOOLS, $TOOLVERS, $TOOLBUILD, $GCCVERS);
 
 IRC::register("Darwin SysInfo", "0.2", "", "");
 IRC::print "Loading Darwin SysInfo Script";
 IRC::add_command_handler("sys", "display_info");
 IRC::add_command_handler("up", "display_uptime");
+IRC::add_command_handler("fink", "display_fink");
 
 sub get_uname {
   chomp($UNAME = `uname -sr`);
@@ -176,6 +181,9 @@ sub get_rez {
   $RES =~ /dimensions: (.+) pixels.*/;         
   $RES = $1;  
   $RES =~ s/ //g;     
+  if (!$RES) {
+    $RES = "X11 not running";
+  }
 }
 
 sub get_hdd {
@@ -257,44 +265,182 @@ sub build_output {
   if ($DEV2) {
     $out .= " %B|%O $DEVTYPE2: In: %B$PACKIN2%O Out: %B$PACKOUT2%O";
   }
+  $out .= "\n";
+}
+
+sub get_osxinfo {
+  my @sw_vers = `sw_vers`;
+  my ($infoline, $value);
+  my $counter = 0;
+
+  foreach $infoline (@sw_vers) {
+    chomp($infoline);
+    if ($infoline =~ /.+:\s?\s?\s?(.+)/) {
+      $value = $1;
+      $counter++;
+      if ($counter eq 1) {
+        $OSX = $value;
+      } elsif ($counter eq 2) {
+        $OSXVERS = $value;
+      } elsif ($counter eq 3) {
+        $OSXBUILD = $value;
+      }
+    }
+  }
+}
+
+sub get_darwininfo {
+}
+
+sub get_finkinfo {
+  my @fink_vers = `$BASEPATH/bin/fink --version`;
+  my $fink_pkgs = `$BASEPATH/bin/fink list -i | wc -l`;
+  my @fink_config = `cat $BASEPATH/etc/fink.conf`;
+  my ($infoline, $value);
+
+  $fink_pkgs =~ s/ //g;
+  $FINKPKGS = sprintf("%s", $fink_pkgs-2);
+
+  foreach $infoline (@fink_config) {
+    chomp($infoline);
+    if ($infoline =~ /^Trees: (.*)$/) {
+      $FINKTREE = $1;
+    }
+  }
+
+  foreach $infoline (@fink_vers) {
+    chomp($infoline);
+    if ($infoline =~ /^(.+): (.+)/) {
+      $value = $2;
+      if ($1 =~ /^Package/i) {
+        $FINKVERS = $value;
+      } elsif ($1 =~ /^Distribution/i) {
+        $DISTVERS = $value;
+      }
+    }
+    $FINKVERS =~ s/ //g;
+    $DISTVERS =~ s/ //g; 
+  }
+}
+
+sub get_devinfo {
+  $TOOLVERS = "Unknown";
+  $TOOLBUILD = "Unknown";
+  $GCCVERS = "Unknown";
+
+  my @gcc_vers = `cc --version`;
+  my @dev_vers = `cat \"/Developer/Applications/Project\ Builder.app/Contents/Resources/English.lproj/DevCDVersion.plist\"`;
+
+  my ($infoline, $value);
+
+  if (-e "/Developer") {
+    $DEVTOOL = "Installed";
+  } else {
+    $DEVTOOL = "N/A";
+  }
+
+  foreach $infoline (@dev_vers) {
+    chomp($infoline);
+    if ($infoline =~ /^.* = "(.*)";/) {
+      $TOOLVERS = "$1";
+    }
+  }
+
+  foreach $infoline (@gcc_vers) {
+    chomp($infoline);
+    if ($infoline =~ /^cc \(GCC\) ([0-9.]+.*)/) {
+      $GCCVERS = $1;
+    } elsif ($infoline =~ /^([0-9.]+)/) {
+      $GCCVERS = $1;
+    }
+  }
+}
+
+sub build_finkout {
+  $out = "%BFinkInfo%O";
+  $out .= " %B|%O System: %B$OSX%O";
+  $out .= " %B|%O Version: %B$OSXVERS%O";
+  $out .= " %B|%O Build: %B$OSXBUILD%O";
+  $out .= " %B|%O Basepath: %B$BASEPATH%O";
+  $out .= " %B|%O Package Manager: %B$FINKVERS%O";
+  $out .= " %B|%O Distribution: %B$DISTVERS%O";
+  $out .= " %B|%O Packages Installed: %B$FINKPKGS%O";                      
+  $out .= " %B|%O Trees: %B$FINKTREE%O";
+  $out .= " %B|%O Dev Tools: %B$DEVTOOL%O";
+  if ($DEVTOOLS = "installed") {
+    $out .= " %B|%O Tools Version: %B$TOOLVERS%O";
+    $out .= " %B|%O Tools Build: %B$TOOLBUILD%O";
+    $out .= " %B|%O GCC Version: %B$GCCVERS%O";
+  }
+  $out .= "\n";
 }
 
 sub display_uptime {
   get_uname();    
 
-  if ($UNAME =~ /^darwin/i) {
-    get_uptime();
-
-    $out = "My current uptime is %B$UPTIME%O".".";
-
-    IRC::command($out);
-    return 0;
-  } else {
+  unless ($UNAME =~ /^darwin/i) {
     $out = "System Unsupported, install Darwin and try again...\n";
     IRC::command($out);
     return 1;
   }
+
+  get_uptime();
+
+  $out = "My current uptime is %B$UPTIME%O".".\n";
+
+  IRC::command($out);
+  return 0;
+}
+
+sub display_fink {
+  get_uname();
+
+  unless ($UNAME =~ /^darwin/i) {
+    $out = "System Unsupported, install Darwin and try again...\n";
+    IRC::command($out);
+    return 1;
+  }
+
+  unless (-f $BASEPATH."/bin/fink") {
+    $out = "Fink Not Installed, you can get Fink at http:\/\/fink.sf.net\/\n";
+    IRC::command($out);
+    return 1;
+  }
+
+  if (-f "/usr/bin/sw_vers") {
+    get_osxinfo();
+  } else {
+    get_darwininfo();
+  }
+
+  get_finkinfo();
+  get_devinfo();
+
+  build_finkout();
+
+  IRC::command($out);
+  return 0;
 }
 
 sub display_info {
   get_uname();
 
-  if ($UNAME =~ /^darwin/i) {
-    get_cpu();
-    get_mem();
-    get_net();
-    get_rez();
-    get_hdd();
-    get_procs();
-    get_uptime();
-
-    build_output();
-
-    IRC::command($out);
-    return 0;
-  } else {
+  unless ($UNAME =~ /^darwin/i) {
     $out = "System Unsupported, install Darwin and try again...\n";
     IRC::command($out);
     return 1;
   }
+
+  get_cpu();
+  get_mem();
+  get_net();
+  get_rez();
+  get_hdd();
+  get_procs();
+  get_uptime();
+
+  build_output();
+
+  IRC::command($out);
+  return 0;
 }
