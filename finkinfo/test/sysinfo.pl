@@ -9,10 +9,10 @@
 # YOU MUST ASSIGN THE VARIABLE BELOW TO SET YOUR INTERNET
 # CONNECTION DEVICE
 
-my $DEV = "en0";	## EtherNet
-my $TYPE = "EtherNet";	## EtherNet
-my $DEV2 = "en1";	## AirPort
-my $TYPE2 = "AirPort";	## AirPort
+my $DEV = "en0";		## EtherNet
+my $DEVNAME = "EtherNet";	## EtherNet
+my $DEV2 = "en1";		## AirPort
+my $DEVNAME2 = "AirPort";	## AirPort
 
 # DON'T TOUCH BELLOW THIS POINT
 # -----------------------------------------------------------------
@@ -25,7 +25,7 @@ my $DEVTYPE, $DEVTYPE2, $PACKIN, $PACKIN2, $PACKOUT, $PACKOUT2;
 my $RES;
 my $HDD, $HDDFREE;
 my $PROCS;
-my $UPTIM, $DAYSE;
+my $UPTIME, $DAYS;
 
 IRC::register("Darwin SysInfo", "0.2", "", "");
 IRC::print "Loading Darwin SysInfo Script";
@@ -50,17 +50,21 @@ sub get_cpu {
   }
 
   $TYPE = `ioreg | grep $ARCH | cut -d"," -f2 | cut -d"@" -f1 | head -1`;
-  chop($TYPE);
+  chomp($TYPE);
 
   $MODEL = "$ARCH"."/"."$TYPE";
-  $MODEL =~ s/^ +//;
 
   $NUM=`sysctl hw.ncpu | cut -d" " -f3`;
   chop($NUM);
   $NUM =~ s/^ +//;
 
-  unless($NUM eq 1 ) { $MODEL="Dual $MODEL"; }
-  chop ($MODEL);
+  if ($NUM eq 1 ) {
+    $MODEL = $MODEL;
+  } elsif ($NUM eq 2) {
+    $MODEL="Dual $MODEL";
+  } else {
+    $MODEL="Multi $MODEL";
+  }
 
   $HEXCPU = `ioreg -n $ARCH,$TYPE | grep clock-frequency | cut -d"<" -f2 | cut -d">" -f1`;
   chop($HEXCPU);
@@ -79,7 +83,7 @@ sub get_mem {
   $MEMUSED = $1;
   $MEMUSEDGKM = $2;      
   if ($MEMUSEDGKM =~ /^K$/) {
-    $MEMUSED = $MEMUSED /  1024;
+    $MEMUSED = $MEMUSED / 1024;
   } elsif ($MEMUSEDGKM =~ /^G$/) {
     $MEMUSED = $MEMUSED * 1024;
   }
@@ -94,9 +98,11 @@ sub get_mem {
   }
 
   if ($MEMUSEDGKM =~ /^K$/) {
+    $MEMUSED = $MEMUSED * 1024;
     $MEMUSED .= "Kb";
     $MEMTOTAL .= "Kb";
   } elsif ($MEMUSEDGKM =~ /^G$/) {
+    $MEMUSED = $MEMUSED / 1024;
     $MEMUSED .= "Gb";
     $MEMTOTAL .= "Gb";
   } else {
@@ -110,7 +116,7 @@ sub get_net {
   chop($DEVTYPE);
 
   if ($DEVTYPE =~ /^$/) {
-      $DEVTYPE=$TYPE;
+      $DEVTYPE=$DEVNAME;
   }
 
   if ($DEV2) {
@@ -118,7 +124,7 @@ sub get_net {
     chop($DEVTYPE2);
 
     if ($DEVTYPE2 =~ /^$/) {
-        $DEVTYPE2=$TYPE2;
+        $DEVTYPE2=$DEVNAME2;
     }
   }
 
@@ -170,8 +176,9 @@ sub get_hdd {
 
 sub get_procs {
   $PROCS = `ps ax | wc -l`;
-  $PROCS =~ s/^\s+//;
   chop ($PROCS);
+
+  $PROCS =~ s/ //g;
 }
 
 sub get_uptime {
@@ -197,9 +204,9 @@ sub build_output {
   $out .= " %B|%O Screen Res: %B$RES%O";
   $out .= " %B|%O Procs: %B$PROCS%O";
   $out .= " %B|%O Uptime: %B$UPTIME%O";
-  $out .= " %B|%O $TYPE: In: %B$PACKIN%O Out: %B$PACKOUT%O";
+  $out .= " %B|%O $DEVTYPE: In: %B$PACKIN%O Out: %B$PACKOUT%O";
   if ($DEV2) {
-    $out .= " %B|%O $TYPE2: In: %B$PACKIN2%O Out: %B$PACKOUT2%O";
+    $out .= " %B|%O $DEVTYPE2: In: %B$PACKIN2%O Out: %B$PACKOUT2%O";
   }
 }
 
