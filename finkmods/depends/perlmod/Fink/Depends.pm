@@ -215,8 +215,8 @@ sub check_pkg {
 
   # get a list of linked files to the pkg files
   foreach $file (@files) {
-    print "-- ".$file."\n";
     chomp($file);
+    print "-- FILE -- ".$file."\n";
     open(OTOOL, "otool -L $file 2>/dev/null |") or die "can't run otool: $!\n";
       # need to drop all links to system libs and the first two lines
       while (<OTOOL>) {
@@ -225,6 +225,7 @@ sub check_pkg {
         next if ("$_" =~ /\/usr\/lib\//);	# Nuke system libs and 
         next if ("$_" =~ /\/System\/Library/);	# frameworks
         $_ =~ s/\ \(.*$//;			# Nuke the end
+        print "  -- MATCH -- ".$_."\n";
         push(@matches, $_);
       }
     close (OTOOL);
