@@ -2,7 +2,7 @@ Package: discover
 Version: 2.0.1
 Revision: 1
 ###
-Depends: discover-data, libdiscover3-shlibs
+Depends: discover-data, libdiscover3-shlibs, debconf, daemonic
 BuildDepends: curl-dev | curl-ssl-dev, expat, doxygen, check, dlcompat-dev
 ###
 Source: http://archive.progeny.com/progeny/%n/%n-%v.tar.bz2
@@ -26,6 +26,12 @@ InstallScript: <<
   cd scripts; make install DESTDIR=%d
   cd sysdeps; make install DESTDIR=%d
   cd test; make install DESTDIR=%d
+
+  ### debconf stuff
+  mkdir -p %i/etc/default
+  mkdir -p %d/DEBIAN
+  cp fink/discover.config %d/DEBIAN
+  cp fink/discover.templates %d/DEBIAN
 <<
 ###
 SplitOff: <<
@@ -42,6 +48,122 @@ SplitOff2: <<
   Files: lib
   DocFiles: AUTHORS INSTALL LICENSE README RELEASE
   Description: Cross platform hardware detection system devel files
+<<
+###
+DaemonicFile: <<
+  <service>
+    <description>Hardware</description>
+    <message>Darkstat</message>
+    <startmessage>Starting Darkstat</startmessage>
+    <stopmessage>Stopping Darkstat</stopmessage>
+    <restartmessage>Restarting Darkstat</restartmessage>
+
+    <daemon name="%n">
+      <executable background="yes">%p/etc/init.d/%n</executable>
+      <parameters> start</parameters>
+      <pidfile>%p/var/run/%n.pid</pidfile>
+    </daemon>
+  </service>
+<<
+###
+PostInstScript: <<
+SCRIPT=discover.postinst
+
+CONFIG_FILE=%p/etc/default/discover
+
+message () {
+  # pretty-print messages of arbitrary length
+  echo "$*" | fold -s -w ${COLUMNS:-80} >&2;
+}
+
+debug_echo () {
+  # echo debugging messages
+  if [ -n "$DEBCONF_DEBUG" ]; then
+    message "$*"
+  fi;
+}
+
+find_discover_markers () {
+  if [ -z "$1" ]; then
+    echo "$SCRIPT: internal error: find_discover_markers() called without argument" >&2
+    exit 1
+  fi
+  if grep -q "^### BEGIN DEBCONF SECTION FOR discover" $1 && \
+     grep -q "^### END DEBCONF SECTION FOR discover" $1; then
+    return 0
+  else
+    return 1
+  fi;
+}
+
+# source debconf library
+. %p/share/debconf/confmodule
+
+# create/update configuration file using debconf db values
+
+WORKTMP=$CONFIG_FILE.discover-tmp
+DEBCONFTMP=$CONFIG_FILE.debconf-tmp
+
+rm -f $WORKTMP $DEBCONFTMP
+
+cat > $DEBCONFTMP << EOF
+### BEGIN DEBCONF SECTION FOR discover
+# Do not edit within this region if you want your changes to be preserved by
+# debconf.  Instead, make changes before the "### BEGIN DEBCONF SECTION FOR
+# discover" line, and/or after the "### END DEBCONF SECTION FOR discover" line.
+EOF
+
+db_get discover/manage_cdrom_devices
+echo "MANAGE_CDROM_DEVICES=$RET" >> $DEBCONFTMP
+
+db_get discover/cdrom_base_mountpoint
+echo "CDROM_BASE_MOUNTPOINT=$RET" >> $DEBCONFTMP
+
+echo "### END DEBCONF SECTION FOR discover" >> $DEBCONFTMP
+
+# does the config file already exist?
+if [ -e $CONFIG_FILE ]; then
+  # does the file have discover's debconf markers in it?
+  if find_discover_markers $CONFIG_FILE; then
+    debug_echo "found discover markers in $CONFIG_FILE"
+    sed -n '/^### BEGIN DEBCONF SECTION FOR discover/q;p' < $CONFIG_FILE > $WORKTMP
+    cat $DEBCONFTMP >> $WORKTMP
+    sed '1,/^### END DEBCONF SECTION FOR discover/d' < $CONFIG_FILE >> $WORKTMP
+  else
+    debug_echo "did not find discover markers in $CONFIG_FILE"
+    # append our settings to the end of the existing file
+    # (the environment file may have debconf sections from several packages)
+    cat $CONFIG_FILE $DEBCONFTMP > $WORKTMP
+  fi
+else
+  cp $DEBCONFTMP $WORKTMP
+fi
+
+[ -e $WORKTMP ] && mv $WORKTMP $CONFIG_FILE || true
+
+rm -f $WORKTMP $DEBCONFTMP
+
+if [ "$1" = "configure" ]; then
+  # register the init script
+  daemonic enable %n
+  # execute the program (it is not a daemon)
+  %p/etc/init.d/discover start
+fi
+
+exit 0
+<<
+###
+PostRmScript: <<
+CONFFILE=%p/etc/discover.conf
+SKIPFILE=%p/etc/discover-autoskip.conf
+INITFILE=%p/etc/default/discover
+
+if [ "$1" = "purge" ]; then
+  daemonic disable %n
+  rm -f $CONFFILE $SKIPFILE $INITFILE
+fi
+
+exit 0
 <<
 ###
 Description: Cross platform hardware detection system
