@@ -203,11 +203,11 @@ sub process {
 		Fink::Package->require_packages();
 	}
 	eval { &$proc(@_); };
-	if ($@) {
-		my $locker = Fink::Config::get_option("Buildlock_PkgVersion");
-		$locker->clear_buildlock() if ref $locker;
-		print "Failed: $@";
-		return $? || 1;
+	my $proc_rc = { '$@' => $@, '$?' => $? };  # save for later
+	Fink::PkgVersion->clear_buildlock();       # always clean up
+	if ($proc_rc->{'$@'}) {                    # now deal with eval results
+		print "Failed: " . $proc_rc->{'$@'};
+		return $proc_rc->{'$?'} || 1;
 	}
 
 	return 0;

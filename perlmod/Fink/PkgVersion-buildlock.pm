@@ -2809,8 +2809,16 @@ EOF
 }
 
 # remove the lock created by set_buildlock
+# okay to call as a package method (will pull PkgVersion object from Config)
+# or as object method (will use its own PkgVersion object)
 sub clear_buildlock {
 	my $self = shift;
+
+	if (!ref $self) {
+		# called as package method...look up PkgVersion object that locked
+		$self = Fink::Config::get_option("Buildlock_PkgVersion");
+		return if !ref $self;   # get out if there's no lock recorded
+	}
 
 	# lock is always for parent of family
 	if (exists $self->{parent}) {
