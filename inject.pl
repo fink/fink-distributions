@@ -5,6 +5,7 @@
 #
 # Fink - a package manager that downloads source and installs it
 # Copyright (c) 2001 Christoph Pfisterer
+# Copyright (c) 2001-2003 The Fink Package Manager Team
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -27,11 +28,23 @@ use strict;
 
 use File::Find;
 
+### list our directories
+
+my @contents = `ls`;
+my ($filename,@directories);
+foreach $filename (@contents) {
+    chomp($filename);
+    if (-d $filename and not $filename eq "CVS") {
+	push(@directories, $filename);
+    }
+}
 ### check if we're unharmed
 
-if (not -d "10.2/stable/main/finkinfo") {
-  print "ERROR: Package is incomplete.\n";
-  exit 1;
+foreach $filename (@directories) {
+    if (not -d "$filename/stable/main/finkinfo") {
+	print "ERROR: Package is incomplete.\n";
+	exit 1;
+    }
 }
 
 ### locate Fink installation
@@ -64,19 +77,21 @@ if (defined $param) {
 unless (-f "$basepath/bin/fink" and
 	-f "$basepath/bin/init.sh" and
 	-f "$basepath/etc/fink.conf" and
-	-d "$basepath/fink/10.2") {
+	-l "$basepath/fink/dists") {
   &print_breaking("The directory '$basepath'$guessed does not contain a ".
 		  "Fink installation. Please provide the correct path ".
 		  "as a parameter to this script.");
   exit 1;
 }
-if (-d "$basepath/fink/CVS" or -d "$basepath/fink/10.2/CVS") {
+foreach $filename (@directories) {
+    if (-d "$basepath/fink/CVS" or -d "$basepath/fink/$filename/CVS") {
   &print_breaking("The directory '$basepath' contains a Fink installation ".
 		  "that was set up to get package descriptions directly ".
 		  "from CVS. This script will not update this ".
 		  "installation. Run 'cvs update -d -P' in the directory ".
 		  "'$basepath/fink' instead.");
   exit 1;
+}
 }
 
 ### parse config file for root method
@@ -135,9 +150,11 @@ sub wanted {
   }
 }
 
-### this version of the script is for "10.2", not "dists"
+### this version of the script is for "10.2" and later, not "dists"
 
-find(\&wanted, "10.2");
+  foreach $filename (@directories) {
+      find(\&wanted, "$filename");
+  }
 
 ### inform the user
 
