@@ -54,7 +54,7 @@ sub get_cpu {
   }
 
   my $truetype;
-  if ($TYPE = "750") {
+  if ($TYPE eq "750") {
     $truetype = "G3";
   } else {
     $truetype = $TYPE;
