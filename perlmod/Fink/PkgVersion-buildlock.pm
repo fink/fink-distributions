@@ -2667,13 +2667,12 @@ sub phase_purge {
 sub set_buildlock {
 	my $self = shift;
 
-	# always lock on parent pkgname
-	my $lockpkg_minor = 'fink-buildlock-';
 	if (exists $self->{parent}) {
-		$lockpkg_minor .= $self->{parent}->get_fullname();
-	} else {
-		$lockpkg_minor .= $self->get_fullname();
+		($self->{parent})->set_buildlock();
+		return;
 	}
+
+	my $lockpkg_minor = 'fink-buildlock-' . $self->get_fullname();
 	my $lockpkg = $lockpkg_minor . '-' .  strftime "%Y.%m.%d-%H.%M.%S", localtime;
 	$self->{_lockpkg} = $lockpkg;
 
@@ -2698,24 +2697,23 @@ Maintainer: Fink Core Group <fink-core\@lists.sourceforge.net>
 Provides: fink-buildlock, $lockpkg_minor
 EOF
 
-	my @depends;
+	my @pkglist;
 
 	# BuildConflicts of pkg are Conflicts of lockpkg
-	if (exists $self->{parent}) {
-		@depends = @{pkglist2lol($self->{parent}->pkglist('BuildConflicts'))};
-	} else {
-		@depends = @{pkglist2lol($self->pkglist('BuildConflicts'))};
+	@pkglist = @{pkglist2lol($self->pkglist('BuildConflicts'))};
+	push @pkglist, [$lockpkg_minor];  # prevent concurrent builds of $self
+	$control .= 'Conflicts: ' . &lol2pkglist(\@pkglist) . "\n";
+
+	# All *Depends of whole family of pkgs are Depends of lockpkg...
+	@pkglist = ();
+	foreach my $pkg ($self->get_splitoffs(1,1)) {
+		push @pkglist, map { @{&pkglist2lol($pkg->pkglist($_))} } (qw(Depends Pre-Depends BuildDepends));
 	}
-	push @depends, $lockpkg_minor;  # prevent concurrent builds of $self
-	$control .= 'Conflicts: ' . &lol2pkglist(\@depends) . "\n";
 
-	# All *Depends of pkg are Depends of lockpkg
-	@depends = map { @{&pkglist2lol($self->pkglist($_))} } (qw(Depends Pre-Depends BuildDepends));
-
-	# remove pkgs being built now from list (avoid chicken-and-egg)
+	# ...but remove pkgs being built now (avoid chicken-and-egg)
 	my $pkgregex = join "|", map { quotemeta($_->get_name()) } $self->get_splitoffs(1,1);
 	$pkgregex = qr/^(?:$pkgregex)(?:\s*\(|\Z)/;  # a pkglist atom of any of us
-	foreach my $deplist (@depends) {
+	foreach my $deplist (@pkglist) {
 		# nuke the whole OR cluster if any atom matches
 		# ($deplist is the listref value from @depends so changing
 		# $deplist changes the list linked from @depends; no need
@@ -2723,7 +2721,7 @@ EOF
 		$deplist = [] if grep { /$pkgregex/ } @$deplist;
 	}
 
-	my $deplist = &lol2pkglist(\@depends);
+	my $deplist = &lol2pkglist(\@pkglist);
 	$control .= "Depends: $deplist\n" if length $deplist;
 
 	### write "control" file
@@ -2735,7 +2733,6 @@ EOF
 	if (&execute("dpkg-deb -b $destdir $buildpath")) {
 		die "can't create package $lockpkg\n";
 	}
-
 	rm_rf $destdir or
 		&print_breaking("WARNING: Can't remove package root directory ".
 						"$destdir. ".
@@ -2746,27 +2743,32 @@ EOF
 	# install $lockpkg (== set lockfile for building $self)
 	print "Setting build lock...\n";
 	my $debfile = $buildpath.'/'.$lockpkg.'_0-0_'.$debarch.'.deb';
-	if (&execute("dpkg -i $debfile")) {
-		die "can't set build lock for " . $self->get_fullname() . "\n";
+	my $lock_failed = &execute("dpkg -i $debfile");
+#	rm_f $debfile or
+#		&print_breaking("WARNING: Can't remove binary package file ".
+#						"$debfile. ".
+#						"This is not fatal, but you may want to remove ".
+#						"the directory manually to save disk space. ".
+#						"Continuing with normal procedure.");
+	if ($lock_failed) {
+		die "Can't set build lock for " . $self->get_fullname() . "\n";
 	}
-
-	rm_f $debfile or
-		&print_breaking("WARNING: Can't remove binary package file ".
-						"$debfile. ".
-						"This is not fatal, but you may want to remove ".
-						"the directory manually to save disk space. ".
-						"Continuing with normal procedure.");
 }
 
 sub clear_buildlock {
 	my $self = shift;
+
+	if (exists $self->{parent}) {
+		($self->{parent})->clear_buildlock();
+		return;
+	}
 
 	my $lockpkg = $self->{_lockpkg};
 
 	# remove $lockpkg (== clear lock for building $self)
 	print "Removing build lock...\n";
 	if (&execute("dpkg -r $lockpkg")) {
-		die "can't remove build lock for " . $self->get_fullname() . "\n";
+		die "Can't remove build lock for " . $self->get_fullname() . "\n";
 	}
 }
 
