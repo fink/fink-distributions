@@ -1,6 +1,6 @@
-diff -wNaur Mac-Glue-1.22/Glue.pm Mac-Glue-new/Glue.pm
---- Mac-Glue-1.22/Glue.pm	Tue Dec  7 01:22:42 2004
-+++ Mac-Glue-new/Glue.pm	Thu Jan 20 05:12:05 2005
+diff -Naur Mac-Glue-1.23/Glue.pm new/Glue.pm
+--- Mac-Glue-1.23/Glue.pm	Sun Feb 20 01:20:12 2005
++++ new/Glue.pm	Wed Mar  2 01:14:05 2005
 @@ -4,7 +4,7 @@
  # venturing within.  it might seem reasonable at first, but then you
  # get sucked in and it's all over.
@@ -30,25 +30,20 @@ diff -wNaur Mac-Glue-1.22/Glue.pm Mac-Glue-new/Glue.pm
 +	}
 +	
 +	unless ($glue) {
-+		my @alldirs = keys
-+			%{( map { "'" . $_ . "'" => 1 } domain_dirs domain_read )};
++		my %dirhash = map { "'" . $_ . "'" => 1 } domain_dirs domain_read;
++		my @alldirs = keys %dirhash;
 +		croak "No application glue for '$app' found in " .
 +			join(", ", @alldirs);
 +	}
  
  	# if not already opened, open and store reference to db
  	unless (exists $OPENGLUES{$glue}) {
-@@ -1336,12 +1344,15 @@
+@@ -1336,31 +1344,43 @@
  sub _open_others {
  	chomp(my $curdir = `pwd`);
  	my @others;
 -	for my $dir (map { catfile($MACGLUEDIR, $_) } qw[dialects additions]) {
 -		unless (-e $dir) {
--			warn "Please run gluedialect and gluescriptadds programs"
--				unless $Mac::Glue::CREATINGGLUES;
--			next;
--		}
-+	
 +	for my $subdir (qw(dialects additions)) {
 +		my $seensub = 0;
 +		
@@ -57,24 +52,57 @@ diff -wNaur Mac-Glue-1.22/Glue.pm Mac-Glue-new/Glue.pm
 +			my $dir = catfile($gluedir, $subdir);
 +			next unless -e $dir;
 +			$seensub = 1;
- 
- 		local *DIR;
- 		opendir DIR, $dir or confess "Can't open directory '$dir': $!";
-@@ -1360,6 +1371,13 @@
- 			push @$OTHERENUM,  $db{ENUM}  if $db{ENUM};
++
++			local *DIR;
++			opendir DIR, $dir or confess "Can't open directory '$dir': $!";
++			chdir $dir or confess "Can't chdir directory '$dir': $!";
++	
++			# add file type / creator checking ???
++			# maybe add a new file type for glues?  i can do that now,
++			# because i am special or something.
++			for (readdir DIR) {
++				next if -d;
++				next if $_ eq "Icon\015";
++				next if /\.pod$/;
++				tie my %db, 'MLDBM', $_, O_RDONLY
++					or confess "Can't tie '$_': $!";
++				push @$OTHEREVENT, $db{EVENT} if $db{EVENT};
++				push @$OTHERCLASS, $db{CLASS} if $db{CLASS};
++				push @$OTHERENUM,  $db{ENUM}  if $db{ENUM};
++			}
++		}
++		
++		unless ($seensub) {
+ 			warn "Please run gluedialect and gluescriptadds programs"
+ 				unless $Mac::Glue::CREATINGGLUES;
+ 			$Mac::Glue::NEEDCREATE = 1;
+-			next;
+-		}
+-
+-		local *DIR;
+-		opendir DIR, $dir or confess "Can't open directory '$dir': $!";
+-		chdir $dir or confess "Can't chdir directory '$dir': $!";
+-
+-		# add file type / creator checking ???
+-		# maybe add a new file type for glues?  i can do that now,
+-		# because i am special or something.
+-		for (readdir DIR) {
+-			next if -d;
+-			next if $_ eq "Icon\015";
+-			next if /\.pod$/;
+-			tie my %db, 'MLDBM', $_, O_RDONLY or confess "Can't tie '$_': $!";
+-			push @$OTHEREVENT, $db{EVENT} if $db{EVENT};
+-			push @$OTHERCLASS, $db{CLASS} if $db{CLASS};
+-			push @$OTHERENUM,  $db{ENUM}  if $db{ENUM};
  		}
  	}
-+		
-+		warn "Please run gluedialect and gluescriptadds programs"
-+			unless $seensub || $Mac::Glue::CREATINGGLUES;
-+	}
 +	
 +	
 +	
  	chdir $curdir or confess "Can't chdir to '$curdir': $!";
  }
  
-@@ -1728,15 +1746,24 @@
+@@ -1729,15 +1749,24 @@
  parse an application's AETE resource, and the glue is written out to a
  file using Storable, DB_File, and MLDBM.  Glues are saved in
  $ENV{MACGLUEDIR} (which is defined when Mac::Glue is used if it is not
@@ -104,9 +132,9 @@ diff -wNaur Mac-Glue-1.22/Glue.pm Mac-Glue-new/Glue.pm
  
  Along with the glue file is a POD file containing documentation for the
  glue, listing all the events (with parameters), classes (with
-diff -wNaur Mac-Glue-1.22/lib/Mac/Glue/Common.pm Mac-Glue-new/lib/Mac/Glue/Common.pm
---- Mac-Glue-1.22/lib/Mac/Glue/Common.pm	Tue Dec  7 01:24:37 2004
-+++ Mac-Glue-new/lib/Mac/Glue/Common.pm	Thu Jan 20 02:32:03 2005
+diff -Naur Mac-Glue-1.23/lib/Mac/Glue/Common.pm new/lib/Mac/Glue/Common.pm
+--- Mac-Glue-1.23/lib/Mac/Glue/Common.pm	Tue Dec  7 01:24:37 2004
++++ new/lib/Mac/Glue/Common.pm	Wed Mar  2 01:09:49 2005
 @@ -25,11 +25,12 @@
  
  use base 'Exporter';
@@ -135,18 +163,21 @@ diff -wNaur Mac-Glue-1.22/lib/Mac/Glue/Common.pm Mac-Glue-new/lib/Mac/Glue/Commo
 -	$MACGLUEDIR ||= "$ENV{MACPERL}site_perl:Mac:Glue:glues:";
 -	$MACGLUEDIR  .= ':' unless $MACGLUEDIR =~ /:$/;
 -} elsif (!$MACGLUEDIR) {
+-	my $dir = dirname $INC{'Mac/Glue/Common.pm'};
+-	unless (file_name_is_absolute($dir)) {
+-		require Cwd;
+-		$dir = catdir(Cwd::cwd(), $dir);
 +	$macgluedir ||= "$ENV{MACPERL}site_perl:Mac:Glue:glues:";
 +	$macgluedir  .= ':' unless $macgluedir =~ /:$/;
 +	
 +	%MACGLUEDIRS = map { $_ => $macgluedir } @alldomains;
 +} else {
 +	if (!$macgluedir) {
- 	my $dir = dirname $INC{'Mac/Glue/Common.pm'};
- 	unless (file_name_is_absolute($dir)) {
- 		require Cwd;
- 		$dir = catdir(Cwd::cwd(), $dir);
- 	}
--	$MACGLUEDIR = catdir($dir, 'glues');
++		my $dir = dirname $INC{'Mac/Glue/Common.pm'};
++		unless (file_name_is_absolute($dir)) {
++			require Cwd;
++			$dir = catdir(Cwd::cwd(), $dir);
++		}
 +		$macgluedir = catdir($dir, 'glues');
 +	}
 +	
@@ -159,7 +190,8 @@ diff -wNaur Mac-Glue-1.22/lib/Mac/Glue/Common.pm Mac-Glue-new/lib/Mac/Glue/Commo
 +			$libloc,				# local
 +			$ENV{HOME} . $libloc	# user
 +		);
-+	}
+ 	}
+-	$MACGLUEDIR = catdir($dir, 'glues');
 +	@MACGLUEDIRS{@alldomains} = reverse @gluedirs;
  }
  
@@ -248,9 +280,9 @@ diff -wNaur Mac-Glue-1.22/lib/Mac/Glue/Common.pm Mac-Glue-new/lib/Mac/Glue/Commo
  
  EOT
  	exit;
-diff -wNaur Mac-Glue-1.22/make_glues Mac-Glue-new/make_glues
---- Mac-Glue-1.22/make_glues	Wed May 19 11:58:41 2004
-+++ Mac-Glue-new/make_glues	Wed Jan 19 01:39:58 2005
+diff -Naur Mac-Glue-1.23/make_glues new/make_glues
+--- Mac-Glue-1.23/make_glues	Wed May 19 11:58:41 2004
++++ new/make_glues	Wed Mar  2 01:08:36 2005
 @@ -9,15 +9,15 @@
  push @apps, 'sevs', 'imev' if $^O ne 'MacOS';
  my @paths = map { $Application{$_} } @apps;
@@ -270,9 +302,9 @@ diff -wNaur Mac-Glue-1.22/make_glues Mac-Glue-new/make_glues
 +system($^X, $lib, "$script/gluemac", '-I', '-D', 'system', @paths);
  
  __END__
-diff -wNaur Mac-Glue-1.22/scripts/gluedialect.PL Mac-Glue-new/scripts/gluedialect.PL
---- Mac-Glue-1.22/scripts/gluedialect.PL	Sat May  3 21:09:47 2003
-+++ Mac-Glue-new/scripts/gluedialect.PL	Wed Jan 19 01:38:37 2005
+diff -Naur Mac-Glue-1.23/scripts/gluedialect.PL new/scripts/gluedialect.PL
+--- Mac-Glue-1.23/scripts/gluedialect.PL	Sat May  3 21:09:47 2003
++++ new/scripts/gluedialect.PL	Wed Mar  2 01:08:36 2005
 @@ -32,6 +32,7 @@
  Read the documentation for created glues with the gluedoc program (for
  dialects, use the -d switch).
@@ -281,9 +313,9 @@ diff -wNaur Mac-Glue-1.22/scripts/gluedialect.PL Mac-Glue-new/scripts/gluedialec
  }
  
  use File::Spec::Functions;
-diff -wNaur Mac-Glue-1.22/scripts/gluedoc.PL Mac-Glue-new/scripts/gluedoc.PL
---- Mac-Glue-1.22/scripts/gluedoc.PL	Wed May 19 03:27:26 2004
-+++ Mac-Glue-new/scripts/gluedoc.PL	Wed Jan 19 23:24:34 2005
+diff -Naur Mac-Glue-1.23/scripts/gluedoc.PL new/scripts/gluedoc.PL
+--- Mac-Glue-1.23/scripts/gluedoc.PL	Wed May 19 03:27:26 2004
++++ new/scripts/gluedoc.PL	Wed Mar  2 01:08:36 2005
 @@ -76,7 +76,8 @@
  
  my %list;
@@ -302,9 +334,9 @@ diff -wNaur Mac-Glue-1.22/scripts/gluedoc.PL Mac-Glue-new/scripts/gluedoc.PL
  			}
  		}
  	}
-diff -wNaur Mac-Glue-1.22/scripts/gluemac.PL Mac-Glue-new/scripts/gluemac.PL
---- Mac-Glue-1.22/scripts/gluemac.PL	Tue Sep  2 03:37:04 2003
-+++ Mac-Glue-new/scripts/gluemac.PL	Wed Jan 19 23:31:20 2005
+diff -Naur Mac-Glue-1.23/scripts/gluemac.PL new/scripts/gluemac.PL
+--- Mac-Glue-1.23/scripts/gluemac.PL	Tue Sep  2 03:37:04 2003
++++ new/scripts/gluemac.PL	Wed Mar  2 01:08:36 2005
 @@ -37,6 +37,7 @@
  		where the app versions don't match)
  EOT
@@ -346,9 +378,9 @@ diff -wNaur Mac-Glue-1.22/scripts/gluemac.PL Mac-Glue-new/scripts/gluemac.PL
  		}
  	}
  	glue($opts, \@paths) if @paths && $opts->{r};
-diff -wNaur Mac-Glue-1.22/scripts/gluescriptadds.PL Mac-Glue-new/scripts/gluescriptadds.PL
---- Mac-Glue-1.22/scripts/gluescriptadds.PL	Sat May  3 21:09:47 2003
-+++ Mac-Glue-new/scripts/gluescriptadds.PL	Wed Jan 19 01:38:42 2005
+diff -Naur Mac-Glue-1.23/scripts/gluescriptadds.PL new/scripts/gluescriptadds.PL
+--- Mac-Glue-1.23/scripts/gluescriptadds.PL	Sat May  3 21:09:47 2003
++++ new/scripts/gluescriptadds.PL	Wed Mar  2 01:08:36 2005
 @@ -32,6 +32,7 @@
  Read the documentation for created glues with the gluedoc program (for
  additions, use the -a switch).
@@ -357,9 +389,9 @@ diff -wNaur Mac-Glue-1.22/scripts/gluescriptadds.PL Mac-Glue-new/scripts/gluescr
  }
  
  use File::Find;
-diff -wNaur Mac-Glue-1.22/scripts/show_glue_pods Mac-Glue-new/scripts/show_glue_pods
---- Mac-Glue-1.22/scripts/show_glue_pods	Wed Aug 27 22:48:07 2003
-+++ Mac-Glue-new/scripts/show_glue_pods	Wed Jan 19 23:28:22 2005
+diff -Naur Mac-Glue-1.23/scripts/show_glue_pods new/scripts/show_glue_pods
+--- Mac-Glue-1.23/scripts/show_glue_pods	Wed Aug 27 22:48:07 2003
++++ new/scripts/show_glue_pods	Wed Mar  2 01:08:36 2005
 @@ -1,18 +1,21 @@
  #!perl -w
  use File::Spec::Functions;
