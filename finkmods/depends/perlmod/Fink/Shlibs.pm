@@ -60,13 +60,15 @@ END { }				# module clean-up code here (global destructor)
 sub get_shlib {
   my $self = shift;
   my $lib = shift;
-  my ($dep);
+  my ($dep, $shlib);
+
+  $dep = "";
 
   $self->require_shlibs();
 
-  foreach $shlibs (keys %shlib_hash) {
-    if ($shlibs eq $lib) {
-      $dep = $shlib_hash{package};
+  foreach $shlib (keys %shlib_hash) {
+    if ("$shlib" eq "$lib") {
+      $dep = $shlib_hash{$shlib}->{packages};
     }
   }
 

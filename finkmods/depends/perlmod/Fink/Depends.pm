@@ -38,17 +38,14 @@ BEGIN {
   $VERSION = 1.00;
   @ISA         = qw(Exporter Fink::Base);
   @EXPORT      = qw();
-  @EXPORT_OK   = qw(&show_shlibs &show_versions &depends_version &run_dependscheck);
+  @EXPORT_OK   = qw(&run_dependscheck);
   %EXPORT_TAGS = ( );
 }
 our @EXPORT_OK;
-our %PACKAGES;
 our %SHLIBS;
 
 # this is the one and only version number
 our $depends_version = "0.3.0.cvs";
-our $show_versions = "false";
-our $show_shlibs = "false";
 
 END { }       # module clean-up code here (global destructor)
 
@@ -56,16 +53,6 @@ END { }       # module clean-up code here (global destructor)
 
 sub depends_version {
   return $depends_version;
-}
-
-sub show_versions {
-  $show_versions = "true";
-  return;
-}
-
-sub show_shlibs {
-  $show_shlibs = "true";
-  return;
 }
 
 sub run_dependscheck {
@@ -92,46 +79,13 @@ sub run_dependscheck {
   @depends = &check_pkg($pkgname);
 
   foreach $depend (@depends) {
-    chomp($depend);
-    if ($depend =~ /shlibs$/) {
-      $pkgversion = get_shlibsversion($depend);
-      $depend = $pkgversion;
-      $SHLIBS{$depend} = 1;
-    } elsif ($depend =~ /^\/usr/ || $depend =~ /^\/System/) {
-      $SHLIBS{$depend} = 1;
-    } else {
-    if ($show_versions eq "true") {
-        $pkgversion = get_dependversion($depend);
-        $pkgversion = "(>= $pkgversion)";
-        $depend = "$depend $pkgversion";
-        $PACKAGES{$depend} = 1;
-      } else {
-        $PACKAGES{$depend} = 1;
-      }
-    }
+    $SHLIBS{$depend} = 1;
   }
 
-  if ($show_shlibs eq "true") {
-    if (keys %SHLIBS) {
-      print "Shared Libs: ", join(', ', sort keys %SHLIBS), "\n\n";
-    } else {
-      print "Has no shlibs depends!\n\n";
-    }
-  }
-  if (keys %PACKAGES || keys %SHLIBS) {    
-    print "Depends: ";
-    if (keys %SHLIBS) {
-      print "\${SHLIB_DEPS}";
-    }
-    if (keys %SHLIBS && keys %PACKAGES) {
-      print ", ";
-    }
-    if (keys %PACKAGES) {
-      print join(', ', sort keys %PACKAGES);
-    }
-    print "\n\n";
+  if (keys %SHLIBS) {
+    print "Shared Libs: ".join(', ', sort keys %SHLIBS)."\n\n";
   } else {
-    print "Has no lib depends!\n\n";
+    print "Has no shlibs depends!\n\n";
   }
 
   return;
@@ -161,61 +115,20 @@ sub check_installed {
   return 0;
 }
 
-### Get Depend version
-sub get_dependversion {
+### Get Depend from shlibs db
+sub get_shlibs_dep {
   my $pattern = shift;
-  my ($vo, $lversion, @allnames, @selected, $pname, $package);
+  my $dep;
 
-  Fink::Package->require_packages();
-  @allnames = Fink::Package->list_packages();
-  @selected = ();
-  $pattern = lc quotemeta $pattern;
-  push @selected, grep(/^$pattern$/, @allnames);
-  foreach $pname (sort @selected) {
-    $package = Fink::Package->package_by_name($pname);
-    $lversion = &latest_version($package->list_versions());
-  }
+  $dep = Fink::Shlibs->get_shlib($pattern);
 
-  return $lversion;
-}
-
-### Get Depend version from shlibs field
-sub get_shlibsversion {
-  my $pattern = shift;
-  my ($vo, $lversion, @allnames, @selected, $pname, $package);
-  my ($shlib, $sdepend, @shlibs);
-
-  Fink::Package->require_packages();
-  @allnames = Fink::Package->list_packages();
-  @selected = ();
-  $pattern = lc quotemeta $pattern;
-  push @selected, grep(/^$pattern$/, @allnames);
-  foreach $pname (sort @selected) {
-    $package = Fink::Package->package_by_name($pname);
-    $lversion = &latest_version($package->list_versions());
-    $vo = $package->get_version($lversion);
-  }
-
-  if ($vo->has_param("shlibs")) {
-    @shlibs = split(/\n/, $vo->param("shlibs"));
-    foreach $shlib (@shlibs) {
-      ### FIXME not a perfect check, need to be more specific
-      if (($shlib =~ / $pattern /m || $shlib =~ / %n /m) && $shlib =~ /^.+ [.0-9]+ (.*)$/) {
-        $sdepend = $1;
-        $sdepend =~ s/%n/$pattern/mg;
-        $sdepend =~ s/%N/$pattern/mg;
-        $sdepend =~ s/\\//mg;
-      }
-    }
-  }
-
-  return $sdepend;
+  return $dep;
 }
 
 
 sub check_pkg {
   my $pkgname = shift;
-  my (@depends, $depend, @files, $file, @matches, $match, $vers);
+  my (@depends, $depend, @files, $file, @matches, $match, $vers, $deb);
 
   # get files to test
   open(DPKG, "dpkg --listfiles $pkgname 2>/dev/null |") or die "can't run dpkg: $!\n";
@@ -256,18 +169,10 @@ sub check_pkg {
    # get list of depend pkgs
    foreach $match (@matches) {
     if (length($match) > 1) {
-      ### FIXME, need to use open and close here
-      open (SEARCH, "dpkg --search $match 2>/dev/null |") or die "can't run dpkg search: $!\n";
-        while (<SEARCH>) {
-          chomp();
-          #next if;
-          $_ =~ s/\:.*$//;		# strip out everything after the colon
-
-          ### FIXME: add virtual and/or provides here to use || and && in pkgs.
-          next if ($_ eq $pkgname);	# Can't dpend on it's self
-          push(@depends, $_);
-        }
-      close(SEARCH);
+      $deb = Fink::Shlibs->get_shlib($match);
+      if (length($deb) > 1) {
+        push(@depends, $deb);
+      }
     }
   }
  
