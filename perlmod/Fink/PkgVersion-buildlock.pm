@@ -2667,7 +2667,8 @@ sub phase_purge {
 sub set_buildlock {
 	my $self = shift;
 
-	my $lockpkg = 'fink-buildlock-' . $self->get_fullname();
+	my $lockpkg_minor = 'fink-buildlock-' . $self->get_fullname();
+	my $lockpkg = $lockpkg_minor . '-' .  strftime "%Y.%m.%d-%H.%M.%S", localtime;
 	$self->{_lockpkg} = $lockpkg;
 
 	my $destdir = "$buildpath/root-$lockpkg";
@@ -2677,37 +2678,33 @@ sub set_buildlock {
 			die "can't create directory for control files for package $lockpkg\n";
 	}
 
-	my $timestamp = strftime "%Y.%m.%d-%H.%M.%S", localtime;
-
 	# generate dpkg "control" file
 
 	my $control = <<EOF;
 Package: $lockpkg
 Source: fink
-Version: $timestamp
+Version: 0-0
 Section: unknown
 Installed-Size: 0
 Architecture: $debarch
 Description: Package compile-time lockfile
 Maintainer: Fink Core Group <fink-core\@lists.sourceforge.net>
-Provides: fink-buildlock
+Provides: fink-buildlock, $lockpkg_minor
 EOF
 
-	my $parent = $self;
-	$parent = $self->{parent} if exists $self->{parent};
+	my @depends;
 
 	# BuildConflicts of pkg are Conflicts of lockpkg
-	if ($parent->has_param('BuildConflicts')) {
-		$control .= 'Conflicts: ' . &collapse_space($parent->pkglist('BuildConflicts')) . "\n";
+	if (exists $self->{parent}) {
+		@depends = @{pkglist2lol($self->{parent}->$pkglist('BuildConflicts'))};
+	} else {
+		@depends = @{pkglist2lol($self->$pkglist('BuildConflicts'))};
 	}
+	pushd @depends, $lockpkg_minor;  # prevent concurrent builds of $self
+	$control .= 'Conflicts: ' . &lol2pkglist(\@depends) . "\n";
 
 	# All *Depends of pkg are Depends of lockpkg
-	my @depends = ( [] );
-	foreach my $field (qw(Depends Pre-Depends BuildDepends)) {
-		if ($self->has_pkglist($field)) {
-			push @depends, @{&pkglist2lol($self->pkglist($field))};
-		}
-	}
+	@depends = map { @{&pkglist2lol($self->pkglist($field))} } (qw(Depends Pre-Depends BuildDepends));
 
 	# remove pkgs being built now from list (avoid chicken-and-egg)
 	my $pkgregex = join "|", map { quotemeta($_->get_name()) } $self->get_splitoffs(1,1);
@@ -2720,12 +2717,8 @@ EOF
 		$deplist = [] if grep { /$pkgregex/ } @$deplist;
 	}
 
-	### CRITICAL FIXME: change this to be the version whose
-	###                 fink-virt-packages exports BuildDependsOnly
-	###                 packages to dpkg
-	unshift @depends, [ 'fink (>= 0.23.1.cvs)' ];
-
-	$control .= 'Depends: ' . &lol2pkglist(\@depends) . "\n";
+	my $deplist = &lol2pkglist(\@depends);
+	$control .= "Depends: $deplist\n" if length $deplist;
 
 	### write "control" file
 	open(CONTROL,">$destdir/DEBIAN/control") or die "can't write control file for $lockpkg: $!\n";

@@ -1673,8 +1673,6 @@ sub real_install {
 					### Double check it didn't already get
 					### installed in an other loop
 					if (!$package->is_installed() || $op == $OP_REBUILD) {
-						$package->phase_unpack();
-						$package->phase_patch();
 						$package->set_buildlock();
 						$SIG{__DIE__} =
 							sub {
@@ -1682,6 +1680,8 @@ sub real_install {
 									&&
 								$package->clear_buildlock();
 							};  # clear buildlock if we crash while building
+						$package->phase_unpack();
+						$package->phase_patch();
 						$package->phase_compile();
 						$package->phase_install();
 						$SIG{__DIE__} = 'DEFAULT';
