@@ -1,0 +1,142 @@
+diff -Naur manedit-old/manedit/Makefile.FreeBSD manedit-new/manedit/Makefile.FreeBSD
+--- manedit-old/manedit/Makefile.FreeBSD	Tue Apr 29 19:51:49 2003
++++ manedit-new/manedit/Makefile.FreeBSD	Sun Jan 18 22:56:24 2004
+@@ -116,7 +116,7 @@
+ # Build Rules:
+ #
+ $(BIN): $(OBJ_C) $(OBJ_CPP)
+-	$(CC) $(OBJ_C) $(OBJ_CPP) -o $(BIN) $(LIB) $(LIB_DIR)
++	$(CPP) $(OBJ_C) $(OBJ_CPP) -o $(BIN) $(LIB) $(LIB_DIR)
+ 
+ all: $(BIN) $(BIN).1.out
+ 
+diff -Naur manedit-old/manedit/Makefile.install.FreeBSD manedit-new/manedit/Makefile.install.FreeBSD
+--- manedit-old/manedit/Makefile.install.FreeBSD	Tue Apr 29 19:51:49 2003
++++ manedit-new/manedit/Makefile.install.FreeBSD	Sun Jan 18 22:56:24 2004
+@@ -11,7 +11,7 @@
+ #	PREFIX
+ #
+ 
+-INSTALL      = install -o root -g wheel
++INSTALL      = install
+ INSTBINFLAGS = -m 0755
+ INSTMANFLAGS = -m 0444
+ INSTDATFLAGS = -m 0644
+diff -Naur manedit-old/manedit/config.h manedit-new/manedit/config.h
+--- manedit-old/manedit/config.h	Tue Apr 29 19:51:49 2003
++++ manedit-new/manedit/config.h	Sun Jan 18 22:56:25 2004
+@@ -6,7 +6,7 @@
+ #define CONFIG_H
+ 
+ #ifndef PREFIX
+-# define PREFIX	"/usr"
++# define PREFIX
+ #endif
+ 
+ 
+@@ -136,7 +136,7 @@
+  *	%p = optional parameters
+  */
+ #if !defined(__FreeBSD__)
+-#define MEDIT_CMD_MANPAGE_TO_OUTPUT	(PREFIX "/bin/man %p %f")
++#define MEDIT_CMD_MANPAGE_TO_OUTPUT	("/usr/bin/groff -S -s -p -t -e -Tascii -mandoc %p %f")
+ #else
+ #define MEDIT_CMD_MANPAGE_TO_OUTPUT	(PREFIX "/bin/manwrap %p %f")
+ #endif	/* !__FreeBSD__ */
+diff -Naur manedit-old/manedit/fb.c manedit-new/manedit/fb.c
+--- manedit-old/manedit/fb.c	Tue Apr 29 19:51:49 2003
++++ manedit-new/manedit/fb.c	Sun Jan 18 22:56:24 2004
+@@ -14,7 +14,6 @@
+ #  include <sys/mnttab.h>
+ #  include <sys/vfstab.h>
+ # else
+-#  include <mntent.h>
+ # endif
+ #endif
+ #include <gtk/gtk.h>
+@@ -695,6 +694,44 @@
+  */
+ static gchar **FileBrowserGetDrivePaths(gint *n)
+ {
++#if 1
++	gint i, strc = 0;
++	gchar **strv = NULL;
++        
++        char *buf;
++        size_t len;
++        FILE *fp = popen("/bin/df -t nodevfs,fdesc,volfs | perl -e '$_=<>; $blks=8+index($_,512); "
++                         "$mnt=index($_,Mounted)-$blks; while(<>){$_=substr($_,$blks); "
++                         "if(/^\\S/){$_=substr($_,$mnt); print}}'", "r");
++        
++        if (fp == NULL || (buf = fgetln(fp, &len)) == NULL)
++	{
++	    if(n != NULL)
++		*n = strc;
++	    return(strv);
++	}
++        
++        do {
++	    i = strc;
++	    strc = i + 1;
++	    strv = (gchar **)g_realloc(
++                                       strv, strc * sizeof(gchar *)
++                                       );
++	    if(strv == NULL)
++	    {
++		strc = 0;
++		break;
++	    }
++            
++	    /* Get mount path as the drive path */
++	    strv[i] = g_strndup(buf, len - 1);
++        } while ( (buf = fgetln(fp, &len)) != NULL );
++        
++	if(n != NULL)
++	    *n = strc;
++        pclose(fp);
++	return(strv);
++#else
+ #ifdef __MSW__
+ 	gchar drive_letter = 'a';
+ 	gchar drive_name[10];
+@@ -734,14 +771,15 @@
+         struct vfstab *vfs_ptr = NULL;
+         int mtback;
+ #else
+-        struct mntent *mt_ptr;
++        struct statfs *mt_ptr;
+ #endif
+ 
+ 	/* Open system devices list file */
+ #ifdef __SOLARIS__
+ 	FILE *fp = FOpen("/etc/vfstab", "rb");
+ #else
+-	FILE *fp = setmntent("/etc/fstab", "rb");
++//	FILE *fp = setmntent("/etc/fstab", "rb");
++	int fsnum = getmntinfo(&mt_ptr, MNT_WAIT);
+ #endif
+ 	if(fp == NULL)
+ 	{
+@@ -801,6 +839,7 @@
+ 	    *n = strc;
+ 
+ 	return(strv);
++#endif
+ #endif
+ }
+ 
+diff -Naur manedit-old/manedit/prochandle.cpp manedit-new/manedit/prochandle.cpp
+--- manedit-old/manedit/prochandle.cpp	Tue Apr 29 19:51:49 2003
++++ manedit-new/manedit/prochandle.cpp	Sun Jan 18 22:56:25 2004
+@@ -244,10 +244,7 @@
+         if(pid == 0)
+             return(0);
+ 
+-        if(sched_getparam(
+-            pid,
+-            &sp
+-        ) == 0)
++        if(kill(pid, SIGINFO) == 0)
+             return(1);
+         else
+             return(0);
