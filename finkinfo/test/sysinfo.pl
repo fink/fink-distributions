@@ -4,25 +4,19 @@
 # kc8apf's sysinfo v0.6 for x-chat
 # Avaliable at http://www.kc8apf.net/sysinfo/sysinfo.pl
 # Author: <kc8apf@kc8apf.net>
-# usage : /sys
-# -----------------------------------------------------------------
-# YOU MUST ASSIGN THE VARIABLE BELOW TO SET YOUR INTERNET
-# CONNECTION DEVICE
-
-my $DEV = "en0";		## EtherNet
-my $DEVNAME = "EtherNet";	## EtherNet
-my $DEV2 = "en1";		## AirPort
-my $DEVNAME2 = "AirPort";	## AirPort
-my $BASEPATH = "/sw";		## Base Fink Path
-
-# DON'T TOUCH BELLOW THIS POINT
+# usage : /sys, /up, /fink, /playing, /saveinfo, /showinfo, /loadinfo
+#         /enable <option>, /conf <option> <value>
 # -----------------------------------------------------------------
 
 my $out;
+my ($ENABLEDEV1, $ENABLEDEV2, $ENABLEPPP, $ENABLEFINK);
+my ($DEV1, $DEV1NAME, $DEV2, $DEV2NAME, $PPP, $PPPNAME);
+my $BASEPATH;
 my $UNAME;
 my ($ARCH, $TYPE, $MODEL, $NUM, $CPU);
 my ($MEMTOTAL, $MEMUSED, $MEMGKM, $MEMPERCENT);
-my ($DEVTYPE, $DEVTYPE2, $PACKIN, $PACKIN2, $PACKOUT, $PACKOUT2);
+my ($DEV1TYPE, $PACKIN1, $PACKOUT1);
+my ($DEV2TYPE, $PACKIN2, $PACKOUT2);
 my $RES;
 my ($HDDTOTAL, $HDDUSED, $HDDCOUNT);
 my $PROCS;
@@ -31,11 +25,98 @@ my ($OSX, $OSXVERS, $OSXBUILD);
 my ($FINKVERS, $DISTVERS, $FINKPKGS, $FINKTREE);
 my ($DEVTOOLS, $TOOLVERS, $TOOLBUILD, $GCCVERS);
 
+IRC::print "Loading Darwin SysInfo Script\n";
+
+# Try to load the config
+LoadConfig();
+
 IRC::register("Darwin SysInfo", "0.2", "", "");
-IRC::print "Loading Darwin SysInfo Script";
+
+IRC::add_command_handler("loadinfo", LoadConfig);
+IRC::add_command_handler("saveinfo", SaveConfig);
+IRC::add_command_handler("showinfo", ShowConfig);
 IRC::add_command_handler("sys", display_info);
 IRC::add_command_handler("up", display_uptime);
 IRC::add_command_handler("fink", display_fink);
+
+sub LoadConfig {
+  open (FD,"<$ENV{HOME}/.xchat/sysinfo.conf");
+  foreach(<FD>) {
+    @values = split(/=/, $_);
+    chomp($values[1]);
+    if ($values[0] eq "enabledev1") {
+      $ENABLEDEV1 = $values[1];
+    } elsif ($values[0] eq "dev1") {
+      $DEV1 = $values[1];
+    } elsif ($values[0] eq "dev1name") {
+      $DEV1NAME = $values[1];
+    } elsif ($values[0] eq "enabledev2") {
+      $ENABLEDEV2 = $values[1];
+    } elsif ($values[0] eq "dev2") {
+      $DEV2 = $values[1];
+    } elsif ($values[0] eq "dev2name") {
+      $DEV2NAME = $values[1];
+    } elsif ($values[0] eq "enableppp") {
+      $ENABLEPPP = $values[1];
+    } elsif ($values[0] eq "ppp") {
+      $PPP = $values[1];
+    } elsif ($values[0] eq "pppname") {
+      $PPPNAME = $values[1];
+    } elsif ($values[0] eq "enablefink") {
+      $ENABLEFINK = $values[1];
+    } elsif ($values[0] eq "basepath") {
+      $BASEPATH = $values[1];
+    }
+  }
+  close(FD);
+  IRC::print "Configuration loaded\n";
+}
+
+sub SaveConfig {
+  open (FD, ">$ENV{HOME}/.xchat/sysinfo.conf");
+    print(FD "enabledev1=\"$ENABLEDEV1\"\n");
+    print(FD "dev1=\"$DEV1\"\n");
+    print(FD "dev1name=\"$DEV1NAME\"\n\n");
+    print(FD "enabledev2=\"$ENABLEDEV2\"\n");
+    print(FD "dev2=\"$DEV2\"\n");
+    print(FD "dev2name=\"$DEV2NAME\"\n\n");      
+    print(FD "enableppp=\"$ENABLEPPP\"\n");
+    print(FD "ppp=\"$PPP\"\n");
+    print(FD "pppname=\"$PPPNAME\"\n\n");
+    print(FD "enablefink=\"$ENABLEFINK\"\n");
+    print(FD "basepath=\"$BASEPATH\"\n");
+  close(FD);
+  IRC::print "Configuration saved\n";
+}
+
+sub ShowConfig {
+  IRC::print "\nDarwin SysInfo\n";
+  IRC::print "   Device 1\n";
+  IRC::print "      Enabled: $ENABLEDEV1\n";
+  if ($ENABLEDEV1 =~ m/true/i) {
+    IRC::print "      Device: $DEV1\n";
+    IRC::print "      Name: $DEV1NAME\n";
+  }
+  IRC::print "   Device 2\n";
+  IRC::print "      Enabled: $ENABLEDEV2\n";
+  if ($ENABLEDEV2 =~ m/true/i) {
+    IRC::print "      Device: $DEV2\n";
+    IRC::print "      Name: $DEV2NAME\n";
+  }
+  IRC::print "   PPP\n";      
+  IRC::print "      Enabled: $ENABLEPPP\n";
+  if ($ENABLEPPP =~ m/true/i) {
+    IRC::print "      Device: $PPP\n";
+    IRC::print "      Name: $PPPNAME\n";
+  }
+  IRC::print "   Fink\n";
+  IRC::print "      Enabled: $ENABLEFINK\n";
+  if ($ENABLEFINK =~ m/true/i) {
+    IRC::print "      Base Path: $BASEPATH\n";
+  }
+
+  return 1;
+}
 
 sub get_uname {
   chomp($UNAME = `uname -sr`);
@@ -126,52 +207,55 @@ sub get_mem {
   }
 }
 
-sub get_net {
-  $DEVTYPE=`dmesg | grep $DEV: | head -n1 | cut -d"<" -f2 | cut -d">" -f1`;
-  chop($DEVTYPE);
+sub get_ppp {
+}
 
-  if ($DEVTYPE =~ /^$/) {
-      $DEVTYPE=$DEVNAME;
+sub get_net {
+  $DEV1TYPE=`dmesg | grep $DEV1: | head -n1 | cut -d"<" -f2 | cut -d">" -f1`;
+  chop($DEV1TYPE);
+
+  if ($DEV1TYPE =~ /^$/) {
+      $DEV1TYPE=$DEV1NAME;
   }
 
   if ($DEV2) {
-    $DEVTYPE2=`dmesg | grep $DEV2: | head -n1 | cut -d"<" -f2 | cut -d">" -f1`;
-    chop($DEVTYPE2);
+    $DEV2TYPE=`dmesg | grep $DEV2: | head -n1 | cut -d"<" -f2 | cut -d">" -f1`;
+    chop($DEV2TYPE);
 
-    if ($DEVTYPE2 =~ /^$/) {
-        $DEVTYPE2=$DEVNAME2;
+    if ($DEV2TYPE =~ /^$/) {
+        $DEV2TYPE=$DEV2NAME;
     }
   }
 
-  $PACKIN = `netstat -i -n -b | grep $DEV | head -n1 | awk '{print \$7}'`;
-  if ($PACKIN < 1024**3) {
-    $PACKIN = sprintf("%.02f",$PACKIN / 1024**2)."Mb";
+  $PACKIN1 = `netstat -i -n -b | grep $DEV1 | head -n1 | awk '{print \$7}'`;
+  if ($PACKIN1 < 1024**3) {
+    $PACKIN1 = sprintf("%.02f",$PACKIN1 / 1024**2)."Mb";
   } else {
-    $PACKIN = sprintf("%.02f", $PACKIN / 1024**3)."Gb";
+    $PACKIN1 = sprintf("%.02f", $PACKIN1 / 1024**3)."Gb";
   }
 
   if ($DEV2) {
     $PACKIN2 = `netstat -i -n -b | grep $DEV2 | head -n1 | awk '{print \$7}'`; 
     if ($PACKIN2 < 1024**3) {
-      $PACKIN2 = sprintf("%.02f",$PACKIN / 1024**2)."Mb";
+      $PACKIN2 = sprintf("%.02f",$PACKIN2 / 1024**2)."Mb";
     } else {
-      $PACKIN2 = sprintf("%.02f", $PACKIN / 1024**3)."Gb";
+      $PACKIN2 = sprintf("%.02f", $PACKIN2 / 1024**3)."Gb";
     }
   }
 
-  $PACKOUT = `netstat -i -n -b | grep $DEV | head -n1 | awk '{print \$10}'`;
-  if ($PACKOUT < 1024**3) {
-    $PACKOUT = sprintf("%.02f",$PACKOUT / 1024**2)."Mb";
+  $PACKOUT1 = `netstat -i -n -b | grep $DEV1 | head -n1 | awk '{print \$10}'`;
+  if ($PACKOUT1 < 1024**3) {
+    $PACKOUT1 = sprintf("%.02f",$PACKOUT1 / 1024**2)."Mb";
   } else {
-    $PACKOUT = sprintf("%.02f", $PACKOUT / 1024**3)."Gb";
+    $PACKOUT1 = sprintf("%.02f", $PACKOUT1 / 1024**3)."Gb";
   }
 
   if ($DEV2) {
     $PACKOUT2 = `netstat -i -n -b | grep $DEV2 | head -n1 | awk '{print \$10}'`;
     if ($PACKOUT2 < 1024**3) {
-      $PACKOUT2 = sprintf("%.02f",$PACKOUT / 1024**2)."Mb";
+      $PACKOUT2 = sprintf("%.02f",$PACKOUT2 / 1024**2)."Mb";
     } else {
-      $PACKOUT2 = sprintf("%.02f", $PACKOUT / 1024**3)."Gb";
+      $PACKOUT2 = sprintf("%.02f", $PACKOUT2 / 1024**3)."Gb";
     }
   }
 }
@@ -261,9 +345,11 @@ sub build_output {
   $out .= " %B|%O Screen Res: %B$RES%O";
   $out .= " %B|%O Procs: %B$PROCS%O";
   $out .= " %B|%O Uptime: %B$UPTIME%O";
-  $out .= " %B|%O $DEVTYPE: In: %B$PACKIN%O Out: %B$PACKOUT%O";
-  if ($DEV2) {
-    $out .= " %B|%O $DEVTYPE2: In: %B$PACKIN2%O Out: %B$PACKOUT2%O";
+  if ($ENABLEDEV1 =~ m/true/i) {
+    $out .= " %B|%O $DEV1TYPE: In: %B$PACKIN1%O Out: %B$PACKOUT1%O";
+  }
+  if ($ENABLEDEV2 =~ m/true/i) {
+    $out .= " %B|%O $DEV2TYPE: In: %B$PACKIN2%O Out: %B$PACKOUT2%O";
   }
 }
 
@@ -393,6 +479,12 @@ sub display_uptime {
 sub display_fink {
   get_uname();
 
+  unless ($ENABLEFINK =~ m/true/i) {
+    $out = "System Unsupported, install Darwin and try again...";
+    IRC::command("/say $out");
+    return 1;
+  }
+
   unless ($UNAME =~ /^darwin/i) {
     $out = "System Unsupported, install Darwin and try again...";
     IRC::command("/say $out");
@@ -432,6 +524,9 @@ sub display_info {
   get_cpu();
   get_mem();
   get_net();
+  if ($ENABLEPPP =~ m/true/i) {
+    get_ppp();
+  }
   get_rez();
   get_hdd();
   get_procs();
