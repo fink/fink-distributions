@@ -381,12 +381,17 @@ sub get_darwininfo {
 
 sub get_finkinfo {
   my @fink_vers = `$BASEPATH/bin/fink --version`;
-  my $fink_pkgs = `$BASEPATH/bin/fink list -i | wc -l`;
+  my @fink_pkgs = `$BASEPATH/bin/fink list -i`;
   my @fink_config = `cat $BASEPATH/etc/fink.conf`;
   my ($infoline, $value);
 
-  $fink_pkgs =~ s/ //g;
-  $FINKPKGS = sprintf("%s", $fink_pkgs-2);
+  $FINKPKGS = 0;
+  foreach $infoline (@fink_pkgs) {
+    chomp($infoline);
+    if ($infoline =~ /^[\(|\s]i.*$/) {
+      $FINKPKGS++;
+    }
+  }
 
   foreach $infoline (@fink_config) {
     chomp($infoline);
