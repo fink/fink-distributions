@@ -1,8 +1,8 @@
 #!/usr/bin/perl -w
 # -----------------------------------------------------------------
 # Darwin SysInfo for X-Chat
-# Available at http://www.southofheaven.net/DarwinSysInfo/
-# Author: <thesin@users.sourceforge.net>
+# Available at http://www.southofheaven.org/DarwinSysInfo/
+# Author: <thesin@users.sourceforge.org>
 # usage : /sys, /up, /fink, /playing
 #         /infosave, /infoshow, /infoload, /infohelp
 #         /enable <option>, /disable <option>, /conf <option> <value>
