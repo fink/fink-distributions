@@ -115,7 +115,10 @@ sub run_dependscheck {
   if (keys %PACKAGES || keys %SHLIBS) {    
     print "Depends: ";
     if (keys %SHLIBS) {
-      print "\${SHLIB_DEPS}, ";
+      print "\${SHLIB_DEPS}";
+    }
+    if (keys %SHLIBS && keys %PACKAGES) {
+      print ", ";
     }
     if (keys %PACKAGES) {
       print join(', ', sort keys %PACKAGES);
