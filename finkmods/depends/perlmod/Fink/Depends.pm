@@ -24,7 +24,12 @@ $|++;
 
 package Fink::Depends;
 use Fink::Base;
+use Fink::Services qw(&print_breaking &print_breaking_prefix
+                      &prompt_boolean &prompt_selection
+                      &latest_version &execute &get_term_width
+                      &file_MD5_checksum &get_arch);
 use Fink::Config qw($basepath);
+use Fink::Package;
 
 use strict;
 use warnings;
@@ -42,7 +47,7 @@ our @EXPORT_OK;
 our %PACKAGES;
 
 # this is the one and only version number
-our $depends_version = "0.1.4.cvs";
+our $depends_version = "0.2.0.cvs";
 our $show_versions = "false";
 
 END { }       # module clean-up code here (global destructor)
@@ -75,8 +80,13 @@ sub run_dependscheck {
   foreach $depend (@depends) {
     chomp($depend);
     if ($show_versions eq "true") {
-      $pkgversion = get_dependversion($depend);
-      $pkgversion = "(>= $pkgversion)";
+      if ($depend =~ /shlibs$/) {
+        $pkgversion = get_shlibsversion($depend);
+        $pkgversion = "(= $pkgversion)";
+      } else {
+        $pkgversion = get_dependversion($depend);
+        $pkgversion = "(>= $pkgversion)";
+      }
       $depend = "$depend $pkgversion";
     }
     $PACKAGES{$depend} = 1;  
@@ -91,16 +101,51 @@ sub run_dependscheck {
   return;
 }
 
-sub get_dependversion($depend) {
-  my $depend = shift;
-  my ($pkgversion);
+### Get Depend version
+sub get_dependversion {
+  my ($pattern);
+  my ($vo, $lversion, @allnames, @selected, $pname, $package);
 
-  $pkgversion = `fink list --width=200 $depend | grep $depend | awk {'print \$3'}`;
-  $pkgversion =~ s/\:.*$//;             # strip out everything after the colon
-  chomp($pkgversion);
+  Fink::Package->require_packages();
+  @allnames = Fink::Package->list_packages();
+  @selected = ();
+  while (defined($pattern = shift)) {
+    $pattern = lc quotemeta $pattern;
+    push @selected, grep(/^$pattern$/, @allnames);
+  }
+  foreach $pname (sort @selected) {
+    $package = Fink::Package->package_by_name($pname);
+    $lversion = &latest_version($package->list_versions());
+  }
 
-  return $pkgversion;
+  return $lversion;
 }
+
+### Get Depend version from shlibs field
+sub get_shlibsversion {
+  my ($pattern);
+  my ($vo, $lversion, @allnames, @selected, $pname, $package, $shlibs);
+
+  Fink::Package->require_packages();
+  @allnames = Fink::Package->list_packages();
+  @selected = ();
+  while (defined($pattern = shift)) {
+    $pattern = lc quotemeta $pattern;
+    push @selected, grep(/^$pattern$/, @allnames);
+  }
+  foreach $pname (sort @selected) {
+    $package = Fink::Package->package_by_name($pname);
+    $lversion = &latest_version($package->list_versions());
+    $vo = $package->get_version($lversion);
+  }
+
+  if ($vo->has_param("shlibs")) {
+    $shlibs = $vo->param("shlibs");
+  }
+
+  return $shlibs;
+}
+
 
 sub check_pkg {
   my $pkgname = shift;
