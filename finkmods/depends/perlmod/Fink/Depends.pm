@@ -140,7 +140,8 @@ sub get_dependversion {
 ### Get Depend version from shlibs field
 sub get_shlibsversion {
   my $pattern = shift;
-  my ($vo, $lversion, @allnames, @selected, $pname, $package, $shlibs);
+  my ($vo, $lversion, @allnames, @selected, $pname, $package);
+  my ($shlib, $sdepend, @shlibs);
 
   Fink::Package->require_packages();
   @allnames = Fink::Package->list_packages();
@@ -153,18 +154,20 @@ sub get_shlibsversion {
     $vo = $package->get_version($lversion);
   }
 
-  ### FIXME for shlibs code
-  ### Add shlibs search here to return multi values
   if ($vo->has_param("shlibs")) {
-    $shlibs = $vo->param("shlibs");
-    if ($shlibs =~ /^.+ [.0-9]+ (.*)$/) {
-      $shlibs = $1;
-      $shlibs =~ s/%n/$pattern/mg;
-      $shlibs =~ s/\\//mg;
+    @shlibs = split(/\n/, $vo->param("shlibs"));
+    foreach $shlib (@shlibs) {
+      ### FIXME not a perfect check, need to be more specific
+      if (($shlib =~ / $pattern /m || $shlib =~ / %n /m) && $shlib =~ /^.+ [.0-9]+ (.*)$/) {
+        $sdepend = $1;
+        $sdepend =~ s/%n/$pattern/mg;
+        $sdepend =~ s/%N/$pattern/mg;
+        $sdepend =~ s/\\//mg;
+      }
     }
   }
 
-  return $shlibs;
+  return $sdepend;
 }
 
 
@@ -178,19 +181,19 @@ sub check_pkg {
   while (<DPKG>) {
     chomp();
     next if (-d "$_");			# Drop  directories
-    if ("$_" =~ /\.dylib/) {		# Check for (.dylib) libs
+#    if ("$_" =~ /\.dylib/) {		# Check for (.dylib) libs
       push(@files, $_);
-    } elsif ("$_" =~ /\.a/) {		# Check for (.a) libs
-      push(@files, $_);
-    } elsif ("$_" =~ /\.so/) {		# Check for (.so) libs
-      push(@files, $_);
-    } elsif ("$_" =~ /\/bin\//) {	# Check for anything in %p/bin
-      push(@files, $_);
-    } elsif ("$_" =~ /\/sbin\//) {	# Check for anything in %p/sbin
-      push(@files, $_);
-    } else {				# Drop everything else
-      next;
-    }
+#    } elsif ("$_" =~ /\.a/) {		# Check for (.a) libs
+#      push(@files, $_);
+#    } elsif ("$_" =~ /\.so/) {		# Check for (.so) libs
+#      push(@files, $_);
+#    } elsif ("$_" =~ /\/bin\//) {	# Check for anything in %p/bin
+#      push(@files, $_);
+#    } elsif ("$_" =~ /\/sbin\//) {	# Check for anything in %p/sbin
+#      push(@files, $_);
+    #} else {				# Drop everything else
+#      next;
+#    }
   }
   close (DPKG);
 
@@ -216,17 +219,7 @@ sub check_pkg {
       $depend = `dpkg --search $match`;
       $depend =~ s/\:.*$//;		# strip out everything after the colon
       chomp($depend);
-      # some checking for virtual depends
-      if ($depend eq "system-xfree86" ||
-          $depend eq "xfree86-threaded-base" ||
-          $depend eq "xfree86-base" ||
-          $depend eq "xfree86") {
-        $depend = "x11";
-      }
-      if ($depend eq "xfree86-rootless" ||
-          $depend eq "xfree86-threaded-rootless") {
-        $depend = "libgl";
-      }
+      ### FIXME: add virtual and/or provides here to use || and && in pkgs.
       next if ($depend eq $pkgname);	# Can't dpend on it's self
       push(@depends, $depend);
     }
