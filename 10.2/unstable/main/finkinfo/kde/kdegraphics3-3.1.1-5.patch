@@ -25,6 +25,46 @@
  
  KDE_ICON = kcoloredit kcolorchooser
  
+--- kdvi/dviwin.cpp	3 Mar 2003 02:52:42 -0000	1.1.1.8
++++ kdvi/dviwin.cpp	9 Apr 2003 23:17:39 -0000	1.2
+@@ -37,7 +37,7 @@
+ #include <klocale.h>
+ #include <kprinter.h>
+ #include <kprocess.h>
+-
++#include <kstandarddirs.h>
+ 
+ #include "dviwin.h"
+ #include "fontpool.h"
+@@ -503,6 +503,28 @@
+   // specials in PostScriptDirectory, and the headers in the
+   // PostScriptHeaderString.
+   PS_interface->clear();
++
++  // Files that reside under "tmp" or under the "data" resource are most
++  // likely remote files. We limit the files they are able to read to
++  // the directory they are in in order to limit the possibilities of a 
++  // denial of service attack.
++  bool restrictIncludePath = true;
++  QString tmp = KGlobal::dirs()->saveLocation("tmp", QString::null);
++  if (!filename.startsWith(tmp))
++  {
++     tmp = KGlobal::dirs()->saveLocation("data", QString::null);
++     if (!filename.startsWith(tmp))
++        restrictIncludePath = false;
++  }
++  
++  QString includePath;
++  if (restrictIncludePath)
++  {
++     includePath = filename;
++     includePath.truncate(includePath.findRev('/'));
++  }
++
++  PS_interface->setIncludePath(includePath);     
+ 
+   // We will also generate a list of hyperlink-anchors in the
+   // document. So declare the existing list empty.
 --- kdvi/font.cpp	2 Oct 2002 23:47:07 -0000	1.1.1.4
 +++ kdvi/font.cpp	2 Oct 2002 23:55:44 -0000	1.6
 @@ -5,6 +5,7 @@
@@ -35,6 +75,58 @@
  #include <qapplication.h>
  #include <qfile.h>
  
+--- kdvi/psgs.cpp	14 Aug 2002 18:51:42 -0000	1.1.1.3
++++ kdvi/psgs.cpp	9 Apr 2003 23:17:39 -0000	1.2
+@@ -59,6 +59,12 @@
+   DiskCache->clear();
+ }
+ 
++void ghostscript_interface::setIncludePath(const QString &_includePath) {
++  if (_includePath.isEmpty())
++     includePath = "*"; // Allow all files
++  else
++     includePath = _includePath+"/*";
++}
+ 
+ void ghostscript_interface::setPostScript(int page, QString PostScript) {
+   pageInfo *info = new pageInfo(PostScript);
+@@ -125,11 +131,13 @@
+   // Step 2: Call GS with the File
+   KProcess proc;
+   proc << "gs";
+-  proc << "-dNOPAUSE" << "-dBATCH" << "-sDEVICE=png256";
++  proc << "-dSAFER" << "-dPARANOIDSAFER" << "-dDELAYSAFER" << "-dNOPAUSE" << "-dBATCH" << "-sDEVICE=png256";
+   proc << QString("-sOutputFile=%1").arg(filename);
++  proc << QString("-sExtraIncludePath=%1").arg(includePath);
+   proc << QString("-g%1x%2").arg(pixel_page_w).arg(pixel_page_h); // page size in pixels
+   proc << QString("-r%1").arg(resolution);                       // resolution in dpi
+-  proc << PSfile.name();
++  proc << "-c" << "<< /PermitFileReading [ ExtraIncludePath ] /PermitFileWriting [] /PermitFileControl [] >> setuserparams .locksafe";
++  proc << "-f" << PSfile.name();
+   proc.start(KProcess::Block);
+   PSfile.unlink();
+   emit(setStatusBarText(QString::null));
+--- kdvi/psgs.h	14 Aug 2002 18:51:42 -0000	1.1.1.2
++++ kdvi/psgs.h	9 Apr 2003 23:17:39 -0000	1.2
+@@ -42,6 +42,9 @@
+   // 
+   void setPostScript(int page, QString PostScript);
+ 
++  // sets path from additional postscript files may be read
++  void setIncludePath(const QString &_includePath);
++
+   // Returns the graphics of the page, if possible. The functions
+   // returns a pointer to a QPixmap, or null. The referred QPixmap
+   // should be deleted after use.
+@@ -64,6 +67,8 @@
+   double                resolution;    // in dots per inch
+   int                   pixel_page_w; // in pixels
+   int                   pixel_page_h; // in pixels
++
++  QString               includePath;
+ 
+ signals:
+   /** Passed through to the top-level kpart. */
 --- kghostview/Makefile.am	2 Oct 2002 23:47:21 -0000	1.1.1.2
 +++ kghostview/Makefile.am	29 Nov 2002 19:01:20 -0000	1.2
 @@ -7,8 +7,9 @@
@@ -78,6 +170,192 @@
  
  METASOURCES = AUTO
  EXTRA_DIST = kghostview.desktop 
+--- kghostview/kgv_miniwidget.cpp	4 Jan 2003 18:47:37 -0000	1.1.1.7
++++ kghostview/kgv_miniwidget.cpp	9 Apr 2003 23:17:42 -0000	1.2
+@@ -293,23 +293,22 @@
+     }
+ 
+     _tmpDSC->close();
+-    _pdfFileName = _fileName;
+-    _fileName = _tmpDSC->name();
+     _format = PDF;
+ 
+-    openPSFile();
++    openPSFile(_tmpDSC->name());
+ }
+ 
+-void KGVMiniWidget::openPSFile()
++void KGVMiniWidget::openPSFile(const QString &file)
+ {
++    QString fileName = file.isEmpty() ? _fileName : file;
+     kdDebug(4500) << "KGVMiniWidget::openPSFile" << endl;
+     
+-    FILE* fp = fopen( QFile::encodeName( _fileName ), "r");
++    FILE* fp = fopen( QFile::encodeName( fileName ), "r");
+     if( fp == 0 ) 
+     {
+ 	KMessageBox::error( _part->widget(),
+ 		i18n( "<qt>Error opening file <nobr><strong>%1</strong></nobr>: %2</qt>" )
+-		.arg( _fileName )
++		.arg( fileName )
+ 		.arg( strerror( errno ) ) );
+ 	emit canceled( "" );
+ 	return;
+@@ -320,9 +319,7 @@
+ 	_isFileOpen = true;    
+ 	scanDSC();
+ 	buildTOC();
+-	_psWidget->setFileName( dsc()->isStructured() 
+-	                            ? QString::null 
+-				    : _fileName );
++	_psWidget->setFileName( _fileName, dsc()->isStructured() );
+ 	emit completed();
+     }
+ }
+@@ -859,6 +856,7 @@
+             << "-dNOPAUSE"
+             << "-dBATCH"
+             << "-dSAFER"
++            << "-dPARANOIDSAFER"
+             << "-sDEVICE=pswrite"
+             << ( QCString("-sOutputFile=")+QFile::encodeName(saveFileName) )
+             << ( QString("-dFirstPage=")+QString::number( firstPage ) )
+@@ -867,7 +865,7 @@
+             << "save"
+             << "pop"
+             << "-f"
+-            << QFile::encodeName(_pdfFileName);
++            << QFile::encodeName(_fileName);
+ 
+     /*QValueList<QCString> args = process.args();
+     QValueList<QCString>::Iterator it = args.begin();
+@@ -1074,7 +1072,7 @@
+                           QString::null, 
+                           _part->widget(), 
+                           QString::null );
+-    if( !KIO::NetAccess::upload( _format == PDF ? _pdfFileName : _fileName,
++    if( !KIO::NetAccess::upload( _fileName,
+ 				 saveURL ) )
+ 	; // TODO: Proper error dialog
+ }
+@@ -1311,10 +1309,16 @@
+     
+     _process = new KProcess;
+     *_process << _ghostscriptPath
++              << "-dSAFER"
++              << "-dPARANOIDSAFER"
++              << "-dDELAYSAFER"
+               << "-dNODISPLAY"
+               << "-dQUIET"
+               << QString( "-sPDFname=%1" ).arg( pdfName )
+               << QString( "-sDSCname=%1" ).arg( dscName )
++              << "-c"
++              << "<< /PermitFileReading [ PDFname ] /PermitFileWriting [ DSCname ] /PermitFileControl [] >> setuserparams .locksafe"
++              << "-f"
+               << "pdf2dsc.ps"
+               << "-c"
+               << "quit";
+--- kghostview/kgv_miniwidget.h	14 Aug 2002 18:52:13 -0000	1.1.1.2
++++ kghostview/kgv_miniwidget.h	9 Apr 2003 23:17:42 -0000	1.2
+@@ -85,7 +85,7 @@
+     void clearTemporaryFiles();
+     
+     void uncompressFile();
+-    void openPSFile();
++    void openPSFile(const QString &file=QString::null);
+ 
+ protected slots:
+     void doOpenFile();
+@@ -116,7 +116,7 @@
+ /*- PRINTING and SAVING ---------------------------------------------------*/
+ 
+ // private data used: 
+-//   Document specific: _dsc, _fileName, _pdfFileName, _format, _origurl
++//   Document specific: _dsc, _fileName, _format, _origurl
+ //   View specific:     _currentPage, _marklist 
+ //   This section only: _printer, _tmpFromPDF
+     
+@@ -267,7 +267,6 @@
+     int _visiblePage;
+ 
+     QString _fileName;
+-    QString _pdfFileName;
+     QString _mimetype;
+ 
+     MarkList* _marklist;
+--- kghostview/kpswidget.cpp	2 Oct 2002 23:47:21 -0000	1.1.1.2
++++ kghostview/kpswidget.cpp	9 Apr 2003 23:17:42 -0000	1.2
+@@ -309,10 +309,11 @@
+     }
+ }
+ 
+-void KPSWidget::setFileName( const QString& fileName )
++void KPSWidget::setFileName( const QString& fileName, bool usePipe )
+ {
+-    if( _fileName != fileName )
++    if(( _fileName != fileName ) || (_usePipe != usePipe))
+     {
++        _usePipe = usePipe;
+ 	_fileName = fileName;
+ 	stopInterpreter();
+ 	_ghostscriptDirty = true;
+@@ -508,8 +509,11 @@
+     for( ; it != _ghostscriptArguments.end(); ++it )
+ 	*_process << (*it);
+     
+-    if( _fileName.isEmpty() )
+-	*_process << "-";
++    if( _usePipe )
++        *_process <<
++        // The following two lines are their to ensure that we are allowed to read _fileName
++        "-dDELAYSAFER" << "-sInputFile="+_fileName << "-c" <<
++        "<< /PermitFileReading [ InputFile ] /PermitFileWriting [] /PermitFileControl [] >> setuserparams .locksafe";
+     else
+ 	*_process << _fileName << "-c" << "quit";
+ 
+@@ -527,7 +531,7 @@
+     // Finally fire up the interpreter.
+     kdDebug(4500) << "KPSWidget: starting interpreter" << endl;
+     if( _process->start( KProcess::NotifyOnExit, 
+-              _fileName.isEmpty() ? KProcess::All : KProcess::AllOutput ) ) 
++              _usePipe ? KProcess::All : KProcess::AllOutput ) ) 
+     {
+ 	_interpreterBusy = true;
+ 	setCursor( waitCursor );
+@@ -648,7 +652,7 @@
+     if( !intConfig->platformFonts() )
+ 	arguments << "-dNOPLATFONTS";
+     
+-    arguments << "-dNOPAUSE" << "-dQUIET" << "-dSAFER";
++    arguments << "-dNOPAUSE" << "-dQUIET" << "-dSAFER" << "-dPARANOIDSAFER";
+ 
+     setGhostscriptArguments( arguments );
+ 
+--- kghostview/kpswidget.h	2 Oct 2002 23:47:21 -0000	1.1.1.2
++++ kghostview/kpswidget.h	9 Apr 2003 23:17:42 -0000	1.2
+@@ -134,10 +134,11 @@
+     bool sendPS( FILE*, unsigned int begin, unsigned int end );
+    
+     /**
+-     * Sets the filename of the ghostscript input. Usually we use a pipe for
+-     * communication and no filename will be needed.
++     * Sets the filename of the ghostscript input. 
++     * @p usePipe indicates whether we use a pipe for
++     * communication or let ghoscript read the file itself.
+      */
+-    void setFileName( const QString& );
++    void setFileName( const QString&, bool usePipe );
+ 
+     /**
+      * Set the bounding box of the drawable. See my comment in the source
+@@ -243,6 +244,7 @@
+     QString     _ghostscriptPath;
+     QStringList _ghostscriptArguments;
+     QString     _fileName;
++    bool        _usePipe;
+ 
+     /**
+      * Flag set when one of the properties _ghostscriptPath, 
 --- kmrml/kmrml/Makefile.am	2 Oct 2002 23:47:24 -0000	1.1.1.1
 +++ kmrml/kmrml/Makefile.am	29 Nov 2002 19:01:20 -0000	1.2
 @@ -28,7 +28,7 @@
@@ -118,7 +396,7 @@
  METASOURCES = AUTO
  
 --- kooka/configure.in.in	25 Jun 2002 02:40:34 -0000	1.1.1.1
-+++ kooka/configure.in.in	25 Mar 2003 18:22:59 -0000
++++ kooka/configure.in.in	9 Apr 2003 23:27:39 -0000
 @@ -1,3 +1,4 @@
  dnl AC_SEARCH_LIBS(pgm2asc,Pgm2asc)
  dnl AC_CHECK_LIB(Pgm2asc,pgm2asc)
@@ -319,7 +597,7 @@
  libkpagetest_la_SOURCES = kpagetest.cpp 
  libkpagetest_la_LDFLAGS = $(all_libraries) $(KDE_PLUGIN)
 --- libkscan/configure.in.in	10 Jul 2002 04:38:45 -0000	1.1.1.2
-+++ libkscan/configure.in.in	25 Mar 2003 18:23:01 -0000
++++ libkscan/configure.in.in	9 Apr 2003 23:27:42 -0000
 @@ -21,3 +21,4 @@
  AC_SUBST(LIBSANE_LDFLAGS)
  AC_SUBST(LIBSANE_INCLUDES)
