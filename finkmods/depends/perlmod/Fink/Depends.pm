@@ -154,6 +154,7 @@ sub check_pkg {
         $_ =~ s/\ \(.*$//;			# Nuke the end
         $_ =~ s/^[\s|\t]+//;
         $_ =~ s/[\s|\t]+$//;
+        $deb = "";
         if (length($_) > 1) {
           $deb = Fink::Shlibs->get_shlib($_);
           if (length($deb) > 1) {
