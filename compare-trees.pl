@@ -1,6 +1,21 @@
 #!/usr/bin/perl
 
 use File::Basename;
+use Getopt::Std;
+
+our ($opt_h, $opt_l);
+getopts('hl');
+
+if ($opt_h) {
+	print <<END;
+usage: $0 [-h] [-l] [directory ...]
+
+	-h       this help
+	-l       include trees other than stable/unstable
+
+END
+	exit 0;
+}
 
 my %PACKAGES;
 my @TREES;
@@ -35,7 +50,8 @@ for my $tree (@TREES) {
 				my $revision  = 0;
 				my $epoch     = 0;
 				my $stable    = "stable";
-				   $stable    = "unstable" if ($file =~ m#/unstable/#);
+				$stable = $1 if ($file =~ m#/([^/]+)/[^/]+/finkinfo#);
+				next if ($stable ne "stable" and $stable ne "unstable" and not $opt_l);
 				while (<INFO>) {
 					if (/^\s*version:\s*(\S+)\s*$/i) {
 						$version = $1;
