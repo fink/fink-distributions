@@ -113,7 +113,7 @@ sub check_pkg {
       while (<OTOOL>) {
         chomp();
         next if ("$_" =~ /\:/);		# Nuke first line or errors
-        # next if ("$_" =~ /\/usr\//);	# Nuke system links
+        next if ("$_" =~ /\/usr\/lib\/libSystem/);	# Nuke system links
         $_ =~ s/\ \(.*$//;		# Nuke the end
         push(@matches, $_);
       }
