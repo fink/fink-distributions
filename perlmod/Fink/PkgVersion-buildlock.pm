@@ -1682,6 +1682,11 @@ END
 		$verbosity = "v";
 	}
 
+	# going to start the actual build process, so need lock
+	# FIXME: do all download/integrity-check, then start creating dirs and a
+	# new loop for all unpacking (so don't need to lock before downloading)
+	$self->set_buildlock();
+
 	# remove dir if it exists
 	chdir "$buildpath";
 	if (-e $bdir) {
@@ -1817,6 +1822,7 @@ END
 		if (&execute($unpack_cmd)) {
 			$tries++;
 
+			# FIXME: this is not the likely problem now since we already checked MD5
 			$answer =
 				&prompt_boolean("Unpacking the file $archive of package ".
 								$self->get_fullname()." failed. The most likely ".
@@ -2580,6 +2586,9 @@ close(SHLIBS) or die "can't write shlibs file for ".$self->get_fullname().": $!\
 							"the directory manually to save disk space. ".
 							"Continuing with normal procedure.");
 	}
+
+	# done with the whole build process, so release lock
+	$self->clear_buildlock();
 }
 
 ### activate
