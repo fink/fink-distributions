@@ -580,7 +580,8 @@ sub display_fink {
   }
 
   unless (-f $BASEPATH."/bin/fink") {
-    $out = "Fink Not Installed, you can get Fink at http://fink.sf.net/";
+    $out = "Fink Not Installed, you can get Fink at http://fink.sf.net/\n";
+    $out = "Or your base path is incorrectly set, /conf basepath <location>\n";
     IRC::command("/say $out");
     return 1;
   }
