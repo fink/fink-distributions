@@ -1,4 +1,4 @@
-#!/usr/bin/perl -w
+#!/usr/bin/perl
 # -----------------------------------------------------------------
 # Based on:
 # kc8apf's sysinfo v0.6 for x-chat
@@ -33,9 +33,9 @@ my ($DEVTOOLS, $TOOLVERS, $TOOLBUILD, $GCCVERS);
 
 IRC::register("Darwin SysInfo", "0.2", "", "");
 IRC::print "Loading Darwin SysInfo Script";
-IRC::add_command_handler("sys", "display_info");
-IRC::add_command_handler("up", "display_uptime");
-IRC::add_command_handler("fink", "display_fink");
+IRC::add_command_handler("sys", display_info);
+IRC::add_command_handler("up", display_uptime);
+IRC::add_command_handler("fink", display_fink);
 
 sub get_uname {
   chomp($UNAME = `uname -sr`);
@@ -387,7 +387,7 @@ sub display_uptime {
   $out = "My current uptime is %B$UPTIME%O".".";
 
   IRC::command("/say $out");
-  return 0;
+  return 1;
 }
 
 sub display_fink {
@@ -417,7 +417,7 @@ sub display_fink {
   build_finkout();
 
   IRC::command("/say $out");
-  return 0;
+  return 1;
 }
 
 sub display_info {
@@ -440,5 +440,5 @@ sub display_info {
   build_output();
 
   IRC::command("/say $out");
-  return 0;
+  return 1;
 }
