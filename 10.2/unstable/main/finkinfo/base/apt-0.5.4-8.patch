@@ -120,49 +120,6 @@ diff -ruN apt-0.5.4/apt-pkg/deb/debindexfile.cc apt-0.5.4-patched/apt-pkg/deb/de
 +  (void)_apt_Pkg;
 +  (void)_apt_Status;
 +}
-diff -ruN apt-0.5.4/apt-pkg/deb/debsystem.cc apt-0.5.4-patched/apt-pkg/deb/debsystem.cc
---- apt-0.5.4/apt-pkg/deb/debsystem.cc	Sun Apr 29 07:13:51 2001
-+++ apt-0.5.4-patched/apt-pkg/deb/debsystem.cc	Fri Oct 19 10:20:04 2001
-@@ -30,6 +30,16 @@
- 
- debSystem debSys;
- 
-+extern void init_deb2();
-+extern void init_deb3();
-+
-+void initDebSystem()
-+{
-+  (void)debSys;
-+  init_deb2();
-+  init_deb3();
-+}
-+
- // System::debSystem - Constructor					/*{{{*/
- // ---------------------------------------------------------------------
- /* */
-@@ -161,8 +171,8 @@
-       which is yet to be determined. The functions in pkgcachegen should
-       be the only users of these */
-    Cnf.CndSet("Dir::State::userstatus","status.user"); // Defunct
--   Cnf.CndSet("Dir::State::status","/var/lib/dpkg/status");
--   Cnf.CndSet("Dir::Bin::dpkg","/usr/bin/dpkg");
-+   Cnf.CndSet("Dir::State::status","@PREFIX@/var/lib/dpkg/status");
-+   Cnf.CndSet("Dir::Bin::dpkg","@PREFIX@/bin/dpkg");
-    
-    return true;
- }
-@@ -185,9 +195,9 @@
- signed debSystem::Score(Configuration const &Cnf)
- {
-    signed Score = 0;
--   if (FileExists(Cnf.FindFile("Dir::State::status","/var/lib/dpkg/status")) == true)
-+   if (FileExists(Cnf.FindFile("Dir::State::status","@PREFIX@/var/lib/dpkg/status")) == true)
-        Score += 10;
--   if (FileExists(Cnf.FindFile("Dir::Bin::dpkg","/usr/bin/dpkg")) == true)
-+   if (FileExists(Cnf.FindFile("Dir::Bin::dpkg","@PREFIX@/bin/dpkg")) == true)
-       Score += 10;
-    if (FileExists("/etc/debian_version") == true)
-       Score += 10;
 diff -ruN apt-0.5.4/apt-pkg/deb/debversion.cc apt-0.5.4-patched/apt-pkg/deb/debversion.cc
 --- apt-0.5.4/apt-pkg/deb/debversion.cc	Mon May  7 07:14:53 2001
 +++ apt-0.5.4-patched/apt-pkg/deb/debversion.cc	Fri Oct 19 10:20:59 2001
@@ -257,39 +214,6 @@ diff -ruN apt-0.5.4/apt-pkg/tagfile.h apt-0.5.4-patched/apt-pkg/tagfile.h
     
     unsigned int TagCount;
       
-diff -ruN apt-0.5.4/buildlib/environment.mak.in apt-0.5.4-patched/buildlib/environment.mak.in
---- apt-0.5.4/buildlib/environment.mak.in	Tue May 29 07:11:03 2001
-+++ apt-0.5.4-patched/buildlib/environment.mak.in	Fri Oct 19 10:13:28 2001
-@@ -11,7 +11,7 @@
- LIBSTDCPP_VER = @LIBSTDCPP_VER@
- 
- # Linker stuff
--PICFLAGS+= -fPIC -DPIC
-+PICFLAGS+= -fno-common -DPIC
- LFLAGS+= @LDFLAGS@
- LEFLAGS+= 
- SOCKETLIBS:= @SOCKETLIBS@
-@@ -47,11 +47,13 @@
- 
- # Shared library things
- HOST_OS = @host_os@
--ifneq ($(words $(filter linux-gnu gnu%,$(HOST_OS))),0)
--   SONAME_MAGIC=-Wl,-soname -Wl,
--   LFLAGS_SO=
--else
--   # Do not know how to create shared libraries here.
--   ONLYSTATICLIBS = yes
--endif
-+#ifneq ($(words $(filter linux-gnu gnu%,$(HOST_OS))),0)
-+#   SONAME_MAGIC=-Wl,-soname -Wl,
-+#   LFLAGS_SO=
-+#else
-+#   # Do not know how to create shared libraries here.
-+#   ONLYSTATICLIBS = yes
-+#endif
-+SONAME_MAGIC=-install_name @PREFIX@/lib/
-+LFLAGS_SO=-dynamiclib -flat_namespace -undefined suppress
- 	
 diff -ruN apt-0.5.4/buildlib/library.mak apt-0.5.4-patched/buildlib/library.mak
 --- apt-0.5.4/buildlib/library.mak	Tue Feb 27 05:16:05 2001
 +++ apt-0.5.4-patched/buildlib/library.mak	Fri Oct 19 10:13:28 2001
@@ -661,3 +585,235 @@ diff -ruN apt-0.5.4/sources.list.fink-bindist apt-0.5.4-patched/sources.list.fin
 +# Official binary distribution: download location for updated
 +# packages built between releases
 +deb http://us.dl.sourceforge.net/fink/direct_download 10.2/current main crypto
+--- apt-0.5.4/apt-pkg/deb/debsystem.cc	2001-04-28 22:13:51.000000000 -0700
++++ apt-0.5.4/apt-pkg/deb/debsystem.cc	2002-12-11 01:18:39.000000000 -0800
+@@ -27,6 +27,105 @@
+ #include <dirent.h>
+ #include <errno.h>
+ 									/*}}}*/
++/* FINK LOCAL begin */
++#include <sys/utsname.h>
++#include <CoreFoundation/CoreFoundation.h>
++#include <fstream>
++
++extern void init_deb2();
++extern void init_deb3();
++
++struct versionrevision {
++  unsigned long epoch;
++  const char *version;
++  const char *revision;
++};  
++
++struct versionrevision darwin_version = {0,NULL,NULL};
++struct versionrevision macosx_version = {0,NULL,NULL};
++
++static void finkinit()
++{
++  Boolean status;
++  SInt32 errorCode;
++  CFURLRef fileURL = NULL;
++  CFDataRef resourceData = NULL;
++  CFPropertyListRef propertyList = NULL;
++  CFStringRef string;
++  static char buffer[256];	// This is static, to ensure the buffer stays around
++
++  static struct utsname ver;	// This is static, to ensure the buffer stays around
++  
++  /* Determine system version */
++  /* TODO - should maybe check if this is really Darwin? */
++  if (!uname(&ver)) {
++    darwin_version.version = ver.release;
++  }
++
++  /* Check whether this is Mac OS X, and which version of it */
++
++  fileURL = CFURLCreateWithFileSystemPath( NULL, 	
++		CFSTR("/System/Library/CoreServices/SystemVersion.plist"),
++		kCFURLPOSIXPathStyle,				
++		false );
++  if (!fileURL)
++    goto BAIL;
++  
++  /* Read the XML */
++  status = CFURLCreateDataAndPropertiesFromResource(
++		NULL,
++		fileURL,
++		&resourceData,
++		NULL,		
++		NULL,
++		&errorCode);
++  if (!status || errorCode != 0)
++    goto BAIL;
++  
++  /* Reconstitute the dictionary using the XML data. */
++  propertyList = CFPropertyListCreateFromXMLData( NULL,
++		resourceData,
++		kCFPropertyListImmutable,
++		&string);
++  if (!propertyList)
++    goto BAIL;
++  
++  /* Try to read the system version from it. */
++  status = CFDictionaryGetValueIfPresent( propertyList,
++		CFSTR("ProductVersion"),
++		(void*)&string);
++  if (!status)
++    goto BAIL;
++  
++  /* Convert into a C string */
++  status = CFStringGetCString( string,
++		buffer,
++		sizeof(buffer),
++		kCFStringEncodingISOLatin1);
++  if (!status)
++    goto BAIL;
++  
++  /* Finally link the buffer into the macosx_version struct. */
++  macosx_version.version = buffer;
++  
++BAIL:
++  // Release all of the CF objects we're responsible for.
++  if (fileURL)
++    CFRelease(fileURL);
++  if (resourceData)
++    CFRelease(resourceData);
++  if (propertyList)
++    CFRelease(propertyList);
++}
++
++void initDebSystem()
++{
++  finkinit();
++  (void)debSys;
++  init_deb2();
++  init_deb3();
++}
++/* FINK LOCAL end */
+ 
+ debSystem debSys;
+ 
+@@ -48,6 +147,7 @@
+ debSystem::~debSystem()
+ {
+    delete StatusFile;
++   delete FinkStatusFile;
+ }
+ 									/*}}}*/
+ // System::Lock - Get the lock						/*{{{*/
+@@ -161,8 +261,8 @@
+       which is yet to be determined. The functions in pkgcachegen should
+       be the only users of these */
+    Cnf.CndSet("Dir::State::userstatus","status.user"); // Defunct
+-   Cnf.CndSet("Dir::State::status","/var/lib/dpkg/status");
+-   Cnf.CndSet("Dir::Bin::dpkg","/usr/bin/dpkg");
++   Cnf.CndSet("Dir::State::status","@PREFIX@/var/lib/dpkg/status");
++   Cnf.CndSet("Dir::Bin::dpkg","@PREFIX@/bin/dpkg");
+    
+    return true;
+ }
+@@ -185,9 +285,9 @@
+ signed debSystem::Score(Configuration const &Cnf)
+ {
+    signed Score = 0;
+-   if (FileExists(Cnf.FindFile("Dir::State::status","/var/lib/dpkg/status")) == true)
++   if (FileExists(Cnf.FindFile("Dir::State::status","@PREFIX@/var/lib/dpkg/status")) == true)
+        Score += 10;
+-   if (FileExists(Cnf.FindFile("Dir::Bin::dpkg","/usr/bin/dpkg")) == true)
++   if (FileExists(Cnf.FindFile("Dir::Bin::dpkg","@PREFIX@/bin/dpkg")) == true)
+       Score += 10;
+    if (FileExists("/etc/debian_version") == true)
+       Score += 10;
+@@ -202,6 +302,37 @@
+    if (StatusFile == 0)
+       StatusFile = new debStatusIndex(_config->FindFile("Dir::State::status"));
+    List.push_back(StatusFile);
++/* FINK LOCAL begin */
++#define FINKSTATUSFILE "/tmp/finkaptstatus"
++   if (FinkStatusFile == 0) {
++      unlink(FINKSTATUSFILE);
++      std::ofstream finkstatus(FINKSTATUSFILE);
++      if(macosx_version.version != 0)
++      {
++        finkstatus << "Package: macosx" << endl;
++        finkstatus << "Status: install ok installed" << endl;      
++        finkstatus << "Priority: optional" << endl;
++        finkstatus << "Section: base" << endl;
++        finkstatus << "Maintainer: None" << endl;
++        finkstatus << "Source: macosx" << endl;
++        finkstatus << "Version: " << macosx_version.version << endl;
++        finkstatus << "Description: Pseudo package representing Mac OS X" << endl;
++        finkstatus << " Pseudo package representing Mac OS X" << endl << endl;
++      }
++      finkstatus << "Package: darwin" << endl;
++      finkstatus << "Status: install ok installed" << endl;
++      finkstatus << "Priority: optional" << endl;
++      finkstatus << "Section: base" << endl;
++      finkstatus << "Maintainer: None" << endl;
++      finkstatus << "Source: darwin" << endl;
++      finkstatus << "Version: " << darwin_version.version  << endl;
++      finkstatus << "Description: Pseudo package representing Darwin" << endl;
++      finkstatus << " Pseudo package representing Darwin" << endl << endl;
++      finkstatus.close();
++      FinkStatusFile = new debStatusIndex(FINKSTATUSFILE);       
++   }
++   List.push_back(FinkStatusFile);
++/* FINK LOCAL end */
+    return true;
+ }
+ 									/*}}}*/
+@@ -217,6 +348,10 @@
+    {
+       Found = StatusFile;
+       return true;
++   }  else if ((FinkStatusFile != 0) && (FinkStatusFile->FindInCache(*File.Cache()) == File))
++   {
++      Found = FinkStatusFile;
++      return true;
+    }
+    
+    return false;
+--- /Users/ben/Desktop/apt-0.5.4/apt-pkg/deb/debsystem.h	Sat Apr 28 22:13:51 2001
++++ apt-0.5.4/apt-pkg/deb/debsystem.h	Wed Dec 11 02:06:42 2002
+@@ -25,6 +25,7 @@
+    bool CheckUpdates();
+    
+    debStatusIndex *StatusFile;
++   debStatusIndex *FinkStatusFile;
+    
+    public:
+ 
+--- apt-0.5.4/buildlib/environment.mak.in	Mon May 28 22:11:03 2001
++++ apt-0.5.4/buildlib/environment.mak.in	Tue Dec 10 23:08:35 2002
+@@ -11,8 +11,8 @@
+ LIBSTDCPP_VER = @LIBSTDCPP_VER@
+ 
+ # Linker stuff
+-PICFLAGS+= -fPIC -DPIC
+-LFLAGS+= @LDFLAGS@
++PICFLAGS+= -fno-common -DPIC
++LFLAGS+= @LDFLAGS@ -framework CoreFoundation
+ LEFLAGS+= 
+ SOCKETLIBS:= @SOCKETLIBS@
+ AR:=@AR@
+@@ -47,11 +47,13 @@
+ 
+ # Shared library things
+ HOST_OS = @host_os@
+-ifneq ($(words $(filter linux-gnu gnu%,$(HOST_OS))),0)
+-   SONAME_MAGIC=-Wl,-soname -Wl,
+-   LFLAGS_SO=
+-else
+-   # Do not know how to create shared libraries here.
+-   ONLYSTATICLIBS = yes
+-endif
++#ifneq ($(words $(filter linux-gnu gnu%,$(HOST_OS))),0)
++#   SONAME_MAGIC=-Wl,-soname -Wl,
++#   LFLAGS_SO=
++#else
++#   # Do not know how to create shared libraries here.
++#   ONLYSTATICLIBS = yes
++#endif
++SONAME_MAGIC=-install_name /sw/lib/
++LFLAGS_SO=-dynamiclib -flat_namespace -undefined suppress
+ 	
