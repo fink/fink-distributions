@@ -1,6 +1,6 @@
 Package: postgresql
 Version: 7.3.2
-Revision: 2
+Revision: 3
 GCC: 3.1
 Source: http://www.postgresql.org/ftpsite/source/v%v/postgresql-%v.tar.gz
 Source-MD5: 23d2762571e8c5bb21eee08aab968ccb
@@ -27,24 +27,24 @@ CompileScript: <<
   # postgresql
   autoconf && \
   ./configure %c && \
-  make && \
+  make includedir=%p/include/postgresql includedir_internal=%p/include/postgresql/internal includedir_server=%p/include/postgresql && \
   make install install-all-headers includedir=%p/include/postgresql includedir_internal=%p/include/postgresql/internal includedir_server=%p/include/postgresql DESTDIR=%d INSTALLSITEMAN3DIR=%i/share/man/man3 || exit 1
 
   # libpq++
   pushd ../libpq++-4.0
-  sed 's|@PREFIX@|%p|g' < %a/%N-libpqpp-%v-%r.patch | patch -p1
+  sed 's|@PREFIX@|%p|g' %a/%N-libpqpp-%v-%r.patch | patch -p1
   make DESTDIR=%d || exit 2
   popd
 
   # libpqxx
   pushd ../libpqxx-1.3.6
   ./configure --prefix=%p --with-postgres-include=%i/include/postgresql --with-postgres-lib=%p/lib && \
-  make || exit 3
+  make includedir=%p/include/postgresql/pqxx || exit 3
   popd
 
   # pgeasy
   pushd ../pgeasy-3.0.1
-  sed 's|@PREFIX@|%p|g' < %a/%N-libpgeasy-%v-%r.patch | patch -p1
+  sed 's|@PREFIX@|%p|g' %a/%N-libpgeasy-%v-%r.patch | patch -p1
   make DESTDIR=%d || exit 4
   popd
 
@@ -87,6 +87,12 @@ InstallScript: <<
 
   install -d -m 755 %i/share/doc/%n
   cp -R contrib %i/share/doc/%n/contrib
+
+  install -d -m 755 %i/bin
+  install -c -m 755 pgsql.sh %i/bin/
+
+  install -d -m 755 %i/var/postgresql
+  echo "be sure to back up this database before any upgrades!" >> %i/var/postgresql/README
 <<
 SplitOff: <<
   Description: PostgreSQL development headers and libraries
@@ -110,7 +116,7 @@ SplitOff3: <<
   Description: PostgreSQL open-source database
   Package: postgresql73
   Conflicts: postgresql73-ssl
-  Depends: readline-shlibs (>= 4.3-5), passwd, daemonic (>= 20010902-1), postgresql73-shlibs (>= %v-%r)
+  Depends: readline-shlibs (>= 4.3-5), passwd (>= 20030330-1), daemonic (>= 20010902-1), postgresql73-shlibs (>= %v-%r)
   Replaces: postgresql (<< %v), postgresql-shlibs, postgresql-ssl-shlibs, postgresql-ssl, postgresql-python (<< 7.3), postgresql-ssl-python (<< 7.3), postgresql-perl (<< 7.3), postgresql-ssl-perl (<< 7.3)
   Files: *
   DaemonicFile: <<
@@ -120,7 +126,7 @@ SplitOff3: <<
     
     <daemon name="postgresql73">
     <executable background="no">/usr/bin/sudo</executable>
-    <parameters>-u pgsql %p/bin/pg_ctl -D %p/var/postgresql/data start -l %p/var/log/postgresql/logfile</parameters>
+    <parameters>-u postgres %p/bin/pgsql.sh</parameters>
     </daemon>
     
     </service>
@@ -144,6 +150,18 @@ if [ "$1" = "upgrade" ] && [ -d "%p/var/postgresql/data" ]; then
   chmod 1777 '%p/var/tmp'
   echo "ok"
   echo ""
+
+  if test `ls -ln /sw/var/ | awk '{ print $3 }' | grep -c '^252$'` -ge 1; then
+    echo -e "- starting postgresql (just to be sure): \c"
+    sudo -u pgsql %p/bin/pg_ctl start -D %p/var/postgresql/data >/dev/null 2>&1 || true
+    echo "ok"
+
+    echo -e "- creating postgres user in database (if needed): \c"
+    %p/bin/createuser -U pgsql -a -d -e -i 2 postgres >/dev/null 2>&1 || true
+    echo "ok"
+
+    chown -R postgres %p/var/postgresql %p/var/log/postgresql
+  fi
 
   OLDMAJOR=`cat '%p/var/postgresql/data/PG_VERSION' 2>/dev/null | cut -d. -f1`
   OLDMINOR=`cat '%p/var/postgresql/data/PG_VERSION' 2>/dev/null | cut -d. -f2`
@@ -189,24 +207,24 @@ END
     echo "automatic" > "%p/var/tmp/pg_upgradetype"
 
     echo -e "- starting postgresql (just to be sure): \c"
-    sudo -u pgsql %p/bin/pg_ctl -D %p/var/postgresql/data start -l %p/var/log/postgresql/logfile >/dev/null 2>&1 || true
+    sudo -u postgres %p/bin/pg_ctl start -D %p/var/postgresql/data >/dev/null 2>&1 || true
     echo "ok"
 
     echo -e "- vacuuming tables (to be sure logs have been played out): \c"
-    %p/bin/vacuumdb -U pgsql -a >/dev/null 2>&1 || die "vacuumdb failed!"
+    %p/bin/vacuumdb -U postgres -a >/dev/null 2>&1 || die "vacuumdb failed!"
     echo -e "ok"
 
     echo -e "- dumping the database for upgrade: \c"
-    sudo -u pgsql %p/bin/pg_dumpall -c -d > "%p/var/tmp/pgdb-${OLDVERSION}.pgsql" 2>&1 || die "couldn't dump database"
+    sudo -u postgres %p/bin/pg_dumpall -c -d > "%p/var/tmp/pgdb-${OLDVERSION}.pgsql" 2>&1 || die "couldn't dump database"
     echo "pgdb-${OLDVERSION}.pgsql"
 
     echo -e "- stopping postgresql: \c"
-    sudo -u pgsql %p/bin/pg_ctl -D %p/var/postgresql/data stop -l %p/var/log/postgresql/logfile >/dev/null 2>&1 || true
+    sudo -u postgres %p/bin/pg_ctl stop -D %p/var/postgresql/data >/dev/null 2>&1 || true
     echo "ok"
 
     echo -e "- backing up the %p/var/postgresql directory: \c"
     pushd "%p/var" >/dev/null 2>&1
-    sudo -u pgsql tar -czf "%p/var/tmp/pgdb-${OLDVERSION}.tar.gz" postgresql >/dev/null 2>&1 || die "couldn't tar up postgresql directory"
+    sudo -u postgres tar -czf "%p/var/tmp/pgdb-${OLDVERSION}.tar.gz" postgresql >/dev/null 2>&1 || die "couldn't tar up postgresql directory"
     popd >/dev/null 2>&1
     echo "pgdb-${OLDVERSION}.tar.gz"
 
@@ -233,16 +251,17 @@ pg_createdb () {
 
   echo -e "- making postgresql directories: \c"
   mkdir -p %p/var/postgresql/data %p/var/log/postgresql
-  chown -R pgsql %p/var/postgresql %p/var/log/postgresql
+  chown -R postgres %p/var/postgresql %p/var/log/postgresql
   chmod 700 %p/var/postgresql
   echo "ok"
 
   echo -e "- initializing database in %p/var/postgresql/data: \c"
-  sudo -u pgsql %p/bin/initdb -D %p/var/postgresql/data >/dev/null 2>&1 || die "couldn't initialize database"
+  sudo -u postgres %p/bin/initdb -D %p/var/postgresql/data >/dev/null 2>&1 || die "couldn't initialize database"
   echo "ok"
 }
 
 if [ -d %p/var/postgresql/data ]; then
+  chown -R postgres %p/var/postgresql %p/var/log/postgresql
   OLDMAJOR=`cat '%p/var/postgresql/data/PG_VERSION' 2>/dev/null | cut -d. -f1`
   OLDMINOR=`cat '%p/var/postgresql/data/PG_VERSION' 2>/dev/null | cut -d. -f2`
   OLDVERSION="${OLDMAJOR}.${OLDMINOR}"
@@ -278,12 +297,12 @@ fi
 <<
 DocFiles: COPYRIGHT HISTORY INSTALL README register.txt
 DescUsage: <<
-The package runs initdb on installation as the user 'pgsql'.
+The package runs initdb on installation as the user 'postgres'.
 
-You can start the PostgreSQL server manually using 'postmaster' as pgsql
-(since pgsql has a shell of /dev/null by default, you must run it as
-sudo -u pgsql postmaster) or you can run 'daemonic enable postgresql' as
-root to create a StartupItem for it.
+You can start the PostgreSQL server manually using 'postmaster' as
+postgres (since postgres has a shell of /dev/null by default, you must
+run it as sudo -u postgres postmaster) or you can run
+'daemonic enable postgresql' as root to create a StartupItem for it.
 
 Also note that installation of this package is interactive, because
 upgrades can make irrevocable changes to your database.
