@@ -42,7 +42,7 @@ our @EXPORT_OK;
 our %PACKAGES;
 
 # this is the one and only version number
-our $depends_version = "0.1.0.cvs";
+our $depends_version = "0.1.1.cvs";
 
 END { }       # module clean-up code here (global destructor)
 
@@ -112,9 +112,10 @@ sub check_pkg {
       # need to drop all links to system libs and the first two lines
       while (<OTOOL>) {
         chomp();
-        next if ("$_" =~ /\:/);		# Nuke first line or errors
+        next if ("$_" =~ /\:/);			# Nuke first line and errors
         next if ("$_" =~ /\/usr\/lib\/libSystem/);	# Nuke system links
-        $_ =~ s/\ \(.*$//;		# Nuke the end
+        next if ("$_" =~ /\/usr\/lib\/libz/);		# Nuke libz links
+        $_ =~ s/\ \(.*$//;				# Nuke the end
         push(@matches, $_);
       }
     close (OTOOL);
@@ -126,6 +127,13 @@ sub check_pkg {
       $depend = `dpkg --search $match`;
       $depend =~ s/\:.*$//;		# strip out everything after the colon
       chomp($depend);
+      # some checking for virtual depends
+      if ($depend eq "xfree86-base" || $depend eq "system-xfree86") {
+        $depend = "x11";
+      }
+      if ($depend eq "xfree86-rootless") {
+        $depend = "libgl";
+      }
       next if ($depend eq $pkgname);	# Can't dpend on it's self
       push(@depends, $depend);
     }
