@@ -93,6 +93,8 @@ sub run_dependscheck {
       $pkgversion = get_shlibsversion($depend);
       $depend = $pkgversion;
       $SHLIBS{$depend} = 1;
+    } elsif ($depend =~ /^\/usr/ || $depend =~ /^\/System/) {
+      $SHLIBS{$depend} = 1;
     } else {
     if ($show_versions eq "true") {
         $pkgversion = get_dependversion($depend);
@@ -209,7 +211,7 @@ sub get_shlibsversion {
 
 sub check_pkg {
   my $pkgname = shift;
-  my (@depends, $depend, @files, $file, @matches, $match);
+  my (@depends, $depend, @files, $file, @matches, $match, $vers);
 
   # get files to test
   open(DPKG, "dpkg --listfiles $pkgname 2>/dev/null |") or die "can't run dpkg: $!\n";
@@ -229,8 +231,16 @@ sub check_pkg {
       while (<OTOOL>) {
         chomp();
         next if ("$_" =~ /\:/);			# Nuke first line and errors
-        next if ("$_" =~ /\/usr\/lib\//);	# Nuke system libs and 
-        next if ("$_" =~ /\/System\/Library/);	# frameworks
+        if ("$_" =~ /\/usr\/lib\// || "$_" =~ /\/System\/Library/) {
+          if ($_ =~ /compatibility version ([.0-9]+)/) {
+            $vers = $1;
+          }
+          $_ =~ s/\ \(.*$//;			# Nuke the end
+          $_ = $_." (>= ".$vers.")";
+          $_ =~ s/^[\s|\t]+//;
+          $_ =~ s/[\s|\t]+$//;
+          push(@depends, $_);
+        }
         $_ =~ s/\ \(.*$//;			# Nuke the end
         $_ =~ s/^[\s|\t]+//;
         $_ =~ s/[\s|\t]+$//;
