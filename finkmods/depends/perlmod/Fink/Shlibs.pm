@@ -64,6 +64,12 @@ sub get_shlib {
 
   $self->require_shlibs();
 
+  foreach $shlibs (keys %shlib_hash) {
+    if ($shlibs eq $lib) {
+      $dep = $shlib_hash{package};
+    }
+  }
+
   return $dep;
 }
 
@@ -215,7 +221,6 @@ sub scan {
   find({ wanted => $wanted, follow => 1, no_chdir => 1 }, $directory);
 
   foreach $filename (@filelist) {
-    print "- $filename\n";
     open(SHLIB, $filename) or die "can't open $filename: $!\n";
       while(<SHLIB>) {
         chomp($_);
@@ -251,7 +256,6 @@ sub inject_shlib {
   my $compat = shift;
   my $package = shift;
 
-  $shlib_hash{$shlibname};
   $shlib_hash{$shlibname}->{compat} = $compat;
   $shlib_hash{$shlibname}->{packages} = $package;
 }
