@@ -54,7 +54,7 @@ for my $tree (@TREES) {
 				my $epoch     = 0;
 				my $stable    = "stable";
 				$stable = $1 if ($file =~ m#/([^/]+)/[^/]+/finkinfo#);
-				next if ($stable ne "stable" and $stable ne "unstable" and not $opt_l);
+				next if ((($stable ne "stable" and $stable ne "unstable") or $file =~ /\/local\//) and not $opt_l);
 				chomp(my @info = <INFO>);
 				close(INFO);
 				if (not defined $opt_m or grep(/^maintainer:.*$opt_m.*$/i, @info)) {
