@@ -190,6 +190,8 @@ sub get_uptime {
     $UPTIME = sprintf("%sd, %dh, %dm", $1, $2, $3);
   } elsif ($DAYS =~ /.?.?(.+):(.+)/) {
     $UPTIME = sprintf("%dh, %dm", $1, $2);
+  } elsif ($DAYS =~ /.?(.+) mins/) {
+    $UPTIME = sprintf("%dm", $1);
   } else {
     $UPTIME = "Not Currently Available ($DAYS)";
   }
