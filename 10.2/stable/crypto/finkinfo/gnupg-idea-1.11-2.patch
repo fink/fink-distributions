@@ -1,0 +1,159 @@
+diff -u -Naur gnupg-idea-1.11/Makefile gnupg-idea-1.11.fink/Makefile
+--- gnupg-idea-1.11/Makefile	Wed Dec 31 19:00:00 1969
++++ gnupg-idea-1.11.fink/Makefile	Mon Sep 30 15:05:03 2002
+@@ -0,0 +1,2 @@
++all:
++	cc -D__PPC__ -Wall -O2 -o idea idea.c -bundle -bundle_loader @PREFIX@/bin/gpg
+diff -u -Naur gnupg-idea-1.11/README.fink gnupg-idea-1.11.fink/README.fink
+--- gnupg-idea-1.11/README.fink	Wed Dec 31 19:00:00 1969
++++ gnupg-idea-1.11.fink/README.fink	Mon Sep 30 15:05:03 2002
+@@ -0,0 +1,17 @@
++Due to patent problems, gpg doesn't include the IDEA encryption
++algorithm by default. Instead it exists in this separate module.
++If you have a legal right to use IDEA, you may enable it by
++adding the line:
++
++load-extension idea
++
++to your ~/.gnupg/options file. Once you have done this, you can 
++check that IDEA is working by typing:
++
++gpg --version
++
++
++
++_______________________________________________________________
++Christian Swinehart <cswinehart@users.sourceforge.net>
++Tue 24 April 2002
+diff -u -Naur gnupg-idea-1.11/idea.c gnupg-idea-1.11.fink/idea.c
+--- gnupg-idea-1.11/idea.c	Tue Apr 23 16:23:17 2002
++++ gnupg-idea-1.11.fink/idea.c	Sun Sep 29 20:32:08 2002
+@@ -1,5 +1,5 @@
+-/* idea.c  -  IDEA function
+- *	Copyright (c) 1997, 1998, 1999, 2001 by Werner Koch (dd9jn)
++/* idea.c  -  IDEA algorithm
++ * Copyright (c) 1997, 1998, 1999, 2001, 2002 by Werner Koch (dd9jn)
+  *
+  * Permission is hereby granted, free of charge, to any person obtaining a
+  * copy of this software and associated documentation files (the "Software"),
+@@ -41,11 +41,12 @@
+  *
+  * 2001-06-08 wk  Changed distribution conditions
+  * 2001-06-11 wk  Fixed invert_key (which is not used in CFB mode) 
+- *                Thanks to Mark A. Borgerding.  Added defintion for
++ *                Thanks to Mark A. Borgerding.  Added definition for
+  *                the PowerPC.
++ * 2002-08-03 wk  Removed dependeny to g10_log_fatal and perform selftest
++ *                in idea_get_info.
+  */
+ 
+-
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -68,7 +69,7 @@
+ #endif
+ 
+ typedef unsigned long  ulong;
+-//typedef unsigned short ushort;
++typedef unsigned short ushort;
+ typedef unsigned char  byte;
+ 
+ typedef unsigned short u16;
+@@ -105,7 +106,7 @@
+ static int do_setkey( IDEA_context *c, byte *key, unsigned keylen );
+ static void encrypt_block( IDEA_context *bc, byte *outbuf, byte *inbuf );
+ static void decrypt_block( IDEA_context *bc, byte *outbuf, byte *inbuf );
+-static void selftest(int);
++static int selftest(int);
+ 
+ 
+ 
+@@ -281,12 +282,6 @@
+ static int
+ do_setkey( IDEA_context *c, byte *key, unsigned keylen )
+ {
+-    static int initialized = 0;
+-
+-    if( !initialized ) {
+-	initialized = 1;
+-	selftest(0);
+-    }
+     assert(keylen == 16);
+     c->have_dk = 0;
+     expand_key( key, c->ek );
+@@ -303,12 +298,6 @@
+ static void
+ decrypt_block( IDEA_context *c, byte *outbuf, byte *inbuf )
+ {
+-    static int initialized;
+-
+-    if( !initialized ) {
+-	initialized = 1;
+-	selftest(1);
+-    }
+     if( !c->have_dk ) {
+        c->have_dk = 1;
+        invert_key( c->ek, c->dk );
+@@ -317,7 +306,7 @@
+ }
+ 
+ 
+-static void
++static int
+ selftest( int check_decrypt )
+ {
+ static struct {
+@@ -379,14 +368,21 @@
+ 	if( !check_decrypt ) {
+ 	    encrypt_block( &c, buffer, test_vectors[i].plain );
+ 	    if( memcmp( buffer, test_vectors[i].cipher, 8 ) )
+-		g10_log_fatal("idea encryption (%d) failed\n", i);
++              {
++		fprintf (stderr, "idea encryption (%d) failed\n", i);
++                return -1;
++              }
+ 	}
+ 	else {
+ 	    decrypt_block( &c, buffer, test_vectors[i].cipher );
+ 	    if( memcmp( buffer, test_vectors[i].plain, 8 ) )
+-		g10_log_fatal("idea decryption (%d) failed\n", i);
++              {
++		fprintf (stderr, "idea decryption (%d) failed\n", i);
++                return -1;
++              }
+ 	}
+     }
++    return 0;
+ }
+ 
+ 
+@@ -404,6 +400,13 @@
+ 		   void (**r_decrypt)( void *c, byte *outbuf, byte *inbuf )
+ 		 )
+ {
++    static int initialized = 0;
++
++    if( !initialized ) {
++	initialized = 1;
++	if ( selftest(0) || selftest(1) )
++          return NULL;
++    }
+     *keylen = 128;
+     *blocksize = 8;
+     *contextsize = sizeof(IDEA_context);
+@@ -465,7 +468,7 @@
+ 	    ret = &func_table[i].value;
+ 	    break;
+ 	  default:
+-	    ret = func_table[i].func;
++	    ret = (void*)func_table[i].func;
+ 	    break;
+ 	}
+ 	i++;
+@@ -474,5 +477,3 @@
+     *sequence = i;
+     return ret;
+ }
+-
+-
