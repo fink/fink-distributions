@@ -25,9 +25,9 @@ $|++;
 package Fink::Depends;
 use Fink::Base;
 use Fink::Services qw(&latest_version);
-use Fink::Config qw($basepath);
 use Fink::Package;
 use Fink::PkgVersion;
+use Fink::Shlibs;
 
 use strict;
 use warnings;
@@ -46,7 +46,7 @@ our %PACKAGES;
 our %SHLIBS;
 
 # this is the one and only version number
-our $depends_version = "0.2.0.cvs";
+our $depends_version = "0.3.0.cvs";
 our $show_versions = "false";
 our $show_shlibs = "false";
 
@@ -71,6 +71,10 @@ sub show_shlibs {
 sub run_dependscheck {
   my $self = shift;
   my $pkgname = shift;
+  if ($pkgname eq "index") {
+    Fink::Shlibs->require_shlibs();
+    exit 0;
+  }
   my (@depends, $depend);
   my ($pkgversion);
 
