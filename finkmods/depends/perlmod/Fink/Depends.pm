@@ -42,7 +42,7 @@ our @EXPORT_OK;
 our %PACKAGES;
 
 # this is the one and only version number
-our $depends_version = "0.1.3.cvs";
+our $depends_version = "0.1.4.cvs";
 
 END { }       # module clean-up code here (global destructor)
 
@@ -133,6 +133,7 @@ sub check_pkg {
         next if ("$_" =~ /\/usr\/lib\/libssl/);         # Nuke libssl links
         next if ("$_" =~ /\/usr\/lib\/libcrypto/);      # Nuke libcrypto links
         next if ("$_" =~ /\/usr\/lib\/libncurses/);     # Nuke libncurses links
+        next if ("$_" =~ /\/Frameworks\//);             # Nuke System Frameworks
         $_ =~ s/\ \(.*$//;				# Nuke the end
         push(@matches, $_);
       }
