@@ -2,7 +2,8 @@
 # -----------------------------------------------------------------
 # Darwin SysInfo for X-Chat
 # Available at http://www.southofheaven.org/DarwinSysInfo/
-# Author: <thesin@users.sourceforge.org>
+# Author: Justin F. Hallett <thesin@users.sourceforge.org>
+# Contrib: Andreas Gockel <gecko2@users.sourceforge.net>
 # usage : /sys, /up, /fink, /playing
 #         /infosave, /infoshow, /infoload, /infohelp
 #         /enable <option>, /disable <option>, /conf <option> <value>
@@ -33,14 +34,15 @@ if (-d "$ENV{HOME}/.xchat2") {
 } else {
   $configfile = "$ENV{HOME}/darwininfo.conf";
 }
-my $version = "0.4.1";
+my $version = "0.4.2";
 my $scriptname = "Darwin SysInfo";
 
-IRC::print "\n\0034Loading\003\002 $scriptname $version Script\002\n";
+IRC::print "\0034Loading\003\002 $scriptname $version Script\002\n";
 
 # Try to load the config
 LoadConfig();
 
+IRC::print "\003\002Use \002\0034/infohelp\003\002 for more info and commands.\002\n";
 IRC::register("$scriptname", "$version", "", "");
 
 IRC::add_command_handler("infoload", "LoadConfig");
@@ -57,7 +59,6 @@ IRC::add_command_handler("disable", "disable_option");
 IRC::add_command_handler("conf", "conf_options");
 
 sub info_help {
-  IRC::print "\n";                           
   IRC::print "\002$scriptname $version\002 \0034HELP!\0034\n";
   IRC::print "\n";
   IRC::print "   \002System Functions\002\n";
@@ -74,10 +75,12 @@ sub info_help {
   IRC::print "           1 = Display song parameters (freq, kbps, st/mon)";
   IRC::print "           2 = Display album and genre (if available)";
   IRC::print "           3 = 1 and 2";
+  IRC::print "           * use /conf displaylevel n to set it";
   IRC::print "\n";                           
   IRC::print "   \002Script Functions\002\n";
   IRC::print "      \002/infoload\002 - Reload configuration from $configfile\n";
   IRC::print "      \002/infosave\002 - Saves configuration to $configfile\n";
+  IRC::print "      \002/infoshow\002 - Display current configuration\n";
   IRC::print "      \002/infohelp\002 - Display this help information\n";
   IRC::print "      \002/enable\002   - Enables an option\n";
   IRC::print "           \002Usage:\002 /enable <option>\n";
@@ -278,6 +281,8 @@ sub LoadConfig {
       $PPP = $values[1];
     } elsif ($values[0] eq "pppname") {
       $PPPNAME = $values[1];
+    } elsif ($values[0] eq "enablexmms") {
+      $ENABLEXMMS = $values[1];
     } elsif ($values[0] eq "enablefink") {
       $ENABLEFINK = $values[1];
     } elsif ($values[0] eq "basepath") {
@@ -764,9 +769,15 @@ sub build_finkout {
 }
 
 sub get_song {
+  eval { require Xmms; require Xmms::Remote; };
+  if ($@) {
+    IRC::print "\0034Install Xmms:: from CPAN then try again!\n\0034";
+    return 1;
+  }
+
   my $remote = Xmms::Remote->new;
 
-  my ($no_tag, $file_ext);
+  my ($no_tag);
 
   my $play_pos = $remote->get_playlist_pos;
   my $song_name = $remote->get_playlist_title($play_pos);
@@ -775,8 +786,35 @@ sub get_song {
   unless (-e $song_file) {
     return 1;
   }
-  my $tag = get_mp3tag($song_file) or $no_tag = 1;
-  my $info = get_mp3info($song_file);
+
+  my $pos_e = rindex ($song_file, ".");
+  my $file_ext = substr ($song_file, $pos_e + 1);
+  $file_ext =~ tr/a-z/A-Z/;
+
+  if ($file_ext eq "M4A") {
+    eval { require MP4::Info; };
+    if ($@) {
+      IRC::print "\0034Install MP4::Info from CPAN then try again!\n\0034";
+      return 1;
+    }
+    my $tag = get_mp4tag($song_file) or $no_tag = 1;
+    my $info = get_mp4info($song_file);
+  } elsif ($file_ext eq "MP3") {
+    eval { require MP3::Info; };
+    if ($@) {
+      IRC::print "\0034Install MP3::Info from CPAN then try again!\n\0034";
+      return 1;
+    } else {
+      import MP3::Info qw(:genres);
+      import MP3::Info qw(:DEFAULT :genres);
+      import MP3::Info qw(:all);
+    }
+    my $tag = get_mp3tag($song_file) or $no_tag = 1;
+    my $info = get_mp3info($song_file);
+  } else {
+    my $tag = 0;
+    my $info = "";
+  }
   my $inf_freq = $info->{FREQUENCY};
   my $inf_bitrate = $info->{BITRATE};
   my $inf_stereo = $info->{STEREO};
@@ -796,12 +834,9 @@ sub get_song {
     $no_tag = 2;
     my $pos_s = rindex ($song_file, "/");
     $pos_s++;
-    my $pos_e = rindex ($song_file, ".");
     my $len_e = length ($song_file) - $pos_e + 1;
     my $len_s = length ($song_file) - $pos_s - $len_e + 1;
     my $leng = length ($song_file);
-    $file_ext = substr ($song_file, $pos_e + 1);
-    $file_ext =~ tr/a-z/A-Z/;
     $song_file = substr ($song_file, $pos_s, $len_s);
   }
   if ($no_tag == 1) {
@@ -813,7 +848,8 @@ sub get_song {
       $out = "\002$song_name\002";
     }
     if (($file_ext ne "MP3") && ($file_ext ne "MP2") &&
-        ($file_ext ne "MPG") && ($song_name ne "")) {
+        ($file_ext ne "MPG") && ($file_ext ne "MP4") &&
+        ($song_name ne "")) {
       $out = "\002$song_name\002 (\002$file_ext\002)";
     }
   }
@@ -839,6 +875,7 @@ sub get_song {
       $out .= " (Genre: \002$inf_genre\002)";
     }
   }
+  return $out;
 }
 
 sub display_uptime {
@@ -931,25 +968,11 @@ sub display_song {
     return 1;
   }
 
-  eval { require Xmms; require Xmms::Remote;};
-  if ($@) {
-    IRC::print "\0034Install Xmms:: from CPAN then try again!\n\0034";
+  $out = get_song();
+
+  if ($out == 1) {
     return 1;
-  }
-
-  eval { require MP3::Info; };
-  if ($@) {
-    IRC::print "\0034Install MP3::Info from CPAN then try again!\n\0034";
-    return 1;
-  } else {
-    import MP3::Info qw(:genres);
-    import MP3::Info qw(:DEFAULT :genres);
-    import MP3::Info qw(:all);
-  }
-
-  get_song();
-
-  if (length($out) < 5) {
+  } elsif (length($out) < 5) {
     IRC::print "\0034Must have XMMS running at least!\n";
     return 1;
   }
