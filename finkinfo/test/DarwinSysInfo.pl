@@ -9,7 +9,7 @@
 # -----------------------------------------------------------------
 
 my $out;
-my ($ENABLEDEV1, $ENABLEDEV2, $ENABLEPPP, $ENABLEFINK);
+my ($ENABLEDEV1, $ENABLEDEV2, $ENABLEPPP, $ENABLEFINK, $ENABLERES);
 my ($DEV1, $DEV1NAME, $DEV2, $DEV2NAME, $PPP, $PPPNAME);
 my $BASEPATH;
 my $UNAME;
@@ -120,68 +120,119 @@ sub conf_options {
 
 sub enable_option {
   my ($option) = @_;
-
-  if ($option =~ m/fink/i) {
-    $ENABLEFINK = "true";
-  } elsif ($option =~ m/dev1/i) {
-    $ENABLEDEV1 = "true";
-  } elsif ($option =~ m/dev2/i) { 
-    $ENABLEDEV2 = "true";
-  } elsif ($option =~ m/ppp/i) { 
-    $ENABLEPPP = "true";
-  } elsif ($option =~ m/xmms/i) { 
-    $ENABLEXMMS = "true";
-  } else {
-    IRC::print "\0034$option Not Valid\0034\n";
-    IRC::print "\002Valid options are:\002 fink, dev1, dev2, ppp, xmms\n";
-  }
-  SaveConfig();
+  my $func = "enable";
+  set_option($option, $func);
   return 1;
 }
 
 sub disable_option {
   my ($option) = @_;
+  my $func = "disable";
+  set_option($option, $func);
+  return 1;
+}
+
+sub set_option {
+  $option = shift;
+  $func = shift;
+  IRC::print "$option, $func\n";
 
   if ($option =~ m/fink/i) {
-    $ENABLEFINK = "false";
+    if ($func =~ m/enable/i) {
+      $ENABLEFINK = "true";
+    } else {
+      $ENABLEFINK = "false";
+    }
   } elsif ($option =~ m/dev1/i) {
-    $ENABLEDEV1 = "false";
-  } elsif ($option =~ m/dev2/i) {
-    $ENABLEDEV2 = "false";
-  } elsif ($option =~ m/ppp/i) {
-    $ENABLEPPP = "false";
-  } elsif ($option =~ m/xmms/i) {
-    $ENABLEXMMS = "false";
+    if ($func =~ m/enable/i) {
+      $ENABLEDEV1 = "true";
+    } else {
+      $ENABLEDEV1 = "false";
+    }
+  } elsif ($option =~ m/dev2/i) { 
+    if ($func =~ m/enable/i) {
+      $ENABLEDEV2 = "true";
+    } else {
+      $ENABLEDEV2 = "false";
+    }
+  } elsif ($option =~ m/ppp/i) { 
+    if ($func =~ m/enable/i) {
+      $ENABLEPPP = "true";
+    } else {
+      $ENABLEPPP = "false";
+    }
+  } elsif ($option =~ m/xmms/i) { 
+    if ($func =~ m/enable/i) {
+      $ENABLEXMMS = "true";
+    } else {
+      $ENABLEXMMS = "false";
+    }
+  } elsif ($option =~ m/res/i) {
+    if ($func =~ m/enable/i) {
+      $ENABLERES = "true";
+    } else {
+      $ENABLERES = "false";
+    }
   } else {
     IRC::print "\0034$option Not Valid\0034\n";
-    IRC::print "\002Valid options are:\002 fink, dev1, dev2, ppp, xmms\n";
+    IRC::print "\002Valid options are:\002 fink, dev1, dev2, ppp, xmms, res\n";
   }
   SaveConfig();
   return 1;
 }
 
 sub LoadDefaults {
-  IRC::print "\0034$configfile not found.\0034\n";
-  IRC::print "\002Loading defaults and creating the file.\002\n";
-  IRC::print "\003Please edit and modify it for your system.\003\n";
+  IRC::print "\0034$configfile not found or not complete.\0034\n";
+  IRC::print "\002Loading defaults for missing values and saving the file.\002\n";
+  IRC::print "\002Please edit and modify it for your system.\002\n";
 
-  $ENABLEDEV1 = "true";
-  $DEV1 = "en0";
-  $DEV1NAME = "EtherNet";
+  unless ($ENABLERES) {
+    $ENABLERES = "false";
+  }
 
-  $ENABLEDEV2 = "false";
-  $DEV2 = "en1";
-  $DEV2NAME = "AirPort";
+  unless ($ENABLEDEV1) {
+    $ENABLEDEV1 = "true";
+  }
+  unless ($DEV1) {
+    $DEV1 = "en0";
+  }
+  unless ($DEV1NAME) {
+    $DEV1NAME = "EtherNet";
+  }
 
-  $ENABLEPPP = "false";
-  $PPP = "ppp0";
-  $PPPNAME = "Internal Modem";
+  unless ($ENABLEDEV2) {
+    $ENABLEDEV2 = "false";
+  }
+  unless ($DEV2) {
+    $DEV2 = "en1";
+  }
+  unless ($DEV2NAME) {
+    $DEV2NAME = "AirPort";
+  }
 
-  $ENABLEXMMS = "false";
-  $DISPLAYLEVEL = "3";
+  unless ($ENABLEPPP) {
+    $ENABLEPPP = "false";
+  }
+  unless ($PPP) {
+    $PPP = "ppp0";
+  }
+  unless ($PPPNAME) {
+    $PPPNAME = "Internal Modem";
+  }
 
-  $ENABLEFINK = "false";
-  $BASEPATH = "/sw";
+  unless ($ENABLEXMMS) {
+    $ENABLEXMMS = "false";
+  }
+  unless ($DISPLAYLEVEL) {
+    $DISPLAYLEVEL = "3";
+  }
+
+  unless ($ENABLEFINK) {
+    $ENABLEFINK = "false";
+  }
+  unless ($BASEPATH) {
+    $BASEPATH = "/sw";
+  }
 
   ShowConfig();
   SaveConfig();
@@ -222,11 +273,20 @@ sub LoadConfig {
       $BASEPATH = $values[1];
     } elsif ($values[0] eq "displaylevel") {
       $DISPLAYLEVEL = $values[1];
+    } elsif ($values[0] eq "enableres") {
+      $ENABLERES = $values[1];
     }
   }
   close(FD);
-  IRC::print "\00311Configuration loaded\00311\n";
-  return 1;
+  unless ($ENABLEDEV1 & $DEV1 & $DEV1NAME & $ENABLEDEV2 & $DEV2 &
+          $DEV2NAME & $ENABLEPPP & $PPP & $PPPNAME & $ENABLEFINK &
+          $BASEPATH & $DISPLAYLEVEL & $ENABLERES) {
+    IRC::print "\0034Config file missing entries, self repair.\002";
+    LoadDefaults();
+  } else {
+    IRC::print "\002Configuration loaded\002\n";
+    return 1;
+  }
 }
 
 sub SaveConfig {
@@ -243,38 +303,41 @@ sub SaveConfig {
     print(FD "enablexmms=$ENABLEXMMS\n");
     print(FD "displaylevel=$DISPLAYLEVEL\n\n");
     print(FD "enablefink=$ENABLEFINK\n");
-    print(FD "basepath=$BASEPATH\n");
+    print(FD "basepath=$BASEPATH\n\n");
+    print(FD "enableres=$ENABLERES\n\n");
   close(FD);
-  IRC::print "\00311Configuration saved\00311\n";
+  IRC::print "\002Configuration saved\002\n";
   return 1;
 }
 
 sub ShowConfig {
   IRC::print "\n\002\0034$scriptname $version\0034\002\n";
-  IRC::print "   \00311Device 1\00311\n";
+  IRC::print "   \0034SysInfo\0034\n";   
+  IRC::print "      \002Res:\002 $ENABLERES\n";
+  IRC::print "   \0034Device 1\0034\n";
   IRC::print "      \002Enabled:\002 $ENABLEDEV1\n";
   if ($ENABLEDEV1 =~ m/true/i) {
     IRC::print "      \002Device:\002 $DEV1\n";
     IRC::print "      \002Name:\002 $DEV1NAME\n";
   }
-  IRC::print "   \00311Device 2\00311\n";
+  IRC::print "   \0034Device 2\0034\n";
   IRC::print "      \002Enabled:\002 $ENABLEDEV2\n";
   if ($ENABLEDEV2 =~ m/true/i) {
     IRC::print "      \002Device:\002 $DEV2\n";
     IRC::print "      \002Name:\002 $DEV2NAME\n";
   }
-  IRC::print "   \00311PPP\00311\n";      
+  IRC::print "   \0034PPP\0034\n";      
   IRC::print "      \002Enabled:\002 $ENABLEPPP\n";
   if ($ENABLEPPP =~ m/true/i) {
     IRC::print "      \002Device:\002 $PPP\n";
     IRC::print "      \002Name:\002 $PPPNAME\n";
   }
-  IRC::print "   \00311XMMS\00311\n";
+  IRC::print "   \0034XMMS\0034\n";
   IRC::print "      \002Enabled:\002 $ENABLEXMMS\n";
   if ($ENABLEXMMS =~ m/true/i) {
     IRC::print "      \002Display Level:\002 $DISPLAYLEVEL\n";
   }
-  IRC::print "   \00311Fink\00311\n";
+  IRC::print "   \0034Fink\0034\n";
   IRC::print "      \002Enabled:\002 $ENABLEFINK\n";
   if ($ENABLEFINK =~ m/true/i) {
     IRC::print "      \002Base Path:\002 $BASEPATH\n";
@@ -430,7 +493,7 @@ sub get_rez {
   $RES =~ /dimensions: (.+) pixels.*/;         
   $RES = $1;  
   $RES =~ s/ //g;     
-  if (!$RES) {
+  unless ($RES) {
     $RES = "X11 not running";
   }
 }
@@ -501,20 +564,22 @@ sub get_uptime {
 }
 
 sub build_output {
-  $out = "%BSysInfo%O";
-  $out .= " %B|%O System: %B$UNAME%O";
-  $out .= " %B|%O CPU: %B$MODEL%O @ %B$CPU%O";
-  $out .= " %B|%O RAM: %B$MEMUSED%O of %B$MEMTOTAL%O (%B$MEMPERCENT% %Oused)";
-  $out .= " %B|%O Disk(s)/Partion(s): %B$HDDCOUNT%O";
-  $out .= " %B|%O Space: %B$HDDUSED%O of %B$HDDTOTAL%O used";
-  $out .= " %B|%O Screen Res: %B$RES%O";
-  $out .= " %B|%O Procs: %B$PROCS%O";
-  $out .= " %B|%O Uptime: %B$UPTIME%O";
+  $out = "\002SysInfo\002";
+  $out .= " \002|\002 System: \002$UNAME\002";
+  $out .= " \002|\002 CPU: \002$MODEL\002 @ \002$CPU\002";
+  $out .= " \002|\002 RAM: \002$MEMUSED\002 of \002$MEMTOTAL\002 (\002$MEMPERCENT% \002used)";
+  $out .= " \002|\002 Disk(s)/Partion(s): \002$HDDCOUNT\002";
+  $out .= " \002|\002 Space: \002$HDDUSED\002 of \002$HDDTOTAL\002 used";
+  if ($ENABLERES =~ m/true/i) {
+    $out .= " \002|\002 Screen Res: \002$RES\002";
+  }
+  $out .= " \002|\002 Procs: \002$PROCS\002";
+  $out .= " \002|\002 Uptime: \002$UPTIME\002";
   if ($ENABLEDEV1 =~ m/true/i) {
-    $out .= " %B|%O $DEV1TYPE: In: %B$PACKIN1%O Out: %B$PACKOUT1%O";
+    $out .= " \002|\002 $DEV1TYPE: In: \002$PACKIN1\002 Out: \002$PACKOUT1\002";
   }
   if ($ENABLEDEV2 =~ m/true/i) {
-    $out .= " %B|%O $DEV2TYPE: In: %B$PACKIN2%O Out: %B$PACKOUT2%O";
+    $out .= " \002|\002 $DEV2TYPE: In: \002$PACKIN2\002 Out: \002$PACKOUT2\002";
   }
 }
 
@@ -612,20 +677,20 @@ sub get_devinfo {
 }
 
 sub build_finkout {
-  $out = "%BFinkInfo%O";
-  $out .= " %B|%O System: %B$OSX%O";
-  $out .= " %B|%O Version: %B$OSXVERS%O";
-  $out .= " %B|%O Build: %B$OSXBUILD%O";
-  $out .= " %B|%O Basepath: %B$BASEPATH%O";
-  $out .= " %B|%O Package Manager: %B$FINKVERS%O";
-  $out .= " %B|%O Distribution: %B$DISTVERS%O";
-  $out .= " %B|%O Packages Installed: %B$FINKPKGS%O";                      
-  $out .= " %B|%O Trees: %B$FINKTREE%O";
-  $out .= " %B|%O Dev Tools: %B$DEVTOOL%O";
+  $out = "\002FinkInfo\002";
+  $out .= " \002|\002 System: \002$OSX\002";
+  $out .= " \002|\002 Version: \002$OSXVERS\002";
+  $out .= " \002|\002 Build: \002$OSXBUILD\002";
+  $out .= " \002|\002 Basepath: \002$BASEPATH\002";
+  $out .= " \002|\002 Package Manager: \002$FINKVERS\002";
+  $out .= " \002|\002 Distribution: \002$DISTVERS\002";
+  $out .= " \002|\002 Packages Installed: \002$FINKPKGS\002";                      
+  $out .= " \002|\002 Trees: \002$FINKTREE\002";
+  $out .= " \002|\002 Dev Tools: \002$DEVTOOL\002";
   if ($DEVTOOLS = "installed") {
-    $out .= " %B|%O Tools Version: %B$TOOLVERS%O";
-    $out .= " %B|%O Tools Build: %B$TOOLBUILD%O";
-    $out .= " %B|%O GCC Version: %B$GCCVERS%O";
+    $out .= " \002|\002 Tools Version: \002$TOOLVERS\002";
+    $out .= " \002|\002 Tools Build: \002$TOOLBUILD\002";
+    $out .= " \002|\002 GCC Version: \002$GCCVERS\002";
   }
 }
 
@@ -633,14 +698,13 @@ sub display_uptime {
   get_uname();    
 
   unless ($UNAME =~ m/darwin/i) {
-    $out = "System Unsupported, install Darwin and try again...";
-    IRC::command("/say $out");
+    IRC::print "\0034System Unsupported, install Darwin and try again...\0034\n";
     return 1;
   }
 
   get_uptime();
 
-  $out = "My current uptime is %B$UPTIME%O".".";
+  $out = "My current uptime is \002$UPTIME\002".".";
 
   IRC::command("/say $out");
   return 1;
@@ -650,21 +714,18 @@ sub display_fink {
   get_uname();
 
   unless ($ENABLEFINK =~ m/true/i) {
-    $out = "Fink reporting is currently disabled, /enable fink to enable it.";
-    IRC::command("/say $out");
+    IRC::print "\0034Fink reporting is currently disabled, /enable fink to enable it.\0034\n";
     return 1;
   }
 
   unless ($UNAME =~ m/darwin/i) {
-    $out = "System Unsupported, install Darwin and try again...";
-    IRC::command("/say $out");
+    IRC::print "\0034System Unsupported, install Darwin and try again...\0034";
     return 1;
   }
 
   unless (-f $BASEPATH."/bin/fink") {
-    $out = "Fink Not Installed, you can get Fink at http://fink.sf.net/\n";
-    $out = "Or your base path is incorrectly set, /conf basepath <location>\n";
-    IRC::command("/say $out");
+    IRC::print "\0034Fink Not Installed, you can get Fink at http://fink.sf.net/\0034\n";
+    IRC::print "\0034Or your base path is incorrectly set, /conf basepath <location>\0034\n";
     return 1;
   }
 
@@ -687,8 +748,7 @@ sub display_info {
   get_uname();
 
   unless ($UNAME =~ m/darwin/i) {
-    $out = "System Unsupported, install Darwin and try again...";
-    IRC::command("/say $out");
+    IRC::print "\0034System Unsupported, install Darwin and try again...\0034";
     return 1;
   }
 
