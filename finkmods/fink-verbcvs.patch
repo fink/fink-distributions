@@ -1,6 +1,6 @@
-diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-verbcvs/perlmod/Fink/SelfUpdate.pm
---- fink/perlmod/Fink/SelfUpdate.pm	2002-12-08 22:29:56.000000000 -0700
-+++ fink-verbcvs/perlmod/Fink/SelfUpdate.pm	2003-01-02 10:34:29.000000000 -0700
+diff -ruN fink.orig/perlmod/Fink/SelfUpdate.pm fink/perlmod/Fink/SelfUpdate.pm
+--- fink.orig/perlmod/Fink/SelfUpdate.pm	Wed Jan 22 09:31:27 2003
++++ fink/perlmod/Fink/SelfUpdate.pm	Wed Jan 22 10:20:04 2003
 @@ -23,7 +23,7 @@
  package Fink::SelfUpdate;
  
@@ -19,7 +19,7 @@ diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-verbcvs/perlmod/Fink/SelfUpdate.p
  
    $descdir = "$basepath/fink";
    chdir $descdir or die "Can't cd to $descdir: $!\n";
-@@ -351,11 +353,41 @@
+@@ -351,11 +353,45 @@
    print "\n";
    &print_breaking($msg);
    print "\n";
@@ -31,6 +31,8 @@ diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-verbcvs/perlmod/Fink/SelfUpdate.p
 -  }
 +
 +  my ($time) = time;
++  # open cvs so we are able to process the output oneline at a time as it
++  # is received as to not have a big pause for modem or slow users.
 +  open(IN,"$cmd 2>&1 |") or die "Updating using CVS failed: $!\n";
 +    while ($line = <IN>) {
 +      chomp($line);
@@ -54,19 +56,21 @@ diff -ruN fink/perlmod/Fink/SelfUpdate.pm fink-verbcvs/perlmod/Fink/SelfUpdate.p
 +    }
 +  close(IN);
 +
++  # display some stats and the time took to do and process to update.
 +  $msg = "\n  Selfupdate added $added, removed $removed and updated $updated ".
 +         "file(s) in ".(time - $time)." second(s)\n";
 +  &print_breaking($msg);
 +
++  # repair cvs if needed
 +  &cvs_repair(\@lines, \@dump);
 +
 +  print "\n";
  }
  
  ### update from packages tarball
-diff -ruN fink/perlmod/Fink/Services.pm fink-verbcvs/perlmod/Fink/Services.pm
---- fink/perlmod/Fink/Services.pm	2003-01-02 11:03:46.000000000 -0700
-+++ fink-verbcvs/perlmod/Fink/Services.pm	2003-01-02 11:59:25.000000000 -0700
+diff -ruN fink.orig/perlmod/Fink/Services.pm fink/perlmod/Fink/Services.pm
+--- fink.orig/perlmod/Fink/Services.pm	Wed Jan 22 09:31:27 2003
++++ fink/perlmod/Fink/Services.pm	Wed Jan 22 10:13:27 2003
 @@ -43,7 +43,7 @@
                      &prompt &prompt_boolean &prompt_selection
                      &version_cmp &latest_version
@@ -76,10 +80,15 @@ diff -ruN fink/perlmod/Fink/Services.pm fink-verbcvs/perlmod/Fink/Services.pm
  }
  our @EXPORT_OK;
  
-@@ -600,5 +600,185 @@
-   return $checksum;
- }
+@@ -602,6 +602,202 @@
+   close(MD5SUM) or die "Error on closing pipe to md5sum: $!\n";
  
+   return $checksum;
++}
++
++###########
++# Parse a cvs line and return a human readable one
++###########
 +sub parse_cvs {
 +  my $line = shift;
 +  my $newline = "";
@@ -87,6 +96,7 @@ diff -ruN fink/perlmod/Fink/Services.pm fink-verbcvs/perlmod/Fink/Services.pm
 +  my $fileext = "";
 +  my ($cvsaction, $dist, $pkgname, $pkgverrev);
 +
++  # Get and process the line from cvs
 +  chomp($line);
 +
 +  if ($line =~ /^(M|P|U|R|C|\?|A)\s.*\/(unstable|stable)\/.*\/(.*)-(.*-.*)\.(info|patch|.*)?$/) {
@@ -119,6 +129,7 @@ diff -ruN fink/perlmod/Fink/Services.pm fink-verbcvs/perlmod/Fink/Services.pm
 +    $fileext = " ($5)";
 +  } elsif ($line =~ /^cvs\sserver:\sUpdating\s.*$/) {
 +    return 1;
++  # check if file is removed from remote cvs
 +  } elsif ($line =~ /^cvs\sserver:\s(.*)\sis\sno\slonger\sin\sthe\srepository$/) {
 +    my $removeline = $1;
 +    $cvsaction = "removed";
@@ -130,6 +141,7 @@ diff -ruN fink/perlmod/Fink/Services.pm fink-verbcvs/perlmod/Fink/Services.pm
 +    } else {
 +      return 1;
 +    }
++  # check for other types of cvs errors
 +  } elsif ($line =~ /^cvs\sserver:\s\[.*\]\s(.*)\sin\s(.*)$/) {
 +    $type = "E";
 +    $pkgname = "CVS Error (".$1.")";
@@ -147,6 +159,11 @@ diff -ruN fink/perlmod/Fink/Services.pm fink-verbcvs/perlmod/Fink/Services.pm
 +  return $newline;
 +}
 +
++########
++# cvs repair, FIXME need to add a three time count then move the cvs dir and
++# restart, that way it should be able to fix any cvs error, right now it can
++# only fix conflicts and moves a the conflicting file to a quarantine dir
++########
 +sub cvs_repair {
 +  use Fink::Config qw($basepath);
 +  require Fink::Config;
@@ -198,6 +215,7 @@ diff -ruN fink/perlmod/Fink/Services.pm fink-verbcvs/perlmod/Fink/Services.pm
 +    }
 +  }
 + 
++  # this will only be displayed if there are warrnings or errors.
 +  if ($numdump > 0 && ($numwarns > 0 || $numerrors > 0)) {
 +    my $msg = "Warnings are not fatal and will likely not affect ".
 +              "fink. Said warnings, in most cases, can be safely ignored. ".
@@ -229,14 +247,18 @@ diff -ruN fink/perlmod/Fink/Services.pm fink-verbcvs/perlmod/Fink/Services.pm
 +    }
 +  }
 +
++  # this will only be run if there are errors.
++  ### FIXME add a count and on third try move cvs dir and reconfigure cvs
 +  if ($numerrors > 0) {
 +    $answer =
 +      &prompt_boolean("Would you like to correct the $numerrors error(s)?", 0);
 +    if ($answer == 1) {
 +      print "Self repairing CVS update...\n";
 +      if (not -d "$basepath/var/fink/quarantine") {
++        print "  Creating missing dir ($basepath/var/fink/quarantine)\n";
 +        &execute("mkdir -p $basepath/var/fink/quarantine");
 +      }
++      print "  Relocated files will be moved to \"$basepath/var/fink/quarantine\"\n";
 +      foreach $line (@errors) {
 +        if ($line =~ /^cvs\sserver:\s\[.*\]\s.*$/) {
 +          print "  CVS Error, tagging for rerun.\n";
@@ -258,7 +280,6 @@ diff -ruN fink/perlmod/Fink/Services.pm fink-verbcvs/perlmod/Fink/Services.pm
 +      exit(0);
 +    }
 +  }
-+}
-+
+ }
+ 
  ### EOF
- 1;
