@@ -24,10 +24,7 @@ $|++;
 
 package Fink::Depends;
 use Fink::Base;
-use Fink::Services qw(&print_breaking &print_breaking_prefix
-                      &prompt_boolean &prompt_selection
-                      &latest_version &execute &get_term_width
-                      &file_MD5_checksum &get_arch);
+use Fink::Services qw(&latest_version);
 use Fink::Config qw($basepath);
 use Fink::Package;
 
@@ -40,15 +37,17 @@ BEGIN {
   $VERSION = 1.00;
   @ISA         = qw(Exporter Fink::Base);
   @EXPORT      = qw();
-  @EXPORT_OK   = qw(&show_versions &depends_version &run_dependscheck);
+  @EXPORT_OK   = qw(&show_shlibs &show_versions &depends_version &run_dependscheck);
   %EXPORT_TAGS = ( );
 }
 our @EXPORT_OK;
 our %PACKAGES;
+our %SHLIBS;
 
 # this is the one and only version number
 our $depends_version = "0.2.0.cvs";
 our $show_versions = "false";
+our $show_shlibs = "false";
 
 END { }       # module clean-up code here (global destructor)
 
@@ -63,6 +62,11 @@ sub show_versions {
   return;
 }
 
+sub show_shlibs {
+  $show_shlibs = "true";
+  return;
+}
+
 sub run_dependscheck {
   my $self = shift;
   my $pkgname = shift;
@@ -74,28 +78,40 @@ sub run_dependscheck {
     return;
   } 
 
-  print "Scanning ${pkgname} for a list of lib depends\n";
+  print "Scanning ${pkgname} for a list of lib depends\n\n";
   @depends = &check_pkg($pkgname);
 
   foreach $depend (@depends) {
     chomp($depend);
-    if ($show_versions eq "true") {
-      if ($depend =~ /shlibs$/) {
+    if ($depend =~ /shlibs$/) {
+      if ($show_shlibs eq "true") {
         $pkgversion = get_shlibsversion($depend);
-        $pkgversion = "(= $pkgversion)";
-      } else {
+        $depend = $pkgversion;
+        $SHLIBS{$depend} = 1;
+      }
+    } else {
+    if ($show_versions eq "true") {
         $pkgversion = get_dependversion($depend);
         $pkgversion = "(>= $pkgversion)";
+        $depend = "$depend $pkgversion";
+        $PACKAGES{$depend} = 1;
+      } else {
+        $PACKAGES{$depend} = 1;
       }
-      $depend = "$depend $pkgversion";
     }
-    $PACKAGES{$depend} = 1;  
   }
 
+  if ($show_shlibs eq "true") {
+    if (keys %SHLIBS) {
+      print "Shared Libs: ", join(', ', sort keys %SHLIBS), "\n\n";
+    } else {
+      print "Has no shlibs depends!\n\n";
+    }
+  }
   if (keys %PACKAGES) {    
-    print "\nDepends: ", join(', ', sort keys %PACKAGES), "\n\n";
+    print "Depends: \${SHLIBS_DEPS}, ", join(', ', sort keys %PACKAGES), "\n\n";
   } else {
-    print "\nHas no lib depends!\n\n";
+    print "Has no lib depends!\n\n";
   }
 
   return;
@@ -123,24 +139,29 @@ sub get_dependversion {
 
 ### Get Depend version from shlibs field
 sub get_shlibsversion {
-  my ($pattern);
+  my $pattern = shift;
   my ($vo, $lversion, @allnames, @selected, $pname, $package, $shlibs);
 
   Fink::Package->require_packages();
   @allnames = Fink::Package->list_packages();
   @selected = ();
-  while (defined($pattern = shift)) {
-    $pattern = lc quotemeta $pattern;
-    push @selected, grep(/^$pattern$/, @allnames);
-  }
+  $pattern = lc quotemeta $pattern;
+  push @selected, grep(/^$pattern$/, @allnames);
   foreach $pname (sort @selected) {
     $package = Fink::Package->package_by_name($pname);
     $lversion = &latest_version($package->list_versions());
     $vo = $package->get_version($lversion);
   }
 
+  ### FIXME for shlibs code
+  ### Add shlibs search here to return multi values
   if ($vo->has_param("shlibs")) {
     $shlibs = $vo->param("shlibs");
+    if ($shlibs =~ /^.+ [.0-9]+ (.*)$/) {
+      $shlibs = $1;
+      $shlibs =~ s/%n/$pattern/mg;
+      $shlibs =~ s/\\//mg;
+    }
   }
 
   return $shlibs;
