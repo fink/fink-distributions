@@ -2735,9 +2735,13 @@ EOF
 
 	my @pkglist;
 
-	# BuildConflicts of pkg are Conflicts of lockpkg
-	@pkglist = @{pkglist2lol($self->pkglist('BuildConflicts'))};
-	push @pkglist, [$lockpkg_minor];  # prevent concurrent builds of $self
+	# BuildConflicts of parent pkg are Conflicts of lockpkg
+	if (exists $self->{parent}) {
+		@pkglist = @{pkglist2lol($self->{parent}->pkglist('BuildConflicts'))};
+	} else {
+		@pkglist = @{pkglist2lol($self->pkglist('BuildConflicts'))};
+	}
+	push @pkglist, [$lockpkg_minor];  # prevent concurrent builds of the family
 	$control .= 'Conflicts: ' . &lol2pkglist(\@pkglist) . "\n";
 
 	# All *Depends of whole family of pkgs are Depends of lockpkg...
@@ -2787,10 +2791,27 @@ EOF
 						"the file manually to save disk space. ".
 						"Continuing with normal procedure.");
 	if ($lock_failed) {
-		# FIXME: need better err msg here:
-		#  * impossible parallel build vs. stray locks
-		#  * conflicting BDep from multiple-pkg build
-		die "Can't set build lock for " . $self->get_fullname() . "\n";
+		my $fullname = $self->get_fullname();
+		die <<EOMSG
+Can't set build lock for $fullname.
+
+If the above message says that there are problems with dependencies,
+fink is has probably gotten confused by trying to build many packages
+at once. Try building just this current package. When that has
+completed successfully, retry whatever you did that led to the present
+error.
+
+If the above message says that there are conflicts among several
+fink-buildlock packages, fink thinks that the package it is about to
+build is currently being built by another fink process. If that is not
+true (perhaps a previous build attempt crashed?), just use fink to
+remove the currently-installed $lockpkg_minor-
+package(s). Then retry whatever you did that led to the present error.
+
+In either case, don't worry--you have not wasted compiling time.
+Packages that had been completely built before this error occurred
+will not have to be recompiled.
+EOMSG
 	}
 
 	# save ref to ourself in global config so can remove lock if build dies
