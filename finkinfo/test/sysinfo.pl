@@ -19,11 +19,11 @@ my $DEVNAME2 = "AirPort";	## AirPort
 
 my $out;
 my $UNAME;
-my $ARCH, $TYPE, $MODEL, $NUM, $HEXCPU, $CPU;
-my $MEMTOTAL, $MEMUSED, $MEMUSEDGKM, $MEMPERCENT;
+my $ARCH, $TYPE, $MODEL, $NUM, $CPU;
+my $MEMTOTAL, $MEMUSED, $MEMGKM, $MEMPERCENT;
 my $DEVTYPE, $DEVTYPE2, $PACKIN, $PACKIN2, $PACKOUT, $PACKOUT2;
 my $RES;
-my $HDD, $HDDFREE;
+my $HDDTOTAL, $HDDUSED, $HDDCOUNT;
 my $PROCS;
 my $UPTIME, $DAYS;
 
@@ -33,14 +33,11 @@ IRC::add_command_handler("sys", "display_info");
 IRC::add_command_handler("up", "display_uptime");
 
 sub get_uname {
-  $UNAME = `uname -sr`;
-  chop ($UNAME);
+  chomp($UNAME = `uname -sr`);
 }
 
 sub get_cpu {
-  $ARCH = `uname -p`;
-  chop($ARCH);
-
+  chomp($ARCH = `uname -p`);
   if ($ARCH =~ /^powerpc/i) {
     $ARCH = "PowerPC";
   } elsif ($ARCH =~ /^86/i) {
@@ -49,46 +46,54 @@ sub get_cpu {
     $ARCH = "Unknown";
   }
 
-  $TYPE = `ioreg | grep $ARCH | cut -d"," -f2 | cut -d"@" -f1 | head -1`;
-  chomp($TYPE);
-
-  $MODEL = "$ARCH"."/"."$TYPE";
-
-  $NUM=`sysctl hw.ncpu | cut -d" " -f3`;
-  chop($NUM);
-  $NUM =~ s/^ +//;
-
-  if ($NUM eq 1 ) {
-    $MODEL = $MODEL;
-  } elsif ($NUM eq 2) {
-    $MODEL="Dual $MODEL";
+  chomp($TYPE = `ioreg | grep $ARCH`);
+  if ($TYPE =~ /.+$ARCH,(.+)@.+/) {
+    $TYPE = $1;
   } else {
-    $MODEL="Multi $MODEL";
+    $TYPE = "Unknown";
   }
 
-  $HEXCPU = `ioreg -n $ARCH,$TYPE | grep clock-frequency | cut -d"<" -f2 | cut -d">" -f1`;
-  chop($HEXCPU);
-  $HEXCPU = hex($HEXCPU) / 1000000;
-  $CPU = sprintf("%.0f"."MHz", $HEXCPU);
+  chomp($NUM=`sysctl hw.ncpu`);
+  $NUM =~ s/hw.ncpu = //;
+  if ($NUM eq 1 ) {
+    $MODEL = "$ARCH/$TYPE";
+  } elsif ($NUM eq 2) {
+    $MODEL="Dual $ARCH/$TYPE";
+  } elsif ($NUM gt 2) {
+    $MODEL="Multi $ARCH/$TYPE";
+  } else {
+    $MODEL = "#? $ARCH/$TYPE";
+  }
+
+  chomp($CPU = `ioreg -n $ARCH,$TYPE | grep clock-frequency`);
+  if ($CPU =~ /.*[<](.+)[>].*/) {
+    $CPU = hex($1)/1000000;
+    if ($CPU gt 999) {
+      $CPU = sprintf("%.0fGHz", $CPU/1000);
+    } else {
+      $CPU = sprintf("%.0fMHz", $CPU);
+    }
+  } else {
+    $CPU = "Unknown ($CPU)";
+  }
 }
 
 sub get_mem {
-  $MEMTOTAL = `sysctl hw.physmem | cut -d" " -f3`;
-  chop($MEMTOTAL);
-  $MEMTOTAL = sprintf("%d",$MEMTOTAL/1024**2);
+  chomp($MEMTOTAL = `sysctl hw.physmem`);
+  $MEMTOTAL =~ s/hw.physmem = //;
 
-  $MEMUSED = `top -l1 | grep PhysMem | cut -d":" -f2 | cut -d"," -f4`;
-  chop ($MEMUSED);
-  $MEMUSED =~ / ([0-9.]+)([GKM]) used$/;
+  chomp($MEMUSED = `top -l1 | grep PhysMem`);
+  $MEMUSED =~ /.*[,](.+)([GKM]) used.*/;
   $MEMUSED = $1;
-  $MEMUSEDGKM = $2;      
-  if ($MEMUSEDGKM =~ /^K$/) {
-    $MEMUSED = $MEMUSED / 1024;
-  } elsif ($MEMUSEDGKM =~ /^G$/) {
-    $MEMUSED = $MEMUSED * 1024;
+  $MEMGKM = $2;
+  $MEMUSED =~ s/ //g;
+  if ($MEMGKM =~ /^K$/) {
+    $MEMTOTAL = sprintf("%.0f", $MEMTOTAL/1024);  
+  } elsif ($MEMGKM =~ /^M$/) {
+    $MEMTOTAL = sprintf("%.0f", $MEMTOTAL/1024**2);
+  } elsif ($MEMGKM =~ /^G$/) {
+    $MEMTOTAL = sprintf("%.0f", $MEMTOTAL/1024**3);  
   }
-
-  $MEMUSED = sprintf("%.0f", $MEMUSED);
 
   $MEMPERCENT = $MEMUSED/$MEMTOTAL*100;
   if (int($MEMPERCENT) == int($MEMPERCENT + .5)) {
@@ -97,12 +102,10 @@ sub get_mem {
     $MEMPERCENT = int($MEMPERCENT + .5);
   }
 
-  if ($MEMUSEDGKM =~ /^K$/) {
-    $MEMUSED = $MEMUSED * 1024;
+  if ($MEMGKM =~ /^K$/) {
     $MEMUSED .= "Kb";
     $MEMTOTAL .= "Kb";
-  } elsif ($MEMUSEDGKM =~ /^G$/) {
-    $MEMUSED = $MEMUSED / 1024;
+  } elsif ($MEMGKM =~ /^G$/) {
     $MEMUSED .= "Gb";
     $MEMTOTAL .= "Gb";
   } else {
@@ -162,28 +165,58 @@ sub get_net {
 }
 
 sub get_rez {
-  $RES = `xdpyinfo | grep dimensions | cut -d\" \" -f7`;
-  chop ($RES);
+  chomp($RES = `xdpyinfo | grep dimensions`);   
+  $RES =~ /dimensions: (.+) pixels.*/;         
+  $RES = $1;  
+  $RES =~ s/ //g;     
 }
 
 sub get_hdd {
-  $HDD = `df -l -x tmpfs -x shm | awk '{ sum+=\$2/1024^2 }; END { printf (\"%dGb\\n\", sum )}'`;
-  chop ($HDD);
-   
-  $HDDFREE = `df -l -x tmpfs -x shm | awk '{ sum+=\$4/1024^2 }; END { printf (\"%dGb\\n\", sum )}'`;
-  chop ($HDDFREE);
+  my @hddlist = `df -l -x volfs -x fdesc -x devfs -x hsfs -x cdfs`;
+  my $hddline;
+  my ($hddtotal, $hddused, $hddcount) = (0, 0, 0);
+
+  foreach $hddline (@hddlist) {
+    chomp($hddline);
+    if ($hddline =~ /^\/dev\S+\ +([0-9.]+)\ +([0-9.]+)\ +([0-9.]+)\ .+[\%].*$/) {
+      if ($3 != 0) {
+        $hddcount++;
+        $hddtotal += $1;
+        $hddused += $2;
+      }
+    }
+  }
+
+  if ($hddtotal >= 1024**3) {
+    $hddtotal = sprintf("%.2fTb", $hddtotal/1024**3);
+    $hddused = sprintf("%.2fTb", $hddused/1024**3);
+  } elsif ($hddtotal >= 1024**2) {
+    $hddtotal = sprintf("%.2fGb", $hddtotal/1024**2);
+    $hddused = sprintf("%.2fGb", $hddused/1024**2);
+  } elsif ($hddtotal >= 1024*1024) {
+    $hddtotal = sprintf("%.2fMb", $hddtotal/1024**1);
+    $hddused = sprintf("%.2fMb", $hddused/1024**1);
+  } elsif ($hddtotal >= 1024) {
+    $hddtotal = sprintf("%.2fKb", $hddtotal/1024);
+    $hddused = sprintf("%.2fKb", $hddused/1024);
+  } else {
+    $hddtotal = sprintf("%.2fb", $hddtotal);
+    $hddused = sprintf("%.2fb", $hddused);
+  }
+  $HDDTOTAL = $hddtotal;
+  $HDDUSED = $hddused;
+  $HDDCOUNT = $hddcount;
 }
 
 sub get_procs {
-  $PROCS = `ps ax | wc -l`;
-  chop ($PROCS);
-
+  chomp($PROCS = `top -l1 | grep Processes`);
+  $PROCS =~ /Processes: (.+) total.*/;
+  $PROCS = $1;
   $PROCS =~ s/ //g;
 }
 
 sub get_uptime {
-  $UPTIME = `uptime`;
-  chop ($UPTIME);
+  chomp($UPTIME = `uptime`);
   $UPTIME =~ /.*up (.+),.+[0-9]+ user/;
   $DAYS = $1;
   if ($DAYS =~ /.?(.+).?days, (.+):(.+)/) {
@@ -202,7 +235,8 @@ sub build_output {
   $out .= " %B|%O System: %B$UNAME%O";
   $out .= " %B|%O CPU: %B$MODEL%O @ %B$CPU%O";
   $out .= " %B|%O RAM: %B$MEMUSED%O of %B$MEMTOTAL%O (%B$MEMPERCENT% %Oused)";
-  $out .= " %B|%O Free Disk: %B$HDDFREE%O of %B$HDD%O";
+  $out .= " %B|%O Disk(s)/Partion(s): %B$HDDCOUNT%O";
+  $out .= " %B|%O Space: %B$HDDUSED%O of %B$HDDTOTAL%O used";
   $out .= " %B|%O Screen Res: %B$RES%O";
   $out .= " %B|%O Procs: %B$PROCS%O";
   $out .= " %B|%O Uptime: %B$UPTIME%O";
