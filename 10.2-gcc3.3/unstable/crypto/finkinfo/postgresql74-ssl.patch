@@ -1,0 +1,1031 @@
+diff -uNr postgresql-7.4.3/pgsql.sh postgresql-7.4.3-new/pgsql.sh
+--- postgresql-7.4.3/pgsql.sh	Wed Dec 31 19:00:00 1969
++++ postgresql-7.4.3-new/pgsql.sh	Sun Jun 20 23:01:25 2004
+@@ -0,0 +1,21 @@
++#!/bin/sh
++
++for flag in "-n" "-d" "-s" "-u" "-v"; do
++	ulimit $flag 65536 >/dev/null 2>&1 || :
++done
++
++PREFIX="@INSTPREFIX@"
++DATADIR="${PREFIX}/var/postgresql-7.4/data"
++LOGFILE="${PREFIX}/var/postgresql-7.4/pgsql.log"
++
++case "$1" in
++	start)
++		sudo -u postgres "${PREFIX}/bin/pg_ctl-7.4" start -D "$DATADIR" -l "$LOGFILE"
++		;;
++	restart)
++		sudo -u postgres "${PREFIX}/bin/pg_ctl-7.4" restart -D "$DATADIR" -m fast
++		;;
++	stop)
++		sudo -u postgres "${PREFIX}/bin/pg_ctl-7.4" stop -D "$DATADIR" -m fast
++		;;
++esac
+diff -uNr postgresql-7.4.3/src/Makefile.global.in postgresql-7.4.3-new/src/Makefile.global.in
+--- postgresql-7.4.3/src/Makefile.global.in	Fri Dec 19 18:29:29 2003
++++ postgresql-7.4.3-new/src/Makefile.global.in	Sun Jun 20 23:01:25 2004
+@@ -65,21 +65,21 @@
+ libexecdir := @libexecdir@
+ ifeq "$(findstring pgsql, $(libexecdir))" ""
+ ifeq "$(findstring postgres, $(libexecdir))" ""
+-override libexecdir := $(libexecdir)/postgresql
++override libexecdir := $(libexecdir)/postgresql-7.4
+ endif
+ endif
+ 
+ datadir := @datadir@
+ ifeq "$(findstring pgsql, $(datadir))" ""
+ ifeq "$(findstring postgres, $(datadir))" ""
+-override datadir := $(datadir)/postgresql
++override datadir := $(datadir)/postgresql-7.4
+ endif
+ endif
+ 
+ sysconfdir := @sysconfdir@
+ ifeq "$(findstring pgsql, $(sysconfdir))" ""
+ ifeq "$(findstring postgres, $(sysconfdir))" ""
+-override sysconfdir := $(sysconfdir)/postgresql
++override sysconfdir := $(sysconfdir)/postgresql-7.4
+ endif
+ endif
+ 
+@@ -87,7 +87,7 @@
+ pkglibdir = $(libdir)
+ ifeq "$(findstring pgsql, $(pkglibdir))" ""
+ ifeq "$(findstring postgres, $(pkglibdir))" ""
+-override pkglibdir := $(pkglibdir)/postgresql
++override pkglibdir := $(pkglibdir)/postgresql-7.4
+ endif
+ endif
+ 
+@@ -95,7 +95,7 @@
+ pkgincludedir = $(includedir)
+ ifeq "$(findstring pgsql, $(pkgincludedir))" ""
+ ifeq "$(findstring postgres, $(pkgincludedir))" ""
+-override pkgincludedir := $(pkgincludedir)/postgresql
++override pkgincludedir := $(pkgincludedir)/postgresql-7.4
+ endif
+ endif
+ includedir_server = $(pkgincludedir)/server
+@@ -107,7 +107,7 @@
+ docdir := @docdir@
+ ifeq "$(findstring pgsql, $(docdir))" ""
+ ifeq "$(findstring postgres, $(docdir))" ""
+-override docdir := $(docdir)/postgresql
++override docdir := $(docdir)/postgresql-7.4
+ endif
+ endif
+ 
+diff -uNr postgresql-7.4.3/src/Makefile.shlib postgresql-7.4.3-new/src/Makefile.shlib
+--- postgresql-7.4.3/src/Makefile.shlib	Sun Oct 19 21:34:33 2003
++++ postgresql-7.4.3-new/src/Makefile.shlib	Sun Jun 20 23:01:25 2004
+@@ -81,8 +81,24 @@
+ endif
+ 
+ ifeq ($(PORTNAME), darwin)
+-  shlib			:= lib$(NAME)$(DLSUFFIX).$(SO_MAJOR_VERSION).$(SO_MINOR_VERSION)
+-  LINK.shared		= $(COMPILER) -bundle
++  ifeq (,$(filter $(host_os), darwin1.0 darwin1.1 darwin1.2))
++     MULTIPLY_DEFINED  =
++  else
++     MULTIPLY_DEFINED  = -multiply_defined suppress
++  endif
++
++  shlib			:= lib$(NAME).$(SO_MAJOR_VERSION).$(SO_MINOR_VERSION)$(DLSUFFIX)
++  ifneq ($(SO_MAJOR_VERSION), 0)
++    version_link	:= -compatibility_version $(SO_MAJOR_VERSION) -current_version $(SO_MAJOR_VERSION).$(SO_MINOR_VERSION)
++  endif
++  ifeq ($(DLTYPE), module)
++    DLSUFFIX		:= .so
++    LINK.shared		= $(COMPILER) $(DARWIN_NAMESPACE_SPEC) -bundle -undefined suppress -flat_namespace
++  else
++    DLSUFFIX		:= .dylib
++    LINK.shared		= $(COMPILER) $(DARWIN_NAMESPACE_SPEC) -install_name $(libdir)/lib$(NAME).$(SO_MAJOR_VERSION)$(DLSUFFIX) $(version_link) -dynamiclib $(MULTIPLY_DEFINED)
++  endif
++  SHLIB_LINK		:= -L$(libpq_builddir) $(SHLIB_LINK)
+ endif
+ 
+ ifeq ($(PORTNAME), openbsd)
+@@ -249,6 +265,7 @@
+ ifneq ($(PORTNAME), beos)
+ ifneq ($(PORTNAME), cygwin)
+ ifneq ($(PORTNAME), aix)
++ifneq ($(PORTNAME), darwin)
+ 
+ # Normal case
+ $(shlib): $(OBJS)
+@@ -264,6 +281,25 @@
+ 	$(LN_S) $(shlib) lib$(NAME)$(DLSUFFIX)
+ endif
+ 
++else # PORTNAME == darwin
++
++# Darwin case
++# (same as normal case, but libfoo.version.suffix)
++
++$(shlib): $(OBJS)
++	$(LINK.shared) $(OBJS) $(SHLIB_LINK) -o $@
++ifneq ($(shlib), lib$(NAME).$(SO_MAJOR_VERSION)$(DLSUFFIX))
++	rm -f lib$(NAME).$(SO_MAJOR_VERSION)$(DLSUFFIX)
++	$(LN_S) $(shlib) lib$(NAME).$(SO_MAJOR_VERSION)$(DLSUFFIX)
++endif
++
++ifneq ($(shlib), lib$(NAME)$(DLSUFFIX))
++	rm -f lib$(NAME)$(DLSUFFIX)
++	$(LN_S) $(shlib) lib$(NAME)$(DLSUFFIX)
++endif
++
++endif # PORTNAME == darwin
++
+ else # PORTNAME == aix
+ 
+ # AIX case
+@@ -316,6 +352,7 @@
+ install-lib-shared: $(shlib)
+ 	$(INSTALL_SHLIB) $< $(DESTDIR)$(libdir)/$(shlib)
+ ifneq ($(PORTNAME), cygwin)
++ifneq ($(PORTNAME), darwin)
+ ifneq ($(shlib), lib$(NAME)$(DLSUFFIX).$(SO_MAJOR_VERSION))
+ 	cd $(DESTDIR)$(libdir) && \
+ 	rm -f lib$(NAME)$(DLSUFFIX).$(SO_MAJOR_VERSION) && \
+@@ -326,7 +363,18 @@
+ 	rm -f lib$(NAME)$(DLSUFFIX) && \
+ 	$(LN_S) $(shlib) lib$(NAME)$(DLSUFFIX)
+ endif
+-
++else
++ifneq ($(shlib), lib$(NAME).$(SO_MAJOR_VERSION)$(DLSUFFIX))
++	cd $(DESTDIR)$(libdir) && \
++	rm -f lib$(NAME).$(SO_MAJOR_VERSION)$(DLSUFFIX) && \
++	$(LN_S) $(shlib) lib$(NAME).$(SO_MAJOR_VERSION)$(DLSUFFIX)
++endif
++ifneq ($(shlib), lib$(NAME)$(DLSUFFIX))
++	cd $(DESTDIR)$(libdir) && \
++	rm -f lib$(NAME)$(DLSUFFIX) && \
++	$(LN_S) $(shlib) lib$(NAME)$(DLSUFFIX)
++endif
++endif # not darwin
+ endif # not cygwin
+ endif # enable_shared
+ 
+@@ -341,7 +389,9 @@
+ ifeq ($(enable_shared), yes)
+ 	rm -f $(DESTDIR)$(libdir)/lib$(NAME)$(DLSUFFIX) \
+ 	  $(DESTDIR)$(libdir)/lib$(NAME)$(DLSUFFIX).$(SO_MAJOR_VERSION) \
+-	  $(DESTDIR)$(libdir)/lib$(NAME)$(DLSUFFIX).$(SO_MAJOR_VERSION).$(SO_MINOR_VERSION)
++	  $(DESTDIR)$(libdir)/lib$(NAME)$(DLSUFFIX).$(SO_MAJOR_VERSION).$(SO_MINOR_VERSION) \
++	  $(DESTDIR)$(libdir)/lib$(NAME).$(SO_MAJOR_VERSION)$(DLSUFFIX) \
++	  $(DESTDIR)$(libdir)/lib$(NAME).$(SO_MAJOR_VERSION).$(SO_MINOR_VERSION)$(DLSUFFIX)
+ endif # enable_shared
+ 
+ 
+@@ -353,7 +403,7 @@
+ clean-lib:
+ 	rm -f lib$(NAME).a
+ ifeq ($(enable_shared), yes)
+-	rm -f lib$(NAME)$(DLSUFFIX) lib$(NAME)$(DLSUFFIX).$(SO_MAJOR_VERSION) lib$(NAME)$(DLSUFFIX).$(SO_MAJOR_VERSION).$(SO_MINOR_VERSION)
++	rm -f lib$(NAME)$(DLSUFFIX) lib$(NAME)$(DLSUFFIX).$(SO_MAJOR_VERSION) lib$(NAME)$(DLSUFFIX).$(SO_MAJOR_VERSION).$(SO_MINOR_VERSION) lib$(NAME).$(SO_MAJOR_VERSION)$(DLSUFFIX) lib$(NAME).$(SO_MAJOR_VERSION).$(SO_MINOR_VERSION)$(DLSUFFIX)
+ ifdef EXPSUFF
+ 	rm -f lib$(NAME)$(EXPSUFF)
+ endif
+diff -uNr postgresql-7.4.3/src/backend/utils/fmgr/dfmgr.c postgresql-7.4.3-new/src/backend/utils/fmgr/dfmgr.c
+--- postgresql-7.4.3/src/backend/utils/fmgr/dfmgr.c	Thu Sep 25 02:58:05 2003
++++ postgresql-7.4.3-new/src/backend/utils/fmgr/dfmgr.c	Sun Jun 20 23:01:25 2004
+@@ -300,6 +300,26 @@
+ 		pfree(full);
+ 	}
+ 
++	new = palloc(strlen(name) + strlen(".so") + 1);
++	strcpy(new, name);
++	strcat(new, ".so");
++
++	if (!have_slash)
++	{
++		full = find_in_dynamic_libpath(new);
++		pfree(new);
++		if (full)
++			return full;
++	}
++	else
++	{
++		full = substitute_libpath_macro(new);
++		pfree(new);
++		if (file_exists(full))
++			return full;
++		pfree(full);
++	}
++
+ 	new = palloc(strlen(name) + strlen(DLSUFFIX) + 1);
+ 	strcpy(new, name);
+ 	strcat(new, DLSUFFIX);
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/ascii_and_mic/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/ascii_and_mic/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/ascii_and_mic/Makefile	Wed Aug 21 22:18:45 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/ascii_and_mic/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.3 2002/08/22 02:18:45 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/ascii_and_mic
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/cyrillic_and_mic/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/cyrillic_and_mic/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/cyrillic_and_mic/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/cyrillic_and_mic/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/cyrillic_and_mic
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/euc_cn_and_mic/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/euc_cn_and_mic/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/euc_cn_and_mic/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/euc_cn_and_mic/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/euc_cn_and_mic
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/euc_jp_and_sjis/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/euc_jp_and_sjis/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/euc_jp_and_sjis/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/euc_jp_and_sjis/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/euc_jp_and_sjis
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/euc_kr_and_mic/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/euc_kr_and_mic/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/euc_kr_and_mic/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/euc_kr_and_mic/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/euc_kr_and_mic
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/euc_tw_and_big5/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/euc_tw_and_big5/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/euc_tw_and_big5/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/euc_tw_and_big5/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/euc_tw_and_big5
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/latin2_and_win1250/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/latin2_and_win1250/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/latin2_and_win1250/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/latin2_and_win1250/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/latin2_and_win1250
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/latin_and_mic/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/latin_and_mic/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/latin_and_mic/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/latin_and_mic/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/latin_and_mic
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_ascii/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_ascii/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_ascii/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_ascii/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_ascii
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_big5/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_big5/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_big5/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_big5/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_big5
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_cyrillic/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_cyrillic/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_cyrillic/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_cyrillic/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_cyrillic
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_euc_cn/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_euc_cn/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_euc_cn/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_euc_cn/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_euc_cn
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_euc_jp/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_euc_jp/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_euc_jp/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_euc_jp/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_euc_jp
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_euc_kr/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_euc_kr/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_euc_kr/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_euc_kr/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_euc_kr
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_euc_tw/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_euc_tw/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_euc_tw/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_euc_tw/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_euc_tw
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_gb18030/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_gb18030/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_gb18030/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_gb18030/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_gb18030
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_gbk/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_gbk/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_gbk/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_gbk/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_gbk
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_iso8859/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_iso8859/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_iso8859/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_iso8859/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_iso8859
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_iso8859_1/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_iso8859_1/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_iso8859_1/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_iso8859_1/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_iso8859_1
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_johab/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_johab/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_johab/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_johab/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_johab
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_sjis/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_sjis/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_sjis/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_sjis/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_sjis
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_tcvn/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_tcvn/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_tcvn/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_tcvn/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_tcvn
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_uhc/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_uhc/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_uhc/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_uhc/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_uhc
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_win1250/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_win1250/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_win1250/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_win1250/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_win1250
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_win1256/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_win1256/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_win1256/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_win1256/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_win1256
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_win874/Makefile postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_win874/Makefile
+--- postgresql-7.4.3/src/backend/utils/mb/conversion_procs/utf8_and_win874/Makefile	Wed Aug 21 17:33:55 2002
++++ postgresql-7.4.3-new/src/backend/utils/mb/conversion_procs/utf8_and_win874/Makefile	Sun Jun 20 23:01:25 2004
+@@ -3,6 +3,9 @@
+ # $Id: Makefile,v 1.2 2002/08/21 21:33:55 momjian Exp $
+ #
+ #-------------------------------------------------------------------------
++
++DLTYPE = module
++
+ subdir = src/backend/utils/mb/conversion_procs/utf8_and_win874
+ top_builddir = ../../../../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/backend/utils/misc/postgresql.conf.sample postgresql-7.4.3-new/src/backend/utils/misc/postgresql.conf.sample
+--- postgresql-7.4.3/src/backend/utils/misc/postgresql.conf.sample	Tue Oct  7 23:49:38 2003
++++ postgresql-7.4.3-new/src/backend/utils/misc/postgresql.conf.sample	Sun Jun 20 23:01:25 2004
+@@ -27,7 +27,7 @@
+ 
+ # - Connection Settings -
+ 
+-#tcpip_socket = false
++tcpip_socket = true
+ #max_connections = 100
+ 	# note: increasing max_connections costs about 500 bytes of shared
+ 	# memory per connection slot, in addition to costs from shared_buffers
+@@ -43,7 +43,7 @@
+ # - Security & Authentication -
+ 
+ #authentication_timeout = 60	# 1-600, in seconds
+-#ssl = false
++ssl = false
+ #password_encryption = true
+ #krb_server_keyfile = ''
+ #db_user_namespace = false
+diff -uNr postgresql-7.4.3/src/bin/initdb/initdb.sh postgresql-7.4.3-new/src/bin/initdb/initdb.sh
+--- postgresql-7.4.3/src/bin/initdb/initdb.sh	Wed May  5 12:09:56 2004
++++ postgresql-7.4.3-new/src/bin/initdb/initdb.sh	Sun Jun 20 23:01:25 2004
+@@ -123,20 +123,20 @@
+ # their trees to backup places, so $bindir might be inaccurate.
+ 
+ if [ x"$self_path" != x"" ] \
+-  && [ -x "$self_path/postgres" ] \
+-  && [ x"`$self_path/postgres -V 2>/dev/null`" = x"postgres (PostgreSQL) $VERSION" ]
++  && [ -x "$self_path/postgres-7.4" ] \
++  && [ x"`$self_path/postgres-7.4 -V 2>/dev/null`" = x"postgres (PostgreSQL) $VERSION" ]
+ then
+     PGPATH=$self_path
+-elif [ -x "$bindir/postgres" ]; then
+-    if [ x"`$bindir/postgres -V 2>/dev/null`" = x"postgres (PostgreSQL) $VERSION" ]
++elif [ -x "$bindir/postgres-7.4" ]; then
++    if [ x"`$bindir/postgres-7.4 -V 2>/dev/null`" = x"postgres (PostgreSQL) $VERSION" ]
+     then
+         PGPATH=$bindir
+     else
+         # Maybe there was an error message?
+-        errormsg=`$bindir/postgres -V 2>&1 >/dev/null`
++        errormsg=`$bindir/postgres-7.4 -V 2>&1 >/dev/null`
+       (
+         echo "The program "
+-        echo "    $bindir/postgres"
++        echo "    $bindir/postgres-7.4"
+         echo "needed by $CMDNAME does not belong to PostgreSQL version $VERSION, or"
+         echo "there may be a configuration problem."
+         if test x"$errormsg" != x""; then
+@@ -148,7 +148,7 @@
+         exit 1
+     fi
+ else
+-    echo "The program \"postgres\" is needed by $CMDNAME but was not found in" 1>&2
++    echo "The program \"postgres-7.4\" is needed by $CMDNAME but was not found in" 1>&2
+     echo "the directory \"$bindir\".  Check your installation." 1>&2
+     exit 1
+ fi
+@@ -156,20 +156,20 @@
+ 
+ # Now we can assume that 'pg_id' belongs to the same version as the
+ # verified 'postgres' in the same directory.
+-if [ ! -x "$PGPATH/pg_id" ]; then
+-    echo "The program \"pg_id\" is needed by $CMDNAME but was not found in" 1>&2
++if [ ! -x "$PGPATH/pg_id-7.4" ]; then
++    echo "The program \"pg_id-7.4\" is needed by $CMDNAME but was not found in" 1>&2
+     echo "the directory \"$PGPATH\".  Check your installation." 1>&2
+     exit 1
+ fi
+ 
+ 
+-EffectiveUser=`$PGPATH/pg_id -n -u`
++EffectiveUser=`$PGPATH/pg_id-7.4 -n -u`
+ if [ -z "$EffectiveUser" ]; then
+     echo "$CMDNAME: could not determine current user name" 1>&2
+     exit 1
+ fi
+ 
+-if [ `$PGPATH/pg_id -u` -eq 0 ]
++if [ `$PGPATH/pg_id-7.4 -u` -eq 0 ]
+ then
+     echo "$CMDNAME: cannot be run as root" 1>&2
+     echo "Please log in (using, e.g., \"su\") as the (unprivileged) user that will" 1>&2
+@@ -372,11 +372,11 @@
+ 
+ if [ "$ENCODING" ]
+ then
+-	ENCODINGID=`$PGPATH/pg_encoding -b $ENCODING`
++	ENCODINGID=`$PGPATH/pg_encoding-7.4 -b $ENCODING`
+ 	if [ "$?" -ne 0 ]
+ 	then
+               (
+-                echo "$CMDNAME: pg_encoding failed"
++                echo "$CMDNAME: pg_encoding-7.4 failed"
+                 echo "Make sure the program was installed correctly."
+               ) 1>&2
+                 exit 1
+@@ -565,7 +565,7 @@
+ do
+     nbuffers=`expr $nconns '*' 5`
+     TEST_OPT="$PGSQL_OPT -c shared_buffers=$nbuffers -c max_connections=$nconns"
+-    if "$PGPATH"/postgres -boot -x0 $TEST_OPT template1 </dev/null >/dev/null 2>&1
++    if "$PGPATH"/postgres-7.4 -boot -x0 $TEST_OPT template1 </dev/null >/dev/null 2>&1
+     then
+ 	break
+     fi
+@@ -578,7 +578,7 @@
+ for nbuffers in 1000 900 800 700 600 500 400 300 200 100 50
+ do
+     TEST_OPT="$PGSQL_OPT -c shared_buffers=$nbuffers -c max_connections=$nconns"
+-    if "$PGPATH"/postgres -boot -x0 $TEST_OPT template1 </dev/null >/dev/null 2>&1
++    if "$PGPATH"/postgres-7.4 -boot -x0 $TEST_OPT template1 </dev/null >/dev/null 2>&1
+     then
+ 	break
+     fi
+@@ -639,7 +639,7 @@
+   export LC_COLLATE
+   export LC_CTYPE
+   unset LC_ALL
+-  "$PGPATH"/postgres -boot -x1 $PGSQL_OPT $BOOTSTRAP_TALK_ARG template1
++  "$PGPATH"/postgres-7.4 -boot -x1 $PGSQL_OPT $BOOTSTRAP_TALK_ARG template1
+ ) \
+ || exit_nicely
+ 
+@@ -661,7 +661,7 @@
+ 
+ $ECHO_N "initializing pg_shadow... "$ECHO_C
+ 
+-"$PGPATH"/postgres $PGSQL_OPT template1 >/dev/null <<EOF
++"$PGPATH"/postgres-7.4 $PGSQL_OPT template1 >/dev/null <<EOF
+ -- Create a trigger so that direct updates to pg_shadow will be written
+ -- to the flat password/group files pg_pwd and pg_group
+ CREATE TRIGGER pg_sync_pg_pwd AFTER INSERT OR UPDATE OR DELETE ON pg_shadow \
+@@ -694,7 +694,7 @@
+         exit_nicely
+     fi
+     $ECHO_N "setting password... "$ECHO_C
+-    "$PGPATH"/postgres $PGSQL_OPT template1 >/dev/null <<EOF
++    "$PGPATH"/postgres-7.4 $PGSQL_OPT template1 >/dev/null <<EOF
+ 	ALTER USER "$POSTGRES_SUPERUSERNAME" WITH PASSWORD '$FirstPw';
+ EOF
+     if [ "$?" -ne 0 ]; then
+@@ -710,7 +710,7 @@
+ 
+ $ECHO_N "enabling unlimited row size for system tables... "$ECHO_C
+ 
+-"$PGPATH"/postgres $PGSQL_OPT template1 >/dev/null <<EOF
++"$PGPATH"/postgres-7.4 $PGSQL_OPT template1 >/dev/null <<EOF
+ ALTER TABLE pg_attrdef CREATE TOAST TABLE;
+ ALTER TABLE pg_constraint CREATE TOAST TABLE;
+ ALTER TABLE pg_database CREATE TOAST TABLE;
+@@ -729,7 +729,7 @@
+ 
+ $ECHO_N "initializing pg_depend... "$ECHO_C
+ 
+-"$PGPATH"/postgres $PGSQL_OPT template1 >/dev/null <<EOF
++"$PGPATH"/postgres-7.4 $PGSQL_OPT template1 >/dev/null <<EOF
+ -- Make PIN entries in pg_depend for all objects made so far in the tables
+ -- that the dependency code handles.  This is overkill (the system doesn't
+ -- really depend on having every last weird datatype, for instance)
+@@ -761,7 +761,7 @@
+ 
+ $ECHO_N "creating system views... "$ECHO_C
+ 
+-"$PGPATH"/postgres $PGSQL_OPT template1 >/dev/null <<EOF
++"$PGPATH"/postgres-7.4 $PGSQL_OPT template1 >/dev/null <<EOF
+ 
+ CREATE VIEW pg_user AS \
+     SELECT \
+@@ -1051,12 +1051,12 @@
+     FROM tmp_pg_description t, pg_class c WHERE c.relname = t.classname;
+ EOF
+ ) \
+-	| "$PGPATH"/postgres $PGSQL_OPT template1 > /dev/null || exit_nicely
++	| "$PGPATH"/postgres-7.4 $PGSQL_OPT template1 > /dev/null || exit_nicely
+ echo "ok"
+ 
+ # Create pg_conversion and support functions
+ $ECHO_N "creating conversions... "$ECHO_C
+-grep -v '^DROP CONVERSION' $datadir/conversion_create.sql | "$PGPATH"/postgres $PGSQL_OPT template1 > /dev/null || exit_nicely
++grep -v '^DROP CONVERSION' $datadir/conversion_create.sql | "$PGPATH"/postgres-7.4 $PGSQL_OPT template1 > /dev/null || exit_nicely
+ echo "ok"
+ 
+ # Set most system catalogs and built-in functions as world-accessible.
+@@ -1076,11 +1076,11 @@
+     GRANT CREATE, USAGE ON SCHEMA public TO PUBLIC;
+ EOF
+ ) \
+-	| "$PGPATH"/postgres $PGSQL_OPT template1 > /dev/null || exit_nicely
++	| "$PGPATH"/postgres-7.4 $PGSQL_OPT template1 > /dev/null || exit_nicely
+ echo "ok"
+ 
+ $ECHO_N "creating information schema... "$ECHO_C
+-"$PGPATH"/postgres $PGSQL_OPT -N template1 > /dev/null < "$datadir"/information_schema.sql || exit_nicely
++"$PGPATH"/postgres-7.4 $PGSQL_OPT -N template1 > /dev/null < "$datadir"/information_schema.sql || exit_nicely
+ (
+   # Format version number to format required by information schema (09.08.0007abc).
+   major_version=`echo $VERSION | sed 's/^\([0-9]*\).*/00\1/;s/.*\(..\)$/\1/'`
+@@ -1093,12 +1093,12 @@
+ 
+   echo "COPY information_schema.sql_features (feature_id, feature_name, sub_feature_id, sub_feature_name, is_supported, comments) FROM '$datadir/sql_features.txt';"
+ ) \
+-	| "$PGPATH"/postgres $PGSQL_OPT template1 > /dev/null || exit_nicely
++	| "$PGPATH"/postgres-7.4 $PGSQL_OPT template1 > /dev/null || exit_nicely
+ echo "ok"
+ 
+ $ECHO_N "vacuuming database template1... "$ECHO_C
+ 
+-"$PGPATH"/postgres $PGSQL_OPT template1 >/dev/null <<EOF
++"$PGPATH"/postgres-7.4 $PGSQL_OPT template1 >/dev/null <<EOF
+ ANALYZE;
+ VACUUM FULL FREEZE;
+ EOF
+@@ -1109,7 +1109,7 @@
+ 
+ $ECHO_N "copying template1 to template0... "$ECHO_C
+ 
+-"$PGPATH"/postgres $PGSQL_OPT template1 >/dev/null <<EOF
++"$PGPATH"/postgres-7.4 $PGSQL_OPT template1 >/dev/null <<EOF
+ CREATE DATABASE template0;
+ 
+ UPDATE pg_database SET \
+@@ -1145,11 +1145,7 @@
+ echo
+ echo "Success. You can now start the database server using:"
+ echo ""
+-echo "    $PGPATH/postmaster -D $PGDATA"
+-echo "or"
+-# (Advertise -l option here, otherwise we have a background
+-#  process writing to the terminal.)
+-echo "    $PGPATH/pg_ctl -D $PGDATA -l logfile start"
++echo "    sudo @INSTPREFIX@/bin/pgsql.sh start"
+ echo
+ 
+ exit 0
+diff -uNr postgresql-7.4.3/src/bin/initlocation/initlocation.sh postgresql-7.4.3-new/src/bin/initlocation/initlocation.sh
+--- postgresql-7.4.3/src/bin/initlocation/initlocation.sh	Wed Jul 23 04:46:57 2003
++++ postgresql-7.4.3-new/src/bin/initlocation/initlocation.sh	Sun Jun 20 23:01:25 2004
+@@ -163,7 +163,7 @@
+     echo "You can now create a database using"
+     echo "  CREATE DATABASE <name> WITH LOCATION = '$Location'"
+     echo "in SQL, or"
+-    echo "  createdb -D '$Location' <name>"
++    echo "  createdb-7.4 -D '$Location' <name>"
+     echo "from the shell."
+ fi
+ echo
+diff -uNr postgresql-7.4.3/src/bin/pg_ctl/pg_ctl.sh postgresql-7.4.3-new/src/bin/pg_ctl/pg_ctl.sh
+--- postgresql-7.4.3/src/bin/pg_ctl/pg_ctl.sh	Thu Aug 14 14:56:41 2003
++++ postgresql-7.4.3-new/src/bin/pg_ctl/pg_ctl.sh	Sun Jun 20 23:01:25 2004
+@@ -14,6 +14,10 @@
+ 
+ CMDNAME=`basename $0`
+ 
++ulimit -d 24000 >/dev/null 2>&1
++ulimit -n 512   >/dev/null 2>&1
++ulimit -s 4096  >/dev/null 2>&1
++
+ help="\
+ $CMDNAME is a utility to start, stop, restart, reload configuration files,
+ or report the status of a PostgreSQL server.
+@@ -98,18 +102,18 @@
+ fi
+ 
+ # Check if needed programs actually exist in path
+-if [ -x "$self_path/postmaster" ] && [ -x "$self_path/psql" ]; then
++if [ -x "$self_path/postmaster-7.4" ] && [ -x "$self_path/psql-7.4" ]; then
+     PGPATH="$self_path"
+-elif [ -x "$bindir/postmaster" ] && [ -x "$bindir/psql" ]; then
++elif [ -x "$bindir/postmaster-7.4" ] && [ -x "$bindir/psql-7.4" ]; then
+     PGPATH="$bindir"
+ else
+-    echo "The programs \"postmaster\" and \"psql\" are needed by $CMDNAME but" 1>&2
++    echo "The programs \"postmaster-7.4\" and \"psql-7.4\" are needed by $CMDNAME but" 1>&2
+     echo "were not found in the directory \"$bindir\"." 1>&2
+     echo "Check your installation." 1>&2
+     exit 1
+ fi
+ 
+-po_path="$PGPATH/postmaster"
++po_path="$PGPATH/postmaster-7.4"
+ 
+ wait=
+ wait_seconds=60
+@@ -384,7 +388,7 @@
+ 	$silence_echo $ECHO_N "waiting for postmaster to start..."$ECHO_C
+ 	while :
+ 	do
+-	    if "$PGPATH/psql" -p $PGPORT -l >/dev/null 2>&1
++	    if "$PGPATH/psql-7.4" -p $PGPORT -l >/dev/null 2>&1
+ 	    then
+ 		break;
+ 	    else
+diff -uNr postgresql-7.4.3/src/interfaces/ecpg/compatlib/Makefile postgresql-7.4.3-new/src/interfaces/ecpg/compatlib/Makefile
+--- postgresql-7.4.3/src/interfaces/ecpg/compatlib/Makefile	Sun Mar 14 07:18:35 2004
++++ postgresql-7.4.3-new/src/interfaces/ecpg/compatlib/Makefile	Sun Jun 20 23:01:25 2004
+@@ -17,6 +17,8 @@
+ SO_MINOR_VERSION= 2
+ 
+ override CPPFLAGS := -I$(top_srcdir)/src/interfaces/ecpg/include -I$(libpq_srcdir) -I$(top_srcdir)/src/include/utils $(CPPFLAGS) $(THREAD_CPPFLAGS)
++override LDFLAGS := -L../../../../src/port -L@BUILDDIR@@INSTPREFIX@/lib -L../ecpglib -lecpg -L../pgtypeslib -lpgtypes $(libpq) $(LDFLAGS)
++
+ SHLIB_LINK = -L../ecpglib -lecpg -L../pgtypeslib -lpgtypes $(libpq) \
+ 	$(filter -lintl -lssl -lcrypto -lkrb5 -lcrypt -lm, $(LIBS)) $(THREAD_LIBS)
+ 
+diff -uNr postgresql-7.4.3/src/interfaces/ecpg/ecpglib/Makefile postgresql-7.4.3-new/src/interfaces/ecpg/ecpglib/Makefile
+--- postgresql-7.4.3/src/interfaces/ecpg/ecpglib/Makefile	Tue Feb 10 02:26:48 2004
++++ postgresql-7.4.3-new/src/interfaces/ecpg/ecpglib/Makefile	Sun Jun 20 23:01:25 2004
+@@ -17,6 +17,7 @@
+ SO_MINOR_VERSION= 1
+ 
+ override CPPFLAGS := -I$(top_srcdir)/src/interfaces/ecpg/include -I$(libpq_srcdir) $(CPPFLAGS) $(THREAD_CPPFLAGS) 
++override LDFLAGS := -L@BUILDDIR@@INSTPREFIX@/lib -L../pgtypeslib -lpgtypes $(libpq) -L../../../../src/port $(LDFLAGS)
+ 
+ OBJS= execute.o typename.o descriptor.o data.o error.o prepare.o memory.o \
+ 	connect.o misc.o
+diff -uNr postgresql-7.4.3/src/makefiles/Makefile.darwin postgresql-7.4.3-new/src/makefiles/Makefile.darwin
+--- postgresql-7.4.3/src/makefiles/Makefile.darwin	Mon Oct 27 02:42:34 2003
++++ postgresql-7.4.3-new/src/makefiles/Makefile.darwin	Sun Jun 20 23:01:25 2004
+@@ -1,13 +1,28 @@
+ AROPT = crs
+ AWK= awk
+  
+-DLSUFFIX = .so
++ifeq ($(DLTYPE), module)
++	DLSUFFIX := .so
++	BE_DLLLIBS= -bundle_loader $(top_builddir)/src/backend/postgres
++else
++	DLSUFFIX := .dylib
++	BE_DLLLIBS=
++endif
++
+ CFLAGS_SL =
+-BE_DLLLIBS= -bundle_loader $(top_builddir)/src/backend/postgres
+- 
++CFLAGS += -fno-common
++
++ifeq (,$(filter $(host_os), darwin1.0 darwin1.1 darwin1.2))
++	MULTIPLY_DEFINED=
++else
++	MULTIPLY_DEFINED=-multiply_defined suppress
++endif
++
+ # Rule for building shared libs (currently used only for regression test
+ # shlib ... should go away, since this is not really enough knowledge)
+ %.so: %.o
+-	$(CC) -bundle -o $@ $< $(BE_DLLLIBS)
++	$(CC) -bundle $(MULTIPLY_DEFINED) -o $@ $< $(BE_DLLLIBS)
++%.dylib: %.o
++	$(CC) -dynamiclib $(MULTIPLY_DEFINED) -o $@ $<
+ 
+ sqlmansect = 7
+diff -uNr postgresql-7.4.3/src/pl/plperl/GNUmakefile postgresql-7.4.3-new/src/pl/plperl/GNUmakefile
+--- postgresql-7.4.3/src/pl/plperl/GNUmakefile	Wed Jan 21 14:25:11 2004
++++ postgresql-7.4.3-new/src/pl/plperl/GNUmakefile	Sun Jun 20 23:03:20 2004
+@@ -1,13 +1,13 @@
+ # Makefile for PL/Perl
+ # $Header: /cvsroot/pgsql-server/src/pl/plperl/GNUmakefile,v 1.10.6.1 2004/01/21 19:25:11 tgl Exp $
+ 
++DLTYPE = module
++
+ subdir = src/pl/plperl
+ top_builddir = ../../..
+ include $(top_builddir)/src/Makefile.global
+ 
+-ifeq ($(perl_useshrplib),true)
+ shared_libperl = yes
+-endif
+ 
+ # If we don't have a shared library and the platform doesn't allow it
+ # to work without, we have to skip it.
+diff -uNr postgresql-7.4.3/src/pl/plpgsql/Makefile postgresql-7.4.3-new/src/pl/plpgsql/Makefile
+--- postgresql-7.4.3/src/pl/plpgsql/Makefile	Thu May 24 18:33:18 2001
++++ postgresql-7.4.3-new/src/pl/plpgsql/Makefile	Sun Jun 20 23:01:25 2004
+@@ -8,6 +8,8 @@
+ #
+ #-------------------------------------------------------------------------
+ 
++DLTYPE = module
++
+ subdir = src/pl/plpgsql
+ top_builddir = ../../..
+ include $(top_builddir)/src/Makefile.global
+diff -uNr postgresql-7.4.3/src/pl/plpgsql/src/Makefile postgresql-7.4.3-new/src/pl/plpgsql/src/Makefile
+--- postgresql-7.4.3/src/pl/plpgsql/src/Makefile	Tue Feb 10 02:26:48 2004
++++ postgresql-7.4.3-new/src/pl/plpgsql/src/Makefile	Sun Jun 20 23:01:25 2004
+@@ -6,6 +6,8 @@
+ #
+ #-------------------------------------------------------------------------
+ 
++DLTYPE = module
++
+ subdir = src/pl/plpgsql/src
+ top_builddir = ../../../..
+ include $(top_builddir)/src/Makefile.global
+@@ -20,6 +22,7 @@
+ SO_MINOR_VERSION= 0
+ 
+ override CPPFLAGS := -I$(srcdir) $(CPPFLAGS)
++override LDFLAGS := $(libpq) $(LDFLAGS)
+ SHLIB_LINK = $(filter -lintl, $(LIBS)) $(BE_DLLLIBS)
+ rpath :=
+ 
+diff -uNr postgresql-7.4.3/src/pl/plpython/Makefile postgresql-7.4.3-new/src/pl/plpython/Makefile
+--- postgresql-7.4.3/src/pl/plpython/Makefile	Wed Jan 21 14:25:11 2004
++++ postgresql-7.4.3-new/src/pl/plpython/Makefile	Sun Jun 20 23:01:25 2004
+@@ -1,5 +1,7 @@
+ # $Header: /cvsroot/pgsql-server/src/pl/plpython/Makefile,v 1.11.6.1 2004/01/21 19:25:11 tgl Exp $
+ 
++DLTYPE = module
++
+ subdir = src/pl/plpython
+ top_builddir = ../../..
+ include $(top_builddir)/src/Makefile.global
+@@ -8,13 +10,12 @@
+ # On some platforms we can only build PL/Python if libpython is a
+ # shared library.  Since there is no official way to determine this,
+ # we see if there is a file that is named like a shared library.
+-ifneq (,$(wildcard $(python_configdir)/libpython*$(DLSUFFIX)*))
++ifneq (,$(wildcard $(python_configdir)/libpython*.dylib*))
+ shared_libpython = yes
+ endif
+ 
+ # If we don't have a shared library and the platform doesn't allow it
+ # to work without, we have to skip it.
+-ifneq (,$(findstring yes, $(shared_libpython)$(allow_nonpic_in_shlib)))
+ 
+ override CPPFLAGS := -I$(srcdir) $(python_includespec) $(CPPFLAGS)
+ rpath :=
+@@ -32,13 +33,7 @@
+ all: all-lib
+ 
+ install: all installdirs
+-ifeq ($(enable_shared), yes)
+ 	$(INSTALL_SHLIB) $(shlib) $(DESTDIR)$(pkglibdir)/plpython$(DLSUFFIX)
+-else
+-	@echo "*****"; \
+-	 echo "* PL/Python was not installed due to lack of shared library support."; \
+-	 echo "*****"
+-endif
+ 
+ installdirs:
+ 	$(mkinstalldirs) $(DESTDIR)$(pkglibdir)
+@@ -53,13 +48,3 @@
+ installcheck:
+ 	PATH=$(bindir):$$PATH $(SHELL) $(srcdir)/test.sh
+ 
+-else # can't build
+-
+-all:
+-	@echo ""; \
+-	 echo "*** Cannot build PL/Python because libpython is not a shared library." ; \
+-	 echo "*** You might have to rebuild your Python installation.  Refer to"; \
+-	 echo "*** the documentation for details."; \
+-	 echo ""
+-
+-endif # can't build
+diff -uNr postgresql-7.4.3/src/pl/tcl/Makefile postgresql-7.4.3-new/src/pl/tcl/Makefile
+--- postgresql-7.4.3/src/pl/tcl/Makefile	Wed Jan 21 14:25:11 2004
++++ postgresql-7.4.3-new/src/pl/tcl/Makefile	Sun Jun 20 23:01:25 2004
+@@ -6,6 +6,8 @@
+ #
+ #-------------------------------------------------------------------------
+ 
++DLTYPE = module
++
+ subdir = src/pl/tcl
+ top_builddir = ../../..
+ include $(top_builddir)/src/Makefile.global
