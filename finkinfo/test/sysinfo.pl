@@ -70,6 +70,7 @@ sub LoadConfig {
   }
   close(FD);
   IRC::print "Configuration loaded\n";
+  return 1;
 }
 
 sub SaveConfig {
@@ -87,6 +88,7 @@ sub SaveConfig {
     print(FD "basepath=\"$BASEPATH\"\n");
   close(FD);
   IRC::print "Configuration saved\n";
+  return 1;
 }
 
 sub ShowConfig {
@@ -196,14 +198,14 @@ sub get_mem {
   }
 
   if ($MEMGKM =~ /^K$/) {
-    $MEMUSED .= "Kb";
-    $MEMTOTAL .= "Kb";
+    $MEMUSED .= "KB";
+    $MEMTOTAL .= "KB";
   } elsif ($MEMGKM =~ /^G$/) {
-    $MEMUSED .= "Gb";
-    $MEMTOTAL .= "Gb";
+    $MEMUSED .= "GB";
+    $MEMTOTAL .= "GB";
   } else {
-    $MEMUSED .= "Mb";
-    $MEMTOTAL .= "Mb";
+    $MEMUSED .= "MB";
+    $MEMTOTAL .= "MB";
   }
 }
 
@@ -229,33 +231,33 @@ sub get_net {
 
   $PACKIN1 = `netstat -i -n -b | grep $DEV1 | head -n1 | awk '{print \$7}'`;
   if ($PACKIN1 < 1024**3) {
-    $PACKIN1 = sprintf("%.02f",$PACKIN1 / 1024**2)."Mb";
+    $PACKIN1 = sprintf("%.02f",$PACKIN1 / 1024**2)."MB";
   } else {
-    $PACKIN1 = sprintf("%.02f", $PACKIN1 / 1024**3)."Gb";
+    $PACKIN1 = sprintf("%.02f", $PACKIN1 / 1024**3)."GB";
   }
 
   if ($DEV2) {
     $PACKIN2 = `netstat -i -n -b | grep $DEV2 | head -n1 | awk '{print \$7}'`; 
     if ($PACKIN2 < 1024**3) {
-      $PACKIN2 = sprintf("%.02f",$PACKIN2 / 1024**2)."Mb";
+      $PACKIN2 = sprintf("%.02f",$PACKIN2 / 1024**2)."MB";
     } else {
-      $PACKIN2 = sprintf("%.02f", $PACKIN2 / 1024**3)."Gb";
+      $PACKIN2 = sprintf("%.02f", $PACKIN2 / 1024**3)."GB";
     }
   }
 
   $PACKOUT1 = `netstat -i -n -b | grep $DEV1 | head -n1 | awk '{print \$10}'`;
   if ($PACKOUT1 < 1024**3) {
-    $PACKOUT1 = sprintf("%.02f",$PACKOUT1 / 1024**2)."Mb";
+    $PACKOUT1 = sprintf("%.02f",$PACKOUT1 / 1024**2)."MB";
   } else {
-    $PACKOUT1 = sprintf("%.02f", $PACKOUT1 / 1024**3)."Gb";
+    $PACKOUT1 = sprintf("%.02f", $PACKOUT1 / 1024**3)."GB";
   }
 
   if ($DEV2) {
     $PACKOUT2 = `netstat -i -n -b | grep $DEV2 | head -n1 | awk '{print \$10}'`;
     if ($PACKOUT2 < 1024**3) {
-      $PACKOUT2 = sprintf("%.02f",$PACKOUT2 / 1024**2)."Mb";
+      $PACKOUT2 = sprintf("%.02f",$PACKOUT2 / 1024**2)."MB";
     } else {
-      $PACKOUT2 = sprintf("%.02f", $PACKOUT2 / 1024**3)."Gb";
+      $PACKOUT2 = sprintf("%.02f", $PACKOUT2 / 1024**3)."GB";
     }
   }
 }
@@ -287,20 +289,20 @@ sub get_hdd {
   }
 
   if ($hddtotal >= 1024**3) {
-    $hddtotal = sprintf("%.2fTb", $hddtotal/1024**3);
-    $hddused = sprintf("%.2fTb", $hddused/1024**3);
+    $hddtotal = sprintf("%.2fTB", $hddtotal/1024**3);
+    $hddused = sprintf("%.2fTB", $hddused/1024**3);
   } elsif ($hddtotal >= 1024**2) {
-    $hddtotal = sprintf("%.2fGb", $hddtotal/1024**2);
-    $hddused = sprintf("%.2fGb", $hddused/1024**2);
+    $hddtotal = sprintf("%.2fGB", $hddtotal/1024**2);
+    $hddused = sprintf("%.2fGB", $hddused/1024**2);
   } elsif ($hddtotal >= 1024*1024) {
-    $hddtotal = sprintf("%.2fMb", $hddtotal/1024**1);
-    $hddused = sprintf("%.2fMb", $hddused/1024**1);
+    $hddtotal = sprintf("%.2fMB", $hddtotal/1024**1);
+    $hddused = sprintf("%.2fMB", $hddused/1024**1);
   } elsif ($hddtotal >= 1024) {
-    $hddtotal = sprintf("%.2fKb", $hddtotal/1024);
-    $hddused = sprintf("%.2fKb", $hddused/1024);
+    $hddtotal = sprintf("%.2fKB", $hddtotal/1024);
+    $hddused = sprintf("%.2fKB", $hddused/1024);
   } else {
-    $hddtotal = sprintf("%.2fb", $hddtotal);
-    $hddused = sprintf("%.2fb", $hddused);
+    $hddtotal = sprintf("%.2fB", $hddtotal);
+    $hddused = sprintf("%.2fB", $hddused);
   }
   $HDDTOTAL = $hddtotal;
   $HDDUSED = $hddused;
