@@ -29,7 +29,7 @@ use File::Find;
 
 ### check if we're unharmed
 
-if (not -d "dists/stable/main/finkinfo") {
+if (not -d "10.2/stable/main/finkinfo") {
   print "ERROR: Package is incomplete.\n";
   exit 1;
 }
@@ -64,13 +64,13 @@ if (defined $param) {
 unless (-f "$basepath/bin/fink" and
 	-f "$basepath/bin/init.sh" and
 	-f "$basepath/etc/fink.conf" and
-	-d "$basepath/fink/dists") {
+	-d "$basepath/fink/10.2") {
   &print_breaking("The directory '$basepath'$guessed does not contain a ".
 		  "Fink installation. Please provide the correct path ".
 		  "as a parameter to this script.");
   exit 1;
 }
-if (-d "$basepath/fink/CVS" or -d "$basepath/fink/dists/CVS") {
+if (-d "$basepath/fink/CVS" or -d "$basepath/fink/10.2/CVS") {
   &print_breaking("The directory '$basepath' contains a Fink installation ".
 		  "that was set up to get package descriptions directly ".
 		  "from CVS. This script will not update this ".
@@ -135,7 +135,9 @@ sub wanted {
   }
 }
 
-find(\&wanted, "dists");
+### this version of the script is for "10.2", not "dists"
+
+find(\&wanted, "10.2");
 
 ### inform the user
 
