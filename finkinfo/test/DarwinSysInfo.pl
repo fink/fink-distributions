@@ -879,6 +879,10 @@ sub display_song {
 
   get_song();
 
-  IRC::command("/me Plays $out");
+  if ($out eq "") {
+    IRC::print "\0034Must have XMMS running at least!\n";
+    return 1;
+  }
+  IRC::command("/me plays $out in xmms.");
   return 1;
 }
