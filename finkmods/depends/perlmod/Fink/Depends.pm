@@ -35,7 +35,7 @@ BEGIN {
   $VERSION = 1.00;
   @ISA         = qw(Exporter Fink::Base);
   @EXPORT      = qw();
-  @EXPORT_OK   = qw(&depends_version &run_dependscheck);
+  @EXPORT_OK   = qw(&show_versions &depends_version &run_dependscheck);
   %EXPORT_TAGS = ( );
 }
 our @EXPORT_OK;
@@ -43,6 +43,7 @@ our %PACKAGES;
 
 # this is the one and only version number
 our $depends_version = "0.1.4.cvs";
+our $show_versions = "false";
 
 END { }       # module clean-up code here (global destructor)
 
@@ -50,6 +51,11 @@ END { }       # module clean-up code here (global destructor)
 
 sub depends_version {
   return $depends_version;
+}
+
+sub show_versions {
+  $show_versions = "true";
+  return;
 }
 
 sub run_dependscheck {
@@ -68,9 +74,11 @@ sub run_dependscheck {
 
   foreach $depend (@depends) {
     chomp($depend);
-    $pkgversion = get_dependversion($depend);
-    $pkgversion = "(>= $pkgversion)";
-    $depend = "$depend $pkgversion";
+    if ($show_versions eq "true") {
+      $pkgversion = get_dependversion($depend);
+      $pkgversion = "(>= $pkgversion)";
+      $depend = "$depend $pkgversion";
+    }
     $PACKAGES{$depend} = 1;  
   }
 
@@ -143,10 +151,14 @@ sub check_pkg {
       $depend =~ s/\:.*$//;		# strip out everything after the colon
       chomp($depend);
       # some checking for virtual depends
-      if ($depend eq "xfree86-base" || $depend eq "system-xfree86") {
+      if ($depend eq "system-xfree86" ||
+          $depend eq "xfree86-threaded-base" ||
+          $depend eq "xfree86-base" ||
+          $depend eq "xfree86") {
         $depend = "x11";
       }
-      if ($depend eq "xfree86-rootless") {
+      if ($depend eq "xfree86-rootless" ||
+          $depend eq "xfree86-threaded-rootless") {
         $depend = "libgl";
       }
       next if ($depend eq $pkgname);	# Can't dpend on it's self
