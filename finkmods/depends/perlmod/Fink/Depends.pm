@@ -215,6 +215,7 @@ sub check_pkg {
 
   # get a list of linked files to the pkg files
   foreach $file (@files) {
+    print "-- ".$file."\n";
     chomp($file);
     open(OTOOL, "otool -L $file 2>/dev/null |") or die "can't run otool: $!\n";
       # need to drop all links to system libs and the first two lines
