@@ -1,4 +1,4 @@
-#$Id: sysinfo.pl,v 1.2 2002/08/22 15:18:24 thesin Exp $
+#$Id: sysinfo.pl,v 1.3 2002/08/22 15:48:16 thesin Exp $
 
 #!/usr/bin/perl -w
 
@@ -133,13 +133,14 @@ sub display_info
     chop ($MEMUSED);
     $MEMUSED =~ / ([0-9]+)([GKM]) used$/;
     $MEMUSED = $1;
-    $MEMUSEDKM = $2;      
-    if ($MEMUSEDKM =~ /^K$/) {
+    $MEMUSEDGKM = $2;      
+    if ($MEMUSEDGKM =~ /^K$/) {
        $MEMUSED = $MEMUSED /  1024;
     };
-    if ($MEMUSEDKM =~ /^G$/) {
-       $MEMUSED = $MEMUSED *  1024;
+    if ($MEMUSEDGKM =~ /^G$/) {
+       $MEMUSED = $MEMUSED * 1024;
     };
+    $MEMUSED = sprintf("%.0f", $MEMUSED);
 
     #--CONNECTION DEVICE--#
     $DEVTYPE=`dmesg | grep $DEV: | head -n1 | cut -d"<" -f2 | cut -d">" -f1`;
