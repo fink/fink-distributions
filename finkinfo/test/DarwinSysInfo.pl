@@ -690,22 +690,40 @@ sub get_devinfo {
       foreach $infoline (@dev_vers) {
         chomp($infoline);
         if ($infoline =~ /^.* = \"(.*)\";/) {
-          $TOOLVERS = "$1";
+          $TOOLVERS = "Xcode $1";
+        }
+      }
+      # now find the cctools version
+      if (-x "/usr/bin/ld") {
+        foreach(`/usr/bin/ld -v`) {
+          if (/cctools-(\d+)/) {
+           $TOOLBUILD = $1;
+           last;
+          }
         }
       }
     } else {
       my @dev_vers = `cat /Developer/Applications/Xcode.app/Contents/version.plist`;
-      my $nextline = 0;
+      my $buildline = 0;
+      my $versline = 0;
+
       foreach $infoline (@dev_vers) {
         chomp($infoline);
-        if ($nextline) {
+        if ($buildline) {
+          if ($infoline =~ /\<string\>(.+)\<\/string\>/) {
+            $TOOLBUILD = "$1";
+          }
+          $buildline = 0;
+        } elsif ($versline) {
           if ($infoline =~ /\<string\>(.+)\<\/string\>/) {
             $TOOLVERS = "$1";
           }
-          $nextline = 0;
+          $versline = 0;
         } else {
           if ($infoline =~ /ProductBuildVersion/) {
-            $nextline = 1;
+            $buildline = 1;
+          } elsif ($infoline =~ /CFBundleShortVersionString/) {
+            $versline = 1;
           }
         }
       }
@@ -717,16 +735,6 @@ sub get_devinfo {
         $GCCVERS = $1;
       } elsif ($infoline =~ /^([0-9.]+)/) {
         $GCCVERS = $1;
-      }
-    }
-
-    # now find the cctools version
-    if (-x "/usr/bin/ld") {
-      foreach(`/usr/bin/ld -v`) {
-        if (/cctools-(\d+)/) {
-         $TOOLBUILD = $1;
-         last;
-        }
       }
     }
   } else {
