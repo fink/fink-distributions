@@ -6,23 +6,6 @@ my %PACKAGES;
 my @TREES;
 my $prefix;
 
-my $do_md5 = 0;
-
-if (grep(/^-m$/, @ARGV)) {
-	$do_md5++;
-	@ARGV = grep(!/^-m$/, @ARGV);
-}
-
-if (grep(/^-h$/, @ARGV)) {
-	print <<END;
-usage: $0 [-m] [tree1] [tree2] ... [treeN]
-
-	-m	check md5sums of info files (slow!)
-
-END
-	exit 0;
-}
-
 if (@ARGV) {
 	@TREES = @ARGV;
 } else {
@@ -41,15 +24,10 @@ for my $tree (@TREES) {
 	$treename =~ s#/*$##;
 	$treename =~ s#^.*/##;
 
-	my $find = "find $tree -name '*.info'";
-	if ($do_md5) {
-		$find .= ' | xargs /sw/bin/md5sum';
-	}
-	$find .= ' |';
-	if (open(FIND, $find)) {
+	if (open(FIND, "find $tree -name '*.info' | xargs /sw/bin/md5sum |")) {
 		while (my $file = <FIND>) {
 			chomp $file;
-			($md5sum, $file) = split(/\s+/, $file) if ($do_md5);
+			($md5sum, $file) = split(/\s+/, $file);
 			if (open(INFO, $file)) {
 				my $firstpack = "";
 				my $packname  = "";
@@ -73,9 +51,7 @@ for my $tree (@TREES) {
 						$package =~ s/\%N/$firstpack/i;
 						if ($packname ne "") {
 							push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, $treename . '/' . $stable);
-							if ($do_md5) {
-								push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, $treename . '/' . $stable);
-							}
+							push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, $treename . '/' . $stable);
 						}
 						$packname = $package;
 					}
@@ -83,9 +59,7 @@ for my $tree (@TREES) {
 				close(INFO);
 				$packname =~ s/\%N/$firstpack/g;
 				push(@{$PACKAGES{$packname}->{version}->{get_verstring($epoch, $version, $revision)}}, $treename . '/' . $stable);
-				if ($do_md5) {
-					push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, $treename . '/' . $stable);
-				}
+				push(@{$PACKAGES{$packname}->{md5s}->{get_verstring($epoch, $version, $revision)}->{$md5sum}}, $treename . '/' . $stable);
 			} else {
 				warn "unable to open $file: $!\n";
 			}
@@ -101,15 +75,11 @@ for my $package (sort keys %PACKAGES) {
 	for my $version (sort keys %{$PACKAGES{$package}->{version}}) {
 		$output .= sprintf('  %-20s ', $version);
 		$output .= join(", ", @{$PACKAGES{$package}->{version}->{$version}});
-		if ($do_md5) {
-			if (%{$PACKAGES{$package}->{md5s}->{$version}} > 1) {
-				$output .= " (md5's don't match)\n";
-				for my $md5sum (sort keys %{$PACKAGES{$package}->{md5s}->{$version}}) {
-					$output .= " " x 27 . $md5sum . ": ";
-					$output .= join(', ', @{$PACKAGES{$package}->{md5s}->{$version}->{$md5sum}});
-					$output .= "\n";
-				}
-			} else {
+		if (%{$PACKAGES{$package}->{md5s}->{$version}} > 1) {
+			$output .= " (md5's don't match)\n";
+			for my $md5sum (sort keys %{$PACKAGES{$package}->{md5s}->{$version}}) {
+				$output .= " " x 27 . $md5sum . ": ";
+				$output .= join(', ', @{$PACKAGES{$package}->{md5s}->{$version}->{$md5sum}});
 				$output .= "\n";
 			}
 		} else {
