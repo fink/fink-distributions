@@ -10,7 +10,8 @@
 # -----------------------------------------------------------------
 
 my $out;
-my ($player, $song_name);
+my ($player, $song_file, $song_name, $song_time, $pos_e, $file_ext);
+my ($no_tag, $tag, $info) = (0, 0, "");
 my ($ENABLEDEV1, $ENABLEDEV2, $ENABLEPPP, $ENABLEFINK, $ENABLERES, $ENABLEXMMS, $ENABLEITUNES);
 my ($DEV1, $DEV1NAME, $DEV2, $DEV2NAME, $PPP, $PPPNAME, $DISPLAYLEVEL);
 my $BASEPATH;
@@ -176,12 +177,14 @@ sub set_option {
   } elsif ($option =~ m/xmms/i) { 
     if ($func =~ m/enable/i) {
       $ENABLEXMMS = "true";
+      $ENABLEITUNES = "false";
     } else {
       $ENABLEXMMS = "false";
     }
   } elsif ($option =~ m/itunes/i) {
     if ($func =~ m/enable/i) {
       $ENABLEITUNES = "true";
+      $ENABLEXMMS = "false";
     } else {
       $ENABLEITUNES = "false";
     }
@@ -361,7 +364,7 @@ sub ShowConfig {
     IRC::print "      \002Device:\002 $PPP\n";
     IRC::print "      \002Name:\002 $PPPNAME\n";
   }
-  IRC::print "   \0034Audio Display\0034\n";
+  IRC::print "   \0034Audio Display - (Only one at a time)\0034\n";
   IRC::print "      \002XMMS:\002 $ENABLEXMMS\n";
   IRC::print "      \002iTunes:\002 $ENABLEITUNES\n";
   if ($ENABLEXMMS =~ m/true/i || $ENABLEITUNES =~ m/true/i) {
@@ -793,38 +796,44 @@ sub get_xmms_info {
 
   my $play_pos = $remote->get_playlist_pos;
   $song_name = $remote->get_playlist_title($play_pos);
-  my $song_time = $remote->get_playlist_timestr($play_pos);
-  my $song_file = $remote->get_playlist_file($play_pos);
+  $song_time = $remote->get_playlist_timestr($play_pos);
+  $song_file = $remote->get_playlist_file($play_pos);
   unless (-e $song_file) {
     return 1;
   }
 
-  my $pos_e = rindex ($song_file, ".");
-  my $file_ext = substr ($song_file, $pos_e + 1);
+  $pos_e = rindex ($song_file, ".");
+  $file_ext = substr ($song_file, $pos_e + 1);
   $file_ext =~ tr/a-z/A-Z/;
   return 0;
 }
 
 sub get_itunes_info {
-  eval { require Mac::iTunes; require Mac::iTunes::Item; };
-  if ($@) {
-    IRC::print "\0034Install Mac::iTunes from CPAN then try again!\0034";
-    return 1;
+  my $get_track = qq(tell application "iTunes"
+        set this_file to the location of current track
+        set this_name to the name of current track
+        set this_time to the time of current track
+end tell
+return this_file & this_name & this_time);
+
+  $get_track = join("' -e '", $get_track);
+
+  my $temp = qx(osascript -e '$get_track');
+  chomp($temp);
+  $temp =~ s/^alias //g;
+
+  ($song_file, $song_name, $song_time) = split(/, /, $temp);
+
+  $song_file =~ s/:/\//g;
+  $song_file = "/Volumes/".$song_file;
+
+  unless (-e $song_file) {
+     IRC::print "\0034Can't find: $song_file!\0034";
+     return 1;
   }
 
-  ### FIXME only gets song title
-  my $controller = Mac::iTunes->new()->controller;
-  $song_name = $controller->current_track_name;
-
-  my $song_time = $controller::seconds;
-  my $song_file = $controller::file;
-  #unless (-e $song_file) {
-  #  IRC::print "\0034File: $song_file!\0034";
-  #  return 1;
-  #}
-
-  my $pos_e = rindex ($song_file, ".");
-  my $file_ext = substr ($song_file, $pos_e + 1);
+  $pos_e = rindex ($song_file, ".");
+  $file_ext = substr ($song_file, $pos_e + 1);
   $file_ext =~ tr/a-z/A-Z/;
   return 0;
 }
@@ -841,7 +850,7 @@ sub get_mp3_info {
   }
   $tag = get_mp3tag($song_file) or $no_tag = 1;
   $info = get_mp3info($song_file);
-  return 0;
+  return $info;
 }
 
 sub get_mp4_info {
@@ -852,12 +861,10 @@ sub get_mp4_info {
   }
   $tag = get_mp4tag($song_file) or $no_tag = 1;
   $info = get_mp4info($song_file);
-  return 0;
+  return $info;
 }
 
 sub get_song {
-  my ($no_tag, $tag, $info) = (0, 0, "");
-
   if ($ENABLEXMMS =~ m/true/i) {
     if (get_xmms_info()) {
       return 1;
@@ -872,13 +879,13 @@ sub get_song {
     $player = "iTunes";
   }
 
-  if ($file_ext eq "M4A") {
+  if ($file_ext =~ m/m4a/i) {
     get_mp4_info();
-  } elsif ($file_ext eq "MP3") {
+  } elsif ($file_ext =~ m/mp3/i) {
     get_mp3_info();
   } else {
-    my $tag = 0;
-    my $notag = 2;
+    $tag = 0;
+    $notag = 2;
   }
   my $inf_freq = $info->{FREQUENCY};
   my $inf_bitrate = $info->{BITRATE};
@@ -911,9 +918,8 @@ sub get_song {
     $out = "\002$song_file\002";
     if (($song_file eq "") && ($song_name ne "")) {
       $out = "\002$song_name\002";
-    }
-    if (($file_ext ne "MP3") && ($file_ext ne "MP2") &&
-        ($file_ext ne "MPG") && ($file_ext ne "MP4") &&
+    } elsif (($file_ext !=~ m/mp3/i) && ($file_ext !=~ m/mp2/i) &&
+        ($file_ext !=~ m/mpg/i) && ($file_ext !=~ m/m4a/i) &&
         ($song_name ne "")) {
       $out = "\002$song_name\002 (\002$file_ext\002)";
     }
