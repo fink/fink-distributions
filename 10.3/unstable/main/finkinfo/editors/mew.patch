@@ -1,0 +1,205 @@
+--- mew-3.3/fink/emacsen-install	Fri Feb 20 22:56:49 2004
++++ mew-3.3-patched/fink/emacsen-install	Fri Feb 20 23:11:07 2004
+@@ -0,0 +1,144 @@
++#!/bin/sh
++# @PREFIX@/lib/emacsen-common/packages/install/mew
++set -e
++
++abort_install() {
++  echo "Byte compile for ${FLAVOR} is failed" >&2
++  echo "Please check ${ELCDIR}/CompilationLog" >&2
++  exit 1
++}
++
++FLAVOR=$1
++VERSION=3.3-4
++PACKAGE=mew
++
++if [ -z "${FLAVOR}" ]; then exit 0; fi
++if [ "${FLAVOR}" = emacs ]; then exit 0; fi
++if [ "${FLAVOR}" = emacs19 ]; then exit 0; fi
++if [ "${FLAVOR}" = mule2 ]; then exit 0; fi
++
++ELDIR=@PREFIX@/share/emacs/site-lisp/mew
++ELCDIR_BASE=@PREFIX@/share/${FLAVOR}/site-lisp/mew
++FLAGS="-no-site-file -q -batch -l path.el -f batch-byte-compile"
++
++EMACSEN_MULE=${FLAVOR}
++EMACSEN_NOMULE=""
++
++FLAVOR_SUFFIX=`echo ${FLAVOR} | cut -s -d - -f 2`
++FLAVORTEST=`echo ${FLAVOR} | cut -c-6`
++if [ "X${FLAVORTEST}" = "Xxemacs" ]; then
++  FLAVOR_BODY=`echo ${FLAVOR} | cut -d - -f 1`
++  if [ "X${FLAVOR_SUFFIX}" = "Xmule" ]; then
++    EMACSEN_MULE=`ls @PREFIX@/bin/${FLAVOR_BODY}*-mule* 2>/dev/null | head -1`
++    if [ -n "${EMACSEN_MULE}" ]; then
++      EMACSEN_MULE=`basename ${EMACSEN_MULE}`
++    fi
++    EMACSEN_NOMULE=""
++  elif [ "X${FLAVOR_SUFFIX}" = "Xnomule" ]; then
++    EMACSEN_MULE=""
++    EMACSEN_NOMULE=`ls @PREFIX@/bin/${FLAVOR_BODY}*-nomule* 2>/dev/null | head -1`
++    if [ -n "${EMACSEN_NOMULE}" ]; then
++      EMACSEN_NOMULE=`basename ${EMACSEN_NOMULE}`
++    fi
++  else
++    FLAVOR_SUFFIX=""
++    EMACSEN_MULE=`ls @PREFIX@/bin/${FLAVOR}*-mule* 2>/dev/null | head -1`
++    if [ -n "${EMACSEN_MULE}" ]; then
++      EMACSEN_MULE=`basename ${EMACSEN_MULE}`
++    fi
++    EMACSEN_NOMULE=`ls @PREFIX@/bin/${FLAVOR}*-nomule* 2>/dev/null | head -1`
++    if [ -n "${EMACSEN_NOMULE}" ]; then
++      EMACSEN_NOMULE=`basename ${EMACSEN_NOMULE}`
++    fi
++  fi
++fi
++
++COMPILED=no
++for EMACSEN in "${EMACSEN_MULE}" "${EMACSEN_NOMULE}"; do
++  if [ -n "${EMACSEN}" ]; then
++    ELCDIR=${ELCDIR_BASE}
++    if [ "X${FLAVORTEST}" = "Xxemacs" -a -z "${FLAVOR_SUFFIX}" ]; then
++      if [ "X${EMACSEN}" = "X${EMACSEN_MULE}" ]; then
++	echo -n "install/${PACKAGE}: Byte-compiling for ${FLAVOR} (mule) ..."
++        ELCDIR=${ELCDIR}/mule
++      else
++	echo -n "install/${PACKAGE}: Byte-compiling for ${FLAVOR} (nomule) ..."
++        ELCDIR=${ELCDIR}/nomule
++      fi
++    else
++      echo -n "install/${PACKAGE}: Byte-compiling for ${FLAVOR} ..."
++    fi
++    STAMP="${ELCDIR}/compile-stamp"
++    if [ -e "${STAMP}" ]; then
++      if [ "X${VERSION}" = X"`cat ${STAMP}`" ]; then
++	echo " skipped. (already compiled)" 
++      else
++	rm -f ${STAMP}
++      fi
++    fi
++    if [ ! -e "${STAMP}" ]; then
++      if [ "X${FLAVORTEST}" = "Xxemacs" -a -z "${FLAVOR_SUFFIX}" ]; then
++	rm -f ${ELCDIR_BASE}/*.el ${ELCDIR_BASE}/*.elc
++      fi
++      rm -rf ${ELCDIR}
++      install -m 755 -d ${ELCDIR}
++      cd ${ELDIR}
++      cp *.el contrib/*.el ${ELCDIR}/
++      cd ${ELCDIR}
++      if [ "X${EMACSEN}" != "X${EMACSEN_MULE}" ]; then
++	rm -f mew-lang-jp.el mew-mule3.el
++      fi
++      # files except mew-nmz*.el
++      FILES=`echo *.el | awk '{gsub("mew-nmz[-a-z]*[.]el", ""); print}'`
++      cat << EOF > path.el
++(setq load-path (cons "." load-path) byte-compile-warnings nil)
++EOF
++      ${EMACSEN} ${FLAGS} ${FILES} >CompilationLog 2>&1 || abort_install
++      if [ "X${EMACSEN}" != "X${EMACSEN_MULE}" ]; then
++	rm -f mew-nmz*.el
++      else
++	# compile mew-nmz*.el if possible
++	if [ -e @PREFIX@/share/${FLAVOR}/site-lisp/namazu/namazu.elc ]; then
++	  cat << EOF > path.el
++(setq load-path (cons "." (cons "@PREFIX@/share/${FLAVOR}/site-lisp/namazu" load-path)) byte-compile-warnings nil)
++EOF
++	  ${EMACSEN} ${FLAGS} mew-nmz.el mew-nmz-*.el >>CompilationLog 2>&1 || abort_install
++	  rm -f mew-nmz*.el
++	else
++	  rm -f mew-nmz*.el
++	  ln -s ${ELDIR}/contrib/mew-nmz*.el .
++	fi
++      fi
++      rm -f ${FILES} path.el
++      gzip -9 ${ELCDIR}/CompilationLog
++      chmod 644 ${ELCDIR}/CompilationLog.gz
++      if [ -f ${ELCDIR}/mew.elc ]; then
++        chmod 644 ${ELCDIR}/*.elc
++	echo "${VERSION}" > ${STAMP}
++        chmod 644 ${STAMP}
++	COMPILED=yes
++      fi
++      if [ "X${FLAVORTEST}" = "Xxemacs" -a -z "${FLAVOR_SUFFIX}" ]; then
++	if [ -e ${ELCDIR_BASE}/mule/mew.elc ]; then
++	  ln -s ${ELCDIR_BASE}/mule/mew* ${ELCDIR_BASE}/
++	elif [ -e ${ELCDIR_BASE}/nomule/mew.elc ]; then
++	  ln -s ${ELCDIR_BASE}/nomule/mew* ${ELCDIR_BASE}/
++	fi
++      fi
++      echo " done."
++    fi
++  fi
++done
++
++if [ "X${COMPILED}" = Xyes ]; then
++  # recompile mhc for mhc-mew
++  pkg=mhc
++  if [ -d @PREFIX@/share/${FLAVOR}/site-lisp/${pkg} ]; then
++    if [ -f @PREFIX@/lib/emacsen-common/packages/install/${pkg} ]; then
++      @PREFIX@/lib/emacsen-common/packages/remove/${pkg} ${FLAVOR}
++      @PREFIX@/lib/emacsen-common/packages/install/${pkg} ${FLAVOR}
++    fi
++  fi
++fi
++
++exit 0
+--- mew-3.3/fink/emacsen-remove	Fri Feb 20 22:56:49 2004
++++ mew-3.3-patched/fink/emacsen-remove	Fri Feb 20 23:11:35 2004
+@@ -0,0 +1,19 @@
++#!/bin/sh
++# @PREFIX@/lib/emacsen-common/packages/remove/mew
++set -e
++
++FLAVOR=$1
++PACKAGE=mew
++
++if [ -z "${FLAVOR}" ]; then exit 0; fi
++if [ "${FLAVOR}" = emacs ]; then exit 0; fi
++if [ "${FLAVOR}" = emacs19 ]; then exit 0; fi
++if [ "${FLAVOR}" = mule2 ]; then exit 0; fi
++
++ELCDIR=@PREFIX@/share/${FLAVOR}/site-lisp/mew
++
++echo -n "remove/${PACKAGE}: Handling removal of emacsen flavor ${FLAVOR} ..."
++rm -rf ${ELCDIR}
++echo " done."
++
++exit 0
+--- mew-3.3/fink/emacsen-startup	Fri Feb 20 22:56:49 2004
++++ mew-3.3-patched/fink/emacsen-startup	Fri Feb 20 22:46:31 2004
+@@ -0,0 +1,33 @@
++;;; 50mew.el --- Debian mew startup file  -*-mode: emacs-lisp;-*-
++
++;;; Code:
++
++(let ((elc-dir (concat "@PREFIX@/share/" (symbol-name fink-emacs-flavor) "/site-lisp/mew")))
++  (if (or (not (file-exists-p "@PREFIX@/lib/emacsen-common/packages/install/mew"))
++	  (not (file-directory-p elc-dir)))
++      ()
++    (if (featurep 'xemacs)
++	(if (featurep 'mule)
++	    (and (file-directory-p (concat elc-dir "/mule"))
++		 (setq elc-dir (concat elc-dir "/mule")))
++	  (and (file-directory-p (concat elc-dir "/nomule"))
++	       (setq elc-dir (concat elc-dir "/nomule")))))
++    (if (fboundp 'debian-pkg-add-load-path-item)
++	(debian-pkg-add-load-path-item elc-dir)
++      (setq load-path (cons elc-dir load-path)))
++    (autoload 'mew-user-agent-compose "mew" nil t)
++    (if (fboundp 'define-mail-user-agent)
++	(define-mail-user-agent
++	  'mew-user-agent
++	  'mew-user-agent-compose
++	  'mew-draft-send-message
++	  'mew-draft-kill
++	  'mew-send-hook))
++    (autoload 'mew "mew" nil t)
++    (autoload 'mew-send "mew" nil t)
++    (setq mew-icon-directory "@PREFIX@/share/pixmaps/mew")
++    ;;
++    ))
++
++;;; 50mew.el ends here
++
