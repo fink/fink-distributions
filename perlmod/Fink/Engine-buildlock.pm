@@ -1684,9 +1684,9 @@ sub real_install {
 						$package->phase_patch();
 						$package->phase_compile();
 						$package->phase_install();
+						$package->phase_build();
 						$SIG{__DIE__} = 'DEFAULT';
 						$package->clear_buildlock();
-						$package->phase_build();
 					} else {
 						&real_install($OP_BUILD, 0, 1, $package->get_name());
 					}
