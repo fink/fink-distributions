@@ -1682,11 +1682,6 @@ END
 		$verbosity = "v";
 	}
 
-	# going to start the actual build process, so need lock
-	# FIXME: do all download/integrity-check, then start creating dirs and a
-	# new loop for all unpacking (so don't need to lock before downloading)
-	$self->set_buildlock();
-
 	# remove dir if it exists
 	chdir "$buildpath";
 	if (-e $bdir) {
@@ -2586,9 +2581,6 @@ close(SHLIBS) or die "can't write shlibs file for ".$self->get_fullname().": $!\
 							"the directory manually to save disk space. ".
 							"Continuing with normal procedure.");
 	}
-
-	# done with the whole build process, so release lock
-	$self->clear_buildlock();
 }
 
 ### activate
@@ -2713,12 +2705,6 @@ sub phase_purge_recursive {
 sub set_buildlock {
 	my $self = shift;
 
-	# lock is always for parent of family
-	if (exists $self->{parent}) {
-		($self->{parent})->set_buildlock();
-		return;
-	}
-
 	# bootstrapping occurs before we have package-management tools needed for buildlock
 	return if $self->{_bootstrap};
 
@@ -2801,6 +2787,9 @@ EOF
 						"the file manually to save disk space. ".
 						"Continuing with normal procedure.");
 	if ($lock_failed) {
+		# FIXME: need better err msg here:
+		#  * impossible parallel build vs. stray locks
+		#  * conflicting BDep from multiple-pkg build
 		die "Can't set build lock for " . $self->get_fullname() . "\n";
 	}
 
@@ -2818,12 +2807,6 @@ sub clear_buildlock {
 		# called as package method...look up PkgVersion object that locked
 		$self = Fink::Config::get_option("Buildlock_PkgVersion");
 		return if !ref $self;   # get out if there's no lock recorded
-	}
-
-	# lock is always for parent of family
-	if (exists $self->{parent}) {
-		($self->{parent})->clear_buildlock();
-		return;
 	}
 
 	# bootstrapping occurs before we have package-management tools needed for buildlock
