@@ -1,0 +1,2304 @@
+diff -ruN imap-2002d.orig/Makefile imap-2002d/Makefile
+--- imap-2002d.orig/Makefile	Wed Apr 16 18:32:42 2003
++++ imap-2002d/Makefile	Sun Aug  3 18:56:08 2003
+@@ -87,6 +87,7 @@
+ # osf	OSF/1 (see sos, os4)
+ # os4	OSF/1 (Digital UNIX) 4
+ # osx	Mac OS X
++# osxs  Mac OS X (Shared c-client lib)
+ # ptx	PTX
+ # pyr	Pyramid
+ # qnx	QNX 4
+@@ -129,7 +130,7 @@
+ # mbox	if file "mbox" exists on the home directory, automatically moves mail
+ #	 from the spool directory to "mbox" and uses "mbox" as INBOX.
+ 
+-EXTRADRIVERS=mbox
++EXTRADRIVERS=maildir mbox
+ 
+ 
+ # Plaintext password type.  Defines how plaintext password authentication is
+@@ -164,7 +165,7 @@
+ #
+ # SSLTYPE=nopwd is now the default as required by the IESG.
+ 
+-SSLTYPE=nopwd
++SSLTYPE=unix.nopwd
+ 
+ 
+ # The following extra compilation flags are defined.  None of these flags are
+@@ -215,7 +216,7 @@
+ #	gradually-increasing intervals, starting at 2800-2900, and becoming
+ #	permanent at 48,300.
+ 
+-EXTRACFLAGS=
++EXTRACFLAGS= -DDISABLE_POP_PROXY
+ 
+ 
+ # Extra linker flags (additional/alternative libraries, etc.)
+@@ -294,9 +295,12 @@
+ 	SPECIALS="SSLDIR=/usr/ssl SSLINCLUDE=/usr/include/openssl SSLLIB=/usr/lib"
+ 
+ osx:	an
+-	$(BUILD) BUILDTYPE=osx \
++	$(BUILD) BUILDTYPE=$@ \
+ 	SPECIALS="SSLDIR=/System/Library/OpenSSL SSLINCLUDE=/usr/include/openssl SSLLIB=/usr/lib"
+ 
++osxs:	an
++	$(BUILD) BUILDTYPE=$@ \
++	SPECIALS="SSLDIR=@FINKPREFIX@ SSLINCLUDE=@FINKPREFIX@/include/openssl SSLLIB=@FINKPREFIX@/lib SSLCERTS=@FINKPREFIX@/etc/ssl"
+ 
+ # Linux shadow password support doesn't build on traditional systems, but most
+ # Linux systems are shadow these days.
+diff -ruN imap-2002d.orig/README.maildir imap-2002d/README.maildir
+--- imap-2002d.orig/README.maildir	Wed Dec 31 17:00:00 1969
++++ imap-2002d/README.maildir	Sun Aug  3 18:56:08 2003
+@@ -0,0 +1,199 @@
++
++IMAP-2001 Maildir c-client module
++---------------------------------
++
++- Written by Mattias Larsson <ml@techno.org> <mta@freeit.com>
++- Based on the Eric Green <thrytis@imaxx.net> IMAP2bis Maildir driver
++- Additional contributions from Aidas Kasparas (kaspar@soften.ktu.lt)
++- Multiple inboxes patch by Dean Gaudet <dgaudet@arctic.org>
++- Rewritten list commands, ref support, uid-in-filename support,
++  size-in-filename support, FAST support, COPY to non-maildir fixes,
++  memory optimizations, cleanups, read-only support
++   -- Miquel van Smoorenburg <miquels@cistron.nl>
++
++o UID storage
++
++  This driver originally used :3, in maildir filenames to note that
++  a new version of the maildir protocol was used (instead of :2,).
++  It then used ,Uxxxx to store the UID in the filename.
++
++  Although a good idea, that caused problems with other maildir clients
++  that didn't reckognize the flags section anymore. So Mattias Larsson
++  stored the UID in the mtime of the file instead. This caused quite
++  a bit of trouble.
++
++  So in this version of the patch we're back to storing the UID in the
++  filename, but in a way that is compatible with maildir version 2 (:2,)
++  clients. We do the same as courier does to store the size: in the
++  part of the filename _before_ the flags. So the filename will look
++  like this:
++
++  time.pid.host,U=xxx:2,flags
++
++  There also is a file ".uidvalidity" in the root of every maildir folder
++  that keeps the UIDVALIDITY attribute of the folder, and the highest UID
++  that has been used in this folder. DO NOT EDIT OR CHANGE THIS FILE.
++  If you have weird synchronization problems you can delete this file and
++  the server will re-create it with a new UIDVALIDITY for the folder.
++
++  Unfortunately maildir is all about not using locks - but we have to
++  lock the .uidvalidity file when reading/updating it to prevent it from
++  getting corrupt. That isn't too bad, as long as you run the IMAP
++  service on just one host. If you run multiple IMAP servers on multiple
++  hosts with the mailspool shared between them you _will_ corrupt the
++  mailbox (well at least the UIDs) eventually!! Especially as flock() is
++  used - fcntl() locking often work over NFS, flock() doesn't work
++  over NFS at all.
++
++  Note that running the IMAP server on one host and the SMTP server
++  that delivers the mail in the maildir folder on another, sharing the
++  maildir over NFS, is NOT a problem.
++
++o Size storage.
++
++  Since the IMAP specification says that in a lot of cases the IMAP server
++  needs to return the size of the message as it is _on the wire_ with
++  linefeeds translated to CRLF, it would be nice if we could calculate
++  that once instead of reading the entire message file every time. So
++  we store that size (the RFC822.SIZE, aka the on-the-wire size) in the
++  same way as we store UIDs: in the filename using the ,W= flag. Eg:
++
++  time.pid.host,U=xxx,W=yyy:2,flags
++
++  Note that courier and exim if so configured can store the size in
++  the filename as well (they use ,S=zzz), but that isn't useful to us
++  since that is the plain file size - we need the filesize as it will
++  be on the wire, with all CRs translated to CRLF.
++
++o Compile time settings.
++
++  Because the UID stuff now works pretty well, the original
++  NO_UID_VALIDITY compile-time tunable has been dropped. There are
++  two more tunables in src/osdep/unix/maildir.c but you probably
++  won't have to change them at all.
++
++o Location of INBOX.
++
++  The driver first checks if $HOME/Maildir is a maildir folder. If
++  so it uses that as your INBOX. Otherwise it tries to use the
++  system mail spool (/var/mail/username, usually) as your maildir INBOX.
++
++o TODO:
++
++  See src/osdep/unix/maildir.c::maildir_ping_core() for some
++  discussions about multiple access to a mailbox. We should be
++  able to detect that another client has deleted a message and
++  handle this gracefully.
++
++  Another thing that can happen is that a non-imap client moves a file
++  from new/ to cur/, and that 2 concurrent IMAP sessions at the same
++  time try to update the ,U= and ,W= flags. We probably should ONLY
++  do that in maildir_ping_core() and rescan if the rename() failed.
++  However, with only IMAP maildir clients this cannot happen.
++
++  Right now the maildir driver gets an exclusive lock (using flock())
++  on .imaplock in the main maildir directory to prevent simultaneous
++  read-write-update access by multiple clients. Secondary clients get
++  readonly access. Crude, but effective.
++
++This version of the maildir driver was created on 28-Aug-2001 by
++Miquel van Smoorenburg <miquels@cistron.nl>
++
++
++The original README.maildir is below.
++
++==============================================================================
++
++Pine 4.0x Maildir c-client module
++---------------------------------
++
++Written by Mattias Larsson <ml@techno.org> <mta@freeit.com>
++
++This is the second release of my Maildir driver for Pine 4. It is based
++on Eric Greens IMAP2bis Maildir driver.
++
++PLEASE NOTE that this driver has only been tested in the IMAP4rev1 daemon
++before. It was just put into Pine 4.00, and it looks like it works, but it
++has not been extensively tested. It has been running for 8 months in
++production in our IMAP4 daemon though.
++
++PLEASE NOTE:
++
++This driver needs to store the UID's of the message in the file somehow. In
++the earlier versions of this driver this was done by adding a new maildir
++flag (the ,3 flag), however, this solution was not very good since most
++other clients could not handle it. Thus I had to find another solution. In
++this driver I use a pretty radical method. Any file in the maildir with the
++execute bit set has its UID set in the mtime of the file. So you should not
++edit the files in here, or in any otherway update the mtime, because then
++the UID gets changed. Most clients should not do this, so I think this
++solution is compatible with most other clients (if you find one that isn't,
++let me know). If you for some reason have to edit a file in the Maildir,
++delete the ".uidvalidity" file in the root of the Maildir (ie, the dir where
++you find cur/ new/ and tmp/). Alternatively, edit maildir.c and define the
++NO_UID_VALIDITY option, which will cause the Maildir to get set new UID's on
++every start up. Note that if you are running IMAP and Netscape as a client,
++you can't change the UID's, because Netscape do not support the UID validity
++flag in the IMAP protocol. So use this with care. 
++
++Please edit the maildir.c file in any case. There are 3 options you can
++set yourself. The default configuration is not suitable for ISPs. If you are
++an ISP, or system with many users, you might want to consider setting some
++of the options different.
++
++Ohh, if there are problems compiling it, let me know, and please let me know
++what you did to fix it. This thing was developed on Solaris (using both GCC
++and SunCC, should work with both), but I haven't tried it on any other
++platform. It is also known to compile cleanly on Linux RH5.1
++
++CONFIGURATION
++-------------
++
++There are a few configurable options. You find these at the top of the
++maildir.c file (and it can be found in imap/src/osdep/unix if I'm not all
++mistaken). Right now, two options are configurable. By default it is
++configured for ISP use, something that you might want to change if you use
++it at home.
++
++HOW TO USE
++----------
++
++Use it as any other c-client driver. There is some option you want to change
++if you want all folders to be created as Maildirs (and I can't remember what
++the option is from the top of my head). Read the pine documentation.
++
++CHANGES
++-------
++
++Rel 4.  Coredump problem fixed. In release 3 I decided to user the sparep
++	in the message cache so no patching of mail.h would be necessary,
++	however, PINE uses this pointer internally for other things, causing
++	coredumps when used with the Rel 3. patch.
++
++Rel 3.	New way of storing UID's (compatible with ,2 clients).
++	Multiple inbox patches applied
++
++Rel 2.  Pine 4 changes.
++
++Rel 1.  Imap4rev 1 driver
++
++FINAL NOTES
++-----------
++
++I'll try to maintain and release new versions as soon as I have time over,
++which unfortunately does not happen very often in this business ;)
++
++You can (might) find newer versions of this driver at:
++
++http://www.freeit.com/mta/
++
++
++Regards,
++Daniel Mattias Larsson
++
++e-mail: ml@techno.org
++ph: +46-707-268785
++snail-mail:
++Industrivagen 4
++SE-194 77 Upplands Vasby
++SWEDEN
+diff -ruN imap-2002d.orig/src/c-client/auth_md5.c imap-2002d/src/c-client/auth_md5.c
+--- imap-2002d.orig/src/c-client/auth_md5.c	Wed May 29 12:04:24 2002
++++ imap-2002d/src/c-client/auth_md5.c	Sun Aug  3 18:54:27 2003
+@@ -18,6 +18,7 @@
+  * CPYRIGHT, included with this Distribution.
+  */
+ 
++#include <time.h>
+ /* MD5 context */
+ 
+ #define MD5BLKLEN 64		/* MD5 block length */
+diff -ruN imap-2002d.orig/src/c-client/mail.c imap-2002d/src/c-client/mail.c
+--- imap-2002d.orig/src/c-client/mail.c	Fri May 16 12:21:06 2003
++++ imap-2002d/src/c-client/mail.c	Sun Aug  3 19:11:24 2003
+@@ -32,6 +32,7 @@
+ char *UW_copyright = "The IMAP toolkit provided in this Distribution is\nCopyright 1988-2003 University of Washington.\nThe full text of our legal notices is contained in the file called\nCPYRIGHT, included with this Distribution.\n";
+ 
+ 
++
+ /* c-client global data */
+ 
+ 				/* list of mail drivers */
+@@ -5314,6 +5315,10 @@
+ 
+ void mail_free_body_data (BODY *body)
+ {
++  /* cleanup body if requested by application */
++  if (body->cleanup)
++    (*body->cleanup)(body);
++
+   switch (body->type) {		/* free contents */
+   case TYPEMULTIPART:		/* multiple part */
+     mail_free_body_part (&body->nested.part);
+diff -ruN imap-2002d.orig/src/c-client/mail.h imap-2002d/src/c-client/mail.h
+--- imap-2002d.orig/src/c-client/mail.h	Wed May 28 16:49:41 2003
++++ imap-2002d/src/c-client/mail.h	Sun Aug  3 19:13:00 2003
+@@ -307,6 +307,8 @@
+ #define DR_NONEWMAIL (long) 0x4000
+ 				/* driver does not announce new mail when RO */
+ #define DR_NONEWMAILRONLY (long) 0x8000
++				/* don't list folder using dummy driver. */
++#define DR_NODLIST (long) 0x4000
+ 
+ 
+ /* Cache management function codes */
+@@ -669,6 +671,9 @@
+     unsigned long bytes;	/* size of text in octets */
+   } size;
+   char *md5;			/* MD5 checksum */
++
++  void *sparep;			/* spare pointer reserved for main program */
++  void (*cleanup)(BODY *);	/* cleanup function */
+ };
+ 
+ 
+@@ -746,6 +751,7 @@
+   unsigned int spare7 : 1;	/* seventh spare bit */
+   unsigned int spare8 : 1;	/* eighth spare bit */
+   void *sparep;			/* spare pointer */
++  void *maildirp;		/* for the Maildir driver */
+   unsigned long user_flags;	/* user-assignable flags */
+ } MESSAGECACHE;
+ 
+diff -ruN imap-2002d.orig/src/dmail/Makefile imap-2002d/src/dmail/Makefile
+--- imap-2002d.orig/src/dmail/Makefile	Mon Nov 18 17:43:31 2002
++++ imap-2002d/src/dmail/Makefile	Sun Aug  3 18:54:27 2003
+@@ -18,7 +18,7 @@
+ 
+ 
+ C = ../c-client
+-CCLIENTLIB = $C/c-client.a
++CCLIENTLIB = $C/`cat $C/ARCHIVENAME`
+ SHELL = /bin/sh
+ 
+ # Get local definitions from c-client directory
+@@ -27,13 +27,10 @@
+ CFLAGS = -I$C `cat $C/CFLAGS`
+ LDFLAGS = $(CCLIENTLIB) `cat $C/LDFLAGS`
+ 
+-dmail: $(CCLIENTLIB) dmail.o
++dmail: dmail.o
+ 	$(CC) $(CFLAGS) -o dmail dmail.o $(LDFLAGS)
+ 
+ dmail.o: $C/mail.h $C/misc.h $C/osdep.h
+-
+-$(CCLIENTLIB):
+-	cd $C;make
+ 
+ clean:
+ 	rm -f *.o dmail
+diff -ruN imap-2002d.orig/src/imapd/Makefile imap-2002d/src/imapd/Makefile
+--- imap-2002d.orig/src/imapd/Makefile	Mon Nov 18 09:48:25 2002
++++ imap-2002d/src/imapd/Makefile	Sun Aug  3 18:54:27 2003
+@@ -44,12 +44,12 @@
+ # Get local definitions from c-client directory
+ 
+ C = ../c-client
+-CCLIENTLIB = $C/c-client.a
++CCLIENTLIB = $C/`cat $C/$ARCHIVENAME`
+ CC = `cat $C/CCTYPE`
+ CFLAGS = -I$C `cat $C/CFLAGS` $(NSBD) $(ENBD) \
+ 	-DANOFILE=\"$(ANO)\" -DALERTFILE=\"$(ALERT)\" \
+ 	-DUSERALERTFILE=\"$(USERALERT)\" -DSHUTDOWNFILE=\"$(SHUTDOWN)\"
+-LDFLAGS = $(CCLIENTLIB) `cat $C/LDFLAGS`
++LDFLAGS = `cat $C/LDFLAGS`
+ 
+ all:	imapd
+ 
+diff -ruN imap-2002d.orig/src/ipopd/Makefile imap-2002d/src/ipopd/Makefile
+--- imap-2002d.orig/src/ipopd/Makefile	Tue Oct 24 17:55:07 2000
++++ imap-2002d/src/ipopd/Makefile	Sun Aug  3 18:54:27 2003
+@@ -19,14 +19,14 @@
+ 
+ 
+ C = ../c-client
+-CCLIENTLIB = $C/c-client.a
++CCLIENTLIB = $C/`cat $C/$ARCHIVENAME`
+ SHELL = /bin/sh
+ 
+ # Get local definitions from c-client directory
+ 
+ CC = `cat $C/CCTYPE`
+ CFLAGS = -I$C `cat $C/CFLAGS`
+-LDFLAGS = $(CCLIENTLIB) `cat $C/LDFLAGS`
++LDFLAGS = `cat $C/LDFLAGS`
+ 
+ ipopd: ipop2d ipop3d
+ 
+diff -ruN imap-2002d.orig/src/mailutil/Makefile imap-2002d/src/mailutil/Makefile
+--- imap-2002d.orig/src/mailutil/Makefile	Mon Nov 18 17:41:46 2002
++++ imap-2002d/src/mailutil/Makefile	Sun Aug  3 18:54:27 2003
+@@ -19,7 +19,7 @@
+ 
+ 
+ C = ../c-client
+-CCLIENTLIB = $C/c-client.a
++CCLIENTLIB = $C/`cat $C/ARCHIVENAME`
+ SHELL = /bin/sh
+ 
+ # Get local definitions from c-client directory
+@@ -28,13 +28,10 @@
+ CFLAGS = -I$C `cat $C/CFLAGS`
+ LDFLAGS = $(CCLIENTLIB) `cat $C/LDFLAGS`
+ 
+-mailutil: $(CCLIENTLIB) mailutil.o
++mailutil: mailutil.o
+ 	$(CC) $(CFLAGS) -o mailutil mailutil.o $(LDFLAGS)
+ 
+ mailutil.o: $C/mail.h $C/misc.h $C/osdep.h
+-
+-$(CCLIENTLIB):
+-	cd $C;make
+ 
+ clean:
+ 	rm -f *.o mailutil
+diff -ruN imap-2002d.orig/src/mtest/Makefile imap-2002d/src/mtest/Makefile
+--- imap-2002d.orig/src/mtest/Makefile	Tue Oct 24 17:55:39 2000
++++ imap-2002d/src/mtest/Makefile	Sun Aug  3 18:54:27 2003
+@@ -19,7 +19,7 @@
+ 
+ 
+ C = ../c-client
+-CCLIENTLIB = $C/c-client.a
++CCLIENTLIB = $C/`cat $C/ARCHIVENAME`
+ SHELL = /bin/sh
+ 
+ # Get local definitions from c-client directory
+@@ -30,13 +30,10 @@
+ 
+ all:	mtest
+ 
+-mtest: $(CCLIENTLIB) mtest.o
++mtest: mtest.o
+ 	$(CC) $(CFLAGS) -o mtest mtest.o $(LDFLAGS)
+ 
+ mtest.o: $C/mail.h $C/misc.h $C/osdep.h $C/rfc822.h $C/smtp.h $C/nntp.h
+-
+-$(CCLIENTLIB):
+-	cd $C;make
+ 
+ clean:
+ 	rm -f *.o mtest || true
+diff -ruN imap-2002d.orig/src/osdep/unix/Makefile imap-2002d/src/osdep/unix/Makefile
+--- imap-2002d.orig/src/osdep/unix/Makefile	Tue Mar  4 22:26:35 2003
++++ imap-2002d/src/osdep/unix/Makefile	Sun Aug  3 18:56:08 2003
+@@ -28,10 +28,11 @@
+ 
+ # Extended flags needed for SSL.  You may need to modify.
+ 
+-SSLDIR=/usr/local/ssl
+-SSLCERTS=$(SSLDIR)/certs
+-SSLINCLUDE=$(SSLDIR)/include
+-SSLLIB=$(SSLDIR)/lib
++SSLDIR=@FINKPREFIX@
++SSLCERTS=@FINKPREFIX@/etc/ssl/certs
++SSLKEYS=@FINKPREFIX@/etc/ssl/private
++SSLINCLUDE=@FINKPREFIX@/include/openssl
++SSLLIB=@FINKPREFIX@/lib
+ 
+ SSLCRYPTO=-lcrypto
+ 
+@@ -45,7 +46,7 @@
+ SSLRSA= # -lRSAglue -lrsaref
+ 
+ SSLCFLAGS= -I$(SSLINCLUDE) -I$(SSLINCLUDE)/openssl\
+- -DSSL_CERT_DIRECTORY=\"$(SSLCERTS)\"
++ -DSSL_CERT_DIRECTORY=\"$(SSLCERTS)\" -DSSL_KEY_DIRECTORY=\"$(SSLKEYS)\"
+ SSLLDFLAGS= -L$(SSLLIB) -lssl $(SSLCRYPTO) $(SSLRSA)
+ 
+ 
+@@ -114,7 +115,7 @@
+ BINARIES=osdep.o mail.o misc.o newsrc.o smanager.o utf8.o siglocal.o \
+  dummy.o pseudo.o netmsg.o flstring.o fdstring.o \
+  rfc822.o nntp.o smtp.o imap4r1.o pop3.o \
+- unix.o mbox.o mbx.o mmdf.o tenex.o mtx.o news.o phile.o mh.o mx.o
++ unix.o mbox.o mbx.o mmdf.o tenex.o mtx.o news.o phile.o mh.o mx.o maildir.o
+ CFLAGS=-g
+ 
+ CAT=cat
+@@ -528,6 +529,16 @@
+ 	 SPOOLDIR=/var/spool MAILSPOOL=/var/mail \
+ 	 BASECFLAGS="-g -O"
+ 
++osxs:	# Mac OS X (c-client as shared lib)
++	$(BUILD) `cat SPECIALS` OS=osx \
++	SIGTYPE=psx CHECKPW=pam CRXTYPE=nfs \
++	SPOOLDIR=@FINKPREFIX@/var/spool MAILSPOOL=@FINKPREFIX@/var/mail \
++	BASECFLAGS="-fPIC -g -fno-common -O -DNFSKLUDGE" \
++	ARCHIVE="libc-client.0.0.$(VERSION).dylib" \
++	BASELDFLAGS="-L../c-client -lc-client -lpam -ldl -lc" \
++	ARRC="gcc -dynamiclib -install_name @FINKPREFIX@/share/c-client/lib/libc-client.0.dylib -compatibility_version 1.0 -current_version 1.0.$(VERSION) -all_load -L@FINKPREFIX@/lib -lpam -ldl -lc $(EXTRALDFLAGS) $(SSLLDFLAGS) -lcrypto -o" \
++	RANLIB=true
++
+ ptx:	# PTX
+ 	$(BUILD) `$(CAT) SPECIALS` OS=$@ \
+ 	 SIGTYPE=psx CHECKPW=svo LOGINPW=sv4 CRXTYPE=nfs \
+@@ -778,7 +789,7 @@
+ # Cleanup
+ 
+ clean:
+-	sh -c '$(RM) auths.c crexcl.c nfstest.c linkage.[ch] siglocal.c osdep*.[ch] *.o ARCHIVE *FLAGS *TYPE $(ARCHIVE) || true'
++	sh -c '$(RM) auths.c crexcl.c nfstest.c linkage.[ch] siglocal.c osdep*.[ch] *.o ARCHIVE ARCHIVENAME *FLAGS *TYPE $(ARCHIVE) || true'
+ 
+ 
+ # Dependencies
+@@ -808,6 +819,7 @@
+ tenex.o: mail.h misc.h osdep.h tenex.h dummy.h
+ unix.o: mail.h misc.h osdep.h unix.h pseudo.h dummy.h
+ utf8.o: mail.h misc.h osdep.h utf8.h
++maildir.o: mail.h misc.h osdep.h maildir.h dummy.h
+ 
+ 
+ # OS-dependent
+@@ -878,6 +890,7 @@
+ 	 -DRSHPATH=\"$(RSHPATH)\" -DLOCKPGM=\"$(LOCKPGM)\" > OSCFLAGS
+ 	echo $(BASELDFLAGS) $(EXTRALDFLAGS) > LDFLAGS
+ 	echo "$(ARRC) $(ARCHIVE) $(BINARIES);$(RANLIB) $(ARCHIVE)" > ARCHIVE
++	echo $(ARCHIVE) > ARCHIVENAME
+ 	echo $(OS) > OSTYPE
+ 	./drivers $(EXTRADRIVERS) $(DEFAULTDRIVERS) dummy
+ 	./mkauths $(EXTRAAUTHENTICATORS) $(DEFAULTAUTHENTICATORS)
+diff -ruN imap-2002d.orig/src/osdep/unix/ckp_pam.c imap-2002d/src/osdep/unix/ckp_pam.c
+--- imap-2002d.orig/src/osdep/unix/ckp_pam.c	Mon Apr 29 20:32:27 2002
++++ imap-2002d/src/osdep/unix/ckp_pam.c	Sun Aug  3 18:54:27 2003
+@@ -18,7 +18,11 @@
+  * CPYRIGHT, included with this Distribution.
+  */
+ 
++#ifndef __APPLE__
+ #include <security/pam_appl.h>
++#else
++#include <pam/pam_appl.h>
++#endif
+ 
+ struct checkpw_cred {
+   char *uname;			/* user name */
+diff -ruN imap-2002d.orig/src/osdep/unix/ckp_pmb.c imap-2002d/src/osdep/unix/ckp_pmb.c
+--- imap-2002d.orig/src/osdep/unix/ckp_pmb.c	Mon Apr 29 20:32:57 2002
++++ imap-2002d/src/osdep/unix/ckp_pmb.c	Sun Aug  3 18:54:27 2003
+@@ -18,7 +18,11 @@
+  * CPYRIGHT, included with this Distribution.
+  */
+ 
++#ifndef __APPLE__
+ #include <security/pam_appl.h>
++#else
++#include <pam/pam_appl.h>
++#endif
+ 
+ static char *pam_uname;		/* user name */
+ static char *pam_pass;		/* password */
+diff -ruN imap-2002d.orig/src/osdep/unix/dummy.c imap-2002d/src/osdep/unix/dummy.c
+--- imap-2002d.orig/src/osdep/unix/dummy.c	Wed Mar  5 17:37:40 2003
++++ imap-2002d/src/osdep/unix/dummy.c	Sun Aug  3 18:56:08 2003
+@@ -346,6 +346,7 @@
+ 				/* don't \NoSelect dir if it has a driver */
+   if ((attributes & LATT_NOSELECT) && (d = mail_valid (NIL,name,NIL)) &&
+       (d != &dummydriver)) attributes &= ~LATT_NOSELECT;
++  if (d && (d->flags & DR_NODLIST)) return NIL;
+   if (!contents ||		/* notify main program */
+       (!(attributes & LATT_NOSELECT) && (csiz = strlen (contents)) &&
+        !stat (dummy_file (tmp,name),&sbuf) && (csiz <= sbuf.st_size) &&
+diff -ruN imap-2002d.orig/src/osdep/unix/env_unix.c imap-2002d/src/osdep/unix/env_unix.c
+--- imap-2002d.orig/src/osdep/unix/env_unix.c	Wed Apr 16 18:14:42 2003
++++ imap-2002d/src/osdep/unix/env_unix.c	Sun Aug  3 18:54:27 2003
+@@ -44,7 +44,7 @@
+ static short anonymous = NIL;	/* is anonymous */
+ static short blackBox = NIL;	/* is a black box */
+ static short closedBox = NIL;	/* is a closed box */
+-static short restrictBox = NIL;	/* is a restricted box */
++static short restrictBox = -1;	/* is a restricted box */
+ static short has_no_life = NIL;	/* is a cretin with no life */
+ 				/* flock() emulator is a no-op */
+ static short disableFcntlLock = NIL;
+@@ -58,6 +58,8 @@
+ 				 * filesystems (AFS and old NFS).  Don't do
+ 				 * this unless you really have to!
+ 				 */
++				/* only advertise own mailboxes and #shared */
++static short limitedadvertise = NIL;
+ 				/* allow user config files */
+ static short allowuserconfig = NIL;
+ 				/* 1 = disable plaintext, 2 = if not SSL */
+@@ -122,6 +124,9 @@
+ static NAMESPACE nsshared = {"#shared/",'/',NIL,&nsftp};
+ 				/* world namespace */
+ static NAMESPACE nsworld = {"/",'/',NIL,&nsshared};
++				/* ONLY shared (no anonymous) namespace */
++static NAMESPACE nsonlyshared = {"#shared/",'/',NIL,NIL};
++
+ 
+ #include "write.c"		/* include safe writing routines */
+ #include "crexcl.c"		/* include exclusive create */
+@@ -642,6 +647,8 @@
+   struct passwd *pw;
+   struct stat sbuf;
+   char tmp[MAILTMPLEN];
++
++  memset (tmp, 0, MAILTMPLEN); /* zero out tmp */
+   if (myUserName) fatal ("env_init called twice!");
+ 				/* myUserName must be set before dorc() call */
+   myUserName = cpystr (user ? user : ANONYMOUSUSER);
+@@ -675,8 +682,12 @@
+ 	mail_parameters (NIL,DISABLE_DRIVER,(void *) "mbox");
+       }
+       nslist[0] = &nshome;	/* home namespace */
+-      nslist[1] = blackBox ? &nsblackother : &nsunixother;
+-      nslist[2] = (advertisetheworld && !blackBox) ? &nsworld : &nsshared;
++      nslist[1] = limitedadvertise ?
++                 NIL: (blackBox ? &nsblackother : &nsunixother);
++      if (!limitedadvertise)
++        nslist[2] = (advertisetheworld && !blackBox) ? &nsworld : &nsshared;
++      else
++       nslist[2] = &nsonlyshared;
+     }
+     else {			/* anonymous user */
+       nslist[0] = nslist[1] = NIL,nslist[2] = &nsftp;
+@@ -688,6 +699,8 @@
+     myHomeDir = cpystr (home);	/* set home directory */
+   }
+ 
++  if(!myHomeDir) myHomeDir = cpystr("");  /* if myHomeDir is still a null pointer */
++
+   if (allowuserconfig) {	/* allow user config files */
+     dorc (strcat (strcpy (tmp,myHomeDir),"/.mminit"),T);
+     dorc (strcat (strcpy (tmp,myHomeDir),"/.imaprc"),NIL);
+@@ -1541,6 +1554,8 @@
+ 	  }
+ 	  else if (!compare_cstring (s,"set advertise-the-world"))
+ 	    advertisetheworld = atoi (k);
++	  else if (!compare_cstring (s,"set limited-advertise"))
++	    limitedadvertise = atoi (k);
+ 	  else if (!compare_cstring
+ 		   (s,"set disable-automatic-shared-namespaces"))
+ 	    noautomaticsharedns = atoi (k);
+diff -ruN imap-2002d.orig/src/osdep/unix/maildir.c imap-2002d/src/osdep/unix/maildir.c
+--- imap-2002d.orig/src/osdep/unix/maildir.c	Wed Dec 31 17:00:00 1969
++++ imap-2002d/src/osdep/unix/maildir.c	Sun Aug  3 18:56:08 2003
+@@ -0,0 +1,1498 @@
++/*
++ * Maildir Module for PINE 4.0x - fourth release, use with CARE! 
++ *
++ * Author:      Mattias Larsson <ml@techno.org>
++ *
++ * Version:     2001beta-2001.08.28
++ *
++ * Please read the README.maildir file before using this module!
++ *
++ * If you have any questions, please e-mail ml@techno.org 
++ *
++ * Multiple inboxes patch by Dean Gaudet <dgaudet@arctic.org>
++ *
++ * Rewritten list commands, ref support, uid-in-filename support,
++ * size-in-filename support, FAST support, COPY to non-maildir fixes,
++ * memory optimizations, cleanups -- Miquel van Smoorenburg <miquels@cistron.nl>
++ *
++ * =================================================
++ *
++ * Based on the IMAP2 maildir routines by:
++ *
++ * Author:      Eric Green
++ *              Bloodhounds International Inc.
++ *              thrytis@imaxx.net
++ *
++ * Additional contributions from:
++ *              Aidas Kasparas (kaspar@soften.ktu.lt)
++ *
++ * Date:        27 April 1997
++ * Last Edited: 13 June 1997
++ *
++ * Based (heavily) on mh.c and other c-client library files by Mark Crispin:
++ *
++ *              Mark Crispin
++ *              Networks and Distributed Computing
++ *              Computing & Communications
++ *              University of Washington
++ *              Administration Building, AG-44
++ *              Seattle, WA  98195
++ *              Internet: MRC@CAC.Washington.EDU
++ *
++ * Copyright 1995 by the University of Washington
++ *
++ *  Permission to use, copy, modify, and distribute this software and its
++ * documentation for any purpose and without fee is hereby granted, provided
++ * that the above copyright notice appears in all copies and that both the
++ * above copyright notice and this permission notice appear in supporting
++ * documentation, and that the name of the University of Washington not be
++ * used in advertising or publicity pertaining to distribution of the software
++ * without specific, written prior permission.  This software is made
++ * available "as is", and
++ * THE UNIVERSITY OF WASHINGTON DISCLAIMS ALL WARRANTIES, EXPRESS OR IMPLIED,
++ * WITH REGARD TO THIS SOFTWARE, INCLUDING WITHOUT LIMITATION ALL IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE, AND IN
++ * NO EVENT SHALL THE UNIVERSITY OF WASHINGTON BE LIABLE FOR ANY SPECIAL,
++ * INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
++ * LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, TORT
++ * (INCLUDING NEGLIGENCE) OR STRICT LIABILITY, ARISING OUT OF OR IN CONNECTION
++ * WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
++ *
++ */
++
++/* CONFIGURABLE OPTIONS - PLEASE CHECK THESE OUT */
++
++#define NO_MAILDIR_FIDDLE	/* disallow Maildir with Maildir in the
++				name. This is useful in an ISP setup
++				using the IMAP daemon. #undef it if you
++				are running a normal pine and know what
++				you are doing */
++
++#define NO_ABSOLUTE_PATHS	/* if you define this, all paths
++				use your HOMEDIR is the root instead
++				of the actual root of the machine. This
++				is also useful in an ISP setup with
++				IMAP */
++
++/* END CONFIGURATION */
++
++#define MTA_DEBUG	/* debugging sent to stdout */
++#undef MTA_DEBUG
++
++#include <stdio.h>
++#include <ctype.h>
++#include <errno.h>
++extern int errno;		/* just in case */
++#include "mail.h"
++#include "osdep.h"
++#include <pwd.h>
++#include <sys/stat.h>
++#include <sys/time.h>
++#include <sys/types.h>
++#include <utime.h>
++#include "maildir.h"
++#include "misc.h"
++#include "dummy.h"
++
++/* Driver dispatch used by MAIL */
++
++DRIVER maildirdriver = {
++  "maildir",			/* driver name */
++				/* driver flags */
++  DR_MAIL|DR_LOCAL|DR_NOFAST|DR_NAMESPACE|DR_NODLIST,
++  (DRIVER *) NIL,		/* next driver */
++  maildir_valid,			/* mailbox is valid for us */
++  maildir_parameters,		/* manipulate parameters */
++  maildir_scan,			/* scan mailboxes */
++  maildir_list,			/* find mailboxes */
++  maildir_lsub,			/* find subscribed mailboxes */
++  maildir_sub,			/* subscribe to mailbox */
++  maildir_unsub,		/* unsubscribe from mailbox */
++  maildir_create,			/* create mailbox */
++  maildir_delete,			/* delete mailbox */
++  maildir_rename,			/* rename mailbox */
++  mail_status_default,		/* status of mailbox */
++  maildir_open,			/* open mailbox */
++  maildir_close,		/* close mailbox */
++  maildir_fast,			/* fetch message "fast" attributes */
++  NIL,				/* fetch message flags */
++  NIL,				/* fetch overview */
++  NIL,				/* fetch message envelopes */
++  maildir_fetchheader,		/* fetch message header */
++  maildir_fetchtext,		/* fetch message body */
++  NIL,				/* fetch partial message text */
++  NIL,				/* unique identifier */
++  NIL,				/* message number */
++  NIL,				/* modify flags */
++  maildir_flagmsg,		/* per-message modify flags */
++  NIL,				/* search for message based on criteria */
++  NIL,				/* sort messages */
++  NIL,				/* thread messages */
++  maildir_ping,			/* ping mailbox to see if still alive */
++  maildir_check,		/* check for new messages */
++  maildir_expunge,		/* expunge deleted messages */
++  maildir_copy,			/* copy messages to another mailbox */
++  maildir_append,		/* append string message to mailbox */
++  maildir_gc,			/* garbage collect stream */
++};
++
++				/* prototype stream */
++MAILSTREAM maildirproto = {&maildirdriver};
++static int stream_rdonly;	/* Yuck - but needed for maildir_select */
++
++/* Check validity of mailbox
++ */
++ 
++DRIVER *maildir_valid (char *name)
++{
++  return maildir_isvalid(name,T) ? &maildirdriver : NIL;
++}
++
++int maildir_isvalid (char *name,long justname)
++{
++  char tmp[MAILTMPLEN];
++  struct stat sbuf;
++  
++  if (!name || (!*name) || 
++      ((*name == '#') && 
++       (*(name+1) == 0 ||
++	(*(name+1) != 'm' && *(name+1) != 'M') ||
++	(*(name+2) != 'd' && *(name+1) != 'D') ||
++	*(name+3) != '/')) || (*name == '.'))
++    return NIL;
++  
++  /* okay, anything containing the name Maildir will be ignored
++     this is to prevent anyone from fiddling with their incoming Maildir
++     directly, it should be accessed via the INBOX alias */
++
++#ifdef NO_MAILDIR_FIDDLE
++  if (strstr(name, "Maildir")) {
++    return NIL; 
++  }
++#endif
++ 				/* If we are requested only to check 
++  				   if the name is appropriate then we
++  				   have done! */
++  if (justname && *name == '#') return T;
++  
++
++				/* must be valid local mailbox */
++  if ((*name != '*') && (*name != '{') &&
++      maildir_file (tmp,name) &&
++				/* assume its maildir if its a dir */
++      stat (tmp,&sbuf) == 0 && S_ISDIR (sbuf.st_mode))
++    return T;
++
++				/* INBOX is for default Maildir */
++  if (!strcmp (ucase (strcpy (tmp,name)), "INBOX") &&
++      (stat (maildir_file (tmp,name),&sbuf) == 0) &&
++      S_ISDIR (sbuf.st_mode))
++    return T;
++
++  return NIL;
++}
++
++/* Maildir mail generate file string
++ */
++
++char *maildir_file (char *dst,char *name)
++{
++  char tmp[MAILTMPLEN];
++  struct stat st;
++#ifdef NO_ABSOLUTE_PATHS  
++  char *p;
++#endif
++ 
++  if (strlen (name) > 3 &&	/* safe do other comparisons */
++      (*name == '#') &&
++      (name[1] == 'm' || name[1] == 'M') &&
++      (name[2] == 'd' || name[2] == 'D') &&
++      (name[3] == '/'))
++    name += 4;
++
++#ifdef NO_ABSOLUTE_PATHS  
++  if (strncmp(name, "../", 3) == 0) name += 2;
++  while ((p = strstr(name, "/../")) != NULL) name = p + 3;
++  while (*name == '/') name++;
++#endif
++
++  /* Let mailboxfile() from env_unix.c do the work. */
++  if (mailboxfile(dst, name) == NIL) {
++    /* Cannot return NIL for now */
++    strcpy(dst, "/never/never/land/cur");
++  } else if (*dst) {
++    /* Some subdir of home or blackbox dir */
++    if (strlen(dst) < MAILTMPLEN - 4) strcat(dst, "/cur");
++  } else {
++    /* It's an inbox, either ~/Maildir or /var/mail/username */
++    sprintf (dst, "%s/%s/cur", myhomedir(), MAILDIRPATH);
++    if (stat(dst, &st) != 0 || !S_ISDIR(st.st_mode))
++      sprintf(dst, "%s/cur", sysinbox());
++  }
++
++#ifdef MTA_DEBUG
++  printf("maildir_file '%s'\n", dst);
++#endif
++
++  return dst;
++}
++
++unsigned int maildir_uid_init(char *dir, unsigned int uidvalidity)
++{
++  FILE *fp;
++  char tmp[MAILTMPLEN], *s;
++  int fd, n;
++  int uid, uidv;
++
++  /* Open .uidvalidity file, and lock it. */
++  strcpy(tmp, dir);
++  strcat(tmp, "/../.uidvalidity");
++
++  if ((fd = open(tmp, O_RDWR|O_CREAT, 0600)) < 0) return 0;
++  if (flock(fd, LOCK_EX) < 0) {
++    close(fd);
++    return 0;
++  }
++
++  /* Read existing contents. If they don't need to be updated return. */
++  if ((n = read(fd, tmp, MAILTMPLEN-1)) < 0) {
++    close(fd);
++    return 0;
++  }
++  uid = 0;
++  uidv = time(0);
++  if (n > 0) {
++    if (sscanf(tmp, "%u\n%u", &uidv, &uid) == 2 && uidvalidity == 0) {
++      close(fd);
++      return uidv;
++    }
++  }
++
++  /* Rewrite file. */
++  if (uidvalidity) uidv = uidvalidity;
++  ftruncate(fd, 0);
++  lseek(fd, 0, SEEK_SET);
++  sprintf(tmp, "%d\n%d\n", uidv, uid);
++  write(fd, tmp, strlen(tmp));
++  close(fd);
++
++  return uidv;
++}
++
++unsigned int maildir_uid(char *dir, int inc, unsigned int uidnew)
++{
++  FILE *fp;
++  char tmp[MAILTMPLEN], *s;
++  struct stat st;
++  int fd, n;
++  int uid, uidv;
++
++  /* Open .uidvalidity file, and lock it. */
++  strcpy(tmp, dir);
++  strcat(tmp, "/../.uidvalidity");
++
++  if ((fd = open(tmp, O_RDWR|O_CREAT, 0600)) < 0) return 0;
++  if (flock(fd, (inc || uidnew) ? LOCK_EX : LOCK_SH) < 0) {
++    close(fd);
++    return 0;
++  }
++
++  /* Read existing contents. */
++  if ((n = read(fd, tmp, MAILTMPLEN-1)) < 0) {
++    close(fd);
++    return 0;
++  }
++  tmp[n] = 0;
++  if (sscanf(tmp, "%u\n%u", &uidv, &uid) != 2) {
++      close(fd);
++      return 0;
++  }
++
++  if (!inc && (uidnew == 0 || uidnew < uid)) {
++    close(fd);
++    return uid;
++  }
++
++  /* Rewrite file. */
++  if (uidnew) uid = uidnew;
++  if (inc) uid++;
++   
++  ftruncate(fd, 0);
++  lseek(fd, 0, SEEK_SET);
++  sprintf(tmp, "%d\n%d\n", uidv, uid);
++  write(fd, tmp, strlen(tmp));
++  close(fd);
++
++  return uid;
++}
++
++/* Maildir open
++ */
++ 
++MAILSTREAM *maildir_open (MAILSTREAM *stream)
++{
++ char tmp[MAILTMPLEN],tmp2[MAILTMPLEN];
++
++ if (!stream) return &maildirproto;
++ if (LOCAL) {		/* recycle stream */
++	maildir_close (stream, 0);
++	stream->dtb = &maildirdriver;
++	mail_free_cache (stream);
++	if (LOCAL->lockfd >= 0) close(LOCAL->lockfd);
++  }
++  
++  stream->local = fs_get (sizeof (MAILDIRLOCAL));
++  LOCAL->inbox = !strcmp (ucase (strcpy (tmp,stream->mailbox)),"INBOX") ||
++      !strcmp (stream->mailbox,maildir_file (tmp2,"INBOX"));
++  LOCAL->dir = cpystr (maildir_file (tmp,stream->mailbox)); /* copy dir name */
++                                /* make temporary buffer */
++  LOCAL->buf = (char *) fs_get ((LOCAL->buflen = MAXMESSAGESIZE) + 1);
++  LOCAL->scantime = 0;          /* not scanned yet */
++  LOCAL->cachedtexts = 0;
++  stream->sequence++;
++  stream->nmsgs = stream->recent = 0;
++
++  /* Try to get exclusive access */
++  sprintf(tmp, "%s/../.imaplock", LOCAL->dir);
++  LOCAL->lockfd = -1;
++  if (!stream->rdonly &&
++      ((LOCAL->lockfd = open(tmp, O_RDWR|O_CREAT, 0600)) < 0 ||
++       flock(LOCAL->lockfd, LOCK_EX|LOCK_NB) < 0)) {
++    if (LOCAL->lockfd >= 0) close(LOCAL->lockfd);
++    LOCAL->lockfd = -1;
++    MM_LOG ("Can't get write access to mailbox, access is readonly",WARN);
++    stream->rdonly = T;
++  }
++
++  if ((stream->uid_validity = maildir_uid_init(LOCAL->dir, 0)) == 0) {
++    MM_LOG("Can't initialize .uidvalidity file",ERROR);
++    if (LOCAL->lockfd >= 0) close(LOCAL->lockfd);
++    LOCAL->lockfd = -1;
++    return NIL;
++  }
++  stream->uid_last = maildir_uid(LOCAL->dir, 0, 0);
++
++  maildir_ping (stream);
++
++  return stream;
++}
++
++/* Maildir ping mailbox
++ */
++
++long maildir_ping_core (MAILSTREAM *stream)
++{
++  char tmp[MAILTMPLEN];
++  MESSAGECACHE *elt;
++  struct stat sbuf, sbuf2;
++  DIR *dir;
++  struct direct *d;
++  int reloadall = NIL;
++  unsigned long old;
++  unsigned int uid, uid_last = 0;
++  long i;
++  long nmsgs = stream->nmsgs;
++  long recent = stream->recent;
++  long nfiles = stream->nmsgs;
++  int silent = stream->silent;
++  char *s, *s2;
++  mailcache_t mc = (mailcache_t) mail_parameters (NIL,GET_CACHE,NIL);
++
++  if (stat (LOCAL->dir,&sbuf) < 0) {
++    sprintf (tmp,"Unable to open maildir: %s",strerror (errno));
++    mm_log (tmp,ERROR);
++    return NIL;
++  }
++
++  stream->silent = T;  
++  if (sbuf.st_ctime != LOCAL->scantime) {
++    /* update the message list */
++    struct direct **names = NIL;
++    stream_rdonly = stream->rdonly;
++    nfiles = scandir (LOCAL->dir,&names,maildir_select,maildir_namesort);
++
++    /* First get the highest assigned UID. */
++    for (i = 0; i < nfiles; i++) {
++        if ((s = strstr (names[i]->d_name, ",U="))) {
++      		s += 3;
++		uid = 0;
++		sscanf(s, "%u", &uid);
++		if (uid > uid_last) uid_last = uid;
++	}
++    }
++
++    /* Fix up .uidvalidity file if needed. */
++    if (stream->uid_last < uid_last)
++      stream->uid_last = maildir_uid(LOCAL->dir, 0, uid_last);
++
++    mm_critical (stream);	/* go critical */
++    old = stream->uid_last;
++    LOCAL->scantime = sbuf.st_ctime;
++
++				/* check if old files same */
++    for (i = 0; i < stream->nmsgs; i++) {
++
++      elt = mail_elt (stream, i + 1);
++      s = (char *) elt->maildirp;
++      if (!strcmp(s, names[i]->d_name)) continue;
++
++      if ((s2 = strchr(s, ':')) && !strncmp(s, names[i]->d_name, s2 - s + 1)) {
++
++	/* Name is the same, it's just the flags that changed.
++	   Should we inform the client about this? How ? */
++	fs_give((void **) &elt->maildirp);
++	(char *)elt->maildirp = cpystr(names[i]->d_name);
++
++      } else {
++
++	/* Oh boy, something is wrong, a simultaneous session deleted
++	   the message. See the comments below. */
++	reloadall = T;
++	break;
++
++      }
++    }
++
++    if (reloadall) { /* files are out of order, rebuild cache */
++      /* FIXME: theoretically this can only happen if a simultaneous
++         session changed flags or deleted a file. We should check for
++	 this based on the UID and simply tell the client that files
++	 were changed/deleted instead of reloading the mailbox.
++	 See RFC2180 for details -- miquels. */
++      i = 1;
++      while (i <= stream->nmsgs)
++				/* clean out cache */
++	if ((elt = (MESSAGECACHE *) (*mc) (stream,i,CH_ELT))) {
++	  fs_give ((void **) &elt->maildirp);
++	  mail_expunged (stream,i);
++	}
++	else
++	  i++;
++      
++      mm_log ("Warning: Mailbox has changed in an unexpected way.  Reloading.",
++	      WARN);
++      stream->nmsgs = 0;
++    }
++    nmsgs = stream->nmsgs;
++
++    stream->nmsgs = nfiles; /* hm? */    
++
++    for (i = nmsgs; i < nfiles; i++) {
++
++      mail_exists(stream, i+1);
++				/* if newly seen, add to list */
++      elt = mail_elt (stream, i + 1);
++      elt->maildirp = (void *) cpystr (names[i]->d_name);
++      elt->valid = T;
++
++      /* grab the flags */
++      if ((s = strstr (names[i]->d_name,":2,")) ||
++          (s = strstr (names[i]->d_name,":3,"))) {
++	s += 3;
++	if (strchr (s,'F'))
++	  elt->flagged = T;
++	if (strchr (s,'R'))
++	  elt->answered = T;
++	if (strchr (s,'S'))
++	  elt->seen = T;
++	if (strchr (s,'T'))
++	  elt->deleted = T;
++      }
++
++      /* get the uid */
++      if ((s = strstr (names[i]->d_name, ",U=")))
++        elt->private.uid = strtoul(s + 3, NULL, 10);
++
++      /* get the RFC822.SIZE */
++      if ((s = strstr (names[i]->d_name, ",W=")))
++        elt->rfc822_size = strtoul(s + 3, NULL, 10);
++
++      /* If we could not retrieve UID from filename, or if UIDs are invalid,
++	 go here. Note that normally maildir_copynew takes care of UIDs. */
++      if (elt->private.uid == 0) {
++	elt = mail_elt (stream,i+1);
++	elt->private.uid = maildir_uid(LOCAL->dir, 1, 0);
++	stream->uid_last = elt->private.uid;
++	maildir_flagmsg(stream, elt); /* store the UID that we assigned to it */
++	elt->recent = T; /* Hmm. Just here? */
++      }
++    }
++
++    mm_nocritical (stream);	/* release critical */
++				/* free the names stuff */
++    for (i = 0; i < nfiles; i++)
++      fs_give ((void **) &names[i]);
++    if (names)
++      fs_give ((void **) &names);
++  }
++  stream->silent = silent;
++  mail_exists(stream,nfiles);
++/*  if (!reloadall)  */
++  	mail_recent (stream,recent);
++
++  return T;			/* return that we are alive */
++}
++
++long maildir_ping (MAILSTREAM *stream)
++{
++  if (!stream->rdonly) maildir_copynew (stream);
++  return maildir_ping_core (stream);
++}
++
++unsigned int maildir_crlfsize(char *file)
++{
++  FILE *fp;
++  char *p, buf[8192];
++  int n;
++  unsigned int bytes = 0;
++
++  if ((fp = fopen(file, "r")) == NULL) return 0;
++  while ((n = fread(buf, 1, 8192, fp)) > 0) {
++    bytes += n;
++    for (p = buf; n-- > 0; p++)
++      if (*p == '\n') bytes++;
++  }
++  fclose(fp);
++
++  return bytes;
++}
++
++void maildir_copynew (MAILSTREAM *stream)
++{
++  char tmp[MAILTMPLEN],file[MAILTMPLEN],newfile[MAILTMPLEN];
++  char uids[32], size[32];
++  unsigned int uid, crlfsize;
++  char *s, *s2;
++  DIR *dir;
++  struct dirent *d;
++  struct stat sbuf;
++  
++  sprintf (tmp,"%s/../new",LOCAL->dir);
++  if (!(dir = opendir (tmp)))
++    return;
++
++  while (d = readdir (dir)) {
++    if (d->d_name[0] == '.')
++      continue;			/* skip .files */
++
++    sprintf (file,"%s/../new/%s",LOCAL->dir,d->d_name);
++				/* make sure this is a normal file */
++    if (stat (file,&sbuf) == 0 && S_ISREG (sbuf.st_mode)) {
++      
++      /* Delete any UID */
++      strcpy(tmp, d->d_name);
++      if ((s = strstr (tmp,",U="))) {
++	s2 = s + 3;
++	while(*s2 >= '0' && *s2 <= '9') s2++;
++	memmove(s, s2, strlen(s2) + 1);
++      }
++      uids[0] = size[0] = 0;
++
++      /* Assign new UID */
++      uid = maildir_uid(LOCAL->dir, 1, 0);
++      stream->uid_last = uid;
++      sprintf(uids, ",U=%u", uid);
++
++      /* Insert the CRLF size if it wasn't encoded in the filename yet. */
++      if (!strstr(tmp, ",W=") && (crlfsize = maildir_crlfsize(file)) > 0)
++	sprintf(size, ",W=%u", crlfsize);
++
++      /* Build filename to use in the cur/ directory. */
++      if ((s = strstr (tmp,":2,"))||(s = strstr(tmp,":3"))) {
++	/* this message already has flags */
++	*s++ = 0;
++	sprintf (newfile,"%s/%s%s%s:%s",LOCAL->dir,tmp,uids,size,s);
++      } else
++	sprintf (newfile,"%s/%s%s%s:2,",LOCAL->dir,tmp, uids, size);
++      
++				/* move the new mail to the cur dir */
++      if (link (file,newfile) == -1)
++	mm_log("Unable to read new mail!",WARN);
++      else
++	unlink (file);	
++    }
++  }
++  closedir (dir);
++}
++
++int maildir_select (struct direct *name)
++{
++  if (name->d_name[0] == '.')
++    return NIL;
++  if (stream_rdonly && strstr(name->d_name, ",U=") == NULL)
++    return NIL;
++
++  return T;
++}
++
++int maildir_namesort (struct direct **d1,struct direct **d2)
++{
++  char *p1, *p2, *n1, *n2;
++  unsigned long t1, t2;
++  unsigned int u1, u2;
++  
++  n1 = (*d1)->d_name;
++  n2 = (*d2)->d_name;
++  u1 = u2 = 0;
++
++  /* Try to sort on UID. A message with a UID sorts _lower_ than
++     a message without one so that new messages end up at the end */
++  if ((p1 = strstr(n1, ",U="))) u1 = strtoul(p1+3, NULL, 10);
++  if ((p2 = strstr(n2, ",U="))) u2 = strtoul(p2+3, NULL, 10);
++  if (p1 || p2) {
++    if (u1 == 0 && u2 > 0) return 1;
++    if (u2 == 0 && u1 > 0) return -1;
++    return u1 - u2;
++  }
++
++  /* If we can't sort on uid, sort on filename. However take
++     into account that the first part is decimal, and that it
++     will wrap from 9 to 10 digits on Sep 9, 2001. That means
++     we should compare the numbers and not use strcmp()  */
++  t1 = strtoul(n1, NULL, 10);
++  t2 = strtoul(n2, NULL, 10);
++  if (t1 > 0 && t2 > 0 && t1 != t2) return t1 - t2;
++
++  return strcmp (n1, n2);
++}
++
++
++/* Maildir close
++ */
++
++void maildir_close (MAILSTREAM *stream, long options)
++{
++  MESSAGECACHE *elt;
++  int i;
++  mailcache_t mc = (mailcache_t) mail_parameters (NIL,GET_CACHE,NIL);
++  char tmp[MAILTMPLEN];
++
++/*  CL_EXPUNGE OPTION SUPPORT HERE SOMEWHERE! */
++				/* clean out the cached paths */
++  for (i = 1; i <= stream->nmsgs; i++)
++    if ((elt = (MESSAGECACHE *) (*mc) (stream,i,CH_ELT)) && elt->maildirp) {
++      fs_give ((void **) &elt->maildirp);
++      elt->maildirp = 0; /* otherwise pine coredumps */  
++	}  
++  
++  if (LOCAL) {			/* only if a stream is open */
++    if (LOCAL->lockfd >= 0) {
++      sprintf(tmp, "%s/../.imaplock", LOCAL->dir);
++      unlink(tmp);
++      close(LOCAL->lockfd);
++    }
++    if (LOCAL->dir) fs_give ((void **) &LOCAL->dir);
++    maildir_gc (stream,GC_TEXTS); /* free local cache */
++				/* free local scratch buffer */
++    if (LOCAL->buf) fs_give ((void **) &LOCAL->buf);
++				/* nuke the local data */
++    fs_give ((void **) &stream->local);
++    stream->dtb = NIL;		/* log out the DTB */
++  }
++}
++
++void maildir_check (MAILSTREAM *stream)
++{
++  /* Perhaps in the future this will preserve flags */
++  if (maildir_ping (stream)) mm_log ("Check completed",(long) NIL);   
++}
++
++void maildir_setdate(MESSAGECACHE *elt)
++{
++  struct tm *tm;
++  time_t t;
++
++  /* Use the date in the filename ... efficient ;) */
++  t = strtoul((char *)elt->maildirp, NULL, 10);
++
++				/* make plausible IMAPish date string */
++  tm = gmtime (&t);
++  elt->day = tm->tm_mday; elt->month = tm->tm_mon + 1;
++  elt->year = tm->tm_year + 1900 - BASEYEAR;
++  elt->hours = tm->tm_hour; elt->minutes = tm->tm_min;
++  elt->seconds = tm->tm_sec;
++  elt->zhours = 0; elt->zminutes = 0;
++}
++
++long maildir_fetchtext (MAILSTREAM *stream,unsigned long msgno,STRING *bs, long flags)
++{
++  unsigned long i;
++  MESSAGECACHE *elt;
++                                /* UID call "impossible" */
++  if (flags & FT_UID) return NIL;
++  elt = mail_elt (stream,msgno);/* get elt */
++                                /* snarf message if don't have it yet */
++  if (!elt->private.msg.text.text.data) {
++    maildir_fetchheader (stream,msgno,&i,flags|FT_NEEDBODY);
++    if (!elt->private.msg.text.text.data) return NIL;
++  }
++  if (!(flags & FT_PEEK)) {     /* mark as seen */
++    mail_elt (stream,msgno)->seen = T;
++    maildir_flagmsg (stream, mail_elt(stream,msgno));
++    mm_flags (stream,msgno);
++  }
++  if (!elt->private.msg.text.text.data) return NIL;
++  INIT (bs,mail_string,elt->private.msg.text.text.data,
++        elt->private.msg.text.text.size);
++  return T;
++}
++
++char *maildir_read(int fd, struct stat *sb, int body_too)
++{
++  char buf[4096];
++  struct stat sbuf;
++  int n, bufsz, totsz, blksz;
++  char *b, *s;
++  char lastc = 0;
++
++  if (sb == NULL) {
++    fstat(fd, &sbuf);
++    sb = &sbuf;
++  }
++  bufsz = body_too ? sb->st_size : 4096;
++  blksz = bufsz;
++  s = fs_get (bufsz + 1);
++  totsz = 0;
++
++  while (blksz && (n = read(fd, s + totsz, blksz)) > 0) {
++    b = s + totsz;
++    totsz += n;
++
++    /* If only header wanted stop at \n\n */
++    if (!body_too) while (n-- > 0) {
++      if (lastc == '\n' && *b == '\n') {
++	blksz = 0;
++	totsz = (b - s) + 1;
++	break;
++      }
++      lastc = *b++;
++    }
++    if (blksz == 0) break;
++
++    /* make buffer bigger if needed. */
++    if (totsz + 4096 > bufsz && bufsz < sb->st_size) {
++      bufsz *= 2;
++      if (bufsz > sb->st_size) bufsz = sb->st_size;
++      fs_resize((void **)&s, bufsz + 1);
++    }
++    /* adjust blksz near eof */
++    if (totsz + blksz > sb->st_size) blksz = sb->st_size - totsz;
++  }
++  s[totsz] = 0;
++  return s;
++}
++
++/* Maildir fetch message header. If we don't need to fetch
++ * the body, then we actually only read the header.
++ */
++
++char *maildir_fetchheader (MAILSTREAM *stream,unsigned long msgno,
++		unsigned long *length, long flags)
++{
++  unsigned long i,hdrsize;
++  int fd, n, body;
++  char *t;
++  char tmp[MAILTMPLEN];
++  char *s,*b;
++  struct stat sbuf;
++  MESSAGECACHE *elt;
++
++  *length = 0;                  /* default to empty */
++  if (flags & FT_UID) return "";/* UID call "impossible" */
++  body = (flags & FT_NEEDBODY);
++  elt = mail_elt (stream,msgno);/* get elt */
++  if (elt->rfc822_size == 0) body++;
++  if (!elt->private.msg.header.text.data ||
++      (!elt->private.msg.text.text.data && body)) {
++
++    /* If we got the header already purge it, we're re-reading it */
++    if (elt->private.msg.header.text.data) {
++      fs_give ((void **) &(elt->private.msg.header.text.data));
++      LOCAL->cachedtexts -= elt->private.msg.header.text.size;
++    }
++				/* purge cache if too big */
++    if (LOCAL->cachedtexts > max (stream->nmsgs * 8192,10485760)) {
++      mail_gc (stream,GC_TEXTS);/* just can't keep that much */
++      LOCAL->cachedtexts = 0;
++    }
++				/* build message file name */
++    sprintf (tmp,"%s/%s",LOCAL->dir,(char *) elt->maildirp);
++    if ((fd = open (tmp,O_RDONLY,NIL)) >= 0) {
++      fstat (fd,&sbuf);		/* get size of message */
++      maildir_setdate(elt);
++				/* slurp message */
++      s = maildir_read(fd, &sbuf, body);
++      close (fd);		/* close file */
++
++      for (i = 0,b = s; *b && !(i && (*b == '\n')); i = (*b++ == '\n'));
++      hdrsize = (*b ? ++b:b)-s;	/* number of header bytes */
++
++      elt->private.msg.header.text.size =
++        strcrlfcpy ((char **) &elt->private.msg.header.text.data,&i,s,
++                    hdrsize);
++      LOCAL->cachedtexts += elt->private.msg.header.text.size;
++      if (body) {
++	elt->private.msg.text.text.size =
++          strcrlfcpy ((char **) &elt->private.msg.text.text.data,&i,b,
++                       sbuf.st_size - hdrsize);
++	LOCAL->cachedtexts += elt->private.msg.text.text.size;
++        if (elt->rfc822_size == 0) {
++	  /* If the size wasn't stored in the filename yet do it now.
++	     Note that normally maildir_copynew() takes care of this. */
++	  elt->rfc822_size = elt->private.msg.header.text.size +
++			     elt->private.msg.text.text.size;
++	  if (!stream->rdonly) maildir_flagmsg(stream, elt);
++        }
++      }
++      fs_give ((void **) &s);
++    } else return "";
++
++  }
++
++  *length = elt->private.msg.header.text.size;
++  return (char *) elt->private.msg.header.text.data;
++}
++
++
++/* Unlike the original maildir patch, this version of maildir_fast
++   is indeed fast - we cache the rfc822_size in the filename, and
++   we use the date in the filename as the IMAP date, usually
++   avoiding a stat() as well.
++ */
++void maildir_fast (MAILSTREAM *stream,char *sequence,long flags)
++{
++  unsigned long i,j;
++  MESSAGECACHE *elt;
++
++  if (!stream || !LOCAL || !((flags & FT_UID) ?
++			  mail_uid_sequence (stream,sequence) :
++			  mail_sequence (stream,sequence)))
++    return;
++
++  for (i = 1; i <= stream->nmsgs; i++) {
++   if (!(elt = mail_elt (stream,i))->sequence) continue;
++   /* If we don't have a size (it wasn't encoded in the filename)
++      we need to read the entire file to calculate it. */
++   if (elt->rfc822_size)
++     maildir_setdate(elt);
++   else
++     maildir_fetchheader (stream,i,&j,NIL);
++  }
++}
++
++/* Maildir scan mailboxes
++ * Accepts: mail stream
++ *          reference
++ *          pattern to search
++ *          string to scan
++ */
++
++void maildir_scan (MAILSTREAM *stream,char *ref,char *pat,char *contents)
++{
++  char tmp[MAILTMPLEN];
++  if (maildir_canonicalize (tmp,ref,pat) && maildir_isvalid(tmp, T))
++    mm_log ("Scan not valid for maildir mailboxes",ERROR);
++}
++
++/* Maildir find list of subscribed mailboxes
++ * Accepts: mail stream
++ *	    pattern to search
++ */
++
++void maildir_list (MAILSTREAM *stream,char *ref, char *pat)
++{
++  char *s,tmp[MAILTMPLEN],subdir[MAILTMPLEN],dir[MAILTMPLEN];
++
++  if (maildir_canonicalize(tmp, ref, pat) == NIL) return;
++  pat = tmp;
++  if (*pat == '#') pat += 4;
++
++  /* Can we start at a subdirectory ? */
++  strcpy(subdir, pat);
++  if ((s = strpbrk (subdir,"%*")) != NULL) *s = 0;
++  if ((s = strrchr (subdir, '/')) != NULL) *s = 0;
++
++  /* find base directory using mailboxfile */
++  if (mailboxfile(dir, subdir[0] ? subdir : ".") && dir[0]) {
++    if ((s = strrchr(dir, '/')) != NULL && s[1] == '.' && s[2] == 0)
++      *s = 0;
++    maildir_listwork(stream, dir, subdir, pat, 1);
++  }
++
++  if ((stream) && (pmatch ("INBOX", ucase(pat))))
++ 	mm_list (stream,NIL,"INBOX",LATT_NOINFERIORS);
++
++}
++
++void maildir_listwork(MAILSTREAM *stream, char *dir, char *subdir, char *pat, int level)
++{
++  DIR *dp;
++  struct direct *d;
++  struct stat sbuf;
++  char subdir2[MAILTMPLEN], dir2[MAILTMPLEN], tmp[MAILTMPLEN];
++  char *p;
++
++  if (subdir[0]) {
++
++    /* Folder or subdir, it _must_ be a directory. */
++    if (stat(dir, &sbuf) != 0 || !S_ISDIR(sbuf.st_mode)) return;
++
++    /* If it matches, list. */
++    if (pmatch_full(subdir, pat, '/')) {
++      /* We should list directories as \NoSelect entities, but the
++	 generic code (dummy.c) already does that */
++      sprintf(tmp, "%s/cur", dir);
++      if (stat(tmp, &sbuf) == 0 && S_ISDIR(sbuf.st_mode))
++        mm_list (stream,'/',subdir,NIL);
++      else
++        /*mm_list (stream,'/',subdir,LATT_NOSELECT)*/;
++    }
++  }
++
++  if ((dp = opendir (dir)) != NULL) {
++    while ((d = readdir (dp)) != NULL) {
++
++      /* skip names starting with a dot, and cur|tmp|new|INBOX|Maildir */
++      if (d->d_name[0] == '.' || !strcmp(d->d_name, "Maildir") ||
++	  !strcmp(d->d_name, "INBOX") || !strcmp(d->d_name, "cur") ||
++	  !strcmp(d->d_name, "tmp") || !strcmp(d->d_name, "new")) continue;
++
++      /* Skip messages (^\d+\.) and save an expensive stat() */
++      for (p = d->d_name; *p; p++)
++	if (*p < '0' || *p > '9') break;
++      if (*p == '.' && p >= d->d_name + 6) continue;
++
++      sprintf(dir2, "%s/%s", dir, d->d_name);
++      sprintf(subdir2, "%s%s%s", subdir, subdir[0] ? "/" : "", d->d_name);
++
++      /* And recurse. */
++      if (level < (long) mail_parameters (NIL,GET_LISTMAXLEVEL,NIL))
++	maildir_listwork(stream, dir2, subdir2, pat, level + 1);
++    }
++    closedir (dp);
++  }
++}
++
++
++
++
++
++void *maildir_parameters (long function,void *value)
++{
++  return NIL;
++}
++
++long maildir_create (MAILSTREAM *stream,char *mailbox)
++{
++  char tmp[MAILTMPLEN];
++  char err[MAILTMPLEN];
++  char *s, *s2;
++  int fnlen, i;
++  char *subdir_names[] = {"/cur","/new","/tmp",NULL};
++
++				/* must not already exist */
++  if (access (maildir_file (tmp,mailbox),F_OK) == 0) {
++    sprintf (err,"Can't create mailbox %s: mailbox already exists",mailbox);
++    mm_log (err,ERROR);
++    return NIL;
++  }
++  
++  maildir_file (tmp,mailbox);	/* get file name */
++  fnlen = strlen (tmp);
++  /*syslog(LOG_INFO, "fname: '%s'", tmp);*/
++  tmp[fnlen - 4] = '\0';	/* making main directory's name */
++  fnlen -= 4;
++
++  /* okay, try to add support for adding hiearchys of directories, this
++     is done by scanning for /'s.... */
++     
++  /*syslog(LOG_INFO, "tmp '%s'", tmp);*/
++  s = tmp;
++
++  while ((s = strstr(s, "/")) != 0) {
++	/*syslog(LOG_INFO, "Before make: '%s'", s);*/
++  	*s = '\0';
++  	/*syslog(LOG_INFO, "Trying to make: '%s'", tmp);*/
++	if (mkdir (tmp,0700) && *s != '\0') /* trying to make the dir */
++	  if (errno != EEXIST) {
++	    sprintf (err,"Can't create mailbox %s: %s %s",
++		     mailbox,tmp,strerror (errno));
++    	     mm_log (err,ERROR);
++             return NIL;
++	  }
++  	*s = '/';
++	s++;
++  	} 
++
++  if (mkdir (tmp,0700)) {	/* try to make new dir */
++    sprintf (err,"Can't create mailbox %s: %s %s",
++	     mailbox,tmp,strerror (errno));
++    mm_log (err,ERROR);
++    return NIL;
++  }
++
++  /*syslog(LOG_INFO, "create maildir");*/
++  for (i = 0; subdir_names[i]; i++) {
++    strcpy (tmp + fnlen,subdir_names[i]);
++
++    if (mkdir (tmp,0700)) {	/* try to make new dir */
++      sprintf (err,"Can't create mailbox %s: %s %s",
++	       mailbox,tmp,strerror (errno));
++      mm_log (err,ERROR);
++      return NIL;
++    }
++  }
++
++  return T;			/* return success */
++}
++
++void maildir_flagmsg (MAILSTREAM *stream,MESSAGECACHE *elt)
++{
++  char oldfile[MAILTMPLEN],newfile[MAILTMPLEN],fn[MAILTMPLEN];
++  char uids[32];
++  char size[32];
++  struct utimbuf tbuf;
++  char *s, *s2;
++
++                                /* build the new filename */
++  sprintf (oldfile,"%s/%s",LOCAL->dir,(char *) elt->maildirp);
++  if ((s = strchr ((char *) elt->maildirp,':'))) *s = '\0';
++  if ((s = strstr ((char *) elt->maildirp,",U="))) {
++    s2 = s + 3;
++    while(*s2 >= '0' && *s2 <= '9') s2++;
++    memmove(s, s2, strlen(s2) + 1);
++  }
++  if ((s = strstr ((char *) elt->maildirp,",W="))) {
++    s2 = s + 3;
++    while(*s2 >= '0' && *s2 <= '9') s2++;
++    memmove(s, s2, strlen(s2) + 1);
++  }
++  uids[0] = size[0] = 0;
++  if (elt->private.uid) sprintf(uids, ",U=%u", elt->private.uid);
++  if (elt->rfc822_size) sprintf(size, ",W=%u", elt->rfc822_size);
++  sprintf (fn,"%s%s%s:2,%s%s%s%s",(char *) elt->maildirp,
++	   uids,size,elt->flagged ? "F" : "",
++           elt->answered ? "R" : "",elt->seen ? "S" : "",
++           elt->deleted ? "T" : "");
++  sprintf (newfile,"%s/%s",LOCAL->dir,fn);
++                                /* rename the file with new flags */
++  if (rename (oldfile,newfile) < 0) {
++    sprintf(oldfile,"Unable to write flags to disk: %s",strerror (errno));
++    mm_log(oldfile,ERROR);
++    return;
++  }
++                                /* update the file name in cache */
++  fs_give ((void **) &elt->maildirp);
++  elt->maildirp = (void *) cpystr (fn);
++
++}
++
++void maildir_expunge (MAILSTREAM *stream)
++{
++  MESSAGECACHE *elt;
++  unsigned long i = 1;
++  unsigned long n = 0;
++  unsigned long recent = stream->recent;
++  
++  if (stream->rdonly) {
++    MM_LOG ("Expunge ignored on readonly mailbox",WARN);
++    return;
++  }
++
++  maildir_gc (stream,GC_TEXTS);	/* invalidate texts */
++  mm_critical (stream);		/* go critical */
++  while (i <= stream->nmsgs) {	/* for each message */
++				/* if deleted, need to trash it */
++    if ((elt = mail_elt (stream,i))->deleted) {
++      sprintf (LOCAL->buf,"%s/%s",LOCAL->dir,(char *) elt->maildirp);
++      if (unlink (LOCAL->buf)) {/* try to delete the message */
++	sprintf (LOCAL->buf,"Expunge of message %ld failed, aborted: %s",i,
++		 strerror (errno));
++	mm_log (LOCAL->buf,WARN);
++	break;
++      }
++			      /* note uncached */
++      LOCAL->cachedtexts -= ((elt->private.msg.header.text.data ?
++			      elt->private.msg.header.text.size : 0) +
++			     (elt->private.msg.text.text.data ?
++			      elt->private.msg.text.text.size : 0));
++      mail_gc_msg (&elt->private.msg,GC_ENV | GC_TEXTS);
++				/* free the cached filename */
++      if (elt->maildirp) {
++	fs_give ((void **) &elt->maildirp);
++	elt->maildirp = 0; /* otherwise pine coredumps */
++      }
++      if (elt->recent) --recent;/* if recent, note one less recent message */
++      mail_expunged (stream,i);	/* notify upper levels */
++      n++;			/* count up one more expunged message */
++    }
++    else i++;			/* otherwise try next message */
++  }
++  if (n) {			/* output the news if any expunged */
++    sprintf (LOCAL->buf,"Expunged %ld messages",n);
++    mm_log (LOCAL->buf,(long) NIL);
++  }
++  else mm_log ("No messages deleted, so no update needed",(long) NIL);
++  mm_nocritical (stream);	/* release critical */
++				/* notify upper level of new mailbox size */
++  mail_exists (stream,stream->nmsgs);
++  mail_recent (stream,recent);
++}
++
++/* dont forget to process options in here */
++long maildir_copy (MAILSTREAM *stream,char *sequence,char *mailbox,long options)
++{
++  STRING st;
++  MESSAGECACHE *elt;
++  struct stat sbuf;
++  int fd;
++  long i;
++  char *s,tmp[MAILTMPLEN];
++				/* copy the messages */
++  if ((options & CP_UID) ? mail_uid_sequence (stream, sequence) : 
++  	mail_sequence (stream,sequence)) 
++  for (i = 1; i <= stream->nmsgs; i++)
++    if ((elt = mail_elt (stream,i))->sequence) {
++      sprintf (LOCAL->buf,"%s/%s",LOCAL->dir,(char *) elt->maildirp);
++      if ((fd = open (LOCAL->buf,O_RDONLY,NIL)) < 0) return NIL;
++      fstat (fd,&sbuf);		/* get size of message */
++      maildir_setdate(elt);
++				/* slurp message */
++      read (fd,s = (char *) fs_get (sbuf.st_size +1),sbuf.st_size);
++      s[sbuf.st_size] = '\0';	/* tie off file */
++      close (fd);		/* flush message file */
++      INIT (&st,mail_string,(void *) s,sbuf.st_size);
++      sprintf (LOCAL->buf,"%s%s%s%s%s)",
++	       elt->seen ? " \\Seen" : "",
++	       elt->deleted ? " \\Deleted" : "",
++	       elt->flagged ? " \\Flagged" : "",
++	       elt->answered ? " \\Answered" : "",
++	       (elt->seen || elt->deleted || elt->flagged || elt->answered) ?
++	       "" : " ");
++      LOCAL->buf[0] = '(';	/* open list */
++      mail_date (tmp,elt);	/* generate internal date */
++      if (!mail_append_full (NIL,mailbox,LOCAL->buf,tmp,&st)) {
++	fs_give ((void **) &s);	/* give back temporary space */
++	return NIL;
++      }
++      fs_give ((void **) &s);	/* give back temporary space */
++      if (options & CP_MOVE) elt->deleted = T;
++    }
++  return T;			/* return success */
++}
++
++long maildir_append (MAILSTREAM *stream,char *mailbox,append_t af,void *data)
++{
++  int fd;
++  char c,*s;
++  char *flags,*date;
++  STRING *message;
++  char tmp[MAILTMPLEN],file[MAILTMPLEN],path1[MAILTMPLEN],path2[MAILTMPLEN];
++  MESSAGECACHE elt;
++  long i;
++  long size = 0;
++  long ret = LONGT;
++  short uf = 0;
++  
++  /*  
++     This is intentionaly made static.  Users can ask to save a LOT of messages
++     at once and this program can do that within one second. Dan's assumption
++     that time+pid+hostname always will be unique stops being true in this
++     case. So we will add yet another number to host part of message file's
++     name. Hostname is used only to make filename unique and Dan  explicitly
++     says that "<...>  Other than this [skipping filenames starting at dot] ,
++     readers should not attempt to parse filenames. <...>". Therefore this 
++     addition should be no problem. Am I right, Dan?   --AK
++  */ 
++  
++  static unsigned int transact = 1;
++
++  if (!stream) stream = &maildirproto;
++  if (!(*af) (stream,data,&flags,&date,&message)) return NIL;
++
++  if (flags) 			/* get flags if given */
++    uf = maildir_getflags (user_flags (&maildirproto),flags);
++
++  if (date) {			/* want to preserve date? */
++    /*syslog(LOG_INFO, "date: '%s'", date);*/
++				/* yes, parse date into an elt */
++    if (!mail_parse_date (&elt,date)) {
++      sprintf (tmp,"Bad date in append: %s",date);
++      mm_log (tmp,ERROR);
++      return NIL;
++    }
++  }
++				/* N.B.: can't use LOCAL->buf for tmp */
++				/* make sure valid mailbox */
++  if (!maildir_isvalid (mailbox, NIL)) {
++    sprintf (tmp,"Not a valid Maildir mailbox: %s",mailbox);
++    mm_log (tmp,ERROR);
++    return NIL;
++  }
++				/* build file name we will use */
++  sprintf (file,"%u.%d_%u.%s:2,%s%s%s%s",
++	   time (0),getpid (),transact++,mylocalhost (),
++	   uf&fFLAGGED ? "F" : "",uf&fANSWERED ? "R" : "",
++	   uf&fSEEN ? "S" : "",uf&fDELETED ? "T" : "");
++				/* build tmp file name */
++  sprintf (path1,"%s/../tmp/%s",maildir_file (tmp,mailbox),file);
++  
++  if ((fd = open (path1,O_WRONLY|O_CREAT|O_EXCL,S_IREAD|S_IWRITE)) < 0) {
++    sprintf (tmp,"Can't open append mailbox: %s",strerror (errno));
++    mm_log (tmp,ERROR);
++    return NIL;
++  }
++  i = SIZE (message);		/* get size of message */
++  s = (char *) fs_get (i + 1);	/* get space for the data */
++				/* copy the data w/o CR's */
++  while (i--) if ((c = SNX (message)) != '\015') s[size++] = c;
++  mm_critical (stream);		/* go critical */
++				/* write the data */
++  if ((write (fd,s,size) < 0) || fsync (fd)) {
++    unlink (path1);		/* delete message */
++    sprintf (tmp,"Message append failed: %s",strerror (errno));
++    mm_log (tmp,ERROR);
++    ret = NIL;
++  }
++				/* build final filename to use */
++  sprintf (path2,"%s/../new/%s",maildir_file (tmp,mailbox),file);
++  if (link (path1,path2) < 0) {
++    sprintf (tmp,"Message append failed: %s",strerror (errno));
++    mm_log (tmp,ERROR);
++    ret = NIL;
++  }
++  unlink (path1);
++  
++  close (fd);			/* close the file */
++  mm_nocritical (stream);	/* release critical */
++  fs_give ((void **) &s);	/* flush the buffer */
++  return ret;
++}
++
++short bezerk_getflags (MAILSTREAM *stream,char *flag)
++{
++  char *t,tmp[MAILTMPLEN],err[MAILTMPLEN];
++  short f = 0;
++  short i,j;
++  if (flag && *flag) {		/* no-op if no flag string */
++				/* check if a list and make sure valid */
++    if ((i = (*flag == '(')) ^ (flag[strlen (flag)-1] == ')')) {
++      mm_log ("Bad flag list",ERROR);
++      return NIL;
++    }
++				/* copy the flag string w/o list construct */
++    strncpy (tmp,flag+i,(j = strlen (flag) - (2*i)));
++    tmp[j] = '\0';
++    t = ucase (tmp);		/* uppercase only from now on */
++
++    while (t && *t) {		/* parse the flags */
++      if (*t == '\\') {		/* system flag? */
++	switch (*++t) {		/* dispatch based on first character */
++	case 'S':		/* possible \Seen flag */
++	  if (t[1] == 'E' && t[2] == 'E' && t[3] == 'N') i = fSEEN;
++	  t += 4;		/* skip past flag name */
++	  break;
++	case 'D':		/* possible \Deleted flag */
++	  if (t[1] == 'E' && t[2] == 'L' && t[3] == 'E' && t[4] == 'T' &&
++	      t[5] == 'E' && t[6] == 'D') i = fDELETED;
++	  t += 7;		/* skip past flag name */
++	  break;
++	case 'F':		/* possible \Flagged flag */
++	  if (t[1] == 'L' && t[2] == 'A' && t[3] == 'G' && t[4] == 'G' &&
++	      t[5] == 'E' && t[6] == 'D') i = fFLAGGED;
++	  t += 7;		/* skip past flag name */
++	  break;
++	case 'A':		/* possible \Answered flag */
++	  if (t[1] == 'N' && t[2] == 'S' && t[3] == 'W' && t[4] == 'E' &&
++	      t[5] == 'R' && t[6] == 'E' && t[7] == 'D') i = fANSWERED;
++	  t += 8;		/* skip past flag name */
++	  break;
++	default:		/* unknown */
++	  i = 0;
++	  break;
++	}
++				/* add flag to flags list */
++	if (i && ((*t == '\0') || (*t++ == ' '))) f |= i;
++      }
++      else {			/* no user flags yet */
++	t = strtok (t," ");	/* isolate flag name */
++	sprintf (err,"Unknown flag: %.80s",t);
++	t = strtok (NIL," ");	/* get next flag */
++	mm_log (err,ERROR);
++      }
++    }
++  }
++  return f;
++}
++
++short maildir_getflags (MAILSTREAM *stream,char *flag)
++{
++  return bezerk_getflags (stream,flag); /* nothing exciting, reuse old code */
++}
++
++long maildir_delete (MAILSTREAM *stream,char *mailbox)
++{
++  DIR *dirp;
++  struct direct *d;
++  int i,j;
++  char tmp[MAILTMPLEN],err[MAILTMPLEN];
++  char *subdir_names[] = {"cur/","new/","tmp/",NULL};
++
++				/* check if mailbox even exists */
++  if (!maildir_isvalid (mailbox,NIL)) {
++/*    sprintf (tmp,"Can't delete mailbox %s: no such mailbox",mailbox);
++    mm_log (tmp,ERROR);
++    return NIL; */
++    /*syslog(LOG_INFO, "Invalid maildir in delete()"); */
++    return T; /* well.. a stupid hack to get by a problem in netscape ..
++    		it remembers folders locally, and if a folder is deleted on
++    		another machine, you have no way removing it on any other
++    		netscapes... */
++  }
++
++				/* get name of directory */
++  i = strlen (maildir_file (tmp,mailbox)) + 1;
++  for (j = 0; subdir_names[j]; j++) {
++    strcpy (tmp + i - 4,subdir_names[j]);
++    if (dirp = opendir (tmp)) {	/* open directory */
++      while (d = readdir (dirp))	/* empty the directory */
++	if (strcmp (d->d_name,".") && strcmp (d->d_name,"..")) {
++	  strcpy (tmp + i,d->d_name);
++	  /*syslog(LOG_INFO, "unlink1: '%s'");*/
++	  unlink (tmp);
++	}
++      closedir (dirp);		/* flush directory */
++    }
++				/* remove the subdir */
++    tmp[i + 3] = '\0';
++    /*syslog(LOG_INFO, "tmp: '%s'", tmp);*/
++    if (rmdir (tmp)) {
++    /*  sprintf (err,"Can't delete directory %s: %s",tmp,strerror (errno));
++      mm_log (err,ERROR);*/
++    }
++  }
++
++  /* remove the .uidvalidity file */
++  strcpy(tmp + i - 4, ".uidvalidity");
++  unlink(tmp);
++
++				/* try to remove the directory */
++  *(tmp + i - 5) = '\0';
++  /*syslog(LOG_INFO, "tmp2: '%s'", tmp);*/
++  if (rmdir (tmp)) {
++/*    sprintf (err,"Can't delete mailbox %s: %s",mailbox,strerror (errno));
++    mm_log (err,ERROR);
++    return NIL; */
++  }
++  return T;			/* return success */
++}
++
++long maildir_rename (MAILSTREAM *stream,char *old,char *new)
++{
++  char tmp[MAILTMPLEN],tmpnew[MAILTMPLEN];
++  int i;
++
++				/* old mailbox name must be valid */
++  if (!maildir_isvalid (old,NIL)) {
++    sprintf (tmp,"Can't rename mailbox %s: no such mailbox",old);
++    mm_log (tmp,ERROR);
++    return NIL;
++  }
++
++				/* new mailbox name must not exist */
++  if (access (maildir_file (tmp,new),F_OK) == 0) {
++    sprintf (tmp,"Can't rename to mailbox %s: destination already exists",new);
++    mm_log (tmp,ERROR);
++    return NIL;
++  }
++
++                /* get the filesnames to rename */
++  maildir_file (tmp,old);
++  i = strlen(tmp);
++  if ( i > 4 && tmp[i-4] == '/' && tmp[i-3] == 'c' && tmp[i-2] == 'u' && tmp[i-1] == 'r' )
++  	tmp[i-4] = 0;
++
++  maildir_file (tmpnew,new);
++  i = strlen(tmpnew);
++  if ( i > 4 && tmpnew[i-4] == '/' && tmpnew[i-3] == 'c' && tmpnew[i-2] == 'u' && tmpnew[i-1] == 'r' )
++  	tmpnew[i-4] = 0;
++
++				/* new filename must not exist */
++  if (access (tmpnew,F_OK) == 0) {
++    sprintf (tmp,"Can't rename to mailbox %s: destination already exists as a non-mailbox",new);
++    mm_log (tmp,ERROR);
++    return NIL;
++  }
++
++				/* try to rename the directory */
++  if (rename (tmp,tmpnew)) {
++    sprintf (tmp,"Can't rename mailbox %s to %s: %s",old,new,strerror (errno));
++    mm_log (tmp,ERROR);
++    return NIL;
++  }
++  return T;			/* return success */
++}
++
++long maildir_sub (MAILSTREAM *stream,char *mailbox)
++{
++  char tmp[MAILTMPLEN];
++  return sm_subscribe (mailbox);
++}
++
++long maildir_unsub (MAILSTREAM *stream,char *mailbox)
++{
++  char tmp[MAILTMPLEN];
++  return sm_unsubscribe (mailbox);
++}
++
++void maildir_lsub (MAILSTREAM *stream,char *ref,char *pat)
++{
++  void *sdb = NIL;
++  char *s;
++  char tmp[MAILTMPLEN];
++
++  if ((stream == NULL)||(maildir_canonicalize(tmp, ref, pat) == NIL)) return;
++  pat = tmp;
++  if (*pat == '#') pat += 4;
++                                /* get canonical form of name */
++  if (maildir_canonicalize(pat, ref, pat) && (s = sm_read (&sdb))) {
++    do if (pmatch_full (s,pat,'/')) mm_lsub (stream,'/',s,NIL);
++    while (s = sm_read (&sdb)); /* until no more subscriptions */
++  }
++
++}
++
++
++void maildir_gc (MAILSTREAM *stream,long gcflags)
++{
++  /* Does nothing right now. */
++}
++
++
++/* Maildir canonicalize name
++ * Accepts: buffer to write name
++ *          reference
++ *          pattern
++ * Returns: T if success, NIL if failure
++ */
++
++long maildir_canonicalize (char *pattern,char *ref,char *pat)
++{
++  if (ref && *ref) {            /* have a reference */
++    strcpy (pattern,ref);       /* copy reference to pattern */
++                                /* # overrides mailbox field in reference */
++    if (*pat == '#') strcpy (pattern,pat);
++                                /* pattern starts, reference ends, with / */
++    else if ((*pat == '/') && (pattern[strlen (pattern) - 1] == '/'))
++      strcat (pattern,pat + 1); /* append, omitting one of the period */
++    else strcat (pattern,pat);  /* anything else is just appended */
++  }
++  else strcpy (pattern,pat);    /* just have basic name */
++
++  pat = pattern;
++  if (*pat != '#') return T;
++  return ((pat[1] == 'm' || pat[1] == 'M') &&
++          (pat[2] == 'd' || pat[2] == 'D') &&
++	  (pat[3] == '/')) ? T : NIL;
++}
++
+diff -ruN imap-2002d.orig/src/osdep/unix/maildir.h imap-2002d/src/osdep/unix/maildir.h
+--- imap-2002d.orig/src/osdep/unix/maildir.h	Wed Dec 31 17:00:00 1969
++++ imap-2002d/src/osdep/unix/maildir.h	Sun Aug  3 18:56:08 2003
+@@ -0,0 +1,59 @@
++/*
++ * Please read maildir.c for license and information
++ *
++ */
++
++#define MAILDIRPATH "Maildir"
++	
++typedef struct maildir_local {
++  unsigned int inbox : 1;	/* if it is an INBOX or not */
++  unsigned int dirty : 1;	/* diskcopy needs updating */
++  char *dir;			/* mail directory name */
++  char *buf;			/* temporary buffer */
++  char *hdr;			/* current header */
++  unsigned long buflen;		/* current size of temporary buffer */
++  unsigned long cachedtexts;    /* total size of all cached texts */
++  time_t scantime;		/* last time directory scanned */
++  int lockfd;			/* Exclusive lock on the maildir */
++} MAILDIRLOCAL;
++
++/* Convenient access to local data */
++
++#define LOCAL ((MAILDIRLOCAL *) stream->local)
++
++/* Function prototypes */
++
++DRIVER *maildir_valid (char *name);
++int maildir_isvalid (char *name,long justname);
++MAILSTREAM *maildir_open (MAILSTREAM *stream);
++void maildir_gc (MAILSTREAM *stream,long gcflags);
++void maildir_close (MAILSTREAM *stream, long options);
++long maildir_ping (MAILSTREAM *stream);
++long maildir_ping_core (MAILSTREAM *stream);
++void maildir_check (MAILSTREAM *stream);
++long maildir_fetchtext (MAILSTREAM *stream,unsigned long msgno,STRING *bs,long flags);
++char *maildir_fetchheader (MAILSTREAM *stream,unsigned long msgno,
++		unsigned long *length, long flags);
++void maildir_fast (MAILSTREAM *stream,char *sequence,long flags);
++void maildir_scan (MAILSTREAM *stream,char *ref,char *pat,char *contents);
++void maildir_list (MAILSTREAM *stream,char *ref,char *pat);
++void *maildir_parameters (long function,void *value);
++long maildir_create (MAILSTREAM *stream,char *mailbox);
++void maildir_flagmsg (MAILSTREAM *stream,MESSAGECACHE *elt);
++void maildir_expunge (MAILSTREAM *stream);
++long maildir_copy (MAILSTREAM *stream,char *sequence,char *mailbox,long options);
++long maildir_append (MAILSTREAM *stream,char *mailbox,append_t af,void *data);
++short maildir_getflags (MAILSTREAM *stream,char *flag);
++long maildir_delete (MAILSTREAM *stream,char *mailbox);
++long maildir_rename (MAILSTREAM *stream,char *old,char *new);
++long maildir_sub (MAILSTREAM *stream,char *mailbox);
++long maildir_unsub (MAILSTREAM *stream,char *mailbox);
++void maildir_lsub (MAILSTREAM *stream,char *ref,char *pat);
++
++/* utility functions */
++char *maildir_file (char *dst,char *name);
++void maildir_copynew (MAILSTREAM *stream);
++int maildir_select (struct direct *name);
++int maildir_namesort (struct direct **d1,struct direct **d2);
++void maildir_listwork(MAILSTREAM *stream, char *dir, char *subdir, char *pat, int level);
++long maildir_canonicalize (char *pattern,char *ref,char *pat);
+diff -ruN imap-2002d.orig/src/osdep/unix/os_osx.h imap-2002d/src/osdep/unix/os_osx.h
+--- imap-2002d.orig/src/osdep/unix/os_osx.h	Tue Oct 24 17:41:12 2000
++++ imap-2002d/src/osdep/unix/os_osx.h	Sun Aug  3 18:54:27 2003
+@@ -18,6 +18,8 @@
+  * CPYRIGHT, included with this Distribution.
+  */
+ 
++#define _XOPEN_SOURCE 1
++#define _BSD_SOURCE 1
+ #include <stdlib.h>
+ #include <unistd.h>
+ #include <string.h>
+diff -ruN imap-2002d.orig/src/osdep/unix/ssl_unix.c imap-2002d/src/osdep/unix/ssl_unix.c
+--- imap-2002d.orig/src/osdep/unix/ssl_unix.c	Tue Jul 16 14:48:40 2002
++++ imap-2002d/src/osdep/unix/ssl_unix.c	Sun Aug  3 18:54:27 2003
+@@ -575,7 +575,8 @@
+ 
+ void ssl_server_init (char *server)
+ {
+-  char tmp[MAILTMPLEN];
++  char tmpcrt[MAILTMPLEN];
++  char tmpkey[MAILTMPLEN];
+   unsigned long i;
+   struct stat sbuf;
+   SSLSTREAM *stream = (SSLSTREAM *) memset (fs_get (sizeof (SSLSTREAM)),0,
+@@ -583,10 +584,16 @@
+   ssl_onceonlyinit ();		/* make sure algorithms added */
+   ERR_load_crypto_strings ();
+   SSL_load_error_strings ();
+-				/* build specific certificate/key file name */
+-  sprintf (tmp,"%s/%s-%s.pem",SSL_CERT_DIRECTORY,server,tcp_serveraddr ());
++				/* build specific certificate file names */
++  sprintf (tmpcrt,"%s/%s-%s.pem",SSL_CERT_DIRECTORY,server,tcp_serveraddr ());
+ 				/* use non-specific name if no specific file */
+-  if (stat (tmp,&sbuf)) sprintf (tmp,"%s/%s.pem",SSL_CERT_DIRECTORY,server);
++  if (stat (tmpcrt,&sbuf)) sprintf (tmpcrt,"%s/%s.pem",SSL_CERT_DIRECTORY,server);
++				/* build specific key file names */
++  sprintf (tmpkey,"%s/%s-%s.pem",SSL_KEY_DIRECTORY,server,tcp_serveraddr ());
++				/* use non-specific name if no specific file */
++  if (stat (tmpkey,&sbuf)) sprintf (tmpkey,"%s/%s.pem",SSL_KEY_DIRECTORY,server);
++				/* use certificate file name as fallback */
++  if (stat (tmpkey,&sbuf)) sprintf (tmpkey,"%s",tmpcrt);
+ 				/* create context */
+   if (!(stream->context = SSL_CTX_new (start_tls ?
+ 				       TLSv1_server_method () :
+@@ -600,14 +607,14 @@
+       syslog (LOG_ALERT,"Unable to set cipher list %.80s, host=%.80s",
+ 	      SSLCIPHERLIST,tcp_clienthost ());
+ 				/* load certificate */
+-    else if (!SSL_CTX_use_certificate_chain_file (stream->context,tmp))
++    else if (!SSL_CTX_use_certificate_chain_file (stream->context,tmpcrt))
+       syslog (LOG_ALERT,"Unable to load certificate from %.80s, host=%.80s",
+-	      tmp,tcp_clienthost ());
++	      tmpcrt,tcp_clienthost ());
+ 				/* load key */
+-    else if (!(SSL_CTX_use_RSAPrivateKey_file (stream->context,tmp,
++    else if (!(SSL_CTX_use_RSAPrivateKey_file (stream->context,tmpkey,
+ 					       SSL_FILETYPE_PEM)))
+       syslog (LOG_ALERT,"Unable to load private key from %.80s, host=%.80s",
+-	      tmp,tcp_clienthost ());
++	      tmpkey,tcp_clienthost ());
+ 
+     else {			/* generate key if needed */
+       if (SSL_CTX_need_tmp_RSA (stream->context))
+diff -ruN imap-2002d.orig/src/osdep/unix/tcp_unix.c imap-2002d/src/osdep/unix/tcp_unix.c
+--- imap-2002d.orig/src/osdep/unix/tcp_unix.c	Thu Oct 31 13:04:41 2002
++++ imap-2002d/src/osdep/unix/tcp_unix.c	Sun Aug  3 18:54:27 2003
+@@ -323,12 +323,12 @@
+ 				/* return immediately if ssh disabled */
+     if (!(sshpath && (ti = sshtimeout))) return NIL;
+ 				/* ssh command prototype defined yet? */
+-    if (!sshcommand) sshcommand = cpystr ("%s %s -l %s exec /etc/r%sd");
++    if (!sshcommand) sshcommand = cpystr ("%s %s -l %s exec /usr/sbin//r%sd");
+   }
+   else if (ti = rshtimeout) {	/* set rsh timeout */
+ 				/* rsh path/command prototypes defined yet? */
+     if (!rshpath) rshpath = cpystr (RSHPATH);
+-    if (!rshcommand) rshcommand = cpystr ("%s %s -l %s exec /etc/r%sd");
++    if (!rshcommand) rshcommand = cpystr ("%s %s -l %s exec /usr/sbin/r%sd");
+   }
+   else return NIL;		/* rsh disabled */
+ 				/* look like domain literal? */
+diff -ruN imap-2002d.orig/src/tmail/Makefile imap-2002d/src/tmail/Makefile
+--- imap-2002d.orig/src/tmail/Makefile	Mon Nov 18 17:45:14 2002
++++ imap-2002d/src/tmail/Makefile	Sun Aug  3 18:54:27 2003
+@@ -18,7 +18,7 @@
+ 
+ 
+ C = ../c-client
+-CCLIENTLIB = $C/c-client.a
++CCLIENTLIB = $C/`cat $C/ARCHIVENAME`
+ SHELL = /bin/sh
+ 
+ # Get local definitions from c-client directory
+@@ -27,13 +27,10 @@
+ CFLAGS = -I$C `cat $C/CFLAGS`
+ LDFLAGS = $(CCLIENTLIB) `cat $C/LDFLAGS`
+ 
+-tmail: $(CCLIENTLIB) tmail.o
++tmail: tmail.o
+ 	$(CC) $(CFLAGS) -o tmail tmail.o $(LDFLAGS)
+ 
+ tmail.o: $C/mail.h $C/misc.h $C/osdep.h
+-
+-$(CCLIENTLIB):
+-	cd $C;make
+ 
+ clean:
+ 	rm -f *.o tmail
