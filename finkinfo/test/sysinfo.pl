@@ -75,17 +75,17 @@ sub LoadConfig {
 
 sub SaveConfig {
   open (FD, ">$ENV{HOME}/.xchat/sysinfo.conf");
-    print(FD "enabledev1=\"$ENABLEDEV1\"\n");
-    print(FD "dev1=\"$DEV1\"\n");
-    print(FD "dev1name=\"$DEV1NAME\"\n\n");
-    print(FD "enabledev2=\"$ENABLEDEV2\"\n");
-    print(FD "dev2=\"$DEV2\"\n");
-    print(FD "dev2name=\"$DEV2NAME\"\n\n");      
-    print(FD "enableppp=\"$ENABLEPPP\"\n");
-    print(FD "ppp=\"$PPP\"\n");
-    print(FD "pppname=\"$PPPNAME\"\n\n");
-    print(FD "enablefink=\"$ENABLEFINK\"\n");
-    print(FD "basepath=\"$BASEPATH\"\n");
+    print(FD "enabledev1=$ENABLEDEV1\n");
+    print(FD "dev1=$DEV1\n");
+    print(FD "dev1name=$DEV1NAME\n\n");
+    print(FD "enabledev2=$ENABLEDEV2\n");
+    print(FD "dev2=$DEV2\n");
+    print(FD "dev2name=$DEV2NAME\n\n");      
+    print(FD "enableppp=$ENABLEPPP\n");
+    print(FD "ppp=$PPP\n");
+    print(FD "pppname=$PPPNAME\n\n");
+    print(FD "enablefink=$ENABLEFINK\n");
+    print(FD "basepath=$BASEPATH\n");
   close(FD);
   IRC::print "Configuration saved\n";
   return 1;
