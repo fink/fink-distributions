@@ -547,10 +547,13 @@ sub get_hdd {
 }
 
 sub get_procs {
-  chomp($PROCS = `top -l1 | grep Processes`);
-  $PROCS =~ /Processes: (.+) total.*/;
-  $PROCS = $1;
-  $PROCS =~ s/ //g;
+  chomp($PROCS = `top -l1 | grep Proc`);
+  if ($PROCS =~ /Processes: (.+) total.*/) {
+    $PROCS = $1;
+    $PROCS =~ s/ //g;
+  } elsif ($PROCS =~ /Procs: (.+)\.$/) {
+    $PROCS = $1;
+  }
 }
 
 sub get_uptime {
