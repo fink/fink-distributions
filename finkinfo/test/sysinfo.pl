@@ -5,7 +5,7 @@
 # Avaliable at http://www.kc8apf.net/sysinfo/sysinfo.pl
 # Author: <kc8apf@kc8apf.net>
 # usage : /sys, /up, /fink, /playing, /saveinfo, /showinfo, /loadinfo
-#         /enable <option>, /conf <option> <value>
+#         /enable <option>, /disable <option, /conf <option> <value>
 # -----------------------------------------------------------------
 
 my $out;
@@ -38,6 +38,87 @@ IRC::add_command_handler("showinfo", ShowConfig);
 IRC::add_command_handler("sys", display_info);
 IRC::add_command_handler("up", display_uptime);
 IRC::add_command_handler("fink", display_fink);
+
+IRC::add_command_handler("enable", enable_option);
+IRC::add_command_handler("disable", disable_option);
+IRC::add_command_handler("conf", conf_options);
+
+sub conf_options {
+  my ($tmp) = @_;
+  my @args = split(/ /, $tmp); 
+  my $option = $args[0];
+  my $value = $args[1];
+
+  if ($option =~ m/basepath/i) {
+    IRC::print "Base Path: $value\n";
+    $BASEPATH = $value;
+  } elsif ($option =~ m/dev1name/i) {
+    IRC::print "Device 1 Name: $value\n";
+    $DEV1NAME = $value;
+  } elsif ($option =~ m/dev1/i) {
+    IRC::print "Device 1 Device: $value\n";
+    $DEV1 = $value;
+  } elsif ($option =~ m/dev2name/i) {
+    IRC::print "Device 2 Name: $value\n";
+    $DEV2NAME = $value;
+  } elsif ($option =~ m/dev2/i) {
+    IRC::print "Device 2 Device: $value\n";
+    $DEV2 = $value;       
+  } elsif ($option =~ m/pppname/i) {
+    IRC::print "PPP Name: $value\n";
+    $PPPNAME = $value;
+  } elsif ($option =~ m/ppp/i) {
+    IRC::print "PPP Device: $value\n";
+    $PPP = $value;        
+  } else {
+    IRC::print "$option Not a valid option\n";
+    IRC::print "Valid options are: basepath, dev1, dev1name, dev2, dev2name, ppp, pppname\n";
+  }
+  SaveConfig();
+  return 1;
+}
+
+sub enable_option {
+  my ($option) = @_;
+
+  if ($option =~ m/fink/i) {
+    $ENABLEFINK = "true";
+  } elsif ($option =~ m/dev1/i) {
+    $ENABLEDEV1 = "true";
+  } elsif ($option =~ m/dev2/i) { 
+    $ENABLEDEV2 = "true";
+  } elsif ($option =~ m/ppp/i) { 
+    $ENABLEPPP = "true";
+  } elsif ($option =~ m/xmms/i) { 
+    $ENABLEXMMS = "true";
+  } else {
+    IRC::print "$option Not Valid\n";
+    IRC::print "Valid options are: fink, dev1, dev2, ppp, xmms\n";
+  }
+  SaveConfig();
+  return 1;
+}
+
+sub disable_option {
+  my ($option) = @_;
+
+  if ($option =~ m/fink/i) {
+    $ENABLEFINK = "false";
+  } elsif ($option =~ m/dev1/i) {
+    $ENABLEDEV1 = "false";
+  } elsif ($option =~ m/dev2/i) {
+    $ENABLEDEV2 = "false";
+  } elsif ($option =~ m/ppp/i) {
+    $ENABLEPPP = "false";
+  } elsif ($option =~ m/xmms/i) {
+    $ENABLEXMMS = "false";
+  } else {
+    IRC::print "$option Not Valid\n";
+    IRC::print "Valid options are: fink, dev1, dev2, ppp, xmms\n";
+  }
+  SaveConfig();
+  return 1;
+}
 
 sub LoadConfig {
   open (FD,"<$ENV{HOME}/.xchat/sysinfo.conf");
