@@ -1,0 +1,499 @@
+diff -ruN php-4.3.1.orig/configure php-4.3.1/configure
+--- php-4.3.1.orig/configure	Sun Feb 16 08:57:27 2003
++++ php-4.3.1/configure	Fri Jul 25 16:06:11 2003
+@@ -78452,10 +78452,10 @@
+     # FIXME: Relying on posixy $() will cause problems for
+     #        cross-compilation, but unfortunately the echo tests do not
+     #        yet detect zsh echo's removal of \ escapes.
+-    archive_cmds='$nonopt $(test "x$module" = xyes && echo -bundle || echo -dynamiclib) $allow_undefined_flag -o $lib $libobjs $deplibs$linker_flags -install_name $rpath/$soname $verstring'
++    archive_cmds='$nonopt $(test .$module = .yes && echo -bundle $allow_undefined_flag || echo -dynamiclib) -o $lib $libobjs $deplibs$linker_flags $(test .$module != .yes && echo -install_name $rpath/$soname $verstring)'
+     # We need to add '_' to the symbols in $export_symbols first
+     #archive_expsym_cmds="$archive_cmds"' && strip -s $export_symbols'
+-    hardcode_direct=yes
++    hardcode_direct=no
+     hardcode_shlibpath_var=no
+     whole_archive_flag_spec='-all_load $convenience'
+     ;;
+diff -ruN php-4.3.1.orig/ext/pdf/pdf.c php-4.3.1/ext/pdf/pdf.c
+--- php-4.3.1.orig/ext/pdf/pdf.c	Tue Dec  3 12:25:48 2002
++++ php-4.3.1/ext/pdf/pdf.c	Fri Jul 25 15:24:04 2003
+@@ -17,7 +17,19 @@
+    +----------------------------------------------------------------------+
+ */
+ 
+-/* $Id: pdf.c,v 1.112.2.2 2002/12/03 19:25:48 iliaa Exp $ */
++/* $Id: pdf.c,v 1.7.2.16 2003/01/07 17:12:54 rjs Exp $ */
++/* derived from:
++    Id: pdf.c,v 1.106 2001/12/11 15:30:08 sebastian 
++    
++    with some exeptions:
++    - pdf_get_major/minorversion not included, as pdf_get_value supports this
++      now without a PDF-object
++    - #if ZEND_MODULE_API_NO >= 20010901 for new ZEND_MODULE support,
++      so that it compiles with older PHP Versions too
++    - TSRMLS fixes included only with ZEND_MODULE_API_NO >= 20010901
++      would break older builds otherwise
++	- new PHP streams #if ZEND_MODULE_API_NO >= 20020429
++   */
+ 
+ /* pdflib 2.02 ... 3.0x is subject to the ALADDIN FREE PUBLIC LICENSE.
+    Copyright (C) 1997-1999 Thomas Merz. 2000-2001 PDFlib GmbH */
+@@ -36,15 +48,10 @@
+ #include "ext/standard/head.h"
+ #include "ext/standard/info.h"
+ #include "ext/standard/file.h"
+-#include "php_streams.h"
+ 
+ #if HAVE_LIBGD13
+ #include "ext/gd/php_gd.h"
+-#if HAVE_GD_BUNDLED
+-#include "ext/gd/libgd/gd.h"
+-#else
+ #include "gd.h"
+-#endif
+ static int le_gd;
+ #endif
+ 
+@@ -86,8 +93,6 @@
+ 	PHP_FE(pdf_close, NULL)
+ 	PHP_FE(pdf_begin_page, NULL)
+ 	PHP_FE(pdf_end_page, NULL)
+-	PHP_FE(pdf_get_majorversion, NULL)
+-	PHP_FE(pdf_get_minorversion, NULL)
+ 	PHP_FE(pdf_get_value, NULL)
+ 	PHP_FE(pdf_set_value, NULL)
+ 	PHP_FE(pdf_get_parameter, NULL)
+@@ -223,7 +228,9 @@
+ /* {{{ pdf_module_entry
+  */
+ zend_module_entry pdf_module_entry = {
++#if ZEND_MODULE_API_NO >= 20010901
+     STANDARD_MODULE_HEADER,
++#endif
+ 	"pdf", 
+ 	pdf_functions, 
+ 	PHP_MINIT(pdf), 
+@@ -231,7 +238,9 @@
+ 	NULL, 
+ 	NULL, 
+ 	PHP_MINFO(pdf), 
++#if ZEND_MODULE_API_NO >= 20010901
+     NO_VERSION_YET,
++#endif
+ 	STANDARD_MODULE_PROPERTIES 
+ };
+ /* }}} */
+@@ -242,7 +251,7 @@
+ 
+ /* {{{ _free_pdf_doc
+  */
+-static void _free_pdf_doc(zend_rsrc_list_entry *rsrc TSRMLS_DC)
++static void _free_pdf_doc(zend_rsrc_list_entry *rsrc)
+ {
+ 	PDF *pdf = (PDF *)rsrc->ptr;
+ 	PDF_delete(pdf);
+@@ -262,7 +271,7 @@
+ 			 * pdf_set_parameter($p, "warning" 0) to switch off
+ 			 * the warnings inside PDFlib.
+ 			 */
+-			php_error(E_WARNING,"Internal PDFlib warning: %s", shortmsg);
++			php_error(E_WARNING,"PDFlib warning: %s", shortmsg);
+ 			return;
+ 		case PDF_MemoryError: /* give up in all other cases */
+ 		case PDF_IOError:
+@@ -276,6 +285,7 @@
+ 		case PDF_SystemError:
+ 		case PDF_UnknownError:
+ 		default:
++			if (p !=NULL) PDF_delete(p); /* clean up PDFlib */
+ 			php_error(E_ERROR,"PDFlib error: %s", shortmsg);
+ 		}
+ }
+@@ -309,9 +319,14 @@
+  */
+ static size_t pdf_flushwrite(PDF *p, void *data, size_t size)
+ {
++#if ZEND_MODULE_API_NO >= 20010901
+ 	TSRMLS_FETCH();
+ 
+ 	return(php_write(data, size TSRMLS_CC));
++#else
++	return(php_write(data, size));
++#endif
++	return 0;
+ }
+ /* }}} */
+ 
+@@ -331,7 +346,7 @@
+ #else
+ 	php_info_print_table_row(2, "PDFlib GmbH Version", tmp );
+ #endif
+-	php_info_print_table_row(2, "Revision", "$Revision: 1.112.2.2 $" );
++	php_info_print_table_row(2, "Revision", "$Revision: 1.7.2.16 $" );
+ 	php_info_print_table_end();
+ 
+ }
+@@ -384,7 +399,7 @@
+ 
+ /* {{{ proto bool pdf_set_info(int pdfdoc, string fieldname, string value)
+    Fills an info field of the document */
+-PHP_FUNCTION(pdf_set_info)
++PHP_FUNCTION(pdf_set_info) 
+ {
+ 	zval **arg1, **arg2, **arg3;
+ 	PDF *pdf;
+@@ -429,7 +444,7 @@
+ 
+ /* {{{ proto bool pdf_set_info_author(int pdfdoc, string author)
+    Fills the author field of the document */
+-PHP_FUNCTION(pdf_set_info_author) 
++PHP_FUNCTION(pdf_set_info_author)
+ {
+ 	_php_pdf_set_info(INTERNAL_FUNCTION_PARAM_PASSTHRU, "Author");
+ }
+@@ -445,33 +460,35 @@
+ 
+ /* {{{ proto int pdf_open([int filedesc])
+    Opens a new pdf document. If filedesc is NULL, document is created in memory. This is the old interface, only for compatibility use pdf_new + pdf_open_file instead */
+-PHP_FUNCTION(pdf_open)
++PHP_FUNCTION(pdf_open) 
+ {
+ 	zval **file;
+ 	FILE *fp = NULL;
+ 	PDF *pdf;
+ 	int argc = ZEND_NUM_ARGS();
+ 
+-	if(argc > 1)  {
++	if(argc > 1) {
+ 		WRONG_PARAM_COUNT;
+ 	} else if (argc != 1 || zend_get_parameters_ex(1, &file) == FAILURE) {
+ 		fp = NULL;
+ 	} else {
++#if ZEND_MODULE_API_NO >= 20020429
+ 		php_stream *stream;
+ 
+ 		php_stream_from_zval(stream, file);
+-		
+-		if (php_stream_cast(stream, PHP_STREAM_AS_STDIO, (void*)&fp, 1) == FAILURE)	{
++		if (php_stream_cast(stream, PHP_STREAM_AS_STDIO, (void*)&fp, 1) == FAILURE) {
+ 			RETURN_FALSE;
+ 		}
++#else
++		ZEND_FETCH_RESOURCE(fp, FILE *, file, -1, "File-Handle", php_file_le_fopen());
++#endif
++		/* XXX should do a zend_list_addref for <fp> here! */
+ 	}
+ 
+ 	pdf = PDF_new2(custom_errorhandler, pdf_emalloc, pdf_realloc, pdf_efree, NULL);
+ 
+ 	if(fp) {
+-		if (PDF_open_fp(pdf, fp) < 0) {
+-			RETURN_FALSE;
+-		}
++		if (PDF_open_fp(pdf, fp) < 0) RETURN_FALSE;
+ 	} else {
+ 		PDF_open_mem(pdf, pdf_flushwrite);
+ 	}
+@@ -487,7 +504,7 @@
+ 
+ /* {{{ proto void pdf_close(int pdfdoc)
+    Closes the pdf document */
+-PHP_FUNCTION(pdf_close)
++PHP_FUNCTION(pdf_close) 
+ {
+ 	zval **arg1;
+ 	PDF *pdf;
+@@ -507,7 +524,7 @@
+ 
+ /* {{{ proto void pdf_begin_page(int pdfdoc, float width, float height)
+    Starts page */
+-PHP_FUNCTION(pdf_begin_page)
++PHP_FUNCTION(pdf_begin_page) 
+ {
+ 	zval **arg1, **arg2, **arg3;
+ 	PDF *pdf;
+@@ -527,7 +544,7 @@
+ 
+ /* {{{ proto void pdf_end_page(int pdfdoc)
+    Ends page */
+-PHP_FUNCTION(pdf_end_page)
++PHP_FUNCTION(pdf_end_page) 
+ {
+ 	zval **arg1;
+ 	PDF *pdf;
+@@ -545,7 +562,7 @@
+ 
+ /* {{{ proto void pdf_show(int pdfdoc, string text)
+    Output text at current position */
+-PHP_FUNCTION(pdf_show)
++PHP_FUNCTION(pdf_show) 
+ {
+ 	zval **arg1, **arg2;
+ 	PDF *pdf;
+@@ -564,7 +581,7 @@
+ 
+ /* {{{ proto void pdf_show_xy(int pdfdoc, string text, float x_koor, float y_koor)
+    Output text at position */
+-PHP_FUNCTION(pdf_show_xy)
++PHP_FUNCTION(pdf_show_xy) 
+ {
+ 	zval **arg1, **arg2, **arg3, **arg4;
+ 	PDF *pdf;
+@@ -585,7 +602,7 @@
+ 
+ /* {{{ proto int pdf_show_boxed(int pdfdoc, string text, float x_koor, float y_koor, float width, float height, string mode [, string feature])
+    Output text formated in a boxed */
+-PHP_FUNCTION(pdf_show_boxed)
++PHP_FUNCTION(pdf_show_boxed) 
+ {
+ 	zval **argv[8];
+ 	int argc = ZEND_NUM_ARGS();
+@@ -627,7 +644,7 @@
+ 
+ /* {{{ proto void pdf_set_font(int pdfdoc, string font, float size, string encoding [, int embed])
+    Select the current font face, size and encoding */
+-PHP_FUNCTION(pdf_set_font)
++PHP_FUNCTION(pdf_set_font) 
+ {
+ 	zval **arg1, **arg2, **arg3, **arg4, **arg5;
+ 	int font, embed;
+@@ -722,12 +739,23 @@
+ 		WRONG_PARAM_COUNT;
+ 	}
+ 
+-	ZEND_FETCH_RESOURCE(pdf, PDF *, argv[0], -1, "pdf object", le_pdf);
+-
+ 	convert_to_string_ex(argv[1]);
+ 	if(argc == 3)
+ 	    convert_to_double_ex(argv[2]);
+ 
++	if(0 == (strcmp(Z_STRVAL_PP(argv[1]), "major"))) {
++		value = PDF_get_value(0, Z_STRVAL_PP(argv[1]), 0);
++		RETURN_DOUBLE(value);
++	} else if(0 == (strcmp(Z_STRVAL_PP(argv[1]), "minor"))) {
++		value = PDF_get_value(0, Z_STRVAL_PP(argv[1]), 0);
++		RETURN_DOUBLE(value);
++	} else if(0 == (strcmp(Z_STRVAL_PP(argv[1]), "revision"))) {
++		value = PDF_get_value(0, Z_STRVAL_PP(argv[1]), 0);
++		RETURN_DOUBLE(value);
++	} else {
++	    ZEND_FETCH_RESOURCE(pdf, PDF *, argv[0], -1, "pdf object", le_pdf);
++	}
++
+ 	if(0 == (strcmp(Z_STRVAL_PP(argv[1]), "imagewidth"))) {
+ 		if(argc < 3) WRONG_PARAM_COUNT;
+ 		value = PDF_get_value(pdf, Z_STRVAL_PP(argv[1]), (float)Z_DVAL_PP(argv[2])-PDFLIB_IMAGE_OFFSET);
+@@ -1536,9 +1564,18 @@
+ 		WRONG_PARAM_COUNT;
+ 	}
+ 	
+-	ZEND_FETCH_RESOURCE(pdf, PDF *, argv[0], -1, "pdf object", le_pdf);
+-
+ 	convert_to_string_ex(argv[1]);
++
++	if(0 == (strcmp(Z_STRVAL_PP(argv[1]), "version"))) {
++	    value = (char *) PDF_get_parameter(0, Z_STRVAL_PP(argv[1]), 0.0);
++	    RETURN_STRING(value, 1);
++	} else if(0 == (strcmp(Z_STRVAL_PP(argv[1]), "pdi"))) {
++	    value = (char *) PDF_get_parameter(0, Z_STRVAL_PP(argv[1]), 0.0);
++	    RETURN_STRING(value, 1);
++	} else {
++	    ZEND_FETCH_RESOURCE(pdf, PDF *, argv[0], -1, "pdf object", le_pdf);
++	}
++
+ 	if(argc == 3) {
+ 		convert_to_double_ex(argv[2]);
+ 		value = (char *) PDF_get_parameter(pdf, Z_STRVAL_PP(argv[1]), (float) Z_DVAL_PP(argv[2]));
+@@ -1833,7 +1870,11 @@
+ 	convert_to_string_ex(arg2);
+ 
+ #ifdef VIRTUAL_DIR
++#    if ZEND_MODULE_API_NO >= 20010901
+ 	virtual_filepath(Z_STRVAL_PP(arg2), &image TSRMLS_CC);
++#    else
++	virtual_filepath(Z_STRVAL_PP(arg2), &image);
++#    endif
+ #else
+ 	image = Z_STRVAL_PP(arg2);
+ #endif  
+@@ -1906,7 +1947,11 @@
+ 	convert_to_string_ex(arg3);
+ 
+ #ifdef VIRTUAL_DIR
++#    if ZEND_MODULE_API_NO >= 20010901
+ 	virtual_filepath(Z_STRVAL_PP(arg3), &image TSRMLS_CC);
++#    else
++	virtual_filepath(Z_STRVAL_PP(arg3), &image);
++#    endif
+ #else
+ 	image = Z_STRVAL_PP(arg3);
+ #endif  
+@@ -1963,30 +2008,17 @@
+ 	ZEND_FETCH_RESOURCE(im, gdImagePtr, arg2, -1, "Image", le_gd);
+ 
+ 	count = 3 * im->sx * im->sy;
+-	buffer = (unsigned char *) emalloc(count);
++	if(NULL == (buffer = (unsigned char *) emalloc(count))) {
++		RETURN_FALSE;
++	}
+ 
+ 	ptr = buffer;
+ 	for(i=0; i<im->sy; i++) {
+ 		for(j=0; j<im->sx; j++) {
+-#if HAVE_LIBGD20
+-			if(gdImageTrueColor(im)) {
+-				if (im->tpixels && gdImageBoundsSafe(im, j, i)) {
+-					color = gdImageTrueColorPixel(im, j, i);
+-					*ptr++ = (color >> 16) & 0xFF;
+-					*ptr++ = (color >> 8) & 0xFF;
+-					*ptr++ = color & 0xFF;
+-				}
+-			} else {
+-#endif
+-				if (im->pixels && gdImageBoundsSafe(im, j, i)) {
+-					color = im->pixels[im->sy][im->sx];
+-					*ptr++ = im->red[color];
+-					*ptr++ = im->green[color];
+-					*ptr++ = im->blue[color];
+-				}
+-#if HAVE_LIBGD20
+-			}
+-#endif		
++			color = im->pixels[i][j];
++			*ptr++ = im->red[color];
++			*ptr++ = im->green[color];
++			*ptr++ = im->blue[color];
+ 		}
+ 	}
+ 
+@@ -2258,29 +2290,6 @@
+ 
+ /* }}} */
+ 
+-/* {{{ proto int pdf_get_majorversion()
+-   Returns the major version number of the PDFlib */
+-PHP_FUNCTION(pdf_get_majorversion)
+-{
+-        if (ZEND_NUM_ARGS() != 0) {  
+-                WRONG_PARAM_COUNT;
+-        }
+-
+-        RETURN_LONG(PDF_get_majorversion());
+-}
+-
+-/* {{{ proto int pdf_get_minorversion()
+-   Returns the minor version number of the PDFlib */
+-PHP_FUNCTION(pdf_get_minorversion)
+-{
+-	if (ZEND_NUM_ARGS() != 0) {
+-		WRONG_PARAM_COUNT;
+-	}
+-
+-	RETURN_LONG(PDF_get_minorversion());
+-}
+-
+-/* }}} */
+ /* {{{ proto bool pdf_delete(int pdfdoc)
+    Deletes the PDF object */
+ PHP_FUNCTION(pdf_delete)
+@@ -2293,6 +2302,11 @@
+ 	}
+ 
+ 	ZEND_FETCH_RESOURCE(pdf, PDF *, arg1, -1, "pdf object", le_pdf);
++
++#ifndef Z_RESVAL        /* for php 4.0.3pl1 */
++#define Z_RESVAL(zval)            (zval).value.lval
++#define Z_RESVAL_PP(zval_pp)      Z_RESVAL(**zval_pp)
++#endif
+ 	zend_list_delete(Z_RESVAL_PP(arg1));
+ 
+ 	RETURN_TRUE;
+@@ -2534,7 +2548,11 @@
+ 
+ 	convert_to_string_ex(arg2);
+ #ifdef VIRTUAL_DIR
++#    if ZEND_MODULE_API_NO >= 20010901
+ 	virtual_filepath(Z_STRVAL_PP(arg2), &image TSRMLS_CC);
++#    else
++	virtual_filepath(Z_STRVAL_PP(arg2), &image);
++#    endif
+ #else
+ 	image = Z_STRVAL_PP(arg2);
+ #endif  
+@@ -2564,7 +2582,6 @@
+ 	zval **arg1, **arg2, **arg3, **arg4, **arg5, **arg6, **arg7, **arg8, **arg9, **arg10;
+ 	PDF *pdf;
+ 	int pdf_image;
+-	char *image;
+ 
+ 	if (ZEND_NUM_ARGS() != 10 || zend_get_parameters_ex(10, &arg1, &arg2, &arg3, &arg4, &arg5, &arg6, &arg7, &arg8, &arg9, &arg10) == FAILURE) {
+ 		WRONG_PARAM_COUNT;
+@@ -2582,16 +2599,10 @@
+ 	convert_to_long_ex(arg9);
+ 	convert_to_string_ex(arg10);
+ 
+-#ifdef VIRTUAL_DIR
+-	virtual_filepath(Z_STRVAL_PP(arg4), &image TSRMLS_CC);
+-#else
+-	image = Z_STRVAL_PP(arg4);
+-#endif  
+-
+ 	pdf_image = PDF_open_image(pdf,
+ 		Z_STRVAL_PP(arg2),
+ 		Z_STRVAL_PP(arg3),
+-		image,
++		Z_STRVAL_PP(arg4),
+ 		Z_LVAL_PP(arg5),
+ 		Z_LVAL_PP(arg6),
+ 		Z_LVAL_PP(arg7),
+@@ -2761,7 +2772,11 @@
+ 	convert_to_long_ex(arg4);
+ 
+ #ifdef VIRTUAL_DIR
++#    if ZEND_MODULE_API_NO >= 20010901
+ 	virtual_filepath(Z_STRVAL_PP(arg2), &file TSRMLS_CC);
++#    else
++	virtual_filepath(Z_STRVAL_PP(arg2), &file);
++#    endif
+ #else
+ 	file = Z_STRVAL_PP(arg2);
+ #endif  
+@@ -3193,7 +3208,7 @@
+ /* {{{ proto void pdf_setmatrix(int pdf, float a, float b, float c, float d, float e, float f)
+    Explicitly set the current transformation matrix. */
+ PHP_FUNCTION(pdf_setmatrix)
+-{ 
++{
+ 	zval **arg1, **arg2, **arg3, **arg4, **arg5, **arg6, **arg7;
+ 	PDF *pdf;
+ 
+@@ -3221,6 +3236,7 @@
+ 	RETURN_TRUE;
+ }
+ /* }}} */
++
+ #endif /* PDFlib >= V4 */
+ 
+ #endif
+diff -ruN php-4.3.1.orig/ltmain.sh php-4.3.1/ltmain.sh
+--- php-4.3.1.orig/ltmain.sh	Sat Jun 29 17:24:48 2002
++++ php-4.3.1/ltmain.sh	Fri Jul 25 15:37:14 2003
+@@ -2894,7 +2894,18 @@
+ 	if test -n "$export_symbols" && test -n "$archive_expsym_cmds"; then
+ 	  eval cmds=\"$archive_expsym_cmds\"
+ 	else
++	  save_deplibs="$deplibs"
++	  for conv in $convenience; do
++	tmp_deplibs=
++	for test_deplib in $deplibs; do
++	  if test "$test_deplib" != "$conv"; then
++	    tmp_deplibs="$tmp_deplibs $test_deplib"
++	  fi
++	done
++	deplibs="$tmp_deplibs"
++	  done
+ 	  eval cmds=\"$archive_cmds\"
++	  deplibs="$save_deplibs"
+ 	fi
+ 	save_ifs="$IFS"; IFS='~'
+ 	for cmd in $cmds; do
