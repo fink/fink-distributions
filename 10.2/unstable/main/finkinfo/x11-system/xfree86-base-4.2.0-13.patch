@@ -1,0 +1,1946 @@
+diff -uNbr xc/config/cf/darwin.cf xc-new/config/cf/darwin.cf
+--- xc/config/cf/darwin.cf	Tue Jan 15 16:22:31 2002
++++ xc-new/config/cf/darwin.cf	Fri Aug 23 14:32:00 2002
+@@ -1,4 +1,4 @@
+-XCOMM platform:  $XFree86: xc/config/cf/darwin.cf,v 1.21 2002/01/15 21:22:31 keithp Exp $
++XCOMM platform:  $XFree86: xc/config/cf/darwin.cf,v 1.21.2.1 2002/05/03 00:36:17 torrey Exp $
+ 
+ /* Darwin / Mac OS X configuration by John Carmack <johnc@idsoftware.com> */
+ 
+@@ -21,15 +21,32 @@
+ /*
+  * Define the operating system's capabilities
+  */
+-#define HasSnprintf             YES
+-#define HasPutenv               YES
++#define BuildGLXLibrary		YES
++#define BuildGLULibrary		YES
+ #define HasBSD44Sockets         YES
++#define HasCplusplus		YES
++#define HasNdbm                 YES
++#define HasPutenv               YES
++#define HasSnprintf             YES
+ #define HasUsableFileMmap       YES
+ #define HasZlib                 YES
++
+ #ifndef HasShm
+ # define HasShm                 YES
+ #endif
+-#define HasNdbm                 YES
++
++/* Jaguar-only stuff */
++#if OSMajorVersion >= 6
++# ifndef HasNCurses
++#  define HasNCurses		YES
++# endif
++# define HasTermcap		YES
++# define TermcapLibrary		-L@FINKPREFIX@/lib -lncurses
++#else
++# define HasTermcap		NO
++# define TermcapLibrary		/**/
++# define DBMLibrary		/**/
++#endif
+ 
+ #ifndef HasGroff
+ # define HasGroff               YES
+@@ -58,14 +75,8 @@
+ # define DarwinQuartzSupport    YES
+ #endif
+ 
+-/* we don't need -lm */
+-#define MathLibrary             /**/
+-
+-/* we don't have a termcap library */
+-#define TermcapLibrary          /**/
++#define MathLibrary             -lm
+ 
+-/* we don't have a dbm library */
+-#define DBMLibrary              /**/
+ 
+ #define MkdirHierCmd            mkdir -p
+ 
+@@ -93,10 +104,12 @@
+ #ifndef LibraryCCOptions
+ # define LibraryCCOptions       DefaultCCOptions -fno-common
+ #endif
++#define SystemMTDefines		-D_REENTRANT
++#define MTSafeAPIDefines	-DXUSE_MTSAFE_API -DXNO_MTSAFE_PWDAPI
+ 
+ #ifdef PpcDarwinArchitecture
+ # define DarwinMachineDefines   -D__powerpc__
+-# define OptimizedCDebugFlags   -O2
++# define OptimizedCDebugFlags   -Os
+ # define ByteOrder              X_BIG_ENDIAN
+ #endif /* PpcDarwinArchitecture */
+ 
+@@ -116,7 +129,7 @@
+  * Darwin's setlocale() doesn't work properly, so use X11's instead.
+  */
+ #define StandardDefines         DarwinMachineDefines -D__DARWIN__ \
+-                                -DNO_ALLOCA -DX_LOCALE
++                                -DNO_ALLOCA -DX_LOCALE -I@FINKPREFIX@/include
+ 
+ /*
+  * Set this to NO to just build the client libs, which should work without
+diff -uNbr xc/config/cf/darwinLib.rules xc-new/config/cf/darwinLib.rules
+--- xc/config/cf/darwinLib.rules	Tue Jan 15 19:39:59 2002
++++ xc-new/config/cf/darwinLib.rules	Sun Aug 11 14:45:32 2002
+@@ -1,4 +1,4 @@
+-XCOMM $XFree86: xc/config/cf/darwinLib.rules,v 1.4 2002/01/16 00:39:59 keithp Exp $
++XCOMM $XFree86: xc/config/cf/darwinLib.rules,v 1.4.2.1 2002/07/16 22:03:05 torrey Exp $
+ /*
+  * Darwin/Mac OS X shared library rules
+  */
+@@ -57,14 +57,14 @@
+  * the library gone for long periods.
+  */
+ #ifndef SharedLibraryTarget
+-#ifdef UseInstalled
+-#define LinkBuildSonameLibrary(lib) true
+-#else
+-#define LinkBuildSonameLibrary(lib) (RemoveFile($(BUILDLIBDIR)/lib); \
++# ifdef UseInstalled
++#  define LinkBuildSonameLibrary(lib) true
++# else
++#  define LinkBuildSonameLibrary(lib) (RemoveFile($(BUILDLIBDIR)/lib); \
+ 	cd $(BUILDLIBDIR); $(LN) $(BUILDINCTOP)/$(CURRENT_DIR)/lib .)
+-#endif
++# endif
+ 
+-#define SharedLibraryTarget(libname,rev,solist,down,up)			@@\
++# define SharedLibraryTarget(libname,rev,solist,down,up)		@@\
+ AllTarget(Concat(lib,libname.rev.dylib))				@@\
+ 									@@\
+ Concat(lib,libname.rev.dylib):  solist $(EXTRALIBRARYDEPS)		@@\
+@@ -93,18 +93,18 @@
+  * SharedDepLibraryTarget - generate rules to create a shared library.
+  */
+ #ifndef SharedDepLibraryTarget
+-#ifdef UseInstalled
+-#ifndef LinkBuildSonameLibrary
+-#define LinkBuildSonameLibrary(lib) true
+-#endif
+-#else
+-#ifndef LinkBuildSonameLibrary
+-#define LinkBuildSonameLibrary(lib) (RemoveFile($(BUILDLIBDIR)/lib); \
++# ifdef UseInstalled
++#  ifndef LinkBuildSonameLibrary
++#   define LinkBuildSonameLibrary(lib) true
++#  endif
++# else
++#  ifndef LinkBuildSonameLibrary
++#   define LinkBuildSonameLibrary(lib) (RemoveFile($(BUILDLIBDIR)/lib); \
+ 	cd $(BUILDLIBDIR); $(LN) $(BUILDINCTOP)/$(CURRENT_DIR)/lib .)
+-#endif
+-#endif
++#  endif
++# endif
+ 
+-#define SharedDepLibraryTarget(libname,rev,deplist,solist,down,up)	@@\
++# define SharedDepLibraryTarget(libname,rev,deplist,solist,down,up)	@@\
+ AllTarget(Concat(lib,libname.rev.dylib))				@@\
+ 									@@\
+ Concat(lib,libname.rev.dylib):  deplist $(EXTRALIBRARYDEPS)		@@\
+@@ -128,6 +128,46 @@
+ 	$(RM) Concat(lib,libname.rev.dylib) Concat(lib,libname.dylib)
+ 
+ #endif /* SharedDepLibraryTarget */
++
++/*
++ * SharedDepCplusplusLibraryTarget - generate rules to create a shared library.
++ */
++#ifndef SharedDepCplusplusLibraryTarget
++# ifdef UseInstalled
++#  ifndef LinkBuildSonameLibrary
++#   define LinkBuildSonameLibrary(lib) true
++#  endif
++# else
++#  ifndef LinkBuildSonameLibrary
++#   define LinkBuildSonameLibrary(lib) (RemoveFile($(BUILDLIBDIR)/lib); \
++	cd $(BUILDLIBDIR); $(LN) $(BUILDINCTOP)/$(CURRENT_DIR)/lib .)
++#  endif
++# endif
++
++# define SharedDepCplusplusLibraryTarget(libname,rev,deplist,solist,down,up)	@@\
++AllTarget(Concat(lib,libname.rev.dylib))				@@\
++									@@\
++Concat(lib,libname.rev.dylib):  deplist $(EXTRALIBRARYDEPS)		@@\
++	$(RM) $@~							@@\
++	@MAJREV=`expr rev : '\([^.]*\)'`; \				@@\
++	  INSTALLNAME=Concat(lib,libname.$$MAJREV.dylib); \		@@\
++	  set -x; (cd down; $(CXX) -o up/$@~ $(SHLIBLDFLAGS) -install_name $(USRLIBDIR)/$$INSTALLNAME -current_version rev -compatibility_version rev solist $(REQUIREDLIBS)); \ @@\
++	  $(RM) $$INSTALLNAME; $(LN) $@ $$INSTALLNAME; \		@@\
++	  LinkBuildSonameLibrary($$INSTALLNAME)				@@\
++	$(RM) $@							@@\
++	$(MV) $@~ $@							@@\
++	@if $(SOSYMLINK); then (set -x; \				@@\
++	  $(RM) Concat(lib,libname.dylib); \				@@\
++	  $(LN) $@ Concat(lib,libname.dylib)); fi			@@\
++	LinkBuildLibrary($@)						@@\
++	LinkBuildLibraryMaybe(Concat(lib,libname.dylib),$(SOSYMLINK))	@@\
++									@@\
++clean::									@@\
++	@MAJREV=`expr rev : '\([^.]*\)'`; \				@@\
++	set -x; $(RM) Concat(lib,libname.$$MAJREV.dylib)		@@\
++	$(RM) Concat(lib,libname.rev.dylib) Concat(lib,libname.dylib)
++
++#endif /* SharedDepCplusplusLibraryTarget */
+ 
+ #ifndef SharedDepModuleTarget
+ #define SharedDepModuleTarget(name,deps,solist)				@@\
+diff -uNbr xc/config/cf/darwinLib.tmpl xc-new/config/cf/darwinLib.tmpl
+--- xc/config/cf/darwinLib.tmpl	Wed Sep 12 21:28:57 2001
++++ xc-new/config/cf/darwinLib.tmpl	Sun Aug 11 14:45:32 2002
+@@ -1,4 +1,4 @@
+-XCOMM $XFree86: xc/config/cf/darwinLib.tmpl,v 1.2 2001/09/13 01:28:57 torrey Exp $
++XCOMM $XFree86: xc/config/cf/darwinLib.tmpl,v 1.2.4.1 2002/06/01 00:11:17 torrey Exp $
+ /*
+  * Darwin/Mac OS X shared library template
+  */
+@@ -33,7 +33,7 @@
+ #define SharedXrandrReqs    $(LDPRELIB) $(XLIB)
+ #define SharedXrenderReqs   $(LDPRELIB) $(EXTENSIONLIB) $(XLIB)
+ #define SharedXssReqs       $(LDPRELIB) $(XLIB) $(EXTENSIONLIB) $(XTOOLLIB)
+-#define SharedXtReqs        $(LDPRELIB) $(XLIBONLY) $(SMLIB) $(ICELIB)
++#define SharedXtReqs        $(LDPRELIB) $(XLIBONLY) $(SMLIB) $(ICELIB) -flat_namespace
+ #define SharedXtstReqs      $(LDPRELIB) $(XLIB)
+ #define SharedXvReqs        $(LDPRELIB) $(XLIB)
+ #define SharedDPSReqs       $(LDPRELIB) $(SMLIB) $(ICELIB) $(XTOOLLIB) $(XLIB)
+diff -uNbr xc/extras/ogl-sample/main/gfx/lib/glu/libnurbs/nurbtess/quicksort.cc xc-new/extras/ogl-sample/main/gfx/lib/glu/libnurbs/nurbtess/quicksort.cc
+--- xc/extras/ogl-sample/main/gfx/lib/glu/libnurbs/nurbtess/quicksort.cc	Mon Jan 15 16:48:59 2001
++++ xc-new/extras/ogl-sample/main/gfx/lib/glu/libnurbs/nurbtess/quicksort.cc	Sun Aug 11 14:45:32 2002
+@@ -31,12 +31,15 @@
+ ** published by SGI, but has not been independently verified as being
+ ** compliant with the OpenGL(R) version 1.2.1 Specification.
+ **
+-** $Date$ $Revision$
++** Date Revision
+ */
+ /*
+-** $Header: //depot/main/gfx/lib/glu/libnurbs/nurbtess/quicksort.cc#3 $
++** Header: //depot/main/gfx/lib/glu/libnurbs/nurbtess/quicksort.cc#3 
+ */
+ 
++
++/* $XFree86: xc/extras/ogl-sample/main/gfx/lib/glu/libnurbs/nurbtess/quicksort.cc,v 1.1.1.1.6.1 2002/01/23 19:16:59 dawes Exp $ */
++
+ #include <stdlib.h>
+ #include <stdio.h>
+ 
+@@ -58,7 +61,6 @@
+ 	       int (*comp) (void *, void *))
+ {
+   int i, last;
+-  void swap(void *v[], int , int);
+   if(left >= right) /*do nothing if array contains */
+     return;         /*fewer than two elements*/
+   
+@@ -72,7 +74,7 @@
+   quicksort(v, last+1, right, comp);
+ }
+ 
+-void swap(void *v[], int i, int j)
++static void swap(void *v[], int i, int j)
+ {
+   void *temp;
+   temp = v[i];
+diff -uNbr xc/include/Xos_r.h xc-new/include/Xos_r.h
+--- xc/include/Xos_r.h	Fri Dec 14 14:53:26 2001
++++ xc-new/include/Xos_r.h	Sun Aug 11 14:45:32 2002
+@@ -254,7 +254,7 @@
+  * fields.
+  */
+    
+-#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__OpenBSD__)
++#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
+ static __inline__ void _Xpw_copyPasswd(_Xgetpwparams p)
+ {
+    memcpy(&(p).pws, (p).pwp, sizeof(struct passwd));
+diff -uNbr xc/lib/GLU/libnurbs/internals/Imakefile xc-new/lib/GLU/libnurbs/internals/Imakefile
+--- xc/lib/GLU/libnurbs/internals/Imakefile	Mon Jun 11 03:23:11 2001
++++ xc-new/lib/GLU/libnurbs/internals/Imakefile	Sun Aug 11 14:45:32 2002
+@@ -1,4 +1,4 @@
+-XCOMM $XFree86: xc/lib/GLU/libnurbs/internals/Imakefile,v 1.6 2001/06/11 07:23:11 torrey Exp $
++XCOMM $XFree86: xc/lib/GLU/libnurbs/internals/Imakefile,v 1.6.4.1 2002/07/16 22:03:06 torrey Exp $
+ 
+ XCOMM License Applicability. Except to the extent portions of this file are
+ XCOMM made subject to an alternative license as permitted in the SGI Free
+@@ -143,8 +143,12 @@
+ 	-I$(TOP)/include \
+ 	-I$(TOP)/include/GL
+ 
+-#if SystemV4 || defined(DarwinArchitecture)
++#if SystemV4
+ OSDEFINES = -DNEEDCEILF
++#elif defined(DarwinArchitecture)
++# if OSMajorVersion <= 5
++OSDEFINES = -DNEEDCEILF
++# endif
+ #else
+ OSDEFINES = -D_EXTENSIONS_
+ #endif
+diff -uNbr xc/lib/X11/XlcDL.c xc-new/lib/X11/XlcDL.c
+--- xc/lib/X11/XlcDL.c	Mon Nov 19 10:33:38 2001
++++ xc-new/lib/X11/XlcDL.c	Sun Aug 11 14:45:32 2002
+@@ -41,7 +41,7 @@
+ Sun Microsystems, Inc. or its licensors is granted.
+ 
+ */
+-/* $XFree86: xc/lib/X11/XlcDL.c,v 1.3 2001/11/19 15:33:38 tsi Exp $ */
++/* $XFree86: xc/lib/X11/XlcDL.c,v 1.3.4.1 2002/01/23 19:17:00 dawes Exp $ */
+ 
+ #include <stdio.h>
+ #if defined(hpux)
+@@ -125,28 +125,37 @@
+ }
+ 
+ static char *
+-strdup_and_prefix(char *symbol)
++strdup_with_underscore(const char *symbol)
+ {
+-	size_t n;
+ 	char *result;
+ 
+-	n = strlen(symbol) + 1;
+-#ifndef __ELF__
+-	n++;			/* add space for _ */
+-#endif
+-	if ((result = malloc(n)) == NULL) 
++	if ((result = malloc(strlen(symbol) + 2)) == NULL) 
+ 		return NULL;
+-#ifndef __ELF__
+ 	result[0] = '_';
+-#endif
+-	memcpy(result
+-#ifndef __ELF__
+-		+1
+-#endif
+-		, symbol, n);
++	strcpy(result + 1, symbol);
+ 	return result;
+ }
+ 
++#ifndef hpux
++static void *
++try_both_dlsym (void *handle, char *name)
++{
++    void    *ret;
++
++    ret = dlsym (handle, name);
++    if (!ret)
++    {
++	 name = strdup_with_underscore (name);
++	 if (name)
++	 {
++	     ret = dlsym (handle, name);
++	     free (name);
++	 }
++    }
++    return ret;
++}
++#endif
++
+ static void
+ resolve_object(path, lc_name)
+ char *path;
+@@ -202,13 +211,13 @@
+ 	    xi18n_objects_list[lc_count].type = XIM_OBJECT;
+ 	  }
+ 	  xi18n_objects_list[lc_count].dl_name = strdup(args[1]);
+-	  xi18n_objects_list[lc_count].open = strdup_and_prefix(args[2]);
++	  xi18n_objects_list[lc_count].open = strdup(args[2]);
+ 	  xi18n_objects_list[lc_count].dl_release = XI18N_DLREL;
+ 	  xi18n_objects_list[lc_count].locale_name = strdup(lc_name);
+ 	  xi18n_objects_list[lc_count].dl_module = (void*)NULL;
+ 	  if (n == 5) {
+-	    xi18n_objects_list[lc_count].im_register = strdup_and_prefix(args[3]);
+-	    xi18n_objects_list[lc_count].im_unregister = strdup_and_prefix(args[4]);
++	    xi18n_objects_list[lc_count].im_register = strdup(args[3]);
++	    xi18n_objects_list[lc_count].im_unregister = strdup(args[4]);
+ 	  } else {
+ 	    xi18n_objects_list[lc_count].im_register = NULL;
+ 	    xi18n_objects_list[lc_count].im_unregister = NULL;
+@@ -331,7 +340,7 @@
+ 	    free(symbols);
+ 	}
+ #else
+-	lc_loader = (XLCd(*)())dlsym(objects_list->dl_module,
++	lc_loader = (XLCd(*)())try_both_dlsym(objects_list->dl_module,
+ 				     objects_list->open);
+ #endif
+ 	if (!lc_loader) continue;
+@@ -406,7 +415,7 @@
+ 	free(symbols);
+     }
+ #else
+-    im_openIM = (XIM(*)())dlsym(objects_list->dl_module,
++    im_openIM = (XIM(*)())try_both_dlsym(objects_list->dl_module,
+ 				objects_list->open);
+     if (!im_openIM) continue;
+ #endif
+@@ -481,7 +490,7 @@
+ 	free(symbols);
+     }
+ #else
+-    im_registerIM = (Bool(*)())dlsym(objects_list->dl_module,
++    im_registerIM = (Bool(*)())try_both_dlsym(objects_list->dl_module,
+ 				     objects_list->im_register);
+     if (!im_registerIM) continue;
+ #endif
+@@ -556,7 +565,7 @@
+ 	free(symbols);
+     }
+ #else
+-    im_unregisterIM = (Bool(*)())dlsym(objects_list->dl_module,
++    im_unregisterIM = (Bool(*)())try_both_dlsym(objects_list->dl_module,
+ 				       objects_list->im_unregister);
+ 
+     if (!im_unregisterIM) continue;
+@@ -651,7 +660,7 @@
+ 	free(symbols);
+     }
+ #else
+-    om_openOM = (XOM(*)())dlsym(objects_list->dl_module,
++    om_openOM = (XOM(*)())try_both_dlsym(objects_list->dl_module,
+ 				objects_list->open);
+     if (!om_openOM) continue;
+ #endif
+diff -uNbr xc/lib/Xaw/AsciiSrc.c xc-new/lib/Xaw/AsciiSrc.c
+--- xc/lib/Xaw/AsciiSrc.c	Fri Dec 14 14:54:38 2001
++++ xc-new/lib/Xaw/AsciiSrc.c	Sun Aug 11 14:45:32 2002
+@@ -26,7 +26,7 @@
+ 
+ */
+ 
+-/* $XFree86: xc/lib/Xaw/AsciiSrc.c,v 1.30 2001/12/14 19:54:38 dawes Exp $ */
++/* $XFree86: xc/lib/Xaw/AsciiSrc.c,v 1.30.2.1 2002/07/04 17:07:09 paulo Exp $ */
+ 
+ /*
+  * AsciiSrc.c - AsciiSrc object. (For use with the text widget).
+@@ -350,7 +350,7 @@
+  *	This function reads the source.
+  *
+  * Returns:
+- *	The number of characters read into the buffer
++ *	The character position following the retrieved text.
+  */
+ static XawTextPosition
+ ReadText(Widget w, XawTextPosition pos, XawTextBlock *text, int length)
+@@ -417,7 +417,7 @@
+     text->firstPos = pos;
+     text->ptr = piece->text + (pos - start);
+     count = piece->used - (pos - start);
+-    text->length = (length > count) ? count : length;
++    text->length = Max(0, (length > count) ? count : length);
+     text->format = XawFmt8Bit;
+ 
+     return (pos + text->length);
+@@ -1777,15 +1777,15 @@
+ static void
+ GetDefaultPieceSize(Widget w, int offset, XrmValue *value)
+ {
+-    static int pagesize;
++    static XPointer pagesize;
+ 
+     if (pagesize == 0) {
+-	pagesize = _XawGetPageSize();
+-	if (pagesize < BUFSIZ)
+-	    pagesize = BUFSIZ;
++	pagesize = (XPointer)((long)_XawGetPageSize());
++	if (pagesize < (XPointer)BUFSIZ)
++	    pagesize = (XPointer)BUFSIZ;
+     }
+ 
+-    value->addr = (XtPointer)&pagesize;
++    value->addr = (XPointer)&pagesize;
+ }
+ 
+ #if (defined(ASCII_STRING) || defined(ASCII_DISK))
+diff -uNbr xc/lib/Xaw/MultiSrc.c xc-new/lib/Xaw/MultiSrc.c
+--- xc/lib/Xaw/MultiSrc.c	Fri Dec 14 14:54:41 2001
++++ xc-new/lib/Xaw/MultiSrc.c	Sun Aug 11 14:45:32 2002
+@@ -27,7 +27,7 @@
+  *
+  * Much code taken from X11R3 String and Disk Sources.
+  */
+-/* $XFree86: xc/lib/Xaw/MultiSrc.c,v 1.24 2001/12/14 19:54:41 dawes Exp $ */
++/* $XFree86: xc/lib/Xaw/MultiSrc.c,v 1.24.2.1 2002/07/04 17:07:09 paulo Exp $ */
+ 
+ /*
+ 
+@@ -320,7 +320,7 @@
+  *	This function reads the source.
+  *
+  * Returns:
+- *	The number of characters read into the buffer
++ *	The character position following the retrieved text.
+  */
+ static XawTextPosition
+ ReadText(Widget w, XawTextPosition pos, XawTextBlock *text, int length)
+@@ -333,7 +333,7 @@
+     text->firstPos = pos;
+     text->ptr = (char *)(piece->text + (pos - start));
+     count = piece->used - (pos - start);
+-    text->length = (length > count) ? count : length;
++    text->length = Max(0, (length > count) ? count : length);
+ 
+     return (pos + text->length);
+ }
+@@ -1610,13 +1610,13 @@
+ static void
+ GetDefaultPieceSize(Widget w, int offset, XrmValue *value)
+ {
+-    static int pagesize;
++    static XPointer pagesize;
+ 
+     if (pagesize == 0) {
+-	pagesize = _XawGetPageSize();
+-	if (pagesize < BUFSIZ)
+-	    pagesize = BUFSIZ;
++	pagesize = (XPointer)((long)_XawGetPageSize());
++	if (pagesize < (XPointer)BUFSIZ)
++	    pagesize = (XPointer)BUFSIZ;
+     }
+ 
+-    value->addr = (XtPointer)&pagesize;
++    value->addr = (XPointer)&pagesize;
+ }
+diff -uNbr xc/lib/Xaw/Pixmap.c xc-new/lib/Xaw/Pixmap.c
+--- xc/lib/Xaw/Pixmap.c	Tue Jan 30 10:03:34 2001
++++ xc-new/lib/Xaw/Pixmap.c	Sun Aug 11 14:45:32 2002
+@@ -25,7 +25,7 @@
+  * XFree86 Project.
+  */
+ 
+-/* $XFree86: xc/lib/Xaw/Pixmap.c,v 3.16 2001/01/30 15:03:34 paulo Exp $ */
++/* $XFree86: xc/lib/Xaw/Pixmap.c,v 3.16.6.1 2002/07/04 17:07:10 paulo Exp $ */
+ 
+ #include <string.h>
+ #include <stdio.h>
+@@ -70,6 +70,7 @@
+ static int bcmp_long(register _Xconst void*, register _Xconst void *);
+ static int qcmp_string(register _Xconst void*, register _Xconst void *);
+ static int bcmp_string(register _Xconst void*, register _Xconst void *);
++static void GetResourcePixmapPath(Display*);
+ 
+ /*
+  * Initialization
+@@ -649,9 +650,51 @@
+ #define PROJECT_ROOT	"/usr/X11R6"
+ #endif
+ 
+-static char *pixmap_path =
++static char *pixmap_path = NULL;
++
++static void
++GetResourcePixmapPath(Display *display)
++{
++    XrmName xrm_name[2];
++    XrmClass xrm_class[2];
++    XrmRepresentation rep_type;
++    XrmValue value;
++    static char *default_path =
+    "%H/%T/%N:%P/include/X11/%T/%N:/usr/X11R6/include/X11/%T/%N:/usr/include/X11/%T/%N:%N";
+ 
++    xrm_name[0] = XrmPermStringToQuark("pixmapFilePath");
++    xrm_name[1] = NULLQUARK;
++    xrm_class[0] = XrmPermStringToQuark("PixmapFilePath");
++    xrm_class[1] = NULLQUARK;
++    if (!XrmGetDatabase(display))
++	(void) XGetDefault(display, "", "");
++    if (XrmQGetResource(XrmGetDatabase(display), xrm_name, xrm_class, 
++			&rep_type, &value) &&
++			rep_type == XrmPermStringToQuark("String")) {
++	int length = 0;
++	char *tok, *buffer = XtNewString(value.addr);
++
++	for (tok = strtok(buffer, ":"); tok; tok = strtok(NULL, ":")) {
++	    int toklen = strlen(tok);
++
++	    if (toklen) {
++		pixmap_path = XtRealloc(pixmap_path, length + toklen + 5);
++		strcpy(pixmap_path + length, tok);
++		if (length)
++		    pixmap_path[length++] = ':';
++		sprintf(pixmap_path + length, "%s/%%N", tok);
++		length += strlen(tok) + 3;
++	    }
++	}
++	pixmap_path = XtRealloc(pixmap_path, length + strlen(default_path) + 2);
++	if (length)
++	    pixmap_path[length++] = ':';
++	strcpy(pixmap_path + length, default_path);
++    }
++    else
++	pixmap_path = default_path;
++}
++
+ static Bool
+ BitmapLoader(XawParams *params, Screen *screen, Colormap colormap, int depth,
+ 	     Pixmap *pixmap_return, Pixmap *mask_return,
+@@ -700,6 +743,8 @@
+       if (!sub[0].substitution)
+ 	sub[0].substitution = getenv("HOME");
+       sub[1].substitution = params->name;
++      if (pixmap_path == NULL)
++	GetResourcePixmapPath(DisplayOfScreen(screen));
+       filename = XtFindFile(pixmap_path, sub, XtNumber(sub), NULL);
+       if (!filename)
+ 	return (FALSE);
+@@ -900,6 +945,8 @@
+       if (!sub[0].substitution)
+ 	sub[0].substitution = getenv("HOME");
+       sub[1].substitution = params->name;
++      if (pixmap_path == NULL)
++	GetResourcePixmapPath(DisplayOfScreen(screen));
+       filename = XtFindFile(pixmap_path, sub, XtNumber(sub), NULL);
+       if (!filename)
+ 	return (False);
+diff -uNbr xc/lib/Xaw/TextSink.c xc-new/lib/Xaw/TextSink.c
+--- xc/lib/Xaw/TextSink.c	Fri Dec 14 14:54:45 2001
++++ xc-new/lib/Xaw/TextSink.c	Sun Aug 11 14:45:32 2002
+@@ -24,7 +24,7 @@
+ in this Software without prior written authorization from The Open Group.
+ 
+ */
+-/* $XFree86: xc/lib/Xaw/TextSink.c,v 1.20 2001/12/14 19:54:45 dawes Exp $ */
++/* $XFree86: xc/lib/Xaw/TextSink.c,v 1.20.2.1 2002/07/04 17:07:10 paulo Exp $ */
+ 
+ /*
+  * Author:  Chris Peterson, MIT X Consortium.
+@@ -1497,6 +1497,7 @@
+     XawTextPropertyList *propl, *prev = NULL;
+     XawTextProperty *def_prop = NULL;
+     String str, tok, tmp;
++    char buffer[BUFSIZ];
+ 
+     if (prop_lists) ptr = (XawTextPropertyList**)
+ 	bsearch((void*)(long)qname, prop_lists, num_prop_lists,
+@@ -1545,6 +1546,10 @@
+ 	params = XawParseParamsString(tok);
+ 	ident = XrmStringToQuark(params->name);
+ 	if (ident == NULLQUARK) {
++	    XmuSnprintf(buffer, sizeof(buffer),
++			"Bad text property name \"%s\".", params->name);
++	    XtAppWarning(XtDisplayToApplicationContext
++			 (DisplayOfScreen(screen)), buffer);
+ 	    DestroyTextPropertyList(propl);
+ 	    if (prev)
+ 		prev->next = NULL;
+@@ -1564,6 +1569,10 @@
+ 
+ 	    if ((prop->font = XLoadQueryFont(DisplayOfScreen(screen),
+ 					     argval->value)) == NULL) {
++		XmuSnprintf(buffer, sizeof(buffer),
++			    "Cannot load font \"%s\".", argval->value);
++		XtAppWarning(XtDisplayToApplicationContext
++			     (DisplayOfScreen(screen)), buffer);
+ 		DestroyTextPropertyList(propl);
+ 		if (prev)
+ 		    prev->next = NULL;
+@@ -1579,6 +1588,10 @@
+ 	    argval->value) {
+ 	    if (!XAllocNamedColor(DisplayOfScreen(screen), colormap,
+ 				  argval->value, &color, &exact)) {
++		XmuSnprintf(buffer, sizeof(buffer),
++			    "Cannot allocate color \"%s\".", argval->value);
++		XtAppWarning(XtDisplayToApplicationContext
++			     (DisplayOfScreen(screen)), buffer);
+ 		DestroyTextPropertyList(propl);
+ 		if (prev)
+ 		    prev->next = NULL;
+@@ -1592,6 +1605,10 @@
+ 	    argval->value) {
+ 	    if (!XAllocNamedColor(DisplayOfScreen(screen), colormap,
+ 				  argval->value, &color, &exact)) {
++		XmuSnprintf(buffer, sizeof(buffer),
++			    "Cannot allocate color \"%s\".", argval->value);
++		XtAppWarning(XtDisplayToApplicationContext
++			     (DisplayOfScreen(screen)), buffer);
+ 		DestroyTextPropertyList(propl);
+ 		if (prev)
+ 		    prev->next = NULL;
+diff -uNbr xc/lib/Xaw/TextSrc.c xc-new/lib/Xaw/TextSrc.c
+--- xc/lib/Xaw/TextSrc.c	Fri Dec 14 14:54:45 2001
++++ xc-new/lib/Xaw/TextSrc.c	Sun Aug 11 14:45:32 2002
+@@ -25,7 +25,7 @@
+ 
+ */
+ 
+-/* $XFree86: xc/lib/Xaw/TextSrc.c,v 1.30 2001/12/14 19:54:45 dawes Exp $ */
++/* $XFree86: xc/lib/Xaw/TextSrc.c,v 1.30.2.1 2002/07/04 17:07:10 paulo Exp $ */
+ 
+ /*
+  * Author:  Chris Peterson, MIT X Consortium.
+@@ -405,6 +405,9 @@
+  *
+  * Description:
+  *	This function reads the source.
++ *
++ * Returns:
++ *	The character position following the retrieved text.
+  */
+ /*ARGSUSED*/
+ static XawTextPosition
+@@ -940,6 +943,7 @@
+ 		    memcpy(list->left->buffer, undo->left->buffer, size);
+ 		}
+ 		++list->left->length;
++		if (l_state->buffer != SrcNL && l_state->buffer != (char*)SrcWNL)
+ 		XtFree(l_state->buffer);
+ 	    }
+ 
+diff -uNbr xc/lib/zlib/infblock.c xc-new/lib/zlib/infblock.c
+--- xc/lib/zlib/infblock.c	Wed Jan 17 14:43:53 2001
++++ xc-new/lib/zlib/infblock.c	Sun Aug 11 14:45:32 2002
+@@ -249,10 +249,11 @@
+                              &s->sub.trees.tb, z);
+       if (t != Z_OK)
+       {
+-        ZFREE(z, s->sub.trees.blens);
+         r = t;
+-        if (r == Z_DATA_ERROR)
++        if (r == Z_DATA_ERROR) {
++          ZFREE(z, s->sub.trees.blens);
+           s->mode = BAD;
++        }
+         LEAVE
+       }
+       s->sub.trees.index = 0;
+@@ -317,14 +318,16 @@
+ #endif
+         t = inflate_trees_dynamic(257 + (t & 0x1f), 1 + ((t >> 5) & 0x1f),
+                                   s->sub.trees.blens, &bl, &bd, &tl, &td, z);
+-        ZFREE(z, s->sub.trees.blens);
+         if (t != Z_OK)
+         {
+-          if (t == (uInt)Z_DATA_ERROR)
++          if (t == (uInt)Z_DATA_ERROR) {
++            ZFREE(z, s->sub.trees.blens);
+             s->mode = BAD;
++          }
+           r = t;
+           LEAVE
+         }
++        ZFREE(z, s->sub.trees.blens);
+         Tracev((stderr, "inflate:       trees ok, %d * %d bytes used\n",
+               inflate_hufts, sizeof(inflate_huft)));
+         if ((c = inflate_codes_new(bl, bd, tl, td, z)) == Z_NULL)
+diff -uNbr xc/programs/Xserver/Xext/shm.c xc-new/programs/Xserver/Xext/shm.c
+--- xc/programs/Xserver/Xext/shm.c	Fri Dec 14 14:58:51 2001
++++ xc-new/programs/Xserver/Xext/shm.c	Sun Aug 11 14:45:32 2002
+@@ -1,4 +1,4 @@
+-/* $XFree86: xc/programs/Xserver/Xext/shm.c,v 3.33 2001/12/14 19:58:51 dawes Exp $ */
++/* $XFree86: xc/programs/Xserver/Xext/shm.c,v 3.33.2.2 2002/05/29 23:03:19 torrey Exp $ */
+ /************************************************************
+ 
+ Copyright 1989, 1998  The Open Group
+@@ -64,6 +64,12 @@
+ #include "panoramiXsrv.h"
+ #endif
+ 
++#if defined(SVR4) || defined(__linux__) || defined(CSRG_BASED)
++#define HAS_SAVED_IDS_AND_SETEUID
++#else
++#include <sys/stat.h>
++#endif
++
+ typedef struct _ShmDesc {
+     struct _ShmDesc *next;
+     int shmid;
+@@ -355,6 +361,45 @@
+     return (client->noClientException);
+ }
+ 
++#ifndef HAS_SAVED_IDS_AND_SETEUID
++/*
++ * Simulate the access() system call for a shared memory segement,
++ * using the real user and group id of the process
++ */
++static int
++shm_access(uid_t uid, gid_t gid, struct ipc_perm *perm, int readonly)
++{
++    mode_t mask;
++
++    /* User id 0 always gets access */
++    if (uid == 0) {
++	return 0;
++    }
++    /* Check the owner */
++    if (perm->uid == uid || perm->cuid == uid) {
++	mask = S_IRUSR;
++	if (!readonly) {
++	    mask |= S_IWUSR;
++	}
++	return (perm->mode & mask) == mask ? 0 : -1;
++    }
++    /* Check the group */
++    if (perm->gid == gid || perm->cgid == gid) {
++	mask = S_IRGRP;
++	if (!readonly) {
++	    mask |= S_IWGRP;
++	}
++	return (perm->mode & mask) == mask ? 0 : -1;
++    }
++    /* Otherwise, check everyone else */
++    mask = S_IROTH;
++    if (!readonly) {
++	mask |= S_IWOTH;
++    }
++    return (perm->mode & mask) == mask ? 0 : -1;
++}
++#endif
++
+ static int
+ ProcShmAttach(client)
+     register ClientPtr client;
+@@ -362,6 +407,12 @@
+     struct shmid_ds buf;
+     ShmDescPtr shmdesc;
+     REQUEST(xShmAttachReq);
++    uid_t ruid;
++    gid_t rgid;
++#ifdef HAS_SAVED_IDS_AND_SETEUID
++    uid_t euid;
++    gid_t egid;
++#endif
+ 
+     REQUEST_SIZE_MATCH(xShmAttachReq);
+     LEGAL_NEW_RESOURCE(stuff->shmseg, client);
+@@ -385,14 +436,44 @@
+ 	shmdesc = (ShmDescPtr) xalloc(sizeof(ShmDescRec));
+ 	if (!shmdesc)
+ 	    return BadAlloc;
++	ruid = getuid();
++	rgid = getgid();
++#ifdef HAS_SAVED_IDS_AND_SETEUID
++	euid = geteuid();
++	egid = getegid();
++
++	if (euid != ruid || egid != rgid) {
++	    /* Temporarly switch back to real ids */
++	    if (seteuid(ruid) == -1 || setegid(rgid) == -1) {
++		return BadAccess;
++	    }
++	}
++#endif
+ 	shmdesc->addr = shmat(stuff->shmid, 0,
+ 			      stuff->readOnly ? SHM_RDONLY : 0);
++#ifdef HAS_SAVED_IDS_AND_SETEUID
++	if (euid != ruid || egid != rgid) {
++	    /* Switch back to root privs */
++	    if (seteuid(euid) == -1 || setegid(egid) == -1) {
++		return BadAccess;
++	    }
++	} 
++#endif
+ 	if ((shmdesc->addr == ((char *)-1)) ||
+ 	    shmctl(stuff->shmid, IPC_STAT, &buf))
+ 	{
+ 	    xfree(shmdesc);
+ 	    return BadAccess;
+ 	}
++#ifndef HAS_SAVED_IDS_AND_SETEUID
++	/* The attach was performed with root privs. We must
++	 * do manual checking of access rights for the real uid/gid */
++	if (shm_access(ruid, rgid, &(buf.shm_perm), stuff->readOnly) == -1) {
++	    shmdt(shmdesc->addr);
++	    xfree(shmdesc);
++	    return BadAccess;
++	}
++#endif	
+ 	shmdesc->shmid = stuff->shmid;
+ 	shmdesc->refcnt = 1;
+ 	shmdesc->writable = !stuff->readOnly;
+diff -uNbr xc/programs/Xserver/hw/darwin/bundle/Dutch.lproj/InfoPlist.strings.cpp xc-new/programs/Xserver/hw/darwin/bundle/Dutch.lproj/InfoPlist.strings.cpp
+--- xc/programs/Xserver/hw/darwin/bundle/Dutch.lproj/InfoPlist.strings.cpp	Thu Nov 15 02:36:23 2001
++++ xc-new/programs/Xserver/hw/darwin/bundle/Dutch.lproj/InfoPlist.strings.cpp	Sun Aug 11 14:45:32 2002
+@@ -1,5 +1,5 @@
+ /* Dutch localized versions of Info.plist keys. */
+ /* Most of these are set in the target application settings. */
+-/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/Dutch.lproj/InfoPlist.strings.cpp,v 1.1 2001/11/15 07:36:23 torrey Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/Dutch.lproj/InfoPlist.strings.cpp,v 1.1.4.1 2002/07/16 22:18:24 torrey Exp $ */
+ 
+-NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__
++NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__;
+diff -uNbr xc/programs/Xserver/hw/darwin/bundle/English.lproj/InfoPlist.strings.cpp xc-new/programs/Xserver/hw/darwin/bundle/English.lproj/InfoPlist.strings.cpp
+--- xc/programs/Xserver/hw/darwin/bundle/English.lproj/InfoPlist.strings.cpp	Sun Nov  4 02:09:47 2001
++++ xc-new/programs/Xserver/hw/darwin/bundle/English.lproj/InfoPlist.strings.cpp	Sun Aug 11 14:45:32 2002
+@@ -1,5 +1,5 @@
+ /* English localized versions of Info.plist keys. */
+ /* Most of these are set in the target application settings. */
+-/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/English.lproj/InfoPlist.strings.cpp,v 1.2 2001/11/04 07:09:47 torrey Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/English.lproj/InfoPlist.strings.cpp,v 1.2.4.1 2002/07/16 22:18:24 torrey Exp $ */
+ 
+-NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__
++NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__;
+diff -uNbr xc/programs/Xserver/hw/darwin/bundle/French.lproj/InfoPlist.strings.cpp xc-new/programs/Xserver/hw/darwin/bundle/French.lproj/InfoPlist.strings.cpp
+--- xc/programs/Xserver/hw/darwin/bundle/French.lproj/InfoPlist.strings.cpp	Sun Nov  4 02:09:48 2001
++++ xc-new/programs/Xserver/hw/darwin/bundle/French.lproj/InfoPlist.strings.cpp	Sun Aug 11 14:45:32 2002
+@@ -1,5 +1,5 @@
+ /* French localized versions of Info.plist keys. */
+ /* Most of these are set in the target application settings. */
+-/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/French.lproj/InfoPlist.strings.cpp,v 1.2 2001/11/04 07:09:48 torrey Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/French.lproj/InfoPlist.strings.cpp,v 1.2.4.1 2002/07/16 22:18:24 torrey Exp $ */
+ 
+-NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__
++NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__;
+diff -uNbr xc/programs/Xserver/hw/darwin/bundle/German.lproj/InfoPlist.strings.cpp xc-new/programs/Xserver/hw/darwin/bundle/German.lproj/InfoPlist.strings.cpp
+--- xc/programs/Xserver/hw/darwin/bundle/German.lproj/InfoPlist.strings.cpp	Sun Nov  4 02:09:48 2001
++++ xc-new/programs/Xserver/hw/darwin/bundle/German.lproj/InfoPlist.strings.cpp	Sun Aug 11 14:45:32 2002
+@@ -1,5 +1,5 @@
+ /* German localized versions of Info.plist keys. */
+ /* Most of these are set in the target application settings. */
+-/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/German.lproj/InfoPlist.strings.cpp,v 1.2 2001/11/04 07:09:48 torrey Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/German.lproj/InfoPlist.strings.cpp,v 1.2.4.1 2002/07/16 22:18:24 torrey Exp $ */
+ 
+-NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__
++NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__;
+diff -uNbr xc/programs/Xserver/hw/darwin/bundle/Japanese.lproj/InfoPlist.strings.cpp xc-new/programs/Xserver/hw/darwin/bundle/Japanese.lproj/InfoPlist.strings.cpp
+--- xc/programs/Xserver/hw/darwin/bundle/Japanese.lproj/InfoPlist.strings.cpp	Sun Nov  4 02:09:48 2001
++++ xc-new/programs/Xserver/hw/darwin/bundle/Japanese.lproj/InfoPlist.strings.cpp	Sun Aug 11 14:45:32 2002
+@@ -1,5 +1,5 @@
+ /* Japanese localized versions of Info.plist keys. */
+ /* Most of these are set in the target application settings. */
+-/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/Japanese.lproj/InfoPlist.strings.cpp,v 1.2 2001/11/04 07:09:48 torrey Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/Japanese.lproj/InfoPlist.strings.cpp,v 1.2.4.1 2002/07/16 22:18:25 torrey Exp $ */
+ 
+-NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__
++NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__;
+diff -uNbr xc/programs/Xserver/hw/darwin/bundle/Spanish.lproj/InfoPlist.strings.cpp xc-new/programs/Xserver/hw/darwin/bundle/Spanish.lproj/InfoPlist.strings.cpp
+--- xc/programs/Xserver/hw/darwin/bundle/Spanish.lproj/InfoPlist.strings.cpp	Tue Nov 27 16:11:50 2001
++++ xc-new/programs/Xserver/hw/darwin/bundle/Spanish.lproj/InfoPlist.strings.cpp	Sun Aug 11 14:45:32 2002
+@@ -1,5 +1,5 @@
+-/* English localized versions of Info.plist keys. */
++/* Spanish localized versions of Info.plist keys. */
+ /* Most of these are set in the target application settings. */
+-/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/Spanish.lproj/InfoPlist.strings.cpp,v 1.1 2001/11/27 21:11:50 torrey Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/Spanish.lproj/InfoPlist.strings.cpp,v 1.1.4.1 2002/07/16 22:18:25 torrey Exp $ */
+ 
+-NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__
++NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__;
+diff -uNbr xc/programs/Xserver/hw/darwin/bundle/Swedish.lproj/InfoPlist.strings.cpp xc-new/programs/Xserver/hw/darwin/bundle/Swedish.lproj/InfoPlist.strings.cpp
+--- xc/programs/Xserver/hw/darwin/bundle/Swedish.lproj/InfoPlist.strings.cpp	Sun Nov  4 02:09:49 2001
++++ xc-new/programs/Xserver/hw/darwin/bundle/Swedish.lproj/InfoPlist.strings.cpp	Sun Aug 11 14:45:32 2002
+@@ -1,5 +1,5 @@
+ /* Swedish localized versions of Info.plist keys. */
+ /* Most of these are set in the target application settings. */
+-/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/Swedish.lproj/InfoPlist.strings.cpp,v 1.2 2001/11/04 07:09:49 torrey Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/Swedish.lproj/InfoPlist.strings.cpp,v 1.2.4.1 2002/07/16 22:18:25 torrey Exp $ */
+ 
+-NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__
++NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__;
+diff -uNbr xc/programs/Xserver/hw/darwin/bundle/XDarwin.pbproj/project.pbxproj xc-new/programs/Xserver/hw/darwin/bundle/XDarwin.pbproj/project.pbxproj
+--- xc/programs/Xserver/hw/darwin/bundle/XDarwin.pbproj/project.pbxproj	Mon Jan 14 02:12:22 2002
++++ xc-new/programs/Xserver/hw/darwin/bundle/XDarwin.pbproj/project.pbxproj	Sun Aug 11 14:45:32 2002
+@@ -324,7 +324,7 @@
+ 				0A79E1A4004499A1CE6F79C2,
+ 			);
+ 			buildSettings = {
+-				INSTALL_PATH = "";
++				INSTALL_PATH = /;
+ 				OPTIMIZATION_CFLAGS = "";
+ 				OTHER_CFLAGS = "";
+ 				OTHER_LDFLAGS = "";
+@@ -338,7 +338,7 @@
+ 			);
+ 			isa = PBXApplicationTarget;
+ 			name = XDarwin;
+-			productInstallPath = "";
++			productInstallPath = /;
+ 			productName = XDarwin;
+ 			productReference = 0A79E19E004499A1CE6F79C2;
+ 			productSettingsXML = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+diff -uNbr xc/programs/Xserver/hw/darwin/bundle/XWindow.m xc-new/programs/Xserver/hw/darwin/bundle/XWindow.m
+--- xc/programs/Xserver/hw/darwin/bundle/XWindow.m	Tue Nov  6 18:18:14 2001
++++ xc-new/programs/Xserver/hw/darwin/bundle/XWindow.m	Sun Aug 11 14:45:32 2002
+@@ -1,7 +1,7 @@
+ /*
+  * NSWindow subclass for Mac OS X rootless X server
+  */
+-/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/XWindow.m,v 1.5 2001/11/06 23:18:14 torrey Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/XWindow.m,v 1.5.4.1 2002/06/03 18:09:24 torrey Exp $ */
+ 
+ #import "XWindow.h"
+ 
+@@ -37,6 +37,7 @@
+     [self setAutodisplay:NO];       // MUST NOT autodisplay! See comment above
+     [self disableFlushWindow];      // We do all the flushing manually
+     [self setHasShadow: !isRoot];   // All windows have shadows except root
++    [self setReleasedWhenClosed:YES]; // Default, but we want to be sure
+ 
+     // [self setAcceptsMouseMovedEvents:YES]; // MUST be AFTER orderFront?
+ 
+diff -uNbr xc/programs/Xserver/hw/darwin/bundle/ko.lproj/InfoPlist.strings.cpp xc-new/programs/Xserver/hw/darwin/bundle/ko.lproj/InfoPlist.strings.cpp
+--- xc/programs/Xserver/hw/darwin/bundle/ko.lproj/InfoPlist.strings.cpp	Mon Dec  3 22:36:39 2001
++++ xc-new/programs/Xserver/hw/darwin/bundle/ko.lproj/InfoPlist.strings.cpp	Sun Aug 11 14:45:32 2002
+@@ -1,5 +1,5 @@
+ /* Korean localized versions of Info.plist keys. */
+ /* Most of these are set in the target application settings. */
+-/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/ko.lproj/InfoPlist.strings.cpp,v 1.1 2001/12/04 03:36:39 torrey Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/ko.lproj/InfoPlist.strings.cpp,v 1.1.4.1 2002/07/16 22:18:26 torrey Exp $ */
+ 
+-NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__
++NSHumanReadableCopyright = __quote__XFree86 XF86_VERSION\nCopyright 2001 XFree86 Project, Inc.__quote__;
+diff -uNbr xc/programs/Xserver/hw/darwin/bundle/rootlessAquaImp.m xc-new/programs/Xserver/hw/darwin/bundle/rootlessAquaImp.m
+--- xc/programs/Xserver/hw/darwin/bundle/rootlessAquaImp.m	Wed Jan 16 21:44:27 2002
++++ xc-new/programs/Xserver/hw/darwin/bundle/rootlessAquaImp.m	Sun Aug 11 14:45:32 2002
+@@ -1,7 +1,7 @@
+ /*
+  * Rootless implementation for Mac OS X Aqua environment
+  */
+-/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/rootlessAquaImp.m,v 1.11 2002/01/17 02:44:27 torrey Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/darwin/bundle/rootlessAquaImp.m,v 1.11.2.1 2002/06/03 18:09:24 torrey Exp $ */
+ 
+ #include "rootlessAquaImp.h"
+ #include "XWindow.h"
+@@ -154,7 +154,8 @@
+ {
+     AquaWindowRec *winRec = WINREC(rw);
+ 
+-    [winRec->window release];
++    [winRec->window orderOut:nil];
++    [winRec->window close];
+ }
+ 
+ void AquaMoveWindow(void *rw, int x, int y)
+diff -uNbr xc/programs/Xserver/hw/darwin/darwinKeyboard.c xc-new/programs/Xserver/hw/darwin/darwinKeyboard.c
+--- xc/programs/Xserver/hw/darwin/darwinKeyboard.c	Wed Dec  5 01:27:43 2001
++++ xc-new/programs/Xserver/hw/darwin/darwinKeyboard.c	Sun Aug 11 14:45:32 2002
+@@ -36,7 +36,7 @@
+ //
+ //=============================================================================
+ 
+-/* $XFree86: xc/programs/Xserver/hw/darwin/darwinKeyboard.c,v 1.14 2001/12/05 06:27:43 torrey Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/darwin/darwinKeyboard.c,v 1.14.2.1 2002/02/07 02:53:11 torrey Exp $ */
+ 
+ /*
+ ===========================================================================
+@@ -416,9 +416,9 @@
+                 km.charP = inBuffer;
+                 km.intP++;
+                 while (km.intP+3 < bufferEnd) {
+-                    map_interface = *(km.intP++);
+-                    map_handler_id = *(km.intP++);
+-                    map_size = *(km.intP++);
++                    map_interface = NXSwapBigIntToHost(*(km.intP++));
++                    map_handler_id = NXSwapBigIntToHost(*(km.intP++));
++                    map_size = NXSwapBigIntToHost(*(km.intP++));
+                     if (map_interface == interface) {
+                         if (map_handler_id == handler_id || hasInterface) {
+                             hasMatch = TRUE;
+diff -uNbr xc/programs/Xserver/hw/xfree86/common/xf86Mode.c xc-new/programs/Xserver/hw/xfree86/common/xf86Mode.c
+--- xc/programs/Xserver/hw/xfree86/common/xf86Mode.c	Thu Dec  6 10:40:27 2001
++++ xc-new/programs/Xserver/hw/xfree86/common/xf86Mode.c	Sun Aug 11 14:45:32 2002
+@@ -1,4 +1,4 @@
+-/* $XFree86: xc/programs/Xserver/hw/xfree86/common/xf86Mode.c,v 1.48 2001/12/06 15:40:27 tsi Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/xfree86/common/xf86Mode.c,v 1.48.2.3 2002/01/25 15:58:00 tsi Exp $ */
+ 
+ /*
+  * Copyright (c) 1997,1998 by The XFree86 Project, Inc.
+@@ -1805,46 +1805,41 @@
+ static void
+ add(char **p, char *new)
+ {
+-    if (!*p) {
+-        *p = xnfalloc(strlen(new) + 1);
+-	strcpy(*p,new);
+-    } else {
+-        *p = xnfrealloc(*p,((*p)?strlen(*p):0) + strlen(new) + 2);
+-	strcat(*p," ");
+-	strcat(*p,new);
+-    }
++    *p = xnfrealloc(*p, strlen(*p) + strlen(new) + 2);
++    strcat(*p, " ");
++    strcat(*p, new);
+ }
+ 
+ static void
+ PrintModeline(int scrnIndex,DisplayModePtr mode)
+ {
+     char tmp[256];
+-    char *flags = NULL;
++    char *flags = xnfcalloc(1, 1);
+ 
+     if (mode->HSkew) { 
+-        snprintf(tmp,256,"hskew %i",mode->HSkew); 
+-	add(&flags,tmp);
++	snprintf(tmp, 256, "hskew %i", mode->HSkew); 
++	add(&flags, tmp);
+     }
+     if (mode->VScan) { 
+-        snprintf(tmp,256,"vscan %i",mode->VScan); 
+-	add(&flags,tmp);
++	snprintf(tmp, 256, "vscan %i", mode->VScan); 
++	add(&flags, tmp);
+     }
+-    if (mode->Flags & V_INTERLACE) add(&flags,"interlace");
+-    if (mode->Flags & V_CSYNC) add(&flags,"composite");
+-    if (mode->Flags & V_DBLSCAN) add(&flags,"doublescan");
+-    if (mode->Flags & V_BCAST) add(&flags,"bcast");
+-    if (mode->Flags & V_PHSYNC) add(&flags,"+hsync");
+-    if (mode->Flags & V_NHSYNC) add(&flags,"-hsync");
+-    if (mode->Flags & V_PVSYNC) add(&flags,"+vsync");
+-    if (mode->Flags & V_NVSYNC) add(&flags,"-vsync");
+-    if (mode->Flags & V_PCSYNC) add(&flags,"+csync");
+-    if (mode->Flags & V_NCSYNC) add(&flags,"-csync");
+-    xf86DrvMsgVerb(scrnIndex,X_INFO,3,
+-		   "Modeline \"%s\"  %6.2f  %i %i %i %i  %i %i %i %i %s\n",
+-		   mode->name,mode->Clock/1000., mode->HDisplay,
+-		   mode->HSyncStart,mode->HSyncEnd,mode->HTotal,
+-		   mode->VDisplay,mode->VSyncStart,mode->VSyncEnd,
+-		   mode->VTotal,flags);
++    if (mode->Flags & V_INTERLACE) add(&flags, "interlace");
++    if (mode->Flags & V_CSYNC) add(&flags, "composite");
++    if (mode->Flags & V_DBLSCAN) add(&flags, "doublescan");
++    if (mode->Flags & V_BCAST) add(&flags, "bcast");
++    if (mode->Flags & V_PHSYNC) add(&flags, "+hsync");
++    if (mode->Flags & V_NHSYNC) add(&flags, "-hsync");
++    if (mode->Flags & V_PVSYNC) add(&flags, "+vsync");
++    if (mode->Flags & V_NVSYNC) add(&flags, "-vsync");
++    if (mode->Flags & V_PCSYNC) add(&flags, "+csync");
++    if (mode->Flags & V_NCSYNC) add(&flags, "-csync");
++    xf86DrvMsgVerb(scrnIndex, X_INFO, 3,
++		   "Modeline \"%s\"  %6.2f  %i %i %i %i  %i %i %i %i%s\n",
++		   mode->name, mode->Clock/1000., mode->HDisplay,
++		   mode->HSyncStart, mode->HSyncEnd, mode->HTotal,
++		   mode->VDisplay, mode->VSyncStart, mode->VSyncEnd,
++		   mode->VTotal, flags);
+     xfree(flags);
+ }
+ 
+@@ -1897,8 +1892,13 @@
+ 	else
+ 	    prefix = "Mode";
+ 	if (hsync == 0 || refresh == 0) {
++	    if (p->name)
+ 	    xf86DrvMsg(scrp->scrnIndex, X_CONFIG,
+ 			"%s \"%s\"\n", prefix, p->name);
++	    else
++		xf86DrvMsg(scrp->scrnIndex, X_PROBED,
++			   "%s %dx%d (unnamed)\n", prefix, p->HDisplay,
++			    p->VDisplay);
+ 	} else if (p->Clock == p->SynthClock) {
+ 	    xf86DrvMsg(scrp->scrnIndex, X_CONFIG,
+ 			"%s \"%s\": %.1f MHz, %.1f kHz, %.1f Hz%s%s\n",
+diff -uNbr xc/programs/Xserver/hw/xfree86/common/xf86pciBus.c xc-new/programs/Xserver/hw/xfree86/common/xf86pciBus.c
+--- xc/programs/Xserver/hw/xfree86/common/xf86pciBus.c	Fri Nov 30 07:11:55 2001
++++ xc-new/programs/Xserver/hw/xfree86/common/xf86pciBus.c	Sun Aug 11 14:45:32 2002
+@@ -1,4 +1,4 @@
+-/* $XFree86: xc/programs/Xserver/hw/xfree86/common/xf86pciBus.c,v 3.48 2001/11/30 12:11:55 eich Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/xfree86/common/xf86pciBus.c,v 3.48.2.1 2002/01/25 20:51:33 tsi Exp $ */
+ /*
+  * Copyright (c) 1997-1999 by The XFree86 Project, Inc.
+  */
+@@ -1916,9 +1916,11 @@
+ 		pnPciBus = &PciBus->next;
+ 		PciBus->primary = -1;
+ 		PciBus->secondary = -1; /* to be set below */
++#ifndef __ia64__
+ 		PciBus->brbus = pcrp->busnum;
+ 		PciBus->brdev = pcrp->devnum;
+ 		PciBus->brfunc = pcrp->funcnum;
++#endif
+ 		PciBus->subclass = sub_class;
+ 		PciBus->brcontrol = PCI_PCI_BRIDGE_VGA_EN;
+ 		PciBus->preferred_io = xf86ExtractTypeFromList(
+diff -uNbr xc/programs/Xserver/hw/xfree86/drivers/vesa/vesa.c xc-new/programs/Xserver/hw/xfree86/drivers/vesa/vesa.c
+--- xc/programs/Xserver/hw/xfree86/drivers/vesa/vesa.c	Mon Oct  1 09:44:12 2001
++++ xc-new/programs/Xserver/hw/xfree86/drivers/vesa/vesa.c	Sun Aug 11 14:45:32 2002
+@@ -27,7 +27,7 @@
+  *
+  * Authors: Paulo César Pereira de Andrade <pcpa@conectiva.com.br>
+  *
+- * $XFree86: xc/programs/Xserver/hw/xfree86/drivers/vesa/vesa.c,v 1.24 2001/10/01 13:44:12 eich Exp $
++ * $XFree86: xc/programs/Xserver/hw/xfree86/drivers/vesa/vesa.c,v 1.24.4.1 2002/07/04 17:07:08 paulo Exp $
+  */
+ 
+ #include "vesa.h"
+@@ -524,9 +524,6 @@
+ 	xf86UnloadSubModule(pDDCModule);
+     }
+ 
+-    /* Set display resolution */
+-    xf86SetDpi(pScrn, 0, 0);
+-
+     if ((pScrn->monitor->DDC = pVesa->monitor) != NULL)
+ 	xf86SetDDCproperties(pScrn, pVesa->monitor);
+ 
+@@ -797,6 +794,9 @@
+     pScrn->displayWidth = pScrn->virtualX;
+ 
+     xf86PrintModes(pScrn);
++
++    /* Set display resolution */
++    xf86SetDpi(pScrn, 0, 0);
+ 
+     if (pScrn->modes == NULL) {
+ 	xf86DrvMsg(pScrn->scrnIndex, X_ERROR, "No modes\n");
+diff -uNbr xc/programs/Xserver/hw/xfree86/etc/Xinstall.sh xc-new/programs/Xserver/hw/xfree86/etc/Xinstall.sh
+--- xc/programs/Xserver/hw/xfree86/etc/Xinstall.sh	Thu Jan 17 15:54:23 2002
++++ xc-new/programs/Xserver/hw/xfree86/etc/Xinstall.sh	Sun Aug 11 14:45:32 2002
+@@ -1,7 +1,7 @@
+ #!/bin/sh
+ 
+ #
+-# $XFree86: xc/programs/Xserver/hw/xfree86/etc/Xinstall.sh,v 1.37 2002/01/17 20:54:23 dawes Exp $
++# $XFree86: xc/programs/Xserver/hw/xfree86/etc/Xinstall.sh,v 1.37.2.1 2002/02/05 22:51:04 torrey Exp $
+ #
+ # Copyright © 2000 by Precision Insight, Inc.
+ # Copyright © 2000, 2001 by VA Linux Systems, Inc.
+@@ -435,7 +435,7 @@
+ 			1.[2-3]*)
+ 				DistName="Darwin-ppc-1.x"
+ 				;;
+-			1.4.* | 5.*)
++			1.4* | 5.*)
+ 				DistName="Darwin-ppc-5.x"
+ 				;;
+ 			[6-9].*)
+@@ -448,7 +448,7 @@
+ 			;;
+ 		x86*)
+ 			case "$OsVersion" in
+-			1.4.* | 5.*)
++			1.4* | 5.*)
+ 				DistName="Darwin-ix86-5.x"
+ 				;;
+ 			[6-9].*)
+diff -uNbr xc/programs/Xserver/hw/xfree86/input/hyperpen/xf86HyperPen.c xc-new/programs/Xserver/hw/xfree86/input/hyperpen/xf86HyperPen.c
+--- xc/programs/Xserver/hw/xfree86/input/hyperpen/xf86HyperPen.c	Wed Dec 26 16:51:58 2001
++++ xc-new/programs/Xserver/hw/xfree86/input/hyperpen/xf86HyperPen.c	Sun Aug 11 14:45:32 2002
+@@ -35,7 +35,7 @@
+  * TORTIOUS ACTIONS, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+  * PERFORMANCE OF THIS SOFTWARE.
+  */
+-/* $XFree86: xc/programs/Xserver/hw/xfree86/input/hyperpen/xf86HyperPen.c,v 1.5 2001/12/26 21:51:58 dawes Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/xfree86/input/hyperpen/xf86HyperPen.c,v 1.5.2.1 2002/02/25 20:17:51 dawes Exp $ */
+ 
+ #include <xf86Version.h>
+ 
+@@ -1779,7 +1779,7 @@
+ 				/* a tool */
+ };
+ 
+-XF86ModuleData HyperPenModuleData = {&xf86HypVersionRec,
++XF86ModuleData hyperpenModuleData = {&xf86HypVersionRec,
+ 					xf86HypPlug,
+ 					xf86HypUnplug};
+ 
+diff -uNbr xc/programs/Xserver/hw/xfree86/os-support/bsd/bsd_mouse.c xc-new/programs/Xserver/hw/xfree86/os-support/bsd/bsd_mouse.c
+--- xc/programs/Xserver/hw/xfree86/os-support/bsd/bsd_mouse.c	Mon Jan 14 10:34:23 2002
++++ xc-new/programs/Xserver/hw/xfree86/os-support/bsd/bsd_mouse.c	Sun Aug 11 14:45:32 2002
+@@ -1,4 +1,4 @@
+-/* $XFree86: xc/programs/Xserver/hw/xfree86/os-support/bsd/bsd_mouse.c,v 1.20 2002/01/14 15:34:23 dawes Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/xfree86/os-support/bsd/bsd_mouse.c,v 1.20.2.1 2002/01/27 19:05:19 herrb Exp $ */
+ 
+ /*
+  * Copyright 1999 by The XFree86 Project, Inc.
+@@ -36,9 +36,6 @@
+ #define UMS_BUT(i) ((i) == 0 ? 2 : (i) == 1 ? 0 : (i) == 2 ? 1 : (i))
+ #endif /* USBMOUSE_SUPPORT */
+ 
+-#ifdef WSCONS_SUPPORT
+-static void wsconsSigioReadInput (int fd, void *closure);
+-#endif
+ #ifdef USBMOUSE_SUPPORT
+ static void usbSigioReadInput (int fd, void *closure);
+ #endif
+@@ -196,82 +193,6 @@
+ #if defined(WSCONS_SUPPORT)
+ #define NUMEVENTS 64
+ 
+-static int
+-wsconsMouseProc(DeviceIntPtr pPointer, int what)
+-{
+-    InputInfoPtr pInfo;
+-    MouseDevPtr pMse;
+-    unsigned char map[MSE_MAXBUTTONS + 1];
+-    int nbuttons;
+-
+-    pInfo = pPointer->public.devicePrivate;
+-    pMse = pInfo->private;
+-    pMse->device = pPointer;
+-
+-    switch (what) {
+-    case DEVICE_INIT: 
+-	pPointer->public.on = FALSE;
+-
+-	for (nbuttons = 0; nbuttons < MSE_MAXBUTTONS; ++nbuttons)
+-	    map[nbuttons + 1] = nbuttons + 1;
+-
+-	InitPointerDeviceStruct((DevicePtr)pPointer, 
+-				map, 
+-				min(pMse->buttons, MSE_MAXBUTTONS),
+-				miPointerGetMotionEvents, 
+-				pMse->Ctrl,
+-				miPointerGetMotionBufferSize());
+-
+-	/* X valuator */
+-	xf86InitValuatorAxisStruct(pPointer, 0, 0, -1, 1, 0, 1);
+-	xf86InitValuatorDefaults(pPointer, 0);
+-	/* Y valuator */
+-	xf86InitValuatorAxisStruct(pPointer, 1, 0, -1, 1, 0, 1);
+-	xf86InitValuatorDefaults(pPointer, 1);
+-	xf86MotionHistoryAllocate(pInfo);
+-	break;
+-
+-    case DEVICE_ON:
+-	pInfo->fd = xf86OpenSerial(pInfo->options);
+-	if (pInfo->fd == -1)
+-	    xf86Msg(X_WARNING, "%s: cannot open input device\n", pInfo->name);
+-	else {
+-	    pMse->buffer = XisbNew(pInfo->fd,
+-			      NUMEVENTS * sizeof(struct wscons_event));
+-	    if (!pMse->buffer) {
+-		xfree(pMse);
+-		xf86CloseSerial(pInfo->fd);
+-		pInfo->fd = -1;
+-	    } else {
+-		xf86FlushInput(pInfo->fd);
+-		if (!xf86InstallSIGIOHandler (pInfo->fd, wsconsSigioReadInput, pInfo))
+-		    AddEnabledDevice(pInfo->fd);
+-	    }
+-	}
+-	pMse->lastButtons = 0;
+-	pMse->emulateState = 0;
+-	pPointer->public.on = TRUE;
+-	break;
+-
+-    case DEVICE_OFF:
+-    case DEVICE_CLOSE:
+-	if (pInfo->fd != -1) {
+-	    RemoveEnabledDevice(pInfo->fd);
+-	    if (pMse->buffer) {
+-		XisbFree(pMse->buffer);
+-		pMse->buffer = NULL;
+-	    }
+-	    xf86CloseSerial(pInfo->fd);
+-	    pInfo->fd = -1;
+-	}
+-	pPointer->public.on = FALSE;
+-	usleep(300000);
+-	break;
+-    }
+-    return Success;
+-}
+-
+-
+ static void
+ wsconsReadInput(InputInfoPtr pInfo)
+ {
+@@ -328,12 +249,6 @@
+     return;
+ }
+ 
+-static void
+-wsconsSigioReadInput (int fd, void *closure)
+-{
+-    wsconsReadInput ((InputInfoPtr) closure);
+-}
+-
+ 
+ /* This function is called when the protocol is "wsmouse". */
+ static Bool
+@@ -365,8 +280,7 @@
+     /* Process common mouse options (like Emulate3Buttons, etc). */
+     pMse->CommonOptions(pInfo);
+ 
+-    /* Setup the local procs. */
+-    pInfo->device_control = wsconsMouseProc;
++    /* Setup the local input proc. */
+     pInfo->read_input = wsconsReadInput;
+ 
+     pInfo->flags |= XI86_CONFIGURED;
+diff -uNbr xc/programs/Xserver/hw/xfree86/xf86Version.h xc-new/programs/Xserver/hw/xfree86/xf86Version.h
+--- xc/programs/Xserver/hw/xfree86/xf86Version.h	Fri Jan 18 15:09:24 2002
++++ xc-new/programs/Xserver/hw/xfree86/xf86Version.h	Sun Aug 11 14:45:32 2002
+@@ -1,4 +1,4 @@
+-/* $XFree86: xc/programs/Xserver/hw/xfree86/xf86Version.h,v 3.487 2002/01/18 20:09:24 dawes Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/xfree86/xf86Version.h,v 3.487.2.3 2002/03/12 19:39:25 dawes Exp $ */
+ 
+ #ifndef XF86_VERSION_CURRENT
+ 
+@@ -24,7 +24,7 @@
+ 			0)
+ 
+ 
+-#define XF86_DATE	"18 January 2002"
++#define XF86_DATE	"11 March 2002"
+ 
+ #endif
+ 
+diff -uNbr xc/programs/Xserver/hw/xfree86/xf8_32bpp/xf86overlay.c xc-new/programs/Xserver/hw/xfree86/xf8_32bpp/xf86overlay.c
+--- xc/programs/Xserver/hw/xfree86/xf8_32bpp/xf86overlay.c	Sat Mar 25 15:14:43 2000
++++ xc-new/programs/Xserver/hw/xfree86/xf8_32bpp/xf86overlay.c	Sun Aug 11 14:45:32 2002
+@@ -1,4 +1,4 @@
+-/* $XFree86: xc/programs/Xserver/hw/xfree86/xf8_32bpp/xf86overlay.c,v 1.8 2000/03/25 20:14:43 mvojkovi Exp $ */
++/* $XFree86: xc/programs/Xserver/hw/xfree86/xf8_32bpp/xf86overlay.c,v 1.8.8.1 2002/02/11 00:07:42 dawes Exp $ */
+ 
+ /*
+    Copyright (C) 1998.  The XFree86 Project Inc.
+@@ -311,6 +311,7 @@
+ 
+ 	pmap->red[pScrn->colorKey].refcnt = AllocPrivate;
+ 	pmap->red[pScrn->colorKey].fShared = FALSE;
++	pmap->freeRed--;
+ 	
+ 	color.red = color.blue = color.green = 0;
+ 	color.pixel = pScrn->colorKey;
+diff -uNbr xc/programs/Xserver/os/xdmcp.c xc-new/programs/Xserver/os/xdmcp.c
+--- xc/programs/Xserver/os/xdmcp.c	Mon Nov 19 15:44:18 2001
++++ xc-new/programs/Xserver/os/xdmcp.c	Sun Aug 11 14:45:32 2002
+@@ -13,7 +13,7 @@
+  * without express or implied warranty.
+  *
+  */
+-/* $XFree86: xc/programs/Xserver/os/xdmcp.c,v 3.20 2001/11/19 20:44:18 tsi Exp $ */
++/* $XFree86: xc/programs/Xserver/os/xdmcp.c,v 3.20.4.1 2002/03/11 18:59:51 keithp Exp $ */
+ 
+ #ifdef WIN32
+ /* avoid conflicting definitions */
+@@ -660,34 +660,17 @@
+     pointer	    pReadmask)
+ {
+     fd_set *LastSelectMask = (fd_set*)pReadmask;
+-    CARD32 millisToGo, wtMillis;
+-    static struct timeval waittime;
++    CARD32 millisToGo;
+ 
+     if (state == XDM_OFF)
+ 	return;
+     FD_SET(xdmcpSocket, LastSelectMask);
+     if (timeOutTime == 0)
+ 	return;
+-    millisToGo = GetTimeInMillis();
+-    if (millisToGo < timeOutTime)
+-	millisToGo = timeOutTime - millisToGo;
+-    else
++    millisToGo = timeOutTime - GetTimeInMillis();
++    if ((int) millisToGo < 0)
+ 	millisToGo = 0;
+-    if (*wt == NULL)
+-    {
+-	waittime.tv_sec = (millisToGo) / 1000;
+-	waittime.tv_usec = 1000 * (millisToGo % 1000);
+-	*wt = &waittime;
+-    }
+-    else
+-    {
+-	wtMillis = (*wt)->tv_sec * 1000 + (*wt)->tv_usec / 1000;
+-	if (millisToGo < wtMillis)
+- 	{
+-	    (*wt)->tv_sec = (millisToGo) / 1000;
+-	    (*wt)->tv_usec = 1000 * (millisToGo % 1000);
+-	}
+-    }
++    AdjustWaitForDelay (wt, millisToGo);
+ }
+ 
+ /*
+@@ -726,7 +709,7 @@
+ 	if (XFD_ANYSET(&AllClients) && state == XDM_RUN_SESSION)
+ 	    timeOutTime = GetTimeInMillis() +  keepaliveDormancy * 1000;
+     }
+-    else if (timeOutTime && GetTimeInMillis() >= timeOutTime)
++    else if (timeOutTime && (int) (GetTimeInMillis() - timeOutTime) >= 0)
+     {
+     	if (state == XDM_RUN_SESSION)
+     	{
+diff -uNbr xc/programs/bitmap/Bitmap-nocase.ad xc-new/programs/bitmap/Bitmap-nocase.ad
+--- xc/programs/bitmap/Bitmap-nocase.ad	Wed Dec 31 19:00:00 1969
++++ xc-new/programs/bitmap/Bitmap-nocase.ad	Sun Aug 11 14:45:32 2002
+@@ -0,0 +1,233 @@
++! $Xorg: Bitmap.ad,v 1.3 2000/08/17 19:53:49 cpqbld Exp $
++!
++! $XFree86: xc/programs/bitmap/Bitmap-nocase.ad,v 1.1.2.1 2002/06/01 00:04:37 torrey Exp $
++!
++! The App-defaults file for Bitmap for use on file systems
++! that are not case sensitive.
++
++*TransientShell.allowShellResize:	True
++*shapeStyle:				oval
++*cursor:				left_ptr
++*pane.orientation:			horizontal
++
++*Form*top:				ChainTop
++*Form*bottom:				ChainTop
++*Form*left:				ChainLeft
++*Form*right:				ChainLeft
++
++*MenuButton.leftBitmap:			menu12
++*form*width:              		120
++*form*height:             		15
++
++*baseTranslations:#override\
++			Ctrl<Key>c:	do-quit()\n\
++			<Key>q:		do-quit()\n\
++			Ctrl<Key>n:	do-new()\n\
++			Ctrl<Key>f:	do-load()\n\
++			Ctrl<Key>i:	do-insert()\n\
++			Ctrl<Key>s:	do-save()\n\
++			Ctrl<Key>w:	do-save-as()\n\
++			Ctrl<Key>r:	do-resize()\n\
++			Ctrl<Key>x:	do-rescale()\n\
++			Ctrl<Key>e:	do-filename()\n\
++			Ctrl<Key>b:	do-basename()\n\
++			Meta<Key>i:	switch-image()\n\
++			Meta<Key>g:	switch-grid()\n\
++			Meta<Key>d:	switch-dashed()\n\
++			Meta<Key>a:	switch-axes()\n\
++			Meta<Key>s:	switch-stippled()\n\
++			Meta<Key>p:	switch-proportional()\n\
++			Meta<Key>z:	switch-zoom()\n\
++			Meta<Key>c:	do-cut()\n\
++			Meta<Key>w:	do-copy()\n\
++			Meta<Key>y:	do-paste()
++
++
++*Toggle.translations:	<EnterWindow>:		highlight(WhenUnset)\n\
++			<LeaveWindow>:		unhighlight()\n\
++			<Btn1Down>,<Btn1Up>: 	set() notify()
++
++*MenuButton.translations:<EnterWindow>:		highlight()\n\
++			<LeaveWindow>:  	reset()\n\
++			Any<BtnDown>:  		reset() fix-menu() PopupMenu()
++
++*Dialog*baseTranslations:#override\
++			<Key>Return:	set-dialog-button(okay, yes, retry)\n\
++			Ctrl<Key>g:	set-dialog-button(cancel, abort)
++*image*baseTranslations:#override\
++			<Btn1Down>,<Btn1Up>:	switch-image()
++*image*width: 0
++*image*height: 0
++*image*Label.internalWidth: 0
++*image*Label.internalHeight: 0
++*image*normalImage.foreground: white
++*image*normalImage.background: black
++*image*invertedImage.foreground: black
++*image*invertedImage.background: white
++
++*bitmap.cursor:           		tcross
++*bitmap.dashes:				Dashes
++*bitmap.stipple:			Stippler
++*bitmap.stippled:			on
++
++*TransientShell.width:			300
++
++*input*icon:				Term
++*qsave*icon:				Term
++*error*icon:				Excl
++*Dialog.yes.label:			Yes
++*Dialog.no.label:			No
++*Dialog.okay.label:			OK
++*Dialog.abort.label:			Abort
++*Dialog.cancel.label:			Cancel
++*Dialog.retry.label:			Retry
++
++*MenuButton.width:			58
++
++*SimpleMenu.width:			0
++*SimpleMenu.height:			0
++*SimpleMenu.cursor:			hand2
++*SimpleMenu.line.height:		0
++
++*fileButton.label:			File
++*fileButton.menuName:			fileMenu
++
++*editButton.label:			Edit
++*editButton.fromHoriz: 			fileButton
++*editButton.menuName:			editMenu
++
++*formy.status*top:			ChainTop
++*formy.status*bottom:			ChainTop
++*formy.status*left:			ChainLeft
++*formy.status*right:			ChainRight
++*status.fromHoriz:			editButton
++*status.borderWidth:			0
++
++*SmeBSB.HorizontalMargins:		32
++
++*fileMenu.new.label:			New (Ctrl-N)...
++*fileMenu.load.label:			Load (Ctrl-F)...   
++*fileMenu.insert.label:			Insert (Ctrl-I)... 
++*fileMenu.save.label:			Save (Ctrl-S)
++*fileMenu.saveAs.label:			Save As (Ctrl-W)...
++*fileMenu.resize.label:			Resize (Ctrl-R)... 
++*fileMenu.rescale.label:		Rescale (Ctrl-X)...
++*fileMenu.filename.label:		Filename (Ctrl-E)...
++*fileMenu.basename.label:		Basename (Ctrl-B)...
++*fileMenu.quit.label:			Quit (Ctrl-C, Q)
++
++*editMenu.image.label:			Image (Meta-I)
++*editMenu.grid.label:			Grid (Meta-G)
++*editMenu.dashed.label:			Dashed (Meta-D)
++*editMenu.axes.label:			Axes (Meta-A)
++*editMenu.stippled.label:		Stippled (Meta-S)
++*editMenu.proportional.label:		Proportional (Meta-P)
++*editMenu.zoom.label:			Zoom (Meta-Z)
++*editMenu.cut.label:			Cut (Meta-C)
++*editMenu.copy.label:			Copy (Meta-W)
++*editMenu.paste.label:			Paste (Meta-Y, Ctrl-mb)
++
++*form.clear.label:			Clear
++*form.set.fromVert: 			clear
++*form.set.label:			Set
++*form.invert.fromVert: 			set
++*form.invert.label:			Invert
++
++*form.mark.vertDistance:		10
++*form.mark.fromVert:			invert
++*form.mark.label:			Mark
++*form.unmark.fromVert:              	mark
++*form.unmark.label:			Unmark
++
++*form.copy.vertDistance:		10
++*form.copy.fromVert: 			unmark
++*form.copy.radioGroup:			mark
++*form.copy.label:			Copy
++*form.move.fromVert: 			copy
++*form.move.radioGroup:			copy
++*form.move.label:			Move
++
++*form.flipHoriz.vertDistance:		10
++*form.flipHoriz.width:			36
++*form.flipHoriz.height:			36
++*form.flipHoriz.fromVert: 		move
++*form.flipHoriz.bitmap:			FlipHoriz
++*form.up.vertDistance:			10
++*form.up.width:				36
++*form.up.height:			36
++*form.up.fromVert: 			move
++*form.up.fromHoriz:			flipHoriz
++*form.up.bitmap:			Up
++*form.flipVert.vertDistance:		10
++*form.flipVert.width:			36
++*form.flipVert.height:			36
++*form.flipVert.fromVert: 		move
++*form.flipVert.fromHoriz:		up
++*form.flipVert.bitmap:			FlipVert
++*form.left.width:			36
++*form.left.height:			36
++*form.left.fromVert: 			flipHoriz
++*form.left.bitmap:			Left
++*form.fold.width:			36
++*form.fold.height:			36
++*form.fold.fromVert: 			up
++*form.fold.fromHoriz: 			left
++*form.fold.bitmap:			Fold
++*form.right.width:			36
++*form.right.height:			36
++*form.right.fromVert: 			flipVert
++*form.right.fromHoriz: 			fold
++*form.right.bitmap:			Right
++*form.rotateLeft.width:			36
++*form.rotateLeft.height:		36
++*form.rotateLeft.fromVert:		left
++*form.rotateLeft.bitmap:		RotateLeft
++*form.down.width:			36
++*form.down.height:			36
++*form.down.fromVert: 			fold
++*form.down.fromHoriz: 			rotateLeft
++*form.down.bitmap:			Down
++*form.rotateRight.width:		36
++*form.rotateRight.height:		36
++*form.rotateRight.fromVert:		right
++*form.rotateRight.fromHoriz:		down
++*form.rotateRight.bitmap:		RotateRight
++
++*form.point.vertDistance:		10
++*form.point.fromVert: 			rotateLeft
++*form.point.radioGroup:  		move
++*form.point.label:			Point
++*form.curve.fromVert: 			point
++*form.curve.radioGroup:  		point
++*form.curve.label:			Curve
++*form.line.fromVert: 			curve
++*form.line.radioGroup: 			curve
++*form.line.label:			Line
++*form.rectangle.fromVert: 		line
++*form.rectangle.radioGroup:  		line
++*form.rectangle.label:			Rectangle
++*form.filledRectangle.fromVert: 	rectangle
++*form.filledRectangle.radioGroup:  	rectangle
++*form.filledRectangle.label:		Filled Rectangle
++*form.circle.fromVert: 			filledRectangle
++*form.circle.radioGroup:  		filledRectangle
++*form.circle.label:			Circle
++*form.filledCircle.fromVert: 		circle
++*form.filledCircle.radioGroup:  	circle
++*form.filledCircle.label:		Filled Circle
++*form.floodFill.fromVert:		filledCircle
++*form.floodFill.radioGroup:  		filledCircle
++*form.floodFill.label:			Flood Fill
++
++*form.setHotSpot.vertDistance:		10
++*form.setHotSpot.fromVert: 		floodFill
++*form.setHotSpot.radioGroup:  		floodFill
++*form.setHotSpot.label:			Set Hot Spot
++*form.clearHotSpot.fromVert: 		setHotSpot
++*form.clearHotSpot.label:		Clear Hot Spot
++
++*form.undo.vertDistance:		10
++*form.undo.fromVert:			clearHotSpot
++*form.undo.label:			Undo
++
++
+diff -uNbr xc/programs/bitmap/Imakefile xc-new/programs/bitmap/Imakefile
+--- xc/programs/bitmap/Imakefile	Wed Jan 17 18:44:51 2001
++++ xc-new/programs/bitmap/Imakefile	Sun Aug 11 14:45:32 2002
+@@ -3,8 +3,9 @@
+ 
+ 
+ 
+-XCOMM $XFree86: xc/programs/bitmap/Imakefile,v 3.5 2001/01/17 23:44:51 dawes Exp $
++XCOMM $XFree86: xc/programs/bitmap/Imakefile,v 3.5.6.1 2002/06/01 00:04:37 torrey Exp $
+ 
++#if CaseSensitiveFileSystem
+ BUTTONPICTURES = \
+ 	Dashes \
+ 	Down \
+@@ -19,6 +20,24 @@
+ 	Stipple \
+ 	Term \
+ 	Up
++#else
++LinkFile(Stippler,Stipple)
++
++BUTTONPICTURES = \
++	Dashes \
++	Down \
++	Excl \
++	FlipHoriz \
++	FlipVert \
++	Fold \
++	Left \
++	Right \
++	RotateLeft \
++	RotateRight \
++	Stippler \
++	Term \
++	Up
++#endif
+ 
+ #if HasMkstemp
+   MKTMP_DEFINES = -DHAS_MKSTEMP
+@@ -42,7 +61,11 @@
+ 
+ BuildIncludes($(BUTTONPICTURES),X11/bitmaps,../..)
+ 
++#if CaseSensitiveFileSystem
+ InstallAppDefaults(Bitmap)
++#else
++InstallAppDefaultsLong(Bitmap-nocase,Bitmap)
++#endif
+ InstallAppDefaultsLong(Bitmap-co,Bitmap-color)
+ InstallMultipleDestFlags(install,$(BUTTONPICTURES),$(INCDIR)/X11/bitmaps,$(INSTINCFLAGS))
+ 
+diff -uNbr xc/programs/scripts/xon.sh xc-new/programs/scripts/xon.sh
+--- xc/programs/scripts/xon.sh	Mon Jan  7 17:00:32 2002
++++ xc-new/programs/scripts/xon.sh	Sun Aug 11 14:45:32 2002
+@@ -1,5 +1,6 @@
+ #!/bin/sh
+ # $Xorg: xon.sh,v 1.4 2000/12/20 16:50:07 pookie Exp $
++# $XFree86: xc/programs/scripts/xon.sh,v 1.5.2.1 2002/01/28 18:27:33 tsi Exp $
+ # start up xterm (or any other X command) on the specified host
+ # Usage: xon host [arguments] [command]
+ 
+@@ -47,7 +48,11 @@
+ :*)
+ 	case `uname` in
+ 	Linux*)
++		if [ -z "`hostname --version | grep GNU`" ]; then
+ 		fullname=`hostname -f`
++		else
++			fullname=`hostname`
++		fi
+ 		;;
+ 	*)
+ 	fullname=`uname -n`
+diff -uNbr xc/programs/xedit/Xedit-color.ad xc-new/programs/xedit/Xedit-color.ad
+--- xc/programs/xedit/Xedit-color.ad	Sat Aug 28 05:01:20 1999
++++ xc-new/programs/xedit/Xedit-color.ad	Sun Aug 11 14:45:32 2002
+@@ -1,4 +1,4 @@
+-! $XFree86: xc/programs/xedit/Xedit-color.ad,v 1.6 1999/08/28 09:01:20 dawes Exp $
++! $XFree86: xc/programs/xedit/Xedit-color.ad,v 1.6.8.1 2002/07/04 17:07:11 paulo Exp $
+ 
+ #include "Xedit"
+ 
+@@ -168,4 +168,4 @@
+ integer?foreground=OrangeRed3&font=*courier-bold-r*12*,\
+ float?foreground=OrangeRed3&font=*courier-bold-r*12*&overstrike&underline,\
+ punctuation?foreground=gray12&font=*courier-bold-r*12*,\
+-error?foreground=yellow&background=red&font=*new century schoolbook-bold*25*
++error?foreground=yellow&background=red&font=*new century schoolbook-bold*24*
+diff -uNbr xc/programs/xinit/startx.cpp xc-new/programs/xinit/startx.cpp
+--- xc/programs/xinit/startx.cpp	Fri Nov 30 15:57:48 2001
++++ xc-new/programs/xinit/startx.cpp	Sun Aug 11 14:45:32 2002
+@@ -11,7 +11,7 @@
+ XCOMM
+ XCOMM Site administrators are STRONGLY urged to write nicer versions.
+ XCOMM
+-XCOMM $XFree86: xc/programs/xinit/startx.cpp,v 3.12 2001/11/30 20:57:48 dawes Exp $
++XCOMM $XFree86: xc/programs/xinit/startx.cpp,v 3.12.2.2 2002/01/28 18:27:34 tsi Exp $
+ 
+ #ifdef SCO
+ 
+@@ -139,24 +139,30 @@
+ fi
+ 
+ if [ x"$XAUTHORITY" = x ]; then
+-    export XAUTHORITY=$HOME/.Xauthority
++    XAUTHORITY=$HOME/.Xauthority
++    export XAUTHORITY
+ fi
+ 
+ removelist=
+ 
+ #if defined(HAS_COOKIE_MAKER) && defined(MK_COOKIE)
+ XCOMM set up default Xauth info for this machine
+-#ifndef HOSTNAME
+-#ifdef __linux__
+-#define HOSTNAME hostname -f
+-#else
+-#define HOSTNAME hostname
+-#endif
+-#endif
++case `uname` in
++Linux*)
++	if [ -z "`hostname --version | grep GNU`" ]; then
++		hostname=`hostname -f`
++	else
++		hostname=`hostname`
++	fi
++	;;
++*)
++	hostname=`hostname`
++	;;
++esac
+ 
+ authdisplay=${display:-:0}
+ mcookie=`MK_COOKIE`
+-for displayname in $authdisplay `HOSTNAME`$authdisplay; do
++for displayname in $authdisplay $hostname$authdisplay; do
+     if ! xauth list "$displayname" | grep "$displayname " >/dev/null 2>&1; then
+ 	xauth add $displayname . $mcookie
+ 	removelist="$displayname $removelist"
+diff -uNbr xc/programs/xterm/Tekproc.c xc-new/programs/xterm/Tekproc.c
+--- xc/programs/xterm/Tekproc.c	Sat Jan  5 17:05:02 2002
++++ xc-new/programs/xterm/Tekproc.c	Sun Aug 11 14:45:32 2002
+@@ -104,7 +104,7 @@
+ #include <Tekparse.h>
+ #include <data.h>
+ #include <error.h>
+-#include <menu.h>
++#include "menu.h"
+ 
+ #ifdef MINIX
+ #include <sys/nbio.h>
+diff -uNbr xc/programs/xterm/button.c xc-new/programs/xterm/button.c
+--- xc/programs/xterm/button.c	Sat Jan  5 20:34:23 2002
++++ xc-new/programs/xterm/button.c	Sun Aug 11 14:45:32 2002
+@@ -71,7 +71,7 @@
+ 
+ #include <data.h>
+ #include <error.h>
+-#include <menu.h>
++#include "menu.h"
+ #include <xcharmouse.h>
+ 
+ #if OPT_WIDE_CHARS
+diff -uNbr xc/programs/xterm/charproc.c xc-new/programs/xterm/charproc.c
+--- xc/programs/xterm/charproc.c	Mon Jan  7 16:02:44 2002
++++ xc-new/programs/xterm/charproc.c	Sun Aug 11 14:45:32 2002
+@@ -122,7 +122,7 @@
+ #include <VTparse.h>
+ #include <data.h>
+ #include <error.h>
+-#include <menu.h>
++#include "menu.h"
+ #include <main.h>
+ #include <fontutils.h>
+ #include <xcharmouse.h>
+diff -uNbr xc/programs/xterm/fontutils.c xc-new/programs/xterm/fontutils.c
+--- xc/programs/xterm/fontutils.c	Mon Jun 18 15:09:26 2001
++++ xc-new/programs/xterm/fontutils.c	Sun Aug 11 14:45:32 2002
+@@ -43,7 +43,7 @@
+ #include <fontutils.h>
+ 
+ #include <data.h>
+-#include <menu.h>
++#include "menu.h"
+ #include <xstrings.h>
+ #include <xterm.h>
+ 
+diff -uNbr xc/programs/xterm/main.c xc-new/programs/xterm/main.c
+--- xc/programs/xterm/main.c	Mon Jan  7 13:35:41 2002
++++ xc-new/programs/xterm/main.c	Sun Aug 11 14:45:32 2002
+@@ -113,7 +113,7 @@
+ 
+ #include <data.h>
+ #include <error.h>
+-#include <menu.h>
++#include "menu.h"
+ #include <main.h>
+ #include <xstrings.h>
+ #include <xterm_io.h>
+diff -uNbr xc/programs/xterm/menu.c xc-new/programs/xterm/menu.c
+--- xc/programs/xterm/menu.c	Sat Jan  5 17:05:03 2002
++++ xc-new/programs/xterm/menu.c	Sun Aug 11 14:45:32 2002
+@@ -50,7 +50,7 @@
+ 
+ #include <xterm.h>
+ #include <data.h>
+-#include <menu.h>
++#include "menu.h"
+ #include <fontutils.h>
+ 
+ #include <X11/StringDefs.h>
+diff -uNbr xc/programs/xterm/misc.c xc-new/programs/xterm/misc.c
+--- xc/programs/xterm/misc.c	Tue Oct 23 21:21:24 2001
++++ xc-new/programs/xterm/misc.c	Sun Aug 11 14:45:32 2002
+@@ -79,7 +79,7 @@
+ 
+ #include <data.h>
+ #include <error.h>
+-#include <menu.h>
++#include "menu.h"
+ #include <fontutils.h>
+ #include <xcharmouse.h>
+ #include <xstrings.h>
+diff -uNbr xc/programs/xterm/os2main.c xc-new/programs/xterm/os2main.c
+--- xc/programs/xterm/os2main.c	Sat Jan  5 17:05:03 2002
++++ xc-new/programs/xterm/os2main.c	Sun Aug 11 14:45:33 2002
+@@ -85,7 +85,7 @@
+ 
+ #include <data.h>
+ #include <error.h>
+-#include <menu.h>
++#include "menu.h"
+ #include <main.h>
+ #include <xstrings.h>
+ #include <xterm_io.h>
+diff -uNbr xc/programs/xterm/scrollbar.c xc-new/programs/xterm/scrollbar.c
+--- xc/programs/xterm/scrollbar.c	Sat Sep  8 21:07:26 2001
++++ xc-new/programs/xterm/scrollbar.c	Sun Aug 11 14:45:33 2002
+@@ -66,7 +66,7 @@
+ 
+ #include <data.h>
+ #include <error.h>
+-#include <menu.h>
++#include "menu.h"
+ #include <xcharmouse.h>
+ 
+ /* Event handlers */
+diff -uNbr xc/programs/xterm/util.c xc-new/programs/xterm/util.c
+--- xc/programs/xterm/util.c	Sat Jan  5 17:05:03 2002
++++ xc-new/programs/xterm/util.c	Sun Aug 11 14:45:33 2002
+@@ -62,7 +62,7 @@
+ 
+ #include <data.h>
+ #include <error.h>
+-#include <menu.h>
++#include "menu.h"
+ #include <fontutils.h>
+ 
+ #if OPT_WIDE_CHARS
