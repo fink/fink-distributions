@@ -550,7 +550,7 @@ sub build_finkout {
 sub display_uptime {
   get_uname();    
 
-  unless ($UNAME =~ /^darwin/i) {
+  unless ($UNAME =~ m/darwin/i) {
     $out = "System Unsupported, install Darwin and try again...";
     IRC::command("/say $out");
     return 1;
@@ -568,12 +568,12 @@ sub display_fink {
   get_uname();
 
   unless ($ENABLEFINK =~ m/true/i) {
-    $out = "System Unsupported, install Darwin and try again...";
+    $out = "Fink reporting is currently disabled, /enable fink to enable it.";
     IRC::command("/say $out");
     return 1;
   }
 
-  unless ($UNAME =~ /^darwin/i) {
+  unless ($UNAME =~ m/darwin/i) {
     $out = "System Unsupported, install Darwin and try again...";
     IRC::command("/say $out");
     return 1;
@@ -603,7 +603,7 @@ sub display_fink {
 sub display_info {
   get_uname();
 
-  unless ($UNAME =~ /^darwin/i) {
+  unless ($UNAME =~ m/darwin/i) {
     $out = "System Unsupported, install Darwin and try again...";
     IRC::command("/say $out");
     return 1;
