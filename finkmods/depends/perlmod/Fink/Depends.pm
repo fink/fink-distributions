@@ -128,7 +128,7 @@ sub get_shlibs_dep {
 
 sub check_pkg {
   my $pkgname = shift;
-  my (@depends, $depend, @files, $file, @matches, $match, $vers, $deb);
+  my (@depends, $depend, @files, $file, $vers, $deb);
 
   # get files to test
   open(DPKG, "dpkg --listfiles $pkgname 2>/dev/null |") or die "can't run dpkg: $!\n";
@@ -148,32 +148,22 @@ sub check_pkg {
       while (<OTOOL>) {
         chomp();
         next if ("$_" =~ /\:/);			# Nuke first line and errors
-        if ("$_" =~ /\/usr\/lib\// || "$_" =~ /\/System\/Library/) {
-          if ($_ =~ /compatibility version ([.0-9]+)/) {
-            $vers = $1;
-          }
-          $_ =~ s/\ \(.*$//;			# Nuke the end
-          $_ = $_." (>= ".$vers.")";
-          $_ =~ s/^[\s|\t]+//;
-          $_ =~ s/[\s|\t]+$//;
-          push(@depends, $_);
+        if ($_ =~ /compatibility version ([.0-9]+)/) {
+          $vers = $1;
         }
         $_ =~ s/\ \(.*$//;			# Nuke the end
         $_ =~ s/^[\s|\t]+//;
         $_ =~ s/[\s|\t]+$//;
-        push(@matches, $_);
+        if (length($_) > 1) {
+          $deb = Fink::Shlibs->get_shlib($_);
+          if (length($deb) > 1) {
+            push(@depends, $deb);
+          } else {
+            push(@depends, "$_ (>= $vers)");
+          }
+        }
       }
     close (OTOOL);
-   }
-
-   # get list of depend pkgs
-   foreach $match (@matches) {
-    if (length($match) > 1) {
-      $deb = Fink::Shlibs->get_shlib($match);
-      if (length($deb) > 1) {
-        push(@depends, $deb);
-      }
-    }
   }
  
   return @depends;
