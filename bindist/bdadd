@@ -1,0 +1,108 @@
+#!/usr/bin/perl
+
+$| = 1;
+require 5.006;  # perl 5.6.0 or newer required
+use strict;
+
+my $base = $ENV{BDBASE};
+chdir $base or die "bindist base \"$base\" is bogus, set env var BDBASE\n";
+
+my ($currel, $dest);
+if (exists $ENV{CURREL} and defined $ENV{CURREL}) {
+  $currel = $ENV{CURREL};
+} else {
+  chomp($currel = `cat $ENV{BDDATA}/current`);
+}
+my $dest = "dists/$currel/main";
+my $dest_crypto = "dists/$currel/crypto";
+
+### now load the useful modules
+
+use Fink::Services qw(&read_config &filename &execute);
+use Fink::Config;
+use Fink::Package;
+use Fink::PkgVersion;
+
+### read config
+
+my $config = &read_config("/sw/etc/fink.conf");
+
+### read package info
+
+Fink::Package->require_packages();
+
+### loop over packages
+
+my ($pkgspec, $pkgname, $po, $fn, $todir, $tofn, $linkpath, $i, $section);
+
+foreach $pkgspec (@ARGV) {
+  $po = Fink::PkgVersion->match_package($pkgspec);
+  if (not defined($po)) {
+    print "ERROR: can't resolve \"$pkgspec\"\n";
+    next;
+  }
+  $pkgname = $po->get_fullname();
+
+  $fn = $po->find_debfile();
+  if (not defined($fn)) {
+    print "ERROR: no binary package for $pkgname\n";
+    next;
+  }
+  $section = $po->get_section();
+  if ($section eq "crypto") {
+    $todir = $dest_crypto."/binary-darwin-powerpc";
+  } else {
+    $todir = $dest."/binary-darwin-powerpc/".$section;
+  }
+  $tofn = $todir."/".&filename($fn);
+  if (not -d $todir) {
+    &execute("mkdir -p $todir");
+  }
+# HACK - we want to keep existing .debs for now
+#  if (not -e $tofn) {
+#    &execute("cp $fn $tofn");
+#  }
+   if (-e $tofn) {
+     &execute("rm -f $tofn");
+   }
+   &execute("cp $fn $tofn");
+
+  for ($i = 1; $i < 10; $i++) {
+    $fn = $po->get_tarball($i);
+    last if not defined($fn);
+    last if $fn eq "-";
+
+    if (not -f "source/$fn") {
+      system('mkdir -p source');
+      $fn = $po->find_tarball($i);
+      if (not defined($fn)) {
+	print "WARNING: can't find source package \"".$po->get_tarball($i)."\" for $pkgname\n";
+	next;
+      }
+      $tofn = "source/".&filename($fn);
+      &execute("cp $fn $tofn");
+    }
+
+    if ($section eq "crypto") {
+      $todir = $dest_crypto."/source";
+      # Crypto currently has no sections, so one ../ less
+      $linkpath = "../../../../source/";
+    } else {
+      $todir = $dest."/source/".$section;
+      $linkpath = "../../../../../source/";
+      # HACK: we need to cope with e.g. libs/perlmods - add one ../
+      if ($section =~ /\//) {
+	$linkpath = "../".$linkpath;
+      }
+    }
+    $tofn = $todir."/".&filename($fn);
+    if (not -f $tofn) {
+      if (not -d $todir) {
+	&execute("mkdir -p $todir");
+      }
+      &execute("ln -s $linkpath".&filename($fn)." $tofn");
+    }
+  }
+}
+&execute("chmod -R g+w ".$dest);
+exit 0;

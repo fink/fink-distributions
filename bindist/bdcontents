@@ -1,0 +1,128 @@
+#!/usr/bin/perl
+use strict;
+
+my ($currel, $dest);
+if (exists $ENV{CURREL} and defined $ENV{CURREL}) {
+  $currel = $ENV{CURREL};
+} else {
+  chomp($currel = `cat $ENV{BDDATA}/current`);
+}
+
+my $base = "$ENV{BDBASE}dists/$currel";
+chdir $base or die "bindist base \"$base\" is bogus, set env var BDBASE\n";
+
+my @dists = ("main", "crypto");
+my @deblist = ();
+my $contentfile = "Contents-darwin-powerpc";
+my (%filelist, $file);
+my $line;
+
+use File::Find;
+
+sub get_debs {
+  my $directory = shift;
+  my $wanted;
+
+  # search for .deb files
+  $wanted =
+    sub {
+      if (-f and not /^[\.#]/ and /\.deb$/) {
+        push @deblist, $File::Find::name;
+      }
+    };
+  find({ wanted => $wanted, follow => 1, no_chdir => 1 }, $directory);
+}
+
+my ($dist, $deb);
+
+print "Building deb list...";
+foreach $dist (@dists) {
+  get_debs("$dist/binary-darwin-powerpc");
+}
+print "Done.\n";
+
+print "Writing $contentfile...";
+open(FILE,">$contentfile") or die "can't open $contentfile: $!";
+  print FILE <<EOF;
+This file maps each file available in the Fink package management system to
+the package from which it originates.  It includes packages from the
+DIST distribution for the ARCH architecture.
+
+You can use this list to determine which package contains a specific
+file, or whether or not a specific file is available.  The list is
+updated as oftend as possible.
+
+When a file is contained in more than one package, all packages are
+listed.  When a directory is contained in more than one package, only
+the first is listed.
+
+The best way to search quickly for a file is with the Unix `grep'
+utility, as in `grep <regular expression> CONTENTS':
+
+ \$ grep nose Contents
+ etc/nosendfile                                          net/sendfile
+ usr/X11R6/bin/noseguy                                   x11/xscreensaver
+ usr/X11R6/man/man1/noseguy.1x.gz                        x11/xscreensaver
+ usr/doc/examples/ucbmpeg/mpeg_encode/nosearch.param     graphics/ucbmpeg
+ usr/lib/cfengine/bin/noseyparker                        admin/cfengine
+
+This list contains files in all packages, even though not all of the
+packages are installed on an actual system at once.  If you want to
+find out which packages on an installed Debian system provide a
+particular file, you can use `dpkg --search <filename>':
+
+ \$ dpkg --search /usr/bin/dselect
+ dpkg: /usr/bin/dselect
+
+
+FILE                                                    LOCATION
+EOF
+
+  foreach $deb (@deblist) {
+    # take everything between the binary directory and the filename
+    my ($section)  = $deb =~ m,binary-darwin-powerpc/(.+)/[^/]+$,;
+
+    # take the last chunk when splitting on / (the filename), and then
+    # use the first chunk when splitting on _ of that  ;)
+    my ($filename) = reverse(split(/\/+/, $deb));
+    my ($packname) = split(/_/, $filename);
+
+    foreach $file (`dpkg -c $base/$deb`) {
+      if ($file =~ /^(.*)\.(\/sw.*)/) {
+        $file = $2;
+        # fix for symlinks
+        $file =~ s/ -> .*$//;
+        if ($file !~ /\/$/) {
+          # $filelist{'/sw/bin/fink'} is an array reference, containing
+          # a list of section/package pairs
+          ### FIXME: needs to avoid dup entries on section/pkgname in case
+          ### two versions of a pkgname in bindist or maybe append versions?
+          push (@{$filelist{$file}}, "$section/$packname");
+        }
+      }
+    }
+  }
+
+  ### FORMAT is:
+  ###  /path/to/file<TAB>section/pkg(,section/pkg)
+
+  foreach $file (sort keys %filelist) {
+    ## FIXME: need to make it into two columns but works like this for now.
+    $line = sprintf("%s\t%s\n", $file, @{$filelist{$file}});
+    print FILE $line;
+  }
+
+close(FILE) or die "can't write $contentfile: $!\n";
+print "Done.\n";
+
+if (-f "$contentfile.gz") {
+  print "Removing old $contentfile.gz...";
+  system("rm $contentfile.gz");
+  print "Done.\n";
+}
+
+print "Compressing $contentfile...";
+system("gzip $contentfile");
+print "Done.\n\n";
+
+exit 0;
