@@ -686,18 +686,31 @@ sub get_devinfo {
     my $infoline;
     my @gcc_vers = `cc --version`;
     if (-d "/Developer/Applications/Project\ Builder.app") {
-        my @dev_vers = `cat \"/Developer/Applications/Project\ Builder.app/Contents/Resources/English.lproj/DevCDVersion.plist\"`;
+      my @dev_vers = `cat \"/Developer/Applications/Project\ Builder.app/Contents/Resources/English.lproj/DevCDVersion.plist\"`;
+      foreach $infoline (@dev_vers) {
+        chomp($infoline);
+        if ($infoline =~ /^.* = \"(.*)\";/) {
+          $TOOLVERS = "$1";
+        }
+      }
     } else {
-        my @dev_vers = `cat \"/Developer/Applications/Xcode.app/Contents/Resources/DevCDVersion.plist\"`;
-    }
-
-    foreach $infoline (@dev_vers) {
-      chomp($infoline);
-      if ($infoline =~ /^.* = \"(.*)\";/) {
-        $TOOLVERS = "$1";
+      my @dev_vers = `cat /Developer/Applications/Xcode.app/Contents/version.plist`;
+      my $nextline = 0;
+      foreach $infoline (@dev_vers) {
+        chomp($infoline);
+        if ($nextline) {
+          if ($infoline =~ /\<string\>(.+)\<\/string\>/) {
+            $TOOLVERS = "$1";
+          }
+          $nextline = 0;
+        } else {
+          if ($infoline =~ /ProductBuildVersion/) {
+            $nextline = 1;
+          }
+        }
       }
     }
-    
+
     foreach $infoline (@gcc_vers) {
       chomp($infoline);
       if ($infoline =~ /^cc \(GCC\) ([0-9.]+.*)/) {
@@ -709,7 +722,7 @@ sub get_devinfo {
 
     # now find the cctools version
     if (-x "/usr/bin/ld") {
-      foreach(`what /usr/bin/ld`) {
+      foreach(`/usr/bin/ld -v`) {
         if (/cctools-(\d+)/) {
          $TOOLBUILD = $1;
          last;
