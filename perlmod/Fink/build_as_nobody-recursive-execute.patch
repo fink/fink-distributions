@@ -1,0 +1,77 @@
+Index: ChangeLog
+===================================================================
+RCS file: /cvsroot/fink/fink/perlmod/Fink/ChangeLog,v
+retrieving revision 1.789
+diff -u -r1.789 ChangeLog
+--- ChangeLog	2 Jan 2005 15:56:49 -0000	1.789
++++ ChangeLog	5 Jan 2005 16:26:32 -0000
+@@ -1,3 +1,8 @@
++2005-01-03  Daniel Macks  <dmacks@netspace.org>
++
++	* Services.pm: rewrite build_as_nobody in execute() to use
++	recursive wrapper (cuts down on system.log polution).
++	
+ 2005-01-02  Dave Morrison  <dmrrsn@users.sourceforge.net>
+ 
+ 	* all: updated Copyright notice
+Index: Services.pm
+===================================================================
+RCS file: /cvsroot/fink/fink/perlmod/Fink/Services.pm,v
+retrieving revision 1.137
+diff -u -r1.137 Services.pm
+--- Services.pm	2 Jan 2005 15:56:59 -0000	1.137
++++ Services.pm	5 Jan 2005 16:26:38 -0000
+@@ -430,10 +430,6 @@
+ 	my %options = ( defined $_[0] ? @_ : () );
+ 	my ($retval, $cmd);
+ 
+-	# preprocess the script, making executable tempfile if necessary
+-	my $is_tempfile = &prepare_script(\$script);
+-	return 0 if not defined $script;
+-
+ 	# drop root if requested
+ 	my $drop_root = $options{'nonroot_okay'} && Fink::Config::get_option("build_as_nobody") == 1;
+ 	if ($drop_root && $< != 0) {
+@@ -441,6 +437,33 @@
+ 		return 1;
+ 	}
+ 
++	# to drop root, we wrap the given $script in a formal (with #!
++	# line) perl script that passes the original back to ourselves
++	# but omitting the nonroot_okay flag
++	if ($drop_root) {
++		my $wrap = <<EOSCRIPT;
++#!/usr/bin/perl
++		use Fink::Services qw(execute);
++		{
++			local \$/;
++			\$script = <DATA>;
++		}
++EOSCRIPT
++		$script = $wrap .
++			'exit &execute(' .
++			join ( ', ',
++				   '$script',
++				   map { "$_ => $options{$_}" } grep { !/nonroot_okay/ } keys %options
++				 ) .
++			 ");\n" .
++			 "__DATA__\n" .
++			 $script;
++	}
++
++	# preprocess the script, making executable tempfile if necessary
++	my $is_tempfile = &prepare_script(\$script);
++	return 0 if not defined $script;
++
+ 	# Execute each line as a separate command.
+ 	foreach my $cmd (split(/\n/,$script)) {
+ 		if (not $options{'quiet'}) {
+@@ -464,7 +487,7 @@
+ 
+ 	# everything was successful so delete tempfile
+ 	# (otherwise keep it around to aide debugging)
+-	unlink($script) if $is_tempfile;  # 
++	unlink($script) if $is_tempfile;
+ 	return 0;
+ }
+ 
