@@ -2670,9 +2670,7 @@ sub set_buildlock {
 	my $lockpkg = 'fink-buildlock-' . $self->get_fullname();
 	$self->{_lockpkg} = $lockpkg;
 
-	chdir "$buildpath";
-	my $ddir = "root-$lockpkg";
-	my $destdir = "$buildpath/$ddir";
+	my $destdir = "$buildpath/root-$lockpkg";
 
 	if (not -d "$destdir/DEBIAN") {
 		mkdir_p "$destdir/DEBIAN" or
@@ -2736,20 +2734,33 @@ EOF
 		mkdir_p $debpath or
 			die "can't create directory for packages\n";
 	}
-	if (&execute("dpkg-deb -b $ddir $debpath")) {
+	if (&execute("dpkg-deb -b $destdir $debpath")) {
 		die "can't create package $lockpkg\n";
 	}
+
+	rm_rf $destdir or
+		&print_breaking("WARNING: Can't remove package root directory ".
+						"$destdir. ".
+						"This is not fatal, but you may want to remove ".
+						"the directory manually to save disk space. ".
+						"Continuing with normal procedure.");
 
 	# record PkgVersion object from which we are locked
 	$config->set_options('BuildLock', $self);
 
 	# install $lockpkg (== set lockfile for building $self)
 	print "Setting build lock...\n";
-	if (&execute("dpkg -i ".$lockpkg."_0-0_".$debarch.".deb")) {
+	my $debfile = $debpath."/".$lockpkg."_0-0_".$debarch.".deb";
+	if (&execute("dpkg -i $debfile")) {
 		die "can't set build lock for " . $self->get_fullname() . "\n";
-
-
 	}
+
+	rm_f $debfile or
+		&print_breaking("WARNING: Can't remove binary package file ".
+						"$debfile. ".
+						"This is not fatal, but you may want to remove ".
+						"the directory manually to save disk space. ".
+						"Continuing with normal procedure.");
 }
 
 sub clear_buildlock {
