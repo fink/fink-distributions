@@ -1,0 +1,1911 @@
+diff -Naur gnome-session-2.0.9.old/fink/gnome-1-to-2 gnome-session-2.0.9.new/fink/gnome-1-to-2
+--- gnome-session-2.0.9.old/fink/gnome-1-to-2	Thu Jan  1 09:00:00 1970
++++ gnome-session-2.0.9.new/fink/gnome-1-to-2	Fri Feb  7 21:12:56 2003
+@@ -0,0 +1,19 @@
++#!/bin/bash -e
++# -*- coding: utf-8 -*-
++# GNOME 1 → GNOME 2
++# Copyright © 2002 Colin Walters <walters@debian.org>
++# $Id: gnome-1-to-2,v 1.4 2002/10/22 16:59:04 walters Exp $
++
++cd ~
++mkdir -p ~/.gnome2
++exec 1> ~/.gnome2/fink-upgrade.log
++exec 2>&1 
++@PREFIX@/share/gnome-session/fink/gnome-stuff-1-to-2 --add-fink-upgrade-check
++@PREFIX@/share/gnome-session/fink/gnome-panel-1-to-2
++@PREFIX@/share/gnome-session/fink/gnome-launchers-1-to-2
++touch ~/.gnome2/fink-upgrade-stage-1
++
++
++# Local Variables:
++# compile-command: "bash -n gnome-1-to-2"
++# End:
+diff -Naur gnome-session-2.0.9.old/fink/gnome-launchers-1-to-2 gnome-session-2.0.9.new/fink/gnome-launchers-1-to-2
+--- gnome-session-2.0.9.old/fink/gnome-launchers-1-to-2	Thu Jan  1 09:00:00 1970
++++ gnome-session-2.0.9.new/fink/gnome-launchers-1-to-2	Fri Feb  7 21:12:56 2003
+@@ -0,0 +1,93 @@
++#!/usr/bin/perl -w
++# -*- coding: utf-8 -*-
++# Convert GNOME 1 .desktop files (e.g gnome-help-browser → yelp)
++# Copyright © 2002 Colin Walters <walters@verbum.org>
++# $Id: gnome-launchers-1-to-2,v 1.8 2002/10/23 18:12:58 walters Exp $
++
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++
++# You should have received a copy of the GNU General Public License
++# along with this program; if not, write to the Free Software
++# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++
++###### #### ### ## # # #
++# This script should be run in the user's home directory,
++# AFTER the gnome-panel-1-to-2 script has run.
++###### #### ### ## # # #
++
++my $no_act = 0;
++foreach my $arg (@ARGV) {
++  if ($arg eq '-n') {
++    $no_act = 1;
++  }
++}
++
++sub log {
++  print "gnome-launchers-1-to-2: " . join(' ', @_) . "\n";
++}
++
++# stuff copied from gnome-panel-1-to-2
++sub system_internal {
++  my @cmd = @_;
++  if (not $no_act) {
++    system(@cmd) == 0 or die "Command \"" . join(' ', @cmd) . "\" exited with an error: $?";
++  }
++}
++
++sub mysystem {
++  my @cmd = @_;
++  &log("running: " . join(' ', @_));
++  system_internal(@_);
++}
++
++my %launcher_exec_map = ('gnomecc' => "@PREFIX@/share/gnome-session/fink/nautilus-666666.desktop",
++			 'gnome-help-browser' => "@PREFIX@/share/applications/yelp.desktop");
++
++foreach my $key (keys(%launcher_exec_map)) {
++  if (! -f $launcher_exec_map{$key}) {
++    &log("$key does not exist, not transitioning");
++    delete $launcher_exec_map{$key};
++  }
++}
++my @desktopfiles = ();
++
++foreach my $source (".gnome2/panel2.d/default/launchers/", ".gnome-desktop/") {
++  if (-d $source) {
++    &log("Reading $source for .desktop files");
++    opendir (DIR, $source) or die "Couldn't open $source: $!";
++    push @desktopfiles, map { $source . $_ } (grep { /.desktop$/ } readdir (DIR));
++    closedir (DIR);
++  }
++}
++
++foreach my $file (@desktopfiles) {
++  &log("Scanning $file");
++  open(LAUNCHER, $file) or die "Couldn't open $file\n: $!";
++  my @lines = <LAUNCHER>;
++  close(LAUNCHER);
++  my $replace = undef;
++  foreach my $line (@lines) {
++    if ($line =~ /^Exec=(.+?)\s*$/i) {
++      my $exec = $1;
++      &log("$file" . ": exec=" . $exec);
++      if (defined $launcher_exec_map{$exec}) {
++	$replace = $launcher_exec_map{$exec};
++      }
++    }
++  }
++  if ($replace) {
++    &mysystem("cp", $replace, "$file")
++  }
++}
++
++# Local Variables:
++# compile-command: "perl -c gnome-launchers-1-to-2"
++# End:
+diff -Naur gnome-session-2.0.9.old/fink/gnome-panel-1-to-2 gnome-session-2.0.9.new/fink/gnome-panel-1-to-2
+--- gnome-session-2.0.9.old/fink/gnome-panel-1-to-2	Thu Jan  1 09:00:00 1970
++++ gnome-session-2.0.9.new/fink/gnome-panel-1-to-2	Fri Feb  7 21:14:06 2003
+@@ -0,0 +1,529 @@
++#!/usr/bin/perl -w
++# -*- coding: utf-8 -*-
++# Convert GNOME 1 panel settings and applets → GNOME 2 GConf keys
++# Copyright © 2002 Colin Walters <walters@verbum.org>
++# $Id: gnome-panel-1-to-2,v 1.5 2002/10/31 21:37:41 walters Exp $
++
++# This program is free software; you can redistribute it and/or modify
++# it under the terms of the GNU General Public License as published by
++# the Free Software Foundation; either version 2 of the License, or
++# (at your option) any later version.
++
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++
++# You should have received a copy of the GNU General Public License
++# along with this program; if not, write to the Free Software
++# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++
++###### #### ### ## # # #
++# NOTE: This script should be run in the user's home directory.
++###### #### ### ## # # #
++
++use POSIX;
++
++my $cwd = POSIX::getcwd();
++
++my $no_act = 0;
++foreach my $arg (@ARGV) {
++  if ($arg eq '-n') {
++    $no_act = 1;
++  }
++}
++
++sub log {
++  print "gnome-panel-1-to-2: " . join(' ', @_) . "\n";
++}
++
++my $panelconfigfile = ".gnome/panel.d/default/panel";
++my $appletconfigfile = ".gnome/panel.d/default/Applet_Config";
++
++open(F, $panelconfigfile) or die "Couldn't open $panelconfigfile\n: $!";
++my ($panel_count, $applet_count) = (0,0);
++while (<F>) {
++  /panel_count=(.+)$/ and $panel_count = $1;
++  /applet_count=(.+)$/ and $applet_count = $1;
++}
++close(F);
++&log("panel_count: $panel_count");
++&log("applet_count: $applet_count\n");
++
++# From gnome-panel-2.0.10/gnome-panel/panel.c, line 101
++my %panel_type_map = (0 => "edge-panel",
++		      1 => "drawer-panel",
++		      2 => "aligned-panel",
++		      3 => "sliding-panel",
++		      4 => "floating-panel",
++		      5 => "menu-panel");
++
++# From gnome-core-1.4.0.6/panel/session.c, line 1357
++my %old_panel_size_map = (0 => "panel-size-xx-small",
++			  1 => "panel-size-medium",
++			  2 => "panel-size-large",
++			  3 => "panel-size-x-large");
++
++my %panel_align_map = (0 => "panel-alignment-left",
++		       2 => "panel-alignment-right");
++
++my %panel_anchor_map = (0 => "panel-anchor-left",
++			1 => "panel-anchor-right");
++
++# From gnome-core-1.4.0.6/panel/panel-types.h, line 15
++my @panel_size_associations = ([12, "panel-size-xx-small"], [24, "panel-size-x-small"],
++			       [36, "panel-size-small"], [48, "panel-size-medium"],
++			       [64, "panel-size-large"], , [80, "panel-size-x-large"],
++			       [128, "panel-size-xx-large"]);
++
++# From gnome-core-1.4.0.6/panel/panel-types.h, line 52
++my %old_panel_edge_map = (0 => "panel-edge-top",
++			  1 => "panel-edge-right",
++			  2 => "panel-edge-bottom",
++			  3 => "panel-edge-left");
++
++sub sprintf_objid {
++  my $id = shift;
++  return sprintf("%08d", $id);
++}
++
++sub system_internal {
++  my @cmd = @_;
++  if (not $no_act) {
++    system(@cmd) == 0 or die "Command \"" . join(' ', @cmd) . "\" exited with an error: $?";
++  }
++}
++
++sub mysystem {
++  my @cmd = @_;
++  &log("running: " . join(' ', @_));
++  system_internal(@_);
++}
++
++sub gconftool {
++  my ($path, $type, $value) = @_;
++  my @cmd = ("gconftool-2", "-s", "$path", "-t", "$type", "--", "$value");
++  mysystem(@cmd);
++}
++
++sub gconftool_list {
++  my ($path, $subtype, $value) = @_;
++  my @cmd = ("gconftool-2", "-s", "$path", "--type=list", "--list-type=$subtype", "--", "$value");
++  mysystem(@cmd);
++}
++
++# Create the panels
++open(F, $panelconfigfile) or die "Couldn't open $panelconfigfile\n: $!";
++my $line;
++@panel_id_list = ();
++$panel_id_count = 1;
++%panel_unique_id_map = ();
++while ($line = <F>) {
++  if ($line =~ /\[Panel_(\d+)\]/) {
++    my $current_panelid = $1;
++    &log("reading panel entry $current_panelid");
++    # skip unused panels
++    if ($current_panelid > $panel_count) {
++      &log("skipping panel id $current_panelid (> $panel_count)");
++      next;
++    }
++    push @panel_id_list, sprintf_objid($panel_id_count);
++    my $scount = sprintf_objid($panel_id_count);
++    # set up some sane defaults
++    gconftool("/apps/panel/profiles/default/panels/$scount/panel_background_pixmap_stretch", "boolean", "false");
++    gconftool("/apps/panel/profiles/default/panels/$scount/panel_background_pixmap_fit", "boolean", "true");
++    gconftool("/apps/panel/profiles/default/panels/$scount/panel_background_pixmap_rotate", "boolean", "true");
++    gconftool("/apps/panel/profiles/default/panels/$scount/hide_buttons_enabled", "boolean", "false");
++    gconftool("/apps/panel/profiles/default/panels/$scount/panel_background_type", "string", "no-background");
++    gconftool("/apps/panel/profiles/default/panels/$scount/panel_background_color", "string", "#000000");
++    gconftool("/apps/panel/profiles/default/panels/$scount/panel_background_pixmap", "string", "");
++    gconftool("/apps/panel/profiles/default/panels/$scount/panel_type", "string", "edge-panel");
++    while (defined(($line = <F>)) and $line =~ /^\w+/) {
++      if ($line =~ /^hidebuttons_enabled=(.+)$/) {
++	gconftool("/apps/panel/profiles/default/panels/$scount/hide_buttons_enabled", "boolean", $1);
++      } elsif ($line =~ /^screen=(.+)$/) {
++	gconftool("/apps/panel/profiles/default/panels/$scount/screen_id", "int", $1);
++      } elsif ($line =~ /^type=(.+)$/) {
++	my $mappedtype = $panel_type_map{$1};
++	if ($mappedtype =~ /edge-panel/) {
++	  gconftool("/apps/panel/profiles/default/panels/$scount/panel_hide_mode", "int", "0");
++	  gconftool("/apps/panel/profiles/default/panels/$scount/panel_hide_state", "int", "0");
++	}
++	gconftool("/apps/panel/profiles/default/panels/$scount/panel_type", "string", $mappedtype);
++      } elsif ($line =~ /^edge=(.+)$/) {
++	gconftool("/apps/panel/profiles/default/panels/$scount/screen_edge", "string", $old_panel_edge_map{$1})
++      } elsif ($line =~ /^align=(.+)$/) {
++	my $align = $1;
++	if (not $panel_align_map{$align}) {
++	  &log("Unknown panel alignment $align")
++	}
++	gconftool("/apps/panel/profiles/default/panels/$scount/panel_align", "string", $panel_align_map{$align} || "panel-alignment-left")
++      } elsif ($line =~ /^anchor=(.+)$/) {
++	my $anchor = $1;
++	if (not $panel_anchor_map{$anchor}) {
++	  &log("Unknown panel anchor $anchor")
++	}
++	gconftool("/apps/panel/profiles/default/panels/$scount/panel_anchor", "string", $panel_anchor_map{$anchor} || "panel-anchor-left")
++      } elsif ($line =~ /^unique_id=(.+)$/) {
++	my $uniqueid = $1;
++	&log("making entry in unique id map: $uniqueid => $panel_id_count");
++	# Store this unique ID; it's used later when figuring out
++	# which applets go to which panel.
++	$panel_unique_id_map{$uniqueid} = $panel_id_count;
++      } elsif ($line =~ /^sz=(.+)$/) {
++	my $size = $1;
++	my $found = 0;
++	foreach my $entry (@panel_size_associations) {
++	  if ((not $found) and $size <= $entry->[0]) {
++	    gconftool("/apps/panel/profiles/default/panels/$scount/panel_size", "string", $entry->[1]);
++	    $found = 1;
++	  }
++	}
++	if (not $found) {
++	  gconftool("/apps/panel/profiles/default/panels/$scount/panel_size", "string", "panel-size-medium");
++	}
++      }
++    }
++    $panel_id_count++;
++  }
++}
++my $liststr = "[" . join(',', @panel_id_list) . "]";
++gconftool_list("/apps/panel/profiles/default/general/panel_id_list", "string", $liststr);
++  
++&log("finished reading panel config file");
++close(F);
++
++&log("converting .desktop files");
++my $gnome1dir = ".gnome/panel.d/default/launchers/";
++my $gnome2dir = ".gnome2/panel2.d/default/launchers/";
++if (-d $gnome1dir) {
++  &mysystem("mkdir", "-p", $gnome2dir);
++  opendir (DIR, $gnome1dir) or die "Couldn't open $gnome1dir: $!";
++  foreach my $entry (readdir(DIR)) {
++    if (not $entry =~ /^\.\.?$/) {
++      &mysystem("cp", "-R", "-p", $gnome1dir . $entry, $gnome2dir);
++    }
++  }
++  closedir(DIR);
++}
++
++# Create the applets and launchers.
++open(F, $appletconfigfile) or die "Couldn't open $appletconfigfile\n: $!";
++&log("Reading applet config file");
++
++my @applet_id_list = ();
++my $applet_id_count = 1;
++my @object_id_list = ();
++my $object_id_count = 1;
++LINE: while (defined ($line = <F>)) {
++  if ($line =~ /\[Applet_(\d+)\]/) {
++    my $appletnumber = $1;
++    &log("Reading applet/object id $appletnumber");
++    my $appletexternfile = ".gnome/panel.d/default/Applet_" . "$appletnumber" . "_Extern";
++    my @lines;
++    while (defined(($line = <F>)) and $line =~ /^\w+/) {
++      push(@lines, $line);
++    }
++    my ($appletid, $count, $scount, $type) = (undef, undef, undef, undef);
++    foreach my $line (@lines) {
++      if ($line =~ /^id=(.+)$/) {
++	$appletid = $1;
++	if ($appletid =~ /Extern/) {
++	  $count = $applet_id_count;
++	  $scount = sprintf_objid($count);
++	  gconftool("/apps/panel/profiles/default/applets/$scount/object_type", "string", "bonobo-applet");
++	  push @applet_id_list, sprintf_objid($applet_id_count);
++	  $applet_id_count++;
++	  $type = 'applets';
++	} elsif ($appletid =~ /Launcher/) {
++	  $count = $object_id_count;
++	  $scount = sprintf_objid($count);
++	  gconftool("/apps/panel/profiles/default/objects/$scount/panel_right_stick", "boolean", "false");
++	  gconftool("/apps/panel/profiles/default/objects/$scount/object_type", "string", "launcher-object");
++	  push @object_id_list, sprintf_objid($object_id_count);
++	  $count = $object_id_count;
++	  $object_id_count++;
++	  $type = 'objects';
++	} elsif ($appletid =~ /Menu/) {
++	  $count = $object_id_count;
++	  $scount = sprintf_objid($count);
++	  gconftool("/apps/panel/profiles/default/objects/$scount/path", "string", "applications://");
++	  gconftool("/apps/panel/profiles/default/objects/$scount/global_main", "boolean", "true");
++	  gconftool("/apps/panel/profiles/default/objects/$scount/main-menu", "boolean", "true");
++	  gconftool("/apps/panel/profiles/default/objects/$scount/object_type", "string", "menu-object");
++	  gconftool("/apps/panel/profiles/default/objects/$scount/custom-icon", "boolean", "false");
++	  push @object_id_list, sprintf_objid($object_id_count);
++	  $count = $object_id_count;
++	  $object_id_count++;
++	  $type = 'objects';
++	} else {
++	  &log("warning: unknown Applet id=$appletid");
++	  $appletid = undef;
++	}
++      }
++    }
++    if (not $appletid) {
++      &log("Skipping this applet: unknown appletid");
++      next LINE;
++    }
++    # Handle applets specially
++    if ($appletid =~ /Extern/) {
++      my $valid_goadid = 1;
++      my $goadid = "!unspecified!";
++      foreach my $line (@lines) {
++	if ($line =~ /goad_id=(.+)$/) {
++	  $goadid = $1;
++	  if ($goadid =~ /clock/i) {
++	    gconftool("/apps/panel/profiles/default/$type/$scount/bonobo_iid", "string", "OAFIID:GNOME_ClockApplet");
++	    # FIXME: set up sane defaults for now; we shoudl really pick these from the old prefs
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/show_seconds", "boolean", "true");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/show_tooltip", "boolean", "true");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/gmt_time", "boolean", "false");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/unix_time", "boolean", "false");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/hour_format", "int", "24");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/internet_time", "boolean", "false");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/show_date", "boolean", "true");
++	  } elsif ($goadid =~ /deskguide/i) {
++	    gconftool("/apps/panel/profiles/default/$type/$scount/bonobo_iid", "string", "OAFIID:GNOME_PagerApplet");
++	    # FIXME: set up sane defaults for now; we shoudl really pick these from the old prefs
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/num_rows", "int", "1");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/display_all_workspaces", "boolean", "true");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/display_workspace_names", "boolean", "false");
++	  } elsif ($goadid =~ /mixer/i) {
++	    gconftool("/apps/panel/profiles/default/$type/$scount/bonobo_iid", "string", "OAFIID:GNOME_MixerApplet");
++	  } elsif ($goadid =~ /geyes/i) {
++	    gconftool("/apps/panel/profiles/default/$type/$scount/bonobo_iid", "string", "OAFIID:GNOME_GeyesApplet");
++	    # Theme stuff doesn't appear to be compatible; just ignore...
++	  } elsif ($goadid =~ /tasklist/i) {
++	    gconftool("/apps/panel/profiles/default/$type/$scount/bonobo_iid", "string", "OAFIID:GNOME_TasklistApplet");
++	    my $group_windows = "auto";
++	    my $display_all_workspaces = "false";
++	    my $move_unminimized_windows = "true";
++	    if (-f $appletexternfile) {
++	      open(EXTFILE, $appletexternfile) or die "Couldn't open $appletexternfile\n: $!";
++	      while (<EXTFILE>) {
++		if (/^enable_grouping=(.+)$/) {
++		  my $grouping =$1;
++		  if ($grouping =~ /false/) {
++		    $group_windows = "never";
++		  }
++		} elsif (/^all_desks_normal=(.+)$/) {
++		  $display_all_workspaces = $1;
++		} elsif (/^move_to_current=(.+)$/) {
++		  $move_unminimized_windows = $1;
++		}
++	      }
++	      close(EXTFILE);
++	    }
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/group_windows", "string", $group_windows);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/display_all_workspaces", "boolean", $display_all_workspaces);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/move_unminimized_windows", "boolean", $move_unminimized_windows);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/maximum_size", "int", "4096");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/minimum_size", "int", "50");
++	  } elsif ($goadid =~ /battery_applet/i) {
++	    gconftool("/apps/panel/profiles/default/$type/$scount/bonobo_iid", "string", "OAFIID:GNOME_BattstatApplet");
++	    my $full_notify_enable = "false";
++	    my $lowwarn_enable = "true";
++	    my $low_charge_val = 25;
++	    my $low_warn_val = 5;
++	    if (-f $appletexternfile) {
++	      open(EXTFILE, $appletexternfile) or die "Couldn't open $appletexternfile\n: $!";
++	      while (<EXTFILE>) {
++		if (/^low_charge_val=(.+)$/) {
++		  $low_charge_val = $1;
++		} elsif (/^low_warn_val=(.+)$/) {
++		  $low_warn_val = $1;
++		} elsif (/^full_notify_enable=(.+)$/) {
++		  $full_notify_enable = $1;
++		} elsif (/^low_warn_enable=(.+)$/) {
++		  $low_warn_enable = $1;
++		}
++	      }
++	      close(EXTFILE);
++	    }
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/full_battery_notification", "boolean", $full_notify_enable);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/show_percent", "boolean", "false");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/beep", "boolean", "false");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/suspend_command", "string", "");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/use_dock", "boolean", "false");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/red_value", "int", $low_warn_val);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/yellow_value", "int", "40");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/orange_value", "int", $low_charge_val);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/show_battery", "boolean", "true");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/horizontal", "boolean", "true");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/show_status", "boolean", "true");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/low_battery_notification", "boolean", $low_warn_enable);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/drain_from_top", "boolean", "false");
++	  } elsif ($goadid =~ /fish_applet/i) {
++	    gconftool("/apps/panel/profiles/default/$type/$scount/bonobo_iid", "string", "OAFIID:GNOME_FishApplet");
++	    my $fishname = "Wanda";
++	    my $image = "fish/fishanim.png";
++	    my $fishcommand = "fortune";
++	    my $frames = 3;
++	    my $speed = 1;
++	    my $rotate = "true";
++	    if (-f $appletexternfile) {
++	      open(EXTFILE, $appletexternfile) or die "Couldn't open $appletexternfile\n: $!";
++	      while (<EXTFILE>) {
++		if (/^name=(.+)$/) {
++		  $fishname = $1;
++		} elsif (/^image=(.+)$/) {
++		  # Get rid of any path prefix.
++		  s,^@PREFIX@/share/pixmaps/,,;
++		  $image = $1;
++		} elsif (/^command=(.+)$/) {
++		  $fishcommand = $1;
++		} elsif (/^frames=(.+)$/) {
++		  $frames = $1;
++		} elsif (/^speed=(.+)$/) {
++		  $speed = $1;
++		} elsif (/^rotate=(.+)$/) {
++		  $rotate = $1;
++		}
++	      }
++	      close(EXTFILE);
++	    }
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/command", "string", $fishcommand);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/image", "string", $image);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/frames", "int", $frames);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/speed", "int", $speed);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/name", "string", $fishname);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/rotate", "boolean", $rotate);
++	  } elsif ($goadid =~ /multiload_(.+?)_applet/i) {
++	    my $multiload_type = $1;
++	    gconftool("/apps/panel/profiles/default/$type/$scount/bonobo_iid", "string", "OAFIID:GNOME_MultiLoadApplet");
++	    my $speed = "500";
++	    my $size = "40";
++	    # FIXME: we make no attempt at preserving colors.  It seems tricky at first glance.
++	    if (-f $appletexternfile) {
++	      open(EXTFILE, $appletexternfile) or die "Couldn't open $appletexternfile\n: $!";
++	      while (<EXTFILE>) {
++		if (/^speed=(.+)$/) {
++		  $speed = $1;
++		} elsif (/^size=(.+)$/) {
++		  $size = $1;
++		}
++	      }
++	      close(EXTFILE);
++	    }
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/view_loadavg", "boolean", "false");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/view_memload", "boolean", "false");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/view_netload", "boolean", "false");
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/view_cpuload", "boolean", "false");
++	    if ($multiload_type =~ /netload/) {
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/view_netload", "boolean", "true");
++	    } elsif ($multiload_type =~ /cpuload/) {
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/view_cpuload", "boolean", "true");
++	    } elsif ($multiload_type =~ /memload/) {
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/view_memload", "boolean", "true");
++	    }
++
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/speed", "int", $speed);
++	    gconftool("/apps/panel/profiles/default/$type/$scount/prefs/size", "int", $size);
++	  } elsif ($goadid =~ /mailcheck/i) {
++	    gconftool("/apps/panel/profiles/default/$type/$scount/bonobo_iid", "string", "OAFIID:GNOME_MailcheckApplet");
++	    my $update_frequency = "120000";
++	    my $exec_enabled = "false";
++	    my $execcommand = "";
++	    my $newmail_enabled = "false";
++	    my $newmailcommand = "";
++	    my $clicked_enabled = "false";
++	    my $clickedcommand = "";
++	    my $play_sound = "false";
++	    my $mailbox_type = "0";
++	    my $mail_file = "";
++	    if (-f $appletexternfile) {
++	      open(EXTFILE, $appletexternfile) or die "Couldn't open $appletexternfile\n: $!";
++	      while (<EXTFILE>) {
++		if (/^update_frequency=(.+)$/) {
++		  $update_frequency = $1;
++		} elsif (/^exec_command=(.+)$/) {
++		  $execcommand = $1;
++		} elsif (/^exec_enabled=(.+)$/) {
++		  $exec_enabled = $1;
++		} elsif (/^newmail_command=(.+)$/) {
++		  $newmailcommand = $1;
++		} elsif (/^newmail_enabled=(.+)$/) {
++		  $newmail_enabled = $1;
++		} elsif (/^clicked_command=(.+)$/) {
++		  $clickedcommand = $1;
++		} elsif (/^clicked_enabled=(.+)$/) {
++		  $clicked_enabled = $1;
++		} elsif (/^play_sound=(.+)$/) {
++		  $play_sound = $1;
++		} elsif (/^mailbox_type=(.+)$/) {
++		  $mailbox_type = $1;
++		} elsif (/^mail_file=(.+)$/) {
++		  $mail_file = $1;
++		}
++	      }
++	      close(EXTFILE);
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/update_frequency", "int", $update_frequency);
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/exec_enabled", "boolean", $exec_enabled);
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/exec_command", "string", $execcommand);
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/newmail_enabled", "boolean", $newmail_enabled);
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/newmail_command", "string", $newmailcommand);
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/clicked_enabled", "boolean", $clicked_enabled);
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/clicked_command", "string", $clickedcommand);
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/play_sound", "boolean", $play_sound);
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/mailbox_type", "int", $mailbox_type);
++	      gconftool("/apps/panel/profiles/default/$type/$scount/prefs/mail_file", "string", $mail_file);
++	    }
++	  } else {
++	    $valid_goadid = undef;
++	  }
++	}
++      }
++      if (not $valid_goadid) {
++	&log("Skipping this applet: unknown goad_id=$goadid");
++	next LINE;
++      }
++    } elsif ($appletid =~ /Menu/) {
++      my $main_menu_flags = 0;
++      my $global_main = 'true';
++      foreach my $line (@lines) {
++	if ($line =~ /^main-menu-flags=(.+)$/) {
++	  $main_menu_flags = $1;
++	} elsif ($line =~ /^global-main=(.+)$/) {
++	  $global_main = $1;
++	}
++      }
++      gconftool("/apps/panel/profiles/default/$type/$scount/global-main", "boolean", $global_main);
++      gconftool("/apps/panel/profiles/default/$type/$scount/main-menu-flags", "int", $main_menu_flags);
++    }
++    foreach my $line (@lines) {
++      if ($line =~ /^right_stick=(.+)$/) {
++	gconftool("/apps/panel/profiles/default/$type/$scount/panel_right_stick", "boolean", $1);
++      } elsif ($line =~ /^position=(.+)$/) {
++	gconftool("/apps/panel/profiles/default/$type/$scount/position", "int", $1);
++      } elsif ($line =~ /^unique_panel_id=(.+)$/) {
++	my $uniqueid = $1;
++	my $realpanelid = $panel_unique_id_map{$uniqueid};
++	if (not defined $realpanelid) {
++	  &log("warning: unknown unique panel id=$uniqueid, assuming first panel");
++	  $realpanelid = 1;
++	}
++	gconftool("/apps/panel/profiles/default/$type/$scount/panel_id", "string", sprintf_objid($realpanelid));
++      } elsif ($line =~ /^base_location=(.+)$/) {
++	my $launcher = $1;
++	gconftool("/apps/panel/profiles/default/$type/$scount/launcher_location", "string", "file://$cwd/.gnome2/panel2.d/default/launchers/$1");
++      }
++    }
++  }
++}
++close(F);
++&log("done reading applet config file");
++$liststr = "[" . join(',', @applet_id_list) . "]";
++gconftool_list("/apps/panel/profiles/default/general/applet_id_list", "string", $liststr);
++$liststr = "[" . join(',', @object_id_list) . "]";
++gconftool_list("/apps/panel/profiles/default/general/object_id_list", "string", $liststr);
++
++# clean up cruft
++&mysystem("rm", "-rf", ".gnome2/panel.d");
++
++&log("Transition script complete");
++
++# Local Variables:
++# compile-command: "perl -c gnome-panel-1-to-2"
++# End:
++
+diff -Naur gnome-session-2.0.9.old/fink/gnome-session-save.1 gnome-session-2.0.9.new/fink/gnome-session-save.1
+--- gnome-session-2.0.9.old/fink/gnome-session-save.1	Thu Jan  1 09:00:00 1970
++++ gnome-session-2.0.9.new/fink/gnome-session-save.1	Fri Feb  7 21:12:56 2003
+@@ -0,0 +1,29 @@
++.\" 
++.\" gnome-session-save manual page.
++.\" (C) 2000 Miguel de Icaza (miguel@helixcode.com)
++.\"
++.TH GNOME 1 "GNOME 1.0"
++.SH NAME
++gnome-session-save \- Saves the current GNOME session (or terminates it)
++.SH SYNOPSIS
++.B gnome-session-save [\-\-kill] [\-\-gui]
++.SH DESCRIPTION
++\fIgnome-session-save\fP can be used from a GNOME session to save a snapshot
++of the currently running applications.  This session will be later
++restored at your next GNOME startup session.
++.PP
++You can specify the 
++.B \-\-kill 
++argument to terminate the GNOME session.
++
++The
++.B \-\-gui
++argument will show a dialog when the session is saved, and report errors
++in dialog boxes instead of printing to stderr.
++
++.SH SEE ALSO
++.BR gnome-session(1)
++.SH BUGS
++If you find bugs in the \fIgnome-session-save\fP program, please report
++these using either \fIbug-buddy\fP or \fIgnome-bug\fP included with the GNOME
++libraries distribution.
+diff -Naur gnome-session-2.0.9.old/fink/gnome-stuff-1-to-2 gnome-session-2.0.9.new/fink/gnome-stuff-1-to-2
+--- gnome-session-2.0.9.old/fink/gnome-stuff-1-to-2	Thu Jan  1 09:00:00 1970
++++ gnome-session-2.0.9.new/fink/gnome-stuff-1-to-2	Sat Feb  8 00:26:47 2003
+@@ -0,0 +1,432 @@
++#!/bin/bash -e
++# Convert GNOME 1 conf files to GNOME 2 GConf keys
++# Copyright (C) 2002 Christian Marillat <marillat.christian@wanadoo.fr>
++# Copyright (C) 2002 Colin Walters <walters@debian.org>
++# $Id: gnome-stuff-1-to-2,v 1.12 2002/11/03 05:53:13 walters Exp $
++
++DEBIAN_ADD_UPGRADE_CHECK="false"
++for arg in "$@";do
++  if [ "$arg" = "--add-fink-upgrade-check" ]; then
++    DEBIAN_ADD_UPGRADE_CHECK="true"
++  fi
++done  
++
++gconftool () {
++  type="$1"
++  key="$2"
++  value="$3"
++  if ! @PREFIX@/bin/g-utf8-validate "$value"; then
++    echo "\"$value\" is not valid UTF-8, ignoring"
++    return
++  fi
++  echo "running: gconftool-2 -t $type -s $key -- $value"
++  gconftool-2 -t "$type" -s "$key" -- "$value"
++}
++
++# Move all files in ~/.gnome/ to ~/.gnome2
++if [ ! -d ~/.gnome2 ]; then
++  mkdir ~/.gnome2
++fi
++
++cp -r ~/.gnome/* ~/.gnome2/
++# Remove cruft
++rm -f ~/.gnome2/.gnome-smproxy*
++
++# Parse gnome general config 1.4
++GNOME_CONFIG_FILE=~/.gnome/Gnome
++
++if [ -e "$GNOME_CONFIG_FILE" ]; then
++  printf "Gnome global options file found\n"
++  GG_TERMINAL=`grep 'Terminal=' $GNOME_CONFIG_FILE | cut -f2 -d'=' | cut -f1 -d' '`
++  GG_EXEC=`grep 'Terminal=' $GNOME_CONFIG_FILE | cut -f2 -d'=' | cut -f2 -d' '`
++
++  # desktop_gnome_applications_terminal.schemas
++  test -n "$GG_TERMINAL" && gconftool string "/desktop/gnome/applications/terminal/exec" "$GG_TERMINAL"
++  test -n "$GG_EXEC" && gconftool string "/desktop/gnome/applications/terminal/exec_arg" "$GG_EXEC"
++  GG_DEFAULT_SHOW=`grep -w default-show $GNOME_CONFIG_FILE | cut -f2 -d'=' | cut -f1 -d' '`
++  GG_NEEDS_TERM=false
++  GG_NREMOTE=false
++
++  if [ "$GG_DEFAULT_SHOW" = "gnome-moz-remote" ]; then
++    if [ -e ~/.gnome/gnome-moz-remote ]; then
++      GG_DEFAULT_SHOW=`grep -w filename ~/.gnome/gnome-moz-remote | cut -f2 -d'='`
++      GG_NEEDS_TERM=`grep -w NEEDS_TERM ~/.gnome/gnome-moz-remote | cut -f2 -d'='`
++      GG_NREMOTE=`grep -w NREMOTE ~/.gnome/gnome-moz-remote | cut -f2 -d'='`
++    fi
++  fi
++
++  # desktop_gnome_applications_browser.schemas
++  test -n "$GG_DEFAULT_SHOW" && gconftool string "/schemas/desktop/gnome/applications/browser/exec" "$GG_DEFAULT_SHOW"
++  test -n "$GG_NEEDS_TERM" && gconftool bool "/desktop/gnome/applications/browser/needs_term" "$GG_NEEDS_TERM"
++  test -n "$GG_NREMOTE" && gconftool bool "/desktop/gnome/applications/browser/nremote" "$GG_NREMOTE"
++
++  GG_GHELP_SHOW=`grep -w ghelp-show $GNOME_CONFIG_FILE | cut -f2 -d'=' | cut -f1 -d' '`
++  GG_GHELP_TERM=`grep -w GHELP_TERM $GNOME_CONFIG_FILE | cut -f2 -d'='`
++  GG_GHELP_URLS=`grep -w GHELP_URLS $GNOME_CONFIG_FILE | cut -f2 -d'='`
++
++  # desktop_gnome_applications_help_viewer.schemas
++  test -n "$GG_GHELP_SHOW" && gconftool string "/desktop/gnome/applications/help_viewer/exec" "$GG_GHELP_SHOW"
++  test -n "$GG_GHELP_TERM" && gconftool bool "/desktop/gnome/applications/help_viewer/needs_term" "$GG_GHELP_TERM"
++  test -n "$GG_GHELP_URLS" && gconftool bool "/desktop/gnome/applications/help_viewer/accepts_urls" "$GG_GHELP_URLS"
++
++  GG_MENUS_HAVE_TEAROFF=`grep -w Menus_have_tearoff $GNOME_CONFIG_FILE | cut -f2 -d'='`
++  GG_MENUS_HAVE_ICONS=`grep -w Menus_have_icons $GNOME_CONFIG_FILE | cut -f2 -d'='`
++  GG_MENUBAR_DETACHABLE=`grep -w Menubar_detachable $GNOME_CONFIG_FILE | cut -f2 -d'='`
++  GG_TOOLBAR_DETACHABLE=`grep -w Toolbar_detachable $GNOME_CONFIG_FILE | cut -f2 -d'='`
++  GG_STATUSBAR_METER_ON_RIGHT=`grep -w StatusBar_Meter_on_Right $GNOME_CONFIG_FILE | cut -f2 -d'='`
++
++  # desktop_gnome_interface.schemas
++  test -n "$GG_MENUS_HAVE_TEAROFF" && gconftool bool "/desktop/gnome/interface/menus_have_tearoff" "$GG_MENUS_HAVE_TEAROFF"
++  test -n "$GG_MENUS_HAVE_ICONS" && gconftool bool "/desktop/gnome/interface/menus_have_icons" "$GG_MENUS_HAVE_ICONS"
++  test -n "$GG_MENUBAR_DETACHABLE" && gconftool bool "/desktop/gnome/interface/menubar_detachable" "$GG_MENUBAR_DETACHABLE"
++  test -n "$GG_TOOLBAR_DETACHABLE" && gconftool bool "/desktop/gnome/interface/toolbar_detachable" "$GG_TOOLBAR_DETACHABLE"
++  test -n "$GG_STATUSBAR_METER_ON_RIGHT" && gconftool bool "/desktop/gnome/interface/status_bar_meter_on_right" "$GG_STATUSBAR_METER_ON_RIGHT"
++
++  printf "Done.\n"
++else
++  printf "Gnome global options file not found\n"
++fi
++
++GNOME_SOUND_FILE=~/.gnome/sound/system
++
++if [ -e "$GNOME_SOUND_FILE" ]; then
++  printf "Gnome sound options file found\n"
++
++  GS_START_ESD=`grep -w start_esd $GNOME_SOUND_FILE | cut -f2 -d'='`
++  GS_EVENT_SOUNDS=`grep -w event_sounds $GNOME_SOUND_FILE | cut -f2 -d'='`
++
++  # desktop_gnome_sound.schemas
++  test -n "$GS_START_ESD" && gconftool bool "/desktop/gnome/sound/enable_esd" "$GS_START_ESD"
++  test -n "$GS_EVENT_SOUNDS" && gconftool bool "/desktop/gnome/sound/event_sounds" "$GS_EVENT_SOUNDS"
++
++  printf "Done.\n"
++else
++  printf "Gnome sound options file not found\n"
++fi
++
++GNOME_MOUSE_FILE=~/.gnome/Desktop
++
++if [ -e "$GNOME_MOUSE_FILE" ]; then
++  printf "Gnome mouse options file found\n"
++
++  GM_ACCELERATION=`grep -w acceleration $GNOME_MOUSE_FILE | cut -f2 -d'='`
++  GM_THRESHOLD=`grep -w threshold $GNOME_MOUSE_FILE | cut -f2 -d'='`
++  GM_RIGHT_TO_LEFT=`grep -w right-to-left $GNOME_MOUSE_FILE | cut -f2 -d'='`
++
++  # desktop_gnome_peripherals_mouse.schemas
++  test -n "$GM_ACCELERATION" && gconftool float "/desktop/gnome/peripherals/mouse/motion_acceleration" "$GM_ACCELERATION"
++  test -n "$GM_THRESHOLD" && gconftool int "/desktop/gnome/peripherals/mouse/motion_threshold" "$GM_THRESHOLD"
++  test -n "$GM_RIGHT_TO_LEFT" && gconftool bool "/desktop/gnome/peripherals/mouse/left_handed" "$GM_RIGHT_TO_LEFT"
++
++  printf "Done.\n"
++else
++  printf "Gnome mouse options file not found\n"
++fi
++
++GNOME_KEYBOARD_FILE=~/.gnome/Desktop
++
++if [ -e "$GNOME_KEYBOARD_FILE" ]; then
++  printf "Gnome keyboard options file found\n"
++
++  GK_REPEAT=`grep -w repeat $GNOME_KEYBOARD_FILE | cut -f2 -d'='`
++  GK_DELAY=`grep -w delay $GNOME_KEYBOARD_FILE | cut -f2 -d'='`
++  GK_RATE=`grep -w rate $GNOME_KEYBOARD_FILE | cut -f2 -d'='`
++  GK_CLICK=`grep -w click $GNOME_KEYBOARD_FILE | cut -f2 -d'='`
++  GK_CLICKVOLUME=`grep -w clickvolume $GNOME_KEYBOARD_FILE | cut -f2 -d'='`
++
++  # desktop_gnome_peripherals_keyboard.schemas
++  test -n "$GK_REPEAT" && gconftool bool "/desktop/gnome/peripherals/keyboard/repeat" "$GK_REPEAT"
++  test -n "$GK_DELAY" && gconftool int "/desktop/gnome/peripherals/keyboard/delay" "$GK_DELAY"
++  test -n "$GK_RATE" && gconftool int "/desktop/gnome/peripherals/keyboard/rate" "$GK_RATE"
++  test -n "$GK_CLICK" && gconftool bool "/desktop/gnome/peripherals/keyboard/click" "$GK_CLICK"
++  test -n "$GK_CLICKVOLUME" && gconftool int "/desktop/gnome/peripherals/keyboard/click_volume" "$GK_CLICKVOLUME"
++
++  printf "Done.\n"
++else
++  printf "Gnome keyboard options file not found\n"
++fi
++
++GNOME_BACKGROUND_FILE=~/.gnome/Background
++
++if [ -e "$GNOME_BACKGROUND_FILE" ]; then
++  printf "Gnome background options file found\n"
++
++  GB_COLOR1=`grep -w color1 $GNOME_BACKGROUND_FILE | cut -f2 -d'='`
++  GB_COLOR2=`grep -w color2 $GNOME_BACKGROUND_FILE | cut -f2 -d'='`
++  GB_OPACITY=`grep -w opacity $GNOME_BACKGROUND_FILE | cut -f2 -d'='`
++  GB_ENABLED=`grep -w Enabled $GNOME_BACKGROUND_FILE | cut -f2 -d'='`
++  GB_GRADIENT=`grep -w gradient $GNOME_BACKGROUND_FILE | cut -f2 -d'='`
++  GB_WALLPAPER=`grep -w wallpaper $GNOME_BACKGROUND_FILE | cut -f2 -d'='`
++
++  GB_WALLPAPERALIGN=`grep -w wallpaperAlign $GNOME_BACKGROUND_FILE | cut -f2 -d'='`
++  case "$GB_WALLPAPERALIGN" in
++    1) GB_WALLPAPERALIGN=centered ;;
++    2) GB_WALLPAPERALIGN=stretched ;;
++    3) GB_WALLPAPERALIGN=scaled ;;
++    *) GB_WALLPAPERALIGN=centered ;;
++  esac
++
++  # desktop_gnome_background.schemas
++  test -n "$GB_COLOR1" && gconftool string "/desktop/gnome/background/primary_color" "$GB_COLOR1"
++  test -n "$GB_COLOR2" && gconftool string "/desktop/gnome/background/secondary_color" "$GB_COLOR2"
++  test -n "$GB_OPACITY" && gconftool int "/desktop/gnome/background/picture_opacity" "$GB_OPACITY"
++  test -n "$GB_ENABLED" && gconftool bool "/desktop/gnome/background/draw_background" "$GB_ENABLED"
++  test -n "$GB_WALLPAPERALIGN" && gconftool string "/desktop/gnome/background/picture_options" "$GB_WALLPAPERALIGN"
++  test -n "$GB_GRADIENT" && gconftool string "/desktop/gnome/background/color_shading_type" "$GB_GRADIENT""-gradient"
++  test -n "$GB_WALLPAPER" && gconftool string "/desktop/gnome/background/picture_filename" "$GB_WALLPAPER"
++
++  printf "Done.\n"
++else
++  printf "Gnome background options file not found\n"
++fi
++
++GNOME_WM_FILE=~/.gnome/default.wm
++
++if [ -e "$GNOME_WM_FILE" ]; then
++  printf "Gnome window-manager options file found\n"
++
++  GWM=`grep -w WM $GNOME_WM_FILE | cut -f2 -d'='`
++
++  # desktop_gnome_peripherals_mouse.schemas
++  test $GWM != "" && gconftool string "/desktop/gnome/applications/window_manager/current" "$GWM"
++
++  printf "Done.\n"
++else
++  printf "Gnome window-manager options file not found\n"
++fi
++
++# Parse gnome-panel (global) 1.4 config
++
++GP_CONFIG_FILE=~/.gnome/panel
++
++if [ -e "$GP_CONFIG_FILE" ]; then
++  printf "Gnome-panel options file found\n"
++  GP_TOOLTIPS_ENABLED=`grep -w tooltips_enabled $GP_CONFIG_FILE | cut -f2 -d'='`
++  GP_DISABLE_ANIMATIONS=`grep -w disable_animations $GP_CONFIG_FILE | cut -f2 -d'='`
++  if [ $GP_DISABLE_ANIMATIONS = "true" ]; then
++    GP_DISABLE_ANIMATIONS=false
++  else
++    GP_DISABLE_ANIMATIONS=true
++  fi
++
++  GP_MINIMIZED_SIZE=`grep -w minimized_size $GP_CONFIG_FILE | cut -f2 -d'='`
++  GP_MAXIMIZE_DELAY=`grep -w maximize_delay $GP_CONFIG_FILE | cut -f2 -d'='`
++  GP_MINIMIZE_DELAY=`grep -w minimize_delay $GP_CONFIG_FILE | cut -f2 -d'='`
++  GP_MENU_KEY=`grep -w menu_key $GP_CONFIG_FILE | cut -f2 -d'='`
++  GP_RUN_KEY=`grep -w run_key $GP_CONFIG_FILE | cut -f2 -d'='`
++  GP_SCREENSHOT_KEY=`grep -w screenshot_key $GP_CONFIG_FILE | cut -f2 -d'='`
++  GP_WINDOW_SCREENSHOT_KEY=`grep -w window_screenshot_key $GP_CONFIG_FILE | cut -f2 -d'='`
++  GP_DRAWER_AUTO_CLOSE=`grep -w drawer_auto_close $GP_CONFIG_FILE | cut -f2 -d'='`
++  GP_CONFIRM_PANEL_REMOVE=`grep -w confirm_panel_remove $GP_CONFIG_FILE | cut -f2 -d'='`
++  GP_MEMORY_HUNGRY_MENUS=`grep -w memory_hungry_menus $GP_CONFIG_FILE | cut -f2 -d'='`
++  GP_SATURATE_WHEN_OVER=`grep -w saturate_when_over $GP_CONFIG_FILE | cut -f2 -d'='`
++
++  # Set gnome-panel 2 configuration
++  # panel-global-config.schemas
++  test -n "$GP_CONFIRM_PANEL_REMOVE" && gconftool bool "/apps/panel/global/confirm_panel_remove" "$GP_CONFIRM_PANEL_REMOVE"
++  test -n "$GP_DRAWER_AUTO_CLOSE" && gconftool bool "/apps/panel/global/drawer_autoclose" "$GP_DRAWER_AUTO_CLOSE"
++  test -n "$GP_DISABLE_ANIMATIONS" && gconftool bool "/apps/panel/global/enable_animations" "$GP_DISABLE_ANIMATIONS"
++  test -n "$GP_SATURATE_WHEN_OVER" && gconftool bool "/apps/panel/global/highlight_launchers_on_mouseover" "$GP_SATURATE_WHEN_OVER"
++  test -n "$GP_MEMORY_HUNGRY_MENUS" && gconftool bool "/apps/panel/global/keep_menus_in_memory" "$GP_MEMORY_HUNGRY_MENUS"
++  test -n "$GP_TOOLTIPS_ENABLED" && gconftool bool "/apps/panel/global/tooltips_enabled" "$GP_TOOLTIPS_ENABLED"
++  test -n "$GP_MINIMIZE_DELAY" && gconftool int "/apps/panel/global/panel_hide_delay" "$GP_MINIMIZE_DELAY"
++  test -n "$GP_MINIMIZED_SIZE" && gconftool int "/apps/panel/global/panel_minimized_size" "$GP_MINIMIZED_SIZE"
++  test -n "$GP_MAXIMIZE_DELAY" && gconftool int "/apps/panel/global/panel_show_delay" "$GP_MAXIMIZE_DELAY"
++  test -n "$GP_MENU_KEY" && gconftool string "/apps/panel/global/menu_key" "$GP_MENU_KEY"
++  test -n "$GP_RUN_KEY" && gconftool string "/apps/panel/global/run_key" "$GP_RUN_KEY"
++  test -n "$GP_SCREENSHOT_KEY" && gconftool string "/apps/panel/global/screenshot_key" "$GP_SCREENSHOT_KEY"
++  test -n "$GP_WINDOW_SCREENSHOT_KEY" && gconftool string "/apps/panel/global/window_screenshot_key" "$GP_WINDOW_SCREENSHOT_KEY"
++
++  printf "Done.\n"
++else
++  printf "Gnome-panel panel options file not found\n"
++fi
++
++# Parse gnome-session 1.4 config
++GSS_CONFIG_FILE=~/.gnome/session
++
++if [ -e "$GSS_CONFIG_FILE" ]; then
++  printf "Gnome-session options file found.\n"
++  GS_AUTOSAVE=`grep -w AutoSave $GSS_CONFIG_FILE | cut -f2 -d'='`
++  GS_LOGOUTPROMPT=`grep -w LogoutPrompt $GSS_CONFIG_FILE | cut -f2 -d'='`
++  GS_SPLASHSCREEN=`grep -w SplashScreen $GSS_CONFIG_FILE | cut -f2 -d'='`
++
++  # Set gnome-session 2 configuration
++  test -n "$GS_AUTOSAVE" && gconftool bool "/apps/gnome-session/options/auto_save_session" "$GS_AUTOSAVE"
++  test -n "$GS_LOGOUTPROMPT" && gconftool bool "/apps/gnome-session/options/logout_prompt" "$GS_LOGOUTPROMPT"
++  test -n "$GS_SPLASHSCREEN" && gconftool bool "/apps/gnome-session/options/show_splash_screen" "$GS_SPLASHSCREEN"
++
++  # First remove the one copied before
++  rm ~/.gnome2/session
++
++  # Which session ?
++  GS_SESSION=`grep -w "Current Session" $GSS_CONFIG_FILE | cut -f2 -d'='`
++
++  # If not defined use Default
++  if [ -z "$GS_SESSION" ]; then
++    GS_SESSION="Default"
++  fi
++
++  # Position of the Default string to do a tail instead a cat
++  GS_SESSION_POS=`grep -n -w "\["$GS_SESSION"\]" $GSS_CONFIG_FILE | cut -f1 -d':'`
++
++  # Load session file
++  array=(`tail +$GS_SESSION_POS $GSS_CONFIG_FILE`)
++  elements=${#array[*]}
++  index=0
++
++  while [ "$index" -lt "$elements" ]
++  do
++    # Number of clients
++    if [ `echo ${array[$index]} | grep -w "\["$GS_SESSION"\]"` ]; then
++      while [ "$index" -lt "$elements" ]
++      do
++	GS_CLIENTS=`echo ${array[$index]} | grep -w num_clients | cut -f2 -d'='`
++	let "index += 1"
++      done
++    fi
++    let "index += 1"
++  done
++
++  count=0
++  index=0
++  found_default=""
++
++  while [ "$count" -lt "$GS_CLIENTS" ]
++  do
++    index=0
++    while [ "$index" -lt "$elements" ]
++    do
++      if [ ${array[$index]} = "["$GS_SESSION"]" ] || [ -n "$found_default" ]; then
++	found_default=TRUE
++	if [ `echo ${array[$index]} | grep $count",Program="` ]; then
++	  while [ "$index" -lt "$elements" ]
++	  do
++	    if [ `echo ${array[$index]} | egrep -v "properties|xscreensaver-demo"` ]; then
++	      skip[$count]=TRUE
++	      let "count += 1"
++	      break
++	    else
++	      skip[$count]=FALSE
++	      let "count += 1"
++	      break
++	    fi
++	  done
++	fi
++      fi
++      let "index += 1"
++    done
++    let "count += 1"
++  done
++
++  found_default=""
++
++  printf "[Default]\n" > ~/.gnome2/session
++  elements=${#skip[*]}
++  count=0
++  index=0
++  found_default=""
++
++  for (( session = 0; session < $elements; session++ ))
++  do
++    if [ ${skip[$session]} = TRUE ]; then
++      tail +$GS_SESSION_POS $GSS_CONFIG_FILE | grep $session, | sed -e s/$session/$count/ >> ~/.gnome2/session
++      let "count += 1"
++    fi
++  done
++  if [ -n "$DEBIAN_ADD_UPGRADE_CHECK" ]; then
++    cat >> ~/.gnome2/session <<EOF
++    $count,id=finkgnomeupgrade666666
++    $count,Priority=50
++    $count,RestartCommand=fink-gnome-upgrade-check --sm-client-id finkgnomeupgrade666666
++    $count,RestartStyleHint=1
++EOF
++    let "count += 1"
++  fi 
++  printf "num_clients="$count"\n" >> ~/.gnome2/session
++
++  # Rename panel in gnome-panel
++  perl -i -pe 's,=panel,=gnome-panel,' ~/.gnome2/session
++  perl -i -pe 's,=@PREFIX@/bin/panel,=gnome-panel,' ~/.gnome2/session
++  # Use nautilus instead of gmc
++  perl -i -pe 's,=@PREFIX@/bin/gmc,=nautilus,' ~/.gnome2/session
++  perl -i -pe 's,=gmc,=nautilus,' ~/.gnome2/session
++
++  # Fink specific name conversion
++  perl -i -pe 's,=@PREFIX@/bin/gnome-panel-real,=gnome-panel,' ~/.gnome2/session
++  perl -i -pe 's,=gnome-panel-real,=gnome-panel,' ~/.gnome2/session
++
++  # replace ~/ by /Users/$user
++  user_name=`id -un`
++  perl -i -pe 's,~/,/Users/'$user_name',' ~/.gnome2/session
++
++  printf "Done.\n"
++else
++  printf "Gnome-session options file not found.\n"
++fi
++
++# Parse gnome-terminal 1.4 config
++GT_CONFIG_FILE=~/.gnome/Terminal
++
++if [ ! -e ~/.gconf/apps/gnome-terminal/global/%gconf.xml ]; then
++  if [ -e "$GT_CONFIG_FILE" ]; then
++    printf "Gnome-terminal configuration file found.\n"
++    GT_BACKGROUND_PIXMAP=`grep -w background_pixmap $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_BELL_SILENCED=`grep -w bell_silenced $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_BLINKING=`grep -w blinking $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_COLOR_SCHEME=`grep -w color_scheme $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_COLOR_SET=`grep -w color_set $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_DEL_IS_DEL=`grep -w del_is_del $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_KEYBOARD_SECURED=`grep -w keyboard_secured $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_LOGIN_BY_DEFAULT=`grep -w login_by_default $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_MENUBAR=`grep -w menubar $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_PALETTE=`grep -w palette $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_PIXMAP_FILE=`grep -w pixmap_file $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_SCROLL_BACKGROUND=`grep -w scroll_background $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_SCROLLBACKLINES=`grep -w scrollbacklines $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_SCROLLONKEY=`grep -w scrollonkey $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_SCROLLONOUTPUT=`grep -w scrollonoutput $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_SCROLLPOS=`grep -w scrollpos $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_SHADED=`grep -w shaded $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_SWAP_DEL_AND_BACKSPACE=`grep -w swap_del_and_backspace $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_TRANSPARENT=`grep -w transparent $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_USE_BOLD=`grep -w use_bold $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_USE_FONTSET=`grep -w use_fontset $GT_CONFIG_FILE | cut -f2 -d'='`
++    GT_WORDCLASS=`grep -w wordclass $GT_CONFIG_FILE | cut -f2 -d'='`
++
++    # Set gnome-terminal 2 configuration
++    test -n "$GT_USE_BOLD" && gconftool bool "/apps/gnome-terminal/profiles/Default/allow_bold" "$GT_USE_BOLD"
++    test -n "$GT_BLINKING" && gconftool bool "/apps/gnome-terminal/profiles/Default/cursor_blink" "$GT_BLINKING"
++    test -n "$GT_MENUBAR" && gconftool bool "/apps/gnome-terminal/profiles/Default/default_show_menubar" "$GT_MENUBAR"
++    test -n "$GT_LOGIN_BY_DEFAULT" && gconftool bool "/apps/gnome-terminal/profiles/Default/login_shell" "$GT_LOGIN_BY_DEFAULT"
++    test -n "$GT_SCROLL_BACKGROUND" && gconftool bool "/apps/gnome-terminal/profiles/Default/scroll_background" "$GT_SCROLL_BACKGROUND"
++    test -n "$GT_SCROLLONKEY" && gconftool bool "/apps/gnome-terminal/profiles/Default/scroll_on_keystroke" "$GT_SCROLLONKEY"
++    test -n "$GT_SCROLLONOUTPUT" && gconftool bool "/apps/gnome-terminal/profiles/Default/scroll_on_output" "$GT_SCROLLONOUTPUT"
++    test -n "$GT_BELL_SILENCED" && gconftool bool "/apps/gnome-terminal/profiles/Default/silent_bell" "$GT_BELL_SILENCED"
++    test -n "$GT_USE_FONTSET" &&  gconftool bool "/apps/gnome-terminal/profiles/Default/use_system_font" "$GT_USE_FONTSET"
++    test -n "$GT_SCROLLBACKLINES" && gconftool int "/apps/gnome-terminal/profiles/Default/scrollback_lines" "$GT_SCROLLBACKLINES"
++    test -n "$GT_PIXMAP_FILE" && gconftool string "/apps/gnome-terminal/profiles/Default/background_image" "$GT_PIXMAP_FILE"
++    test -n "$GT_SCROLLPOS" && gconftool string "/apps/gnome-terminal/profiles/Default/scrollbar_position" "$GT_SCROLLPOS"
++    
++    if [ "$GT_TRANSPARENT" = "true" ]; then
++      gconftool string "/apps/gnome-terminal/profiles/Default/background_type" "transparent"
++    else
++      gconftool string "/apps/gnome-terminal/profiles/Default/background_type" "solid"
++    fi
++
++    for GT_COLORS in $GT_PALETTE
++    do
++      NEW_GT_COLORS=$NEW_GT_COLORS'#'`perl -e "print substr (\"$GT_COLORS\", 7, 2)"``perl -e "print substr (\"$GT_COLORS\", 12, 2)"``perl -e "print substr (\"$GT_COLORS\", 17, 2)"`':'
++    done
++    NEW_GT_COLORS=`echo $NEW_GT_COLORS | cut -f-16 -d':'`
++    gconftool string "/apps/gnome-terminal/profiles/Default/palette" "$NEW_GT_COLORS"
++
++    printf "Done.\n"
++  else
++    printf "Gnome-terminal configuration file not found.\n"
++  fi
++fi
++
++# Local Variables:
++# compile-command: "bash -n gnome-stuff-1-to-2"
++# End:
+diff -Naur gnome-session-2.0.9.old/fink/nautilus-666666.desktop gnome-session-2.0.9.new/fink/nautilus-666666.desktop
+--- gnome-session-2.0.9.old/fink/nautilus-666666.desktop	Thu Jan  1 09:00:00 1970
++++ gnome-session-2.0.9.new/fink/nautilus-666666.desktop	Fri Feb  7 21:12:56 2003
+@@ -0,0 +1,96 @@
++[Desktop Entry]
++Encoding=UTF-8
++Version=1.0
++Type=Application
++Exec=nautilus preferences://
++TryExec=
++Icon=@PREFIX@/share/pixmaps/control-center2.png
++X-GNOME-DocPath=
++Terminal=false
++Name[en_US]=Desktop Preferences
++Name[am]=የሠሌዳ ምርጫዎች
++Name[ar]=تفضيلات سطح المكتب
++Name[bg]=Десктоп Настройки
++Name[ca]=Preferències de l'escriptori
++Name[cs]=Nastavení prostředí
++Name[da]=Skrivebordsindstillinger
++Name[de]=Desktop-Einstellungen
++Name[el]=Προτιμήσεις Επιφάνειας Εργασίας
++Name[es]=Preferencias del escritorio
++Name[et]=Töölaua häälestus
++Name[eu]=Mahaiko hobespenak
++Name[fi]=Työpöydän asetukset
++Name[fr]=Préférences du bureau
++Name[gl]=Preferencias do escritorio
++Name[he]=העדפות שולחן העבודה
++Name[hu]=Munkaasztal beállításai
++Name[ja]=デスクトップ設定
++Name[ko]=데스크탑 기본 설정
++Name[lt]=Darbalaukio parinktys
++Name[lv]=Darbvirsmas Preferences
++Name[mk]=Подесувања за десктопот
++Name[ms]=Keutamaan Desktop
++Name[nl]=Bureaubladvoorkeuren
++Name[nn]=Skrivebordinnstillingar
++Name[no]=Brukervalg
++Name[pl]=Ustawienia środowiska
++Name[pt]=Preferências Ambiente Trabalho
++Name[pt_BR]=Preferências
++Name[ro]=Preferinţe desktop
++Name[ru]=Настройки Рабочего стола
++Name[sk]=Nastavenia plochy
++Name[sl]=Nastavitve namizja
++Name[sp]=Поставкe десктопа
++Name[sr]=Postavke desktopa
++Name[sv]=Skrivbordsinställningar
++Name[ta]=¸½¢§Á¨º Å¢ÕôÀí¸û
++Name[tr]=Masaüstü Tercihleri
++Name[uk]=Властивості стільниці
++Name[vi]=Tùy thích cho Desktop
++Name[wa]=Preferinces do scribanne
++Name[zh_CN]=桌面首选项
++Name[zh_TW]=桌面偏好設定
++Comment=Preferences that affect the whole GNOME desktop
++Comment[ar]=التفضيلات التي تحكم سطح مكتب جينوم كله
++Comment[bg]=Настройки, които влияят на целият GNOME десктоп
++Comment[ca]=Preferències que afecten a tot l'escriptori del GNOME
++Comment[cs]=Nastavení které se týkají celého prostředí GNOME
++Comment[da]=Indstillinger der har indflydelse på hele Gnome-skrivebordet
++Comment[de]=Einstellungen, die den gesamten GNOME-Desktop betreffen
++Comment[el]=Προτιμήσεις που επηρεάζουν όλη την επιφάνεια εργασίας του GNOME
++Comment[es]=Preferencias que afectan a todo el escritorio de GNOME
++Comment[et]=Häälestused, mis mõjutavad kogu Gnome töölauda
++Comment[eu]=Hobespenak, GNOMEKO idazmahi osorakoak
++Comment[fi]=Asetukset, jotka vaikuttavat koko GNOME-työpöytään
++Comment[fr]=Préférences affectant l'intégralité du bureau GNOME
++Comment[gl]=Preferencias que afectan a todo o escritorio GNOME
++Comment[he]=העדפות שישפיעו על כל שולחן העבודה של GNOME
++Comment[hu]=Tulajdonságok, amelyek a Gnome munkafelületét érintik
++Comment[ja]=GNOME デスクトップ全体に影響する設定
++Comment[ko]=전체 그놈 데스크탑에 대한 기본 설정
++Comment[lt]=Parinktys, kurios įtakoja visą GNOME darbalaukį
++Comment[lv]=Preferences, kas ietekmē visu GNOME darbvirsmu
++Comment[mk]=Подесувања кои влијаат на целиот GNOME десктоп
++Comment[ms]=Keutamaan yang melibatkan seluruh desktop GNOME
++Comment[nl]=Voorkeuren die het hele GNOME bureaublad beïnvloeden
++Comment[nn]=Instillingar som endrar på heile GNOME-skrivebordet
++Comment[no]=Brukervalg som påvirker hele GNOME skrivebordet
++Comment[pl]=Ustawienia, które wpływają na całe środowisko GNOME
++Comment[pt]=Preferências que afectam todo o ambiente de trabalho GNOME
++Comment[pt_BR]=Preferências que afetam todo o desktop do GNOME
++Comment[ro]=Preferinţe care afectează tot desktopul GNOME
++Comment[ru]=Настойки, которые применяются ко всему рабочему столу среды GNOME
++Comment[sk]=Nastavenia, ktoré ovplyvňujú celé prostredie GNOME
++Comment[sl]=Nastavitve, ki vplivajo na celo namizje GNOME
++Comment[sp]=Опције које утичу на цели GNOME десктоп
++Comment[sr]=Opcije koje utiču na celi GNOME desktop
++Comment[sv]=Inställningar som påverkar hela GNOME-skrivbordet
++Comment[ta]=ÓØ ¸§É¡õ ¸½¢§Á¨º¨ÂÔõ À¡¾¢ì¸ìÜÊÂ Å¢ÕôÀí¸û
++Comment[tr]=Tüm GNOME masaüstünü etkileyen tercihler
++Comment[uk]=Властивості, що стосуються всієї стільниці GNOME
++Comment[vi]=Các tùy thích tác động lên toàn bộ màn hình nền của GNOME
++Comment[wa]=Preferinces ki candjèt li scribanne Gnome en etir
++Comment[zh_CN]=影响整个 GNOME 桌面的首选项
++Comment[zh_TW]=有關整個 GNOME 桌面的偏好設定
++GenericName[en_US]=Desktop Preferences
++Comment[en_US]=Desktop Preferences
+diff -Naur gnome-session-2.0.9.old/gnome-session/Makefile.in gnome-session-2.0.9.new/gnome-session/Makefile.in
+--- gnome-session-2.0.9.old/gnome-session/Makefile.in	Fri Nov 15 12:54:56 2002
++++ gnome-session-2.0.9.new/gnome-session/Makefile.in	Fri Feb  7 21:12:56 2003
+@@ -160,10 +160,18 @@
+ gnome_session_save_LDADD = $(GNOME_SESSION_LIBS)
+ gnome_session_properties_LDADD = $(GNOME_SESSION_LIBS)
+ splash_test_LDADD = $(GNOME_SESSION_LIBS)
++g_utf8_validate_LDADD = $(GNOME_SESSION_LIBS)
++fink_gnome_upgrade_check_LDADD = $(GNOME_SESSION_LIBS)
+ 
+ @SESSION_TRUE@noinst_PROGRAMS = 	splash-test
+ 
+-@SESSION_TRUE@bin_PROGRAMS = 	gnome-session			gnome-session-save		gnome-session-properties
++@SESSION_TRUE@bin_PROGRAMS = 	fink-gnome-upgrade-check 	g-utf8-validate			gnome-session			gnome-session-save		gnome-session-properties
++
++g_utf8_validate_SOURCES =  	g-utf8-validate.c
++
++
++fink_gnome_upgrade_check_SOURCES =  	fink-gnome-upgrade-check.c
++
+ 
+ splash_test_SOURCES =  	splash-widget.c		splash-widget.h		splash-test.c
+ 
+@@ -214,7 +222,8 @@
+ mkinstalldirs = $(SHELL) $(top_srcdir)/mkinstalldirs
+ CONFIG_HEADER = ../config.h
+ CONFIG_CLEAN_FILES =  default.session.5 gnome-session.1
+-@SESSION_TRUE@bin_PROGRAMS =  gnome-session$(EXEEXT) \
++@SESSION_TRUE@bin_PROGRAMS =  fink-gnome-upgrade-check$(EXEEXT) \
++@SESSION_TRUE@g-utf8-validate$(EXEEXT) gnome-session$(EXEEXT) \
+ @SESSION_TRUE@gnome-session-save$(EXEEXT) \
+ @SESSION_TRUE@gnome-session-properties$(EXEEXT)
+ @SESSION_TRUE@noinst_PROGRAMS =  splash-test$(EXEEXT)
+@@ -226,6 +235,13 @@
+ X_CFLAGS = @X_CFLAGS@
+ X_EXTRA_LIBS = @X_EXTRA_LIBS@
+ X_PRE_LIBS = @X_PRE_LIBS@
++fink_gnome_upgrade_check_OBJECTS =  \
++fink-gnome-upgrade-check.$(OBJEXT)
++fink_gnome_upgrade_check_DEPENDENCIES = 
++fink_gnome_upgrade_check_LDFLAGS = 
++g_utf8_validate_OBJECTS =  g-utf8-validate.$(OBJEXT)
++g_utf8_validate_DEPENDENCIES = 
++g_utf8_validate_LDFLAGS = 
+ gnome_session_OBJECTS =  manager.$(OBJEXT) ice.$(OBJEXT) main.$(OBJEXT) \
+ prop.$(OBJEXT) save.$(OBJEXT) command.$(OBJEXT) remote.$(OBJEXT) \
+ logout.$(OBJEXT) splash-widget.$(OBJEXT) gsm-gsd.$(OBJEXT) \
+@@ -266,18 +282,27 @@
+ 
+ DISTFILES = $(DIST_COMMON) $(SOURCES) $(HEADERS) $(TEXINFOS) $(EXTRA_DIST)
+ 
+-TAR = gtar
++TAR = tar
+ GZIP_ENV = --best
+-SOURCES = $(gnome_session_SOURCES) $(gnome_session_save_SOURCES) $(gnome_session_properties_SOURCES) $(splash_test_SOURCES)
+-OBJECTS = $(gnome_session_OBJECTS) $(gnome_session_save_OBJECTS) $(gnome_session_properties_OBJECTS) $(splash_test_OBJECTS)
++DEP_FILES =  .deps/command.P .deps/fink-gnome-upgrade-check.P \
++.deps/g-utf8-validate.P .deps/gsm-atk.P .deps/gsm-client-editor.P \
++.deps/gsm-client-list.P .deps/gsm-client-row.P .deps/gsm-gsd.P \
++.deps/gsm-protocol.P .deps/gsm-sound.P .deps/gsm-typebuiltins.P \
++.deps/ice.P .deps/logout.P .deps/main.P .deps/manager.P .deps/prop.P \
++.deps/remote.P .deps/save-session.P .deps/save.P .deps/session-names.P \
++.deps/session-properties-capplet.P .deps/session-properties.P \
++.deps/splash-test.P .deps/splash-widget.P .deps/startup-programs.P \
++.deps/util.P
++SOURCES = $(fink_gnome_upgrade_check_SOURCES) $(g_utf8_validate_SOURCES) $(gnome_session_SOURCES) $(gnome_session_save_SOURCES) $(gnome_session_properties_SOURCES) $(splash_test_SOURCES)
++OBJECTS = $(fink_gnome_upgrade_check_OBJECTS) $(g_utf8_validate_OBJECTS) $(gnome_session_OBJECTS) $(gnome_session_save_OBJECTS) $(gnome_session_properties_OBJECTS) $(splash_test_OBJECTS)
+ 
+ all: all-redirect
+ .SUFFIXES:
+ .SUFFIXES: .S .c .lo .o .obj .s
+ $(srcdir)/Makefile.in: @MAINTAINER_MODE_TRUE@ Makefile.am $(top_srcdir)/configure.in $(ACLOCAL_M4) 
+-	cd $(top_srcdir) && $(AUTOMAKE) --gnu --include-deps gnome-session/Makefile
++	cd $(top_srcdir) && $(AUTOMAKE) --gnu gnome-session/Makefile
+ 
+-Makefile: $(srcdir)/Makefile.in  $(top_builddir)/config.status
++Makefile: $(srcdir)/Makefile.in  $(top_builddir)/config.status $(BUILT_SOURCES)
+ 	cd $(top_builddir) \
+ 	  && CONFIG_FILES=$(subdir)/$@ CONFIG_HEADERS= $(SHELL) ./config.status
+ 
+@@ -320,9 +345,6 @@
+ 
+ maintainer-clean-noinstPROGRAMS:
+ 
+-.c.o:
+-	$(COMPILE) -c $<
+-
+ # FIXME: We should only use cygpath when building on Windows,
+ # and only if it is available.
+ .c.obj:
+@@ -345,9 +367,6 @@
+ 
+ maintainer-clean-compile:
+ 
+-.c.lo:
+-	$(LIBTOOL) --mode=compile $(COMPILE) -c $<
+-
+ .s.lo:
+ 	$(LIBTOOL) --mode=compile $(COMPILE) -c $<
+ 
+@@ -364,6 +383,14 @@
+ 
+ maintainer-clean-libtool:
+ 
++fink-gnome-upgrade-check$(EXEEXT): $(fink_gnome_upgrade_check_OBJECTS) $(fink_gnome_upgrade_check_DEPENDENCIES)
++	@rm -f fink-gnome-upgrade-check$(EXEEXT)
++	$(LINK) $(fink_gnome_upgrade_check_LDFLAGS) $(fink_gnome_upgrade_check_OBJECTS) $(fink_gnome_upgrade_check_LDADD) $(LIBS)
++
++g-utf8-validate$(EXEEXT): $(g_utf8_validate_OBJECTS) $(g_utf8_validate_DEPENDENCIES)
++	@rm -f g-utf8-validate$(EXEEXT)
++	$(LINK) $(g_utf8_validate_LDFLAGS) $(g_utf8_validate_OBJECTS) $(g_utf8_validate_LDADD) $(LIBS)
++
+ gnome-session$(EXEEXT): $(gnome_session_OBJECTS) $(gnome_session_DEPENDENCIES)
+ 	@rm -f gnome-session$(EXEEXT)
+ 	$(LINK) $(gnome_session_LDFLAGS) $(gnome_session_OBJECTS) $(gnome_session_LDADD) $(LIBS)
+@@ -565,7 +592,7 @@
+ 	  awk '    { files[$$0] = 1; } \
+ 	       END { for (i in files) print i; }'`; \
+ 	test -z "$(ETAGS_ARGS)$$unique$(LISP)$$tags" \
+-	  || (cd $(srcdir) && etags $(ETAGS_ARGS) $$tags  $$unique $(LISP) -o $$here/TAGS)
++	  || (cd $(srcdir) && etags -o $$here/TAGS $(ETAGS_ARGS) $$tags  $$unique $(LISP))
+ 
+ mostlyclean-tags:
+ 
+@@ -581,6 +608,11 @@
+ subdir = gnome-session
+ 
+ distdir: $(DISTFILES)
++	here=`cd $(top_builddir) && pwd`; \
++	top_distdir=`cd $(top_distdir) && pwd`; \
++	distdir=`cd $(distdir) && pwd`; \
++	cd $(top_srcdir) \
++	  && $(AUTOMAKE) --include-deps --build-dir=$$here --srcdir-name=$(top_srcdir) --output-dir=$$top_distdir --gnu gnome-session/Makefile
+ 	@for file in $(DISTFILES); do \
+ 	  d=$(srcdir); \
+ 	  if test -d $$d/$$file; then \
+@@ -592,48 +624,38 @@
+ 	  fi; \
+ 	done
+ 	$(MAKE) $(AM_MAKEFLAGS) top_distdir="$(top_distdir)" distdir="$(distdir)" dist-hook
+-command.o: command.c ../config.h command.h manager.h headers.h session.h \
+-	save.h prop.h
+-gsm-atk.o: gsm-atk.c ../config.h gsm-atk.h
+-gsm-client-editor.o: gsm-client-editor.c ../config.h gsm-client-editor.h \
+-	gsm-protocol.h gsm-client-row.h gsm-client-list.h gsm-atk.h
+-gsm-client-list.o: gsm-client-list.c ../config.h gsm-client-list.h \
+-	gsm-protocol.h gsm-client-row.h gsm-client-editor.h
+-gsm-client-row.o: gsm-client-row.c ../config.h gsm-client-row.h \
+-	gsm-protocol.h gsm-client-list.h gsm-client-editor.h
+-gsm-gsd.o: gsm-gsd.c ../config.h gsm-gsd.h util.h
+-gsm-multiscreen.o: gsm-multiscreen.c ../config.h gsm-multiscreen.h
+-gsm-protocol.o: gsm-protocol.c ../config.h session.h gsm-protocol.h \
+-	gsm-typebuiltins.h gsm-marshal.h gsm-marshal.c
+-gsm-sound.o: gsm-sound.c ../config.h gsm-sound.h
+-gsm-typebuiltins.o: gsm-typebuiltins.c gsm-typebuiltins.h gsm-protocol.h
+-ice.o: ice.c ../config.h ice.h headers.h session.h manager.h util.h
+-logout.o: logout.c ../config.h ice.h headers.h logout.h command.h \
+-	manager.h util.h
+-main.o: main.c ../config.h manager.h headers.h ice.h save.h command.h \
+-	splash-widget.h util.h gsm-sound.h gsm-gsd.h
+-manager.o: manager.c ../config.h manager.h headers.h session.h prop.h \
+-	command.h splash-widget.h remote.h save.h logout.h ice.h \
+-	gsm-protocol.h util.h
+-prop.o: prop.c prop.h headers.h
+-remote.o: remote.c ../config.h remote.h headers.h
+-save-session.o: save-session.c ../config.h
+-save.o: save.c ../config.h save.h headers.h session.h prop.h command.h \
+-	manager.h util.h
+-session-names.o: session-names.c ../config.h \
+-	session-properties-capplet.h headers.h gsm-protocol.h
+-session-properties-capplet.o: session-properties-capplet.c ../config.h \
+-	headers.h gsm-protocol.h session-properties-capplet.h \
+-	session-properties.h
+-session-properties.o: session-properties.c ../config.h gsm-client-list.h \
+-	gsm-protocol.h gsm-atk.h session-properties.h \
+-	session-properties-capplet.h
+-splash-test.o: splash-test.c ../config.h splash-widget.h
+-splash-widget.o: splash-widget.c ../config.h headers.h splash-widget.h
+-startup-programs.o: startup-programs.c ../config.h \
+-	session-properties-capplet.h gsm-protocol.h headers.h
+-util.o: util.c ../config.h util.h
+ 
++DEPS_MAGIC := $(shell mkdir .deps > /dev/null 2>&1 || :)
++
++-include $(DEP_FILES)
++
++mostlyclean-depend:
++
++clean-depend:
++
++distclean-depend:
++	-rm -rf .deps
++
++maintainer-clean-depend:
++
++%.o: %.c
++	@echo '$(COMPILE) -c $<'; \
++	$(COMPILE) -Wp,-MD,.deps/$(*F).pp -c $<
++	@-cp .deps/$(*F).pp .deps/$(*F).P; \
++	tr ' ' '\012' < .deps/$(*F).pp \
++	  | sed -e 's/^\\$$//' -e '/^$$/ d' -e '/:$$/ d' -e 's/$$/ :/' \
++	    >> .deps/$(*F).P; \
++	rm .deps/$(*F).pp
++
++%.lo: %.c
++	@echo '$(LTCOMPILE) -c $<'; \
++	$(LTCOMPILE) -Wp,-MD,.deps/$(*F).pp -c $<
++	@-sed -e 's/^\([^:]*\)\.o[ 	]*:/\1.lo \1.o :/' \
++	  < .deps/$(*F).pp > .deps/$(*F).P; \
++	tr ' ' '\012' < .deps/$(*F).pp \
++	  | sed -e 's/^\\$$//' -e '/^$$/ d' -e '/:$$/ d' -e 's/$$/ :/' \
++	    >> .deps/$(*F).P; \
++	rm -f .deps/$(*F).pp
+ info-am:
+ info: info-am
+ dvi-am:
+@@ -680,18 +702,19 @@
+ maintainer-clean-generic:
+ mostlyclean-am:  mostlyclean-binPROGRAMS mostlyclean-noinstPROGRAMS \
+ 		mostlyclean-compile mostlyclean-libtool \
+-		mostlyclean-tags mostlyclean-generic
++		mostlyclean-tags mostlyclean-depend mostlyclean-generic
+ 
+ mostlyclean: mostlyclean-am
+ 
+ clean-am:  clean-binPROGRAMS clean-noinstPROGRAMS clean-compile \
+-		clean-libtool clean-tags clean-generic mostlyclean-am
++		clean-libtool clean-tags clean-depend clean-generic \
++		mostlyclean-am
+ 
+ clean: clean-am
+ 
+ distclean-am:  distclean-binPROGRAMS distclean-noinstPROGRAMS \
+ 		distclean-compile distclean-libtool distclean-tags \
+-		distclean-generic clean-am
++		distclean-depend distclean-generic clean-am
+ 	-rm -f libtool
+ 
+ distclean: distclean-am
+@@ -699,8 +722,8 @@
+ maintainer-clean-am:  maintainer-clean-binPROGRAMS \
+ 		maintainer-clean-noinstPROGRAMS \
+ 		maintainer-clean-compile maintainer-clean-libtool \
+-		maintainer-clean-tags maintainer-clean-generic \
+-		distclean-am
++		maintainer-clean-tags maintainer-clean-depend \
++		maintainer-clean-generic distclean-am
+ 	@echo "This command is intended for maintainers to use;"
+ 	@echo "it deletes files that may require special tools to rebuild."
+ 
+@@ -718,8 +741,9 @@
+ install-defaultDATA uninstall-pixmapDATA install-pixmapDATA \
+ uninstall-schemaDATA install-schemaDATA uninstall-settingsDATA \
+ install-settingsDATA tags mostlyclean-tags distclean-tags clean-tags \
+-maintainer-clean-tags distdir info-am info dvi-am dvi check check-am \
+-installcheck-am installcheck install-exec-am install-exec \
++maintainer-clean-tags distdir mostlyclean-depend distclean-depend \
++clean-depend maintainer-clean-depend info-am info dvi-am dvi check \
++check-am installcheck-am installcheck install-exec-am install-exec \
+ install-data-local install-data-am install-data install-am install \
+ uninstall-am uninstall all-redirect all-am all installdirs \
+ mostlyclean-generic distclean-generic clean-generic \
+diff -Naur gnome-session-2.0.9.old/gnome-session/fink-gnome-upgrade-check.c gnome-session-2.0.9.new/gnome-session/fink-gnome-upgrade-check.c
+--- gnome-session-2.0.9.old/gnome-session/fink-gnome-upgrade-check.c	Thu Jan  1 09:00:00 1970
++++ gnome-session-2.0.9.new/gnome-session/fink-gnome-upgrade-check.c	Fri Feb  7 21:12:57 2003
+@@ -0,0 +1,135 @@
++/* debian-gnome-upgrade-check.c -*- coding: utf-8 -*-
++
++   Copyright © 2002 Colin Walters <walters@verbum.org>
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2, or (at your option)
++   any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
++   02111-1307, USA.  */
++
++#include <config.h>
++
++#include <stdio.h>
++#include <gtk/gtk.h>
++#include <signal.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/types.h>
++#include <sys/wait.h>
++#include <sys/stat.h>
++#include <netdb.h>
++#include <errno.h>
++#include <fcntl.h>
++
++#include <libgnome/libgnome.h>
++#include <libgnomeui/libgnomeui.h>
++
++static const struct poptOption options[] = {
++  {NULL, '\0', 0, NULL, 0}
++};
++
++#define DEBIAN_UPGRADE_STAGE_1 "fink-upgrade-stage-1"
++
++int quit (void);
++
++int quit (void)
++{
++  char *stage1file = g_build_filename (g_get_home_dir (), ".gnome2", DEBIAN_UPGRADE_STAGE_1, NULL);
++  unlink (stage1file);
++  g_free (stage1file);
++  exit (0);
++}
++
++enum {
++  RESPONSE_KEEP,
++  RESPONSE_DISCARD
++};
++
++int
++main (int argc, char *argv[])
++{
++  GnomeClient *client;
++  GtkWidget *questionbox;
++  char *stage1file;
++  struct stat stbuf;
++  int response;
++
++  /* Initialize the i18n stuff */
++  bindtextdomain (GETTEXT_PACKAGE, GNOMELOCALEDIR);
++  bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
++  textdomain (GETTEXT_PACKAGE);
++
++  gnome_program_init ("fink-gnome-upgrade-check", VERSION, 
++		      LIBGNOMEUI_MODULE, argc, argv, 
++		      GNOME_PROGRAM_STANDARD_PROPERTIES,
++		      NULL);
++#if 0
++  gnome_window_icon_set_default_from_file (GNOME_ICONDIR "/gnome-debian.png");
++#endif
++  client = gnome_master_client ();
++
++  g_signal_connect (client, "die", G_CALLBACK (quit), NULL);
++
++  stage1file = g_build_filename (g_get_home_dir (), GNOME_DOT_GNOME, DEBIAN_UPGRADE_STAGE_1, NULL);
++  if (stat (stage1file, &stbuf))
++    {
++      printf ("Couldn't access Fink Stage 1 upgrade file \"%s\": %s\n", stage1file, g_strerror (errno));
++      g_free (stage1file);
++      goto cleanup_exit;
++    }
++  
++  questionbox = gtk_message_dialog_new (NULL, 0,
++					GTK_MESSAGE_QUESTION,
++					GTK_BUTTONS_NONE,
++					_("*** You are using an experimental release of Fink GNOME 2 ***\n\n"
++					  "Do you want to keep the current desktop layout?\n"
++					  "(If your desktop looks very strange, with lots of missing buttons "
++					  "or panels in odd places, then the upgrade probably failed.)\n"
++					  "If you choose not to accept the current layout, you will be\n"
++					  "logged out; when you log in again, you will just be presented\n"
++					  "with a standard GNOME desktop layout.\n\n"));
++
++  gtk_dialog_add_buttons (GTK_DIALOG (questionbox), "Discard", RESPONSE_DISCARD, "Keep", RESPONSE_KEEP, NULL);
++  gtk_window_set_title (GTK_WINDOW (questionbox), "Fink GNOME Upgrade Successful?");
++  gtk_window_set_position (GTK_WINDOW (questionbox), GTK_WIN_POS_CENTER);
++  gtk_dialog_set_default_response (GTK_DIALOG (questionbox), RESPONSE_KEEP);
++  
++  response = gtk_dialog_run (GTK_DIALOG (questionbox));
++  gtk_widget_destroy (questionbox);
++  if (response == RESPONSE_DISCARD)
++    {
++      char *fname = g_build_filename (g_get_home_dir (), GNOME_DOT_GNOME,
++				      "fink-upgrade-failed", NULL);
++      int fd = open (fname, O_CREAT | O_EXCL, 0600);
++      if (fd < 0)
++	{
++	  char *err = g_strdup_printf (_("Couldn't create ~/%s/fink-upgrade-failed: %s"), GNOME_DOT_GNOME, g_strerror (errno));
++	  fprintf (stderr, "%s\n", err);
++	  gnome_error_dialog (err);
++	  g_free (err);
++	  exit (1);
++	}
++      
++      close (fd);
++      unlink (stage1file);
++      /* This should log them out immediately. */
++      gnome_client_request_save (client, GNOME_SAVE_GLOBAL, TRUE, GNOME_INTERACT_NONE, TRUE, FALSE);
++      exit (0);
++    }
++  
++  unlink (stage1file);
++ cleanup_exit:
++  /* Remove ourselves from the startup queue */
++  gnome_client_set_restart_style (client, GNOME_RESTART_NEVER);
++  exit (0);
++}
+diff -Naur gnome-session-2.0.9.old/gnome-session/g-utf8-validate.c gnome-session-2.0.9.new/gnome-session/g-utf8-validate.c
+--- gnome-session-2.0.9.old/gnome-session/g-utf8-validate.c	Thu Jan  1 09:00:00 1970
++++ gnome-session-2.0.9.new/gnome-session/g-utf8-validate.c	Fri Feb  7 21:12:57 2003
+@@ -0,0 +1,21 @@
++/* g-utf8-validate.c -- Simple program to validate utf-8
++
++   Copyright © 2002 Colin Walters <walters@debian.org>
++
++   This program is hereby placed into the public domain.
++
++*/
++
++#include <glib.h>
++#include <stdio.h>
++
++int
++main(int argc, char **argv) {
++  int count = 0;
++  while (--argc > 0) {
++    if (g_utf8_validate (argv[++count], -1, NULL) != TRUE)
++      exit (1);
++  }
++  exit(0);
++}
++  
+diff -Naur gnome-session-2.0.9.old/gnome-session/gnome-session.1.in gnome-session-2.0.9.new/gnome-session/gnome-session.1.in
+--- gnome-session-2.0.9.old/gnome-session/gnome-session.1.in	Tue Feb  6 06:14:11 2001
++++ gnome-session-2.0.9.new/gnome-session/gnome-session.1.in	Fri Feb  7 21:12:57 2003
+@@ -3,6 +3,7 @@
+ .\" (C) 2000 Miguel de Icaza (miguel@helixcode.com)
+ .\"
+ .TH GNOME 1 "GNOME 1.0"
++.SH NAME
+ gnome-session \- Starts up the GNOME desktop environment
+ .SH SYNOPSIS
+ .B gnome-session [\-\-choosesession] [\-\-failsafe]
+diff -Naur gnome-session-2.0.9.old/gnome-session/gnome-wm gnome-session-2.0.9.new/gnome-session/gnome-wm
+--- gnome-session-2.0.9.old/gnome-session/gnome-wm	Sun Dec  9 12:25:38 2001
++++ gnome-session-2.0.9.new/gnome-session/gnome-wm	Fri Feb  7 21:12:57 2003
+@@ -3,6 +3,7 @@
+ .\" (C) 2000 Miguel de Icaza (miguel@helixcode.com)
+ .\"
+ .TH GNOME 1 "GNOME 1.0"
++.SH NAME
+ gnome-wm \- Launches the user selected window manager for the GNOME
+ session
+ .SH SYNOPSIS
+diff -Naur gnome-session-2.0.9.old/gnome-session/main.c gnome-session-2.0.9.new/gnome-session/main.c
+--- gnome-session-2.0.9.old/gnome-session/main.c	Sat Jul 27 03:37:02 2002
++++ gnome-session-2.0.9.new/gnome-session/main.c	Fri Feb  7 21:13:42 2003
+@@ -26,10 +26,14 @@
+ #include <string.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
++#include <sys/stat.h>
+ #include <netdb.h>
++#include <fcntl.h>
+ 
+ #include <gconf/gconf-client.h>
+ 
++#include <gtk/gtkprogressbar.h>
++#include <gtk/gtklabel.h>
+ #include <libgnome/libgnome.h>
+ #include <libgnomeui/libgnomeui.h>
+ 
+@@ -233,6 +237,212 @@
+     }
+ }
+ 
++
++/* Debian GNOME 1 to GNOME 2 transition handler, written by
++   Colin Walters <walters@debian.org> */
++enum {
++  RESPONSE_CONVERT,
++  RESPONSE_DISCARD
++};
++enum {
++  RESPONSE_CONTINUE,
++  RESPONSE_EXIT
++};
++
++#define DEBIAN_1_TO_2_UPGRADE_SCRIPT "@PREFIX@/share/gnome-session/fink/gnome-1-to-2"
++static void
++debian_gnome_1_to_2_upgrade_check(void) {
++  struct stat stbuf;
++  GtkWidget *tmp_msgbox = NULL;
++  char *fname;
++  int response, status;
++
++  /* If we can't find the script, just assume all hell has broken
++     loose, and continue quietly. */
++  if (stat (DEBIAN_1_TO_2_UPGRADE_SCRIPT, &stbuf))
++    return;
++
++  /* If they've never run GNOME 1, just skip the whole thing. */
++  fname = g_build_filename (g_get_home_dir (), ".gnome", "session", NULL);
++  if (stat (fname, &stbuf))
++    goto cleanup;
++
++  g_free (fname);
++
++  fname = g_build_filename (g_get_home_dir (), ".gnome2", "fink-upgrade-failed", NULL);
++  if (!stat (fname, &stbuf))
++    {
++      char *fname2;
++      fprintf (stderr, "Found fink-upgrade-failed file\n");
++      g_free (fname);
++    upgrade_script_failure:
++      fprintf (stderr, "Purging gconf2 database\n");
++      /* Gross, but simple */
++      system ("gconftool-2 --recursive-unset /apps");
++      system ("gconftool-2 --recursive-unset /desktop");
++      system ("gconftool-2 --recursive-unset /system");
++      system ("gconftool-2 --recursive-unset /apps");
++      system ("gconftool-2 --recursive-unset /desktop");
++      system ("gconftool-2 --recursive-unset /system");
++      fprintf (stderr, "Removing existing .gnome2 dir\n");
++      fname = g_concat_dir_and_file (g_get_home_dir (), ".gnome2");
++      fname2 = g_concat_dir_and_file (g_get_home_dir (), ".gnome2.fink-backup");
++      rename(fname, fname2);
++      g_free (fname);
++      g_free (fname2);
++      /* We're all done; let GNOME create all the default settings. */
++      return;
++    }
++  g_free (fname);
++
++  fname = g_build_filename (g_get_home_dir (), ".gnome2", "session", NULL);
++  if (!stat (fname, &stbuf))
++    /* They've already run GNOME 2. */
++    goto cleanup;
++
++  g_free(fname);
++
++  fname = g_build_filename (g_get_home_dir (), ".gnome2", "fink-upgrade-declined", NULL);
++  if (!stat (fname, &stbuf))
++    /* They've declined to make an upgrade, but haven't saved their
++       session yet, so ~/.gnome2/session doesn't exist. */
++    goto cleanup;
++  
++  g_free(fname);
++
++  fprintf (stderr, "gnome-session Fink upgrade: Asking upgrade question\n");
++  tmp_msgbox = gtk_message_dialog_new (NULL, 0,
++				       GTK_MESSAGE_QUESTION,
++				       GTK_BUTTONS_NONE,
++				       _("IMPORTANT: You appear to be upgrading from an older version of GNOME.\n"
++					 "The GNOME 2 Desktop is much simplified compared to previous versions. "
++					 "However, some less commonly-used features have been removed.\n"
++					 "Consequently, your desktop layout may not be preserved perfectly.\n\n"
++					 "Do you want to attempt to convert your older settings?\n"));
++
++  gtk_dialog_add_buttons (GTK_DIALOG (tmp_msgbox), "Discard", RESPONSE_DISCARD, "Convert", RESPONSE_CONVERT, NULL);
++  gtk_window_set_position (GTK_WINDOW (tmp_msgbox), GTK_WIN_POS_CENTER);
++  gtk_dialog_set_default_response (GTK_DIALOG (tmp_msgbox), RESPONSE_CONVERT);
++
++  response = gtk_dialog_run (GTK_DIALOG (tmp_msgbox));
++  gtk_widget_destroy (tmp_msgbox);
++  if (response != RESPONSE_CONVERT)
++    {
++      char *gnome_user_dir;
++      fprintf (stderr, "gnome-session Fink upgrade: Got negative response to upgrade question\n");
++      fname = g_build_filename (g_get_home_dir (), ".gnome2", "fink-upgrade-declined", NULL);
++      gnome_user_dir = g_build_filename (g_get_home_dir(), GNOME_DOT_GNOME, NULL);
++      mkdir (gnome_user_dir, 0700);
++      creat (fname, 0644);
++      g_free (fname);
++      g_free (gnome_user_dir);
++      return;
++    }
++
++  fprintf (stderr, "gnome-session Fink upgrade: forking\n");
++  {
++    GtkWidget *label, *progress, *vbox;
++    pid_t pid = fork();
++    status = -1;
++    tmp_msgbox = NULL;
++    if (pid < 0)
++      {
++	fprintf (stderr, "Unable to fork\n");
++	goto lose_on_fork;
++      }
++
++    if (pid == 0)
++      {
++	/* Child */
++	execl(DEBIAN_1_TO_2_UPGRADE_SCRIPT, DEBIAN_1_TO_2_UPGRADE_SCRIPT, NULL);
++	_exit(1);
++      }
++
++    fprintf (stderr, "Creating progressbar window\n");
++    tmp_msgbox = gtk_window_new (GTK_WINDOW_TOPLEVEL);
++    vbox = gtk_vbox_new (FALSE, GNOME_PAD);
++    label = gtk_label_new (NULL);
++    gtk_label_set_markup (GTK_LABEL (label), _("<span size=\"large\" style=\"italic\">Performing upgrade...</span>"));
++    gtk_container_add (GTK_CONTAINER (vbox), label); 
++    progress = gtk_progress_bar_new ();
++    gtk_container_add (GTK_CONTAINER (vbox), progress); 
++    gtk_container_add (GTK_CONTAINER (tmp_msgbox), vbox); 
++    gtk_window_set_position (GTK_WINDOW (tmp_msgbox), GTK_WIN_POS_CENTER);
++    gtk_widget_show_all (GTK_WIDGET (tmp_msgbox));
++
++    while (1)
++      {
++	int ret;
++	ret = waitpid (pid, &status, WNOHANG);
++	if (ret != 0)
++	  {
++	    if ((WIFEXITED (status) && WEXITSTATUS (status) == 0))
++	      {
++		fprintf (stderr, "Upgrade successful\n");
++		break;
++	      }
++	    else
++	      {
++		if (WIFEXITED (status))
++		  fprintf (stderr, "Upgrade script \"%s\" exited with code %d\n", DEBIAN_1_TO_2_UPGRADE_SCRIPT,
++			   WEXITSTATUS (status));
++		else if (WIFSIGNALED (status))
++		  fprintf (stderr, "Upgrade script \"%s\" killed by signal %d\n", DEBIAN_1_TO_2_UPGRADE_SCRIPT,
++			   WTERMSIG (status));
++		else
++		  fprintf (stderr, "Upgrade script \"%s\" stopped by signal %d\n", DEBIAN_1_TO_2_UPGRADE_SCRIPT,
++			   WSTOPSIG (status));
++	      lose_on_fork:
++		fprintf (stderr, "Upgrade script failed\n");
++		/* If we were displaying a progressbar, destroy it. */
++		if (tmp_msgbox != NULL)
++		  gtk_widget_destroy (tmp_msgbox);
++		/* Continuing past this point means something bad happened... */
++		tmp_msgbox = gtk_message_dialog_new (NULL, 0,
++						     GTK_MESSAGE_ERROR,
++						     GTK_BUTTONS_NONE,
++						     status < 0 ? 
++						     _("The upgrade script could not be executed.\n"
++						       "If you choose to continue, your old settings will be backed up,"
++						       "and a safe session will be used."
++						       "Do you want to continue?\n") : ("The upgrade script exited with an error.\n"
++											"(See ~/.gnome2/fink-upgrade.log for the reason)\n"
++											"If you choose to continue, your old settings will be backed up, "
++											"and a safe session will be used.\n\n"
++											"Do you want to continue?\n"));
++		gtk_dialog_add_buttons (GTK_DIALOG (tmp_msgbox), "Exit", RESPONSE_EXIT, "Continue", RESPONSE_CONTINUE, NULL);
++		gtk_window_set_position (GTK_WINDOW (tmp_msgbox), GTK_WIN_POS_CENTER);
++		gtk_dialog_set_default_response (GTK_DIALOG (tmp_msgbox), RESPONSE_EXIT);
++		fprintf (stderr, "Displaying upgrade script failure dialog\n");
++		response = gtk_dialog_run (GTK_DIALOG (tmp_msgbox));
++		gtk_widget_destroy (tmp_msgbox);
++		if (response != RESPONSE_CONTINUE)
++		  {
++		    fprintf (stderr, "Got negative response\n");
++		    exit(1);
++		  }
++		/* They said to continue.  Loop back up to the top as if the
++		   fink-upgrade-failed file existed. */
++		fprintf (stderr, "Going back to upgrade_script_failure\n");
++		goto upgrade_script_failure;
++	      }
++	  }
++	    
++	while (gtk_events_pending ())
++	  gtk_main_iteration ();
++	gtk_progress_bar_pulse (GTK_PROGRESS_BAR (progress));
++	g_usleep (100000);
++      }
++    gtk_widget_destroy (tmp_msgbox);
++  }
++
++  return;
++
++  cleanup:  
++  g_free(fname);
++  return;
++}
++  
+ int
+ main (int argc, char *argv[])
+ {
+@@ -259,6 +469,9 @@
+    * gnome yet
+    */
+   gtk_init (&argc, &argv);
++  
++  debian_gnome_1_to_2_upgrade_check ();
++  
+   gnome_login_check ();
+ 
+   err = NULL;
