@@ -5,7 +5,7 @@
 # Author: <thesin@users.sourceforge.net>
 # usage : /sys, /up, /fink, /playing
 #         /infosave, /infoshow, /infoload, /infohelp
-#         /enable <option>, /disable <option, /conf <option> <value>
+#         /enable <option>, /disable <option>, /conf <option> <value>
 # -----------------------------------------------------------------
 
 my $out;
@@ -25,7 +25,14 @@ my ($OSX, $OSXVERS, $OSXBUILD);
 my ($FINKVERS, $DISTVERS, $FINKPKGS, $FINKTREE);
 my ($DEVTOOLS, $TOOLVERS, $TOOLBUILD, $GCCVERS);
 
-my $configfile = "$ENV{HOME}/.xchat/darwininfo.conf";
+my $configfile;
+if (-d "$ENV{HOME}/.xchat2") {
+  $configfile = "$ENV{HOME}/.xchat2/darwininfo.conf";
+} elsif (-d "$ENV{HOME}/.xchat") {
+  $configfile = "$ENV{HOME}/.xchat/darwininfo.conf";
+} else {
+  $configfile = "$ENV{HOME}/darwininfo.conf";
+}
 my $version = "0.4.0";
 my $scriptname = "Darwin SysInfo";
 
@@ -652,31 +659,31 @@ sub get_devinfo {
   $TOOLBUILD = "Unknown";
   $GCCVERS = "Unknown";
 
-  my @gcc_vers = `cc --version`;
-  my @dev_vers = `cat \"/Developer/Applications/Project\ Builder.app/Contents/Resources/English.lproj/DevCDVersion.plist\"`;
-
-  my ($infoline, $value);
-
   if (-e "/Developer") {
     $DEVTOOLS = "Installed";
+
+    my $infoline;
+    my @gcc_vers = `cc --version`;
+    my @dev_vers = `cat \"/Developer/Applications/Project\ Builder.app/Contents/Resources/English.lproj/DevCDVersion.plist\"`;
+
+    foreach $infoline (@dev_vers) {
+      chomp($infoline);
+      if ($infoline =~ /^.* = \"(.*)\";/) {
+        $TOOLVERS = "$1";
+      }
+    }
+
+    
+    foreach $infoline (@gcc_vers) {
+      chomp($infoline);
+      if ($infoline =~ /^cc \(GCC\) ([0-9.]+.*)/) {
+        $GCCVERS = $1;
+      } elsif ($infoline =~ /^([0-9.]+)/) {
+        $GCCVERS = $1;
+      }
+    }
   } else {
     $DEVTOOLS = "N/A";
-  }
-
-  foreach $infoline (@dev_vers) {
-    chomp($infoline);
-    if ($infoline =~ /^.* = "(.*)";/) {
-      $TOOLVERS = "$1";
-    }
-  }
-
-  foreach $infoline (@gcc_vers) {
-    chomp($infoline);
-    if ($infoline =~ /^cc \(GCC\) ([0-9.]+.*)/) {
-      $GCCVERS = $1;
-    } elsif ($infoline =~ /^([0-9.]+)/) {
-      $GCCVERS = $1;
-    }
   }
 }
 
