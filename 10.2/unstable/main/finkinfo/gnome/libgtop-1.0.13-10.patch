@@ -1,0 +1,2527 @@
+diff -Naur libgtop-1.0.13.old/configure libgtop-1.0.13.new/configure
+--- libgtop-1.0.13.old/configure	Tue Nov 27 07:50:58 2001
++++ libgtop-1.0.13.new/configure	Sun Aug 25 22:50:23 2002
+@@ -5711,11 +5711,11 @@
+     ;;
+ 
+   darwin* | rhapsody*)
+-    allow_undefined_flag='-undefined suppress'
++    allow_undefined_flag='-undefined suppress -flat_namespace'
+     # FIXME: Relying on posixy $() will cause problems for
+     #        cross-compilation, but unfortunately the echo tests do not
+     #        yet detect zsh echo's removal of \ escapes.
+-    archive_cmds='$CC $(test .$module = .yes && echo -bundle || echo -dynamiclib) $allow_undefined_flag -o $lib $libobjs $deplibs$linkopts -install_name $rpath/$soname $(test -n "$verstring" -a x$verstring != x0.0 && echo $verstring)'
++    archive_cmds='$CC $(test .$module = .yes && echo -bundle || echo -dynamiclib) $allow_undefined_flag -o $lib $libobjs $deplibs$linkopts -install_name $rpath/$soname $tmp_verstring'
+     # We need to add '_' to the symbols in $export_symbols first
+     #archive_expsym_cmds="$archive_cmds"' && strip -s $export_symbols'
+     hardcode_direct=yes
+@@ -10002,6 +10002,12 @@
+ 	      libgtop_use_machine_h=yes
+ 	      libgtop_need_server=yes
+ 	      ;;
++	    darwin*)
++	      libgtop_sysdeps_dir=darwin
++	      libgtop_use_machine_h=yes
++	      libgtop_need_server=yes
++	      libgtop_postinstall='chgrp kmem $(DESTDIR)$(bindir)/libgtop_server && chmod 6755 $(DESTDIR)$(bindir)/libgtop_server'
++	      ;;
+ 	    *)
+ 	      libgtop_sysdeps_dir=stub
+ 	      libgtop_use_machine_h=no
+@@ -18298,7 +18304,7 @@
+    server_programs=
+ fi
+ 
+-ac_config_files="$ac_config_files Makefile libgtop.spec po/Makefile.in intl/Makefile misc/Makefile include/Makefile include/glibtop/Makefile sysdeps/Makefile sysdeps/common/Makefile sysdeps/names/Makefile sysdeps/guile/Makefile sysdeps/guile/names/Makefile sysdeps/stub/Makefile sysdeps/stub_suid/Makefile sysdeps/sun4/Makefile sysdeps/osf1/Makefile sysdeps/linux/Makefile sysdeps/kernel/Makefile sysdeps/freebsd/Makefile sysdeps/solaris/Makefile src/Makefile src/daemon/Makefile src/inodedb/Makefile lib/Makefile examples/Makefile doc/Makefile support/Makefile macros/Makefile"
++ac_config_files="$ac_config_files Makefile libgtop.spec po/Makefile.in intl/Makefile misc/Makefile include/Makefile include/glibtop/Makefile sysdeps/Makefile sysdeps/common/Makefile sysdeps/names/Makefile sysdeps/guile/Makefile sysdeps/guile/names/Makefile sysdeps/stub/Makefile sysdeps/stub_suid/Makefile sysdeps/sun4/Makefile sysdeps/osf1/Makefile sysdeps/darwin/Makefile sysdeps/linux/Makefile sysdeps/kernel/Makefile sysdeps/freebsd/Makefile sysdeps/solaris/Makefile src/Makefile src/daemon/Makefile src/inodedb/Makefile lib/Makefile examples/Makefile doc/Makefile support/Makefile macros/Makefile"
+ cat >confcache <<\_ACEOF
+ # This file is a shell script that caches the results of configure
+ # tests run on this system so they can be shared between configure
+@@ -18634,6 +18640,7 @@
+   "sysdeps/stub_suid/Makefile" ) CONFIG_FILES="$CONFIG_FILES sysdeps/stub_suid/Makefile" ;;
+   "sysdeps/sun4/Makefile" ) CONFIG_FILES="$CONFIG_FILES sysdeps/sun4/Makefile" ;;
+   "sysdeps/osf1/Makefile" ) CONFIG_FILES="$CONFIG_FILES sysdeps/osf1/Makefile" ;;
++  "sysdeps/darwin/Makefile" ) CONFIG_FILES="$CONFIG_FILES sysdeps/darwin/Makefile" ;;
+   "sysdeps/linux/Makefile" ) CONFIG_FILES="$CONFIG_FILES sysdeps/linux/Makefile" ;;
+   "sysdeps/kernel/Makefile" ) CONFIG_FILES="$CONFIG_FILES sysdeps/kernel/Makefile" ;;
+   "sysdeps/freebsd/Makefile" ) CONFIG_FILES="$CONFIG_FILES sysdeps/freebsd/Makefile" ;;
+diff -Naur libgtop-1.0.13.old/lib/read.c libgtop-1.0.13.new/lib/read.c
+--- libgtop-1.0.13.old/lib/read.c	Tue Nov 27 07:37:58 2001
++++ libgtop-1.0.13.new/lib/read.c	Fri Oct 18 04:38:45 2002
+@@ -57,6 +57,7 @@
+ void
+ glibtop_read_l (glibtop *server, size_t size, void *buf)
+ {
++	size_t done = 0;
+ 	int ret = 0;
+ 
+ 	glibtop_init_r (&server, 0, 0);
+@@ -68,7 +69,11 @@
+ 	if (server->socket) {
+ 		do_read (server->socket, buf, size);
+ 	} else {
+-		ret = read (server->input [0], buf, size);
++		while (ret >= 0 && done < size) {
++			ret = read (server->input [0], (char*)buf + done, size - done);
++			if (ret > 0)
++				done += ret;
++		}
+ 	}
+ 
+ 	if (ret < 0)
+diff -Naur libgtop-1.0.13.old/ltmain.sh libgtop-1.0.13.new/ltmain.sh
+--- libgtop-1.0.13.old/ltmain.sh	Tue Nov 27 07:49:54 2001
++++ libgtop-1.0.13.new/ltmain.sh	Sun Aug 25 22:50:23 2002
+@@ -2858,6 +2858,11 @@
+ 	if test -n "$export_symbols" && test -n "$archive_expsym_cmds"; then
+ 	  eval cmds=\"$archive_expsym_cmds\"
+ 	else
++	  if test "x$verstring" = "x0.0"; then
++	    tmp_verstring=
++	  else
++	    tmp_verstring="$verstring"
++	  fi
+ 	  eval cmds=\"$archive_cmds\"
+ 	fi
+ 	IFS="${IFS= 	}"; save_ifs="$IFS"; IFS='~'
+diff -Naur libgtop-1.0.13.old/src/daemon/Makefile.in libgtop-1.0.13.new/src/daemon/Makefile.in
+--- libgtop-1.0.13.old/src/daemon/Makefile.in	Tue Nov 27 11:05:20 2001
++++ libgtop-1.0.13.new/src/daemon/Makefile.in	Sun Aug 25 22:50:23 2002
+@@ -181,7 +181,7 @@
+ 
+ LINK = $(LIBTOOL) --mode=link $(CC) $(CFLAGS) $(LDFLAGS) -o $@
+ 
+-INCLUDES = @INCLUDES@ -D_BSD 				  -DLIBGTOP_COMPILE_SYSTEM=\"`uname -s`\" 				  -DLIBGTOP_COMPILE_RELEASE=\"`uname -r`\" 				  -DLIBGTOP_COMPILE_MACHINE=\"`uname -m`\"
++INCLUDES = @INCLUDES@ -D_BSD 				  -DLIBGTOP_COMPILE_SYSTEM="\"`uname -s`\"" 				  -DLIBGTOP_COMPILE_RELEASE=\"`uname -r`\" 				  -DLIBGTOP_COMPILE_MACHINE="\"`uname -m`\""
+ 
+ @NEED_LIBGTOP_TRUE@suid_sysdeps = $(top_builddir)/sysdeps/@sysdeps_dir@/libgtop_sysdeps_suid.la
+ @NEED_LIBGTOP_FALSE@suid_sysdeps = 
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/Makefile.am libgtop-1.0.13.new/sysdeps/darwin/Makefile.am
+--- libgtop-1.0.13.old/sysdeps/darwin/Makefile.am	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/Makefile.am	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,23 @@
++LINK				= $(LIBTOOL) --mode=link $(CC) $(CFLAGS) $(LDFLAGS) -o $@
++
++INCLUDES			= @INCLUDES@
++
++lib_LTLIBRARIES			= libgtop_sysdeps.la libgtop_sysdeps_suid.la
++
++libgtop_sysdeps_la_SOURCES	= nosuid.c siglist.c
++
++libgtop_sysdeps_la_LDFLAGS	= $(LT_VERSION_INFO)
++
++libgtop_sysdeps_suid_la_SOURCES	= open.c close.c siglist.c cpu.c mem.c swap.c \
++				  uptime.c loadavg.c shm_limits.c msg_limits.c \
++				  sem_limits.c proclist.c procstate.c procuid.c \
++				  proctime.c procmem.c procsignal.c prockernel.c \
++				  procsegment.c procargs.c procmap.c netload.c \
++				  ppp.c
++
++libgtop_sysdeps_suid_la_LDFLAGS	= $(LT_VERSION_INFO)
++
++libgtopinclude_HEADERS		= glibtop_server.h glibtop_machine.h
++libgtopincludedir		= $(includedir)/libgtop-1.0
++
++noinst_HEADERS			= glibtop_suid.h
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/Makefile.in libgtop-1.0.13.new/sysdeps/darwin/Makefile.in
+--- libgtop-1.0.13.old/sysdeps/darwin/Makefile.in	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/Makefile.in	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,465 @@
++# Makefile.in generated automatically by automake 1.4-p5 from Makefile.am
++
++# Copyright (C) 1994, 1995-8, 1999, 2001 Free Software Foundation, Inc.
++# This Makefile.in is free software; the Free Software Foundation
++# gives unlimited permission to copy and/or distribute it,
++# with or without modifications, as long as this notice is preserved.
++
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY, to the extent permitted by law; without
++# even the implied warranty of MERCHANTABILITY or FITNESS FOR A
++# PARTICULAR PURPOSE.
++
++
++SHELL = @SHELL@
++
++srcdir = @srcdir@
++top_srcdir = @top_srcdir@
++VPATH = @srcdir@
++prefix = @prefix@
++exec_prefix = @exec_prefix@
++
++bindir = @bindir@
++sbindir = @sbindir@
++libexecdir = @libexecdir@
++datadir = @datadir@
++sysconfdir = @sysconfdir@
++sharedstatedir = @sharedstatedir@
++localstatedir = @localstatedir@
++libdir = @libdir@
++infodir = @infodir@
++mandir = @mandir@
++includedir = @includedir@
++oldincludedir = /usr/include
++
++DESTDIR =
++
++pkgdatadir = $(datadir)/@PACKAGE@
++pkglibdir = $(libdir)/@PACKAGE@
++pkgincludedir = $(includedir)/@PACKAGE@
++
++top_builddir = ../..
++
++ACLOCAL = @ACLOCAL@
++AUTOCONF = @AUTOCONF@
++AUTOMAKE = @AUTOMAKE@
++AUTOHEADER = @AUTOHEADER@
++
++INSTALL = @INSTALL@
++INSTALL_PROGRAM = @INSTALL_PROGRAM@ $(AM_INSTALL_PROGRAM_FLAGS)
++INSTALL_DATA = @INSTALL_DATA@
++INSTALL_SCRIPT = @INSTALL_SCRIPT@
++transform = @program_transform_name@
++
++NORMAL_INSTALL = :
++PRE_INSTALL = :
++POST_INSTALL = :
++NORMAL_UNINSTALL = :
++PRE_UNINSTALL = :
++POST_UNINSTALL = :
++build_alias = @build_alias@
++build_triplet = @build@
++host_alias = @host_alias@
++host_triplet = @host@
++target_alias = @target_alias@
++target_triplet = @target@
++AR = @AR@
++AS = @AS@
++AWK = @AWK@
++BUILD_GUILE = @BUILD_GUILE@
++CATALOGS = @CATALOGS@
++CATOBJEXT = @CATOBJEXT@
++CC = @CC@
++DATADIRNAME = @DATADIRNAME@
++DLLTOOL = @DLLTOOL@
++DL_LIB = @DL_LIB@
++ECHO = @ECHO@
++EXEEXT = @EXEEXT@
++GENCAT = @GENCAT@
++GLIB_CFLAGS = @GLIB_CFLAGS@
++GLIB_CONFIG = @GLIB_CONFIG@
++GLIB_LIBS = @GLIB_LIBS@
++GMOFILES = @GMOFILES@
++GMSGFMT = @GMSGFMT@
++GNOMEGNORBA_LIBS = @GNOMEGNORBA_LIBS@
++GNOMEUI_LIBS = @GNOMEUI_LIBS@
++GNOME_APPLETS_LIBS = @GNOME_APPLETS_LIBS@
++GNOME_CAPPLET_LIBS = @GNOME_CAPPLET_LIBS@
++GNOME_CONFIG = @GNOME_CONFIG@
++GNOME_INCLUDEDIR = @GNOME_INCLUDEDIR@
++GNOME_LIBDIR = @GNOME_LIBDIR@
++GNOME_LIBS = @GNOME_LIBS@
++GNORBA_CFLAGS = @GNORBA_CFLAGS@
++GNORBA_LIBS = @GNORBA_LIBS@
++GTKXMHTML_LIBS = @GTKXMHTML_LIBS@
++GT_NO = @GT_NO@
++GT_YES = @GT_YES@
++GUILE_INCS = @GUILE_INCS@
++GUILE_LIBS = @GUILE_LIBS@
++INCLUDE_LOCALE_H = @INCLUDE_LOCALE_H@
++INSTOBJEXT = @INSTOBJEXT@
++INTLDEPS = @INTLDEPS@
++INTLLIBS = @INTLLIBS@
++INTLOBJS = @INTLOBJS@
++LIBGTOP_BINARY_AGE = @LIBGTOP_BINARY_AGE@
++LIBGTOP_BINDIR = @LIBGTOP_BINDIR@
++LIBGTOP_CONFIG = @LIBGTOP_CONFIG@
++LIBGTOP_EXTRA_LIBS = @LIBGTOP_EXTRA_LIBS@
++LIBGTOP_GUILE_INCS = @LIBGTOP_GUILE_INCS@
++LIBGTOP_GUILE_LIBS = @LIBGTOP_GUILE_LIBS@
++LIBGTOP_GUILE_NAMES_INCS = @LIBGTOP_GUILE_NAMES_INCS@
++LIBGTOP_GUILE_NAMES_LIBS = @LIBGTOP_GUILE_NAMES_LIBS@
++LIBGTOP_INCLUDEDIR = @LIBGTOP_INCLUDEDIR@
++LIBGTOP_INCS = @LIBGTOP_INCS@
++LIBGTOP_INTERFACE_AGE = @LIBGTOP_INTERFACE_AGE@
++LIBGTOP_LIBDIR = @LIBGTOP_LIBDIR@
++LIBGTOP_LIBS = @LIBGTOP_LIBS@
++LIBGTOP_MAJOR_VERSION = @LIBGTOP_MAJOR_VERSION@
++LIBGTOP_MICRO_VERSION = @LIBGTOP_MICRO_VERSION@
++LIBGTOP_MINOR_VERSION = @LIBGTOP_MINOR_VERSION@
++LIBGTOP_NAMES_INCS = @LIBGTOP_NAMES_INCS@
++LIBGTOP_NAMES_LIBS = @LIBGTOP_NAMES_LIBS@
++LIBGTOP_SERVER = @LIBGTOP_SERVER@
++LIBGTOP_SERVER_VERSION = @LIBGTOP_SERVER_VERSION@
++LIBGTOP_VERSION = @LIBGTOP_VERSION@
++LIBGTOP_VERSION_CODE = @LIBGTOP_VERSION_CODE@
++LIBGTOP_VERSION_SUFFIX = @LIBGTOP_VERSION_SUFFIX@
++LIBOBJS = @LIBOBJS@
++LIBSUPPORT = @LIBSUPPORT@
++LIBTOOL = @LIBTOOL@
++LN_S = @LN_S@
++LTLIBOBJS = @LTLIBOBJS@
++LT_AGE = @LT_AGE@
++LT_CURRENT = @LT_CURRENT@
++LT_RELEASE = @LT_RELEASE@
++LT_REVISION = @LT_REVISION@
++LT_VERSION_INFO = @LT_VERSION_INFO@
++MAKEINFO = @MAKEINFO@
++MKINSTALLDIRS = @MKINSTALLDIRS@
++NM = @NM@
++OBJDUMP = @OBJDUMP@
++OBJEXT = @OBJEXT@
++ORBIT_CFLAGS = @ORBIT_CFLAGS@
++ORBIT_CONFIG = @ORBIT_CONFIG@
++ORBIT_IDL = @ORBIT_IDL@
++ORBIT_LIBS = @ORBIT_LIBS@
++PACKAGE = @PACKAGE@
++PERL = @PERL@
++POFILES = @POFILES@
++POSUB = @POSUB@
++QTTHREADS_LIB = @QTTHREADS_LIB@
++RANLIB = @RANLIB@
++READLINE_LIB = @READLINE_LIB@
++STRIP = @STRIP@
++SUPPORTINCS = @SUPPORTINCS@
++TERMCAP_LIB = @TERMCAP_LIB@
++USE_INCLUDED_LIBINTL = @USE_INCLUDED_LIBINTL@
++USE_NLS = @USE_NLS@
++VERSION = @VERSION@
++ZVT_LIBS = @ZVT_LIBS@
++ac_dc_found = @ac_dc_found@
++cflags_set = @cflags_set@
++cxxflags_set = @cxxflags_set@
++guile_examples = @guile_examples@
++guile_subdirs = @guile_subdirs@
++l = @l@
++libgtop_guile_found = @libgtop_guile_found@
++libgtop_have_sysinfo = @libgtop_have_sysinfo@
++libgtop_need_server = @libgtop_need_server@
++libgtop_postinstall = @libgtop_postinstall@
++libgtop_sysdeps_dir = @libgtop_sysdeps_dir@
++libgtop_top_builddir = @libgtop_top_builddir@
++libgtop_use_machine_h = @libgtop_use_machine_h@
++libs_xauth = @libs_xauth@
++machine_incs = @machine_incs@
++need_gnome_support = @need_gnome_support@
++server_programs = @server_programs@
++smp_examples = @smp_examples@
++static_targets = @static_targets@
++sysdeps_dir = @sysdeps_dir@
++sysdeps_suid_lib = @sysdeps_suid_lib@
++
++LINK = $(LIBTOOL) --mode=link $(CC) $(CFLAGS) $(LDFLAGS) -o $@
++
++INCLUDES = @INCLUDES@
++
++lib_LTLIBRARIES = libgtop_sysdeps.la libgtop_sysdeps_suid.la
++
++libgtop_sysdeps_la_SOURCES = nosuid.c siglist.c
++
++libgtop_sysdeps_la_LDFLAGS = $(LT_VERSION_INFO)
++
++libgtop_sysdeps_suid_la_SOURCES = open.c close.c siglist.c cpu.c mem.c swap.c 				  uptime.c loadavg.c shm_limits.c msg_limits.c 				  sem_limits.c proclist.c procstate.c procuid.c 				  proctime.c procmem.c procsignal.c prockernel.c 				  procsegment.c procargs.c procmap.c netload.c 				  ppp.c
++
++
++libgtop_sysdeps_suid_la_LDFLAGS = $(LT_VERSION_INFO)
++
++libgtopinclude_HEADERS = glibtop_server.h glibtop_machine.h
++libgtopincludedir = $(includedir)/libgtop-1.0
++
++noinst_HEADERS = glibtop_suid.h
++mkinstalldirs = $(SHELL) $(top_srcdir)/mkinstalldirs
++CONFIG_HEADER = ../../config.h
++CONFIG_CLEAN_FILES = 
++LTLIBRARIES =  $(lib_LTLIBRARIES)
++
++
++DEFS = @DEFS@ -I. -I$(srcdir) -I../..
++CPPFLAGS = @CPPFLAGS@
++LDFLAGS = @LDFLAGS@
++LIBS = @LIBS@
++X_CFLAGS = @X_CFLAGS@
++X_LIBS = @X_LIBS@
++X_EXTRA_LIBS = @X_EXTRA_LIBS@
++X_PRE_LIBS = @X_PRE_LIBS@
++libgtop_sysdeps_la_LIBADD = 
++libgtop_sysdeps_la_OBJECTS =  nosuid.lo siglist.lo
++libgtop_sysdeps_suid_la_LIBADD = 
++libgtop_sysdeps_suid_la_OBJECTS =  open.lo close.lo siglist.lo cpu.lo \
++mem.lo swap.lo uptime.lo loadavg.lo shm_limits.lo msg_limits.lo \
++sem_limits.lo proclist.lo procstate.lo procuid.lo proctime.lo \
++procmem.lo procsignal.lo prockernel.lo procsegment.lo procargs.lo \
++procmap.lo netload.lo ppp.lo
++CFLAGS = @CFLAGS@
++COMPILE = $(CC) $(DEFS) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
++LTCOMPILE = $(LIBTOOL) --mode=compile $(CC) $(DEFS) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS)
++CCLD = $(CC)
++HEADERS =  $(libgtopinclude_HEADERS) $(noinst_HEADERS)
++
++DIST_COMMON =  ChangeLog Makefile.am Makefile.in
++
++
++DISTFILES = $(DIST_COMMON) $(SOURCES) $(HEADERS) $(TEXINFOS) $(EXTRA_DIST)
++
++TAR = gtar
++GZIP_ENV = --best
++SOURCES = $(libgtop_sysdeps_la_SOURCES) $(libgtop_sysdeps_suid_la_SOURCES)
++OBJECTS = $(libgtop_sysdeps_la_OBJECTS) $(libgtop_sysdeps_suid_la_OBJECTS)
++
++all: all-redirect
++.SUFFIXES:
++.SUFFIXES: .S .c .lo .o .obj .s
++$(srcdir)/Makefile.in: Makefile.am $(top_srcdir)/configure.in $(ACLOCAL_M4) 
++	cd $(top_srcdir) && $(AUTOMAKE) --gnu --include-deps sysdeps/stub_suid/Makefile
++
++Makefile: $(srcdir)/Makefile.in  $(top_builddir)/config.status
++	cd $(top_builddir) \
++	  && CONFIG_FILES=$(subdir)/$@ CONFIG_HEADERS= $(SHELL) ./config.status
++
++
++mostlyclean-libLTLIBRARIES:
++
++clean-libLTLIBRARIES:
++	-test -z "$(lib_LTLIBRARIES)" || rm -f $(lib_LTLIBRARIES)
++
++distclean-libLTLIBRARIES:
++
++maintainer-clean-libLTLIBRARIES:
++
++install-libLTLIBRARIES: $(lib_LTLIBRARIES)
++	@$(NORMAL_INSTALL)
++	$(mkinstalldirs) $(DESTDIR)$(libdir)
++	@list='$(lib_LTLIBRARIES)'; for p in $$list; do \
++	  if test -f $$p; then \
++	    echo "$(LIBTOOL)  --mode=install $(INSTALL) $$p $(DESTDIR)$(libdir)/$$p"; \
++	    $(LIBTOOL)  --mode=install $(INSTALL) $$p $(DESTDIR)$(libdir)/$$p; \
++	  else :; fi; \
++	done
++
++uninstall-libLTLIBRARIES:
++	@$(NORMAL_UNINSTALL)
++	list='$(lib_LTLIBRARIES)'; for p in $$list; do \
++	  $(LIBTOOL)  --mode=uninstall rm -f $(DESTDIR)$(libdir)/$$p; \
++	done
++
++.c.o:
++	$(COMPILE) -c $<
++
++# FIXME: We should only use cygpath when building on Windows,
++# and only if it is available.
++.c.obj:
++	$(COMPILE) -c `cygpath -w $<`
++
++.s.o:
++	$(COMPILE) -c $<
++
++.S.o:
++	$(COMPILE) -c $<
++
++mostlyclean-compile:
++	-rm -f *.o core *.core
++	-rm -f *.$(OBJEXT)
++
++clean-compile:
++
++distclean-compile:
++	-rm -f *.tab.c
++
++maintainer-clean-compile:
++
++.c.lo:
++	$(LIBTOOL) --mode=compile $(COMPILE) -c $<
++
++.s.lo:
++	$(LIBTOOL) --mode=compile $(COMPILE) -c $<
++
++.S.lo:
++	$(LIBTOOL) --mode=compile $(COMPILE) -c $<
++
++mostlyclean-libtool:
++	-rm -f *.lo
++
++clean-libtool:
++	-rm -rf .libs _libs
++
++distclean-libtool:
++
++maintainer-clean-libtool:
++
++libgtop_sysdeps.la: $(libgtop_sysdeps_la_OBJECTS) $(libgtop_sysdeps_la_DEPENDENCIES)
++	$(LINK) -rpath $(libdir) $(libgtop_sysdeps_la_LDFLAGS) $(libgtop_sysdeps_la_OBJECTS) $(libgtop_sysdeps_la_LIBADD) $(LIBS)
++
++libgtop_sysdeps_suid.la: $(libgtop_sysdeps_suid_la_OBJECTS) $(libgtop_sysdeps_suid_la_DEPENDENCIES)
++	$(LINK) -rpath $(libdir) $(libgtop_sysdeps_suid_la_LDFLAGS) $(libgtop_sysdeps_suid_la_OBJECTS) $(libgtop_sysdeps_suid_la_LIBADD) $(LIBS)
++
++install-libgtopincludeHEADERS: $(libgtopinclude_HEADERS)
++	@$(NORMAL_INSTALL)
++	$(mkinstalldirs) $(DESTDIR)$(libgtopincludedir)
++	@list='$(libgtopinclude_HEADERS)'; for p in $$list; do \
++	  if test -f "$$p"; then d= ; else d="$(srcdir)/"; fi; \
++	  echo " $(INSTALL_DATA) $$d$$p $(DESTDIR)$(libgtopincludedir)/$$p"; \
++	  $(INSTALL_DATA) $$d$$p $(DESTDIR)$(libgtopincludedir)/$$p; \
++	done
++
++uninstall-libgtopincludeHEADERS:
++	@$(NORMAL_UNINSTALL)
++	list='$(libgtopinclude_HEADERS)'; for p in $$list; do \
++	  rm -f $(DESTDIR)$(libgtopincludedir)/$$p; \
++	done
++
++tags: TAGS
++
++ID: $(HEADERS) $(SOURCES) $(LISP)
++	list='$(SOURCES) $(HEADERS)'; \
++	unique=`for i in $$list; do echo $$i; done | \
++	  awk '    { files[$$0] = 1; } \
++	       END { for (i in files) print i; }'`; \
++	here=`pwd` && cd $(srcdir) \
++	  && mkid -f$$here/ID $$unique $(LISP)
++
++TAGS:  $(HEADERS) $(SOURCES)  $(TAGS_DEPENDENCIES) $(LISP)
++	tags=; \
++	here=`pwd`; \
++	list='$(SOURCES) $(HEADERS)'; \
++	unique=`for i in $$list; do echo $$i; done | \
++	  awk '    { files[$$0] = 1; } \
++	       END { for (i in files) print i; }'`; \
++	test -z "$(ETAGS_ARGS)$$unique$(LISP)$$tags" \
++	  || (cd $(srcdir) && etags $(ETAGS_ARGS) $$tags  $$unique $(LISP) -o $$here/TAGS)
++
++mostlyclean-tags:
++
++clean-tags:
++
++distclean-tags:
++	-rm -f TAGS ID
++
++maintainer-clean-tags:
++
++distdir = $(top_builddir)/$(PACKAGE)-$(VERSION)/$(subdir)
++
++subdir = sysdeps/stub_suid
++
++distdir: $(DISTFILES)
++	@for file in $(DISTFILES); do \
++	  d=$(srcdir); \
++	  if test -d $$d/$$file; then \
++	    cp -pr $$d/$$file $(distdir)/$$file; \
++	  else \
++	    test -f $(distdir)/$$file \
++	    || ln $$d/$$file $(distdir)/$$file 2> /dev/null \
++	    || cp -p $$d/$$file $(distdir)/$$file || :; \
++	  fi; \
++	done
++
++info-am:
++info: info-am
++dvi-am:
++dvi: dvi-am
++check-am: all-am
++check: check-am
++installcheck-am:
++installcheck: installcheck-am
++install-exec-am: install-libLTLIBRARIES
++install-exec: install-exec-am
++
++install-data-am: install-libgtopincludeHEADERS
++install-data: install-data-am
++
++install-am: all-am
++	@$(MAKE) $(AM_MAKEFLAGS) install-exec-am install-data-am
++install: install-am
++uninstall-am: uninstall-libLTLIBRARIES uninstall-libgtopincludeHEADERS
++uninstall: uninstall-am
++all-am: Makefile $(LTLIBRARIES) $(HEADERS)
++all-redirect: all-am
++install-strip:
++	$(MAKE) $(AM_MAKEFLAGS) AM_INSTALL_PROGRAM_FLAGS=-s install
++installdirs:
++	$(mkinstalldirs)  $(DESTDIR)$(libdir) $(DESTDIR)$(libgtopincludedir)
++
++
++mostlyclean-generic:
++
++clean-generic:
++
++distclean-generic:
++	-rm -f Makefile $(CONFIG_CLEAN_FILES)
++	-rm -f config.cache config.log stamp-h stamp-h[0-9]*
++
++maintainer-clean-generic:
++mostlyclean-am:  mostlyclean-libLTLIBRARIES mostlyclean-compile \
++		mostlyclean-libtool mostlyclean-tags \
++		mostlyclean-generic
++
++mostlyclean: mostlyclean-am
++
++clean-am:  clean-libLTLIBRARIES clean-compile clean-libtool clean-tags \
++		clean-generic mostlyclean-am
++
++clean: clean-am
++
++distclean-am:  distclean-libLTLIBRARIES distclean-compile \
++		distclean-libtool distclean-tags distclean-generic \
++		clean-am
++	-rm -f libtool
++
++distclean: distclean-am
++
++maintainer-clean-am:  maintainer-clean-libLTLIBRARIES \
++		maintainer-clean-compile maintainer-clean-libtool \
++		maintainer-clean-tags maintainer-clean-generic \
++		distclean-am
++	@echo "This command is intended for maintainers to use;"
++	@echo "it deletes files that may require special tools to rebuild."
++
++maintainer-clean: maintainer-clean-am
++
++.PHONY: mostlyclean-libLTLIBRARIES distclean-libLTLIBRARIES \
++clean-libLTLIBRARIES maintainer-clean-libLTLIBRARIES \
++uninstall-libLTLIBRARIES install-libLTLIBRARIES mostlyclean-compile \
++distclean-compile clean-compile maintainer-clean-compile \
++mostlyclean-libtool distclean-libtool clean-libtool \
++maintainer-clean-libtool uninstall-libgtopincludeHEADERS \
++install-libgtopincludeHEADERS tags mostlyclean-tags distclean-tags \
++clean-tags maintainer-clean-tags distdir info-am info dvi-am dvi check \
++check-am installcheck-am installcheck install-exec-am install-exec \
++install-data-am install-data install-am install uninstall-am uninstall \
++all-redirect all-am all installdirs mostlyclean-generic \
++distclean-generic clean-generic maintainer-clean-generic clean \
++mostlyclean distclean maintainer-clean
++
++
++# Tell versions [3.59,3.63) of GNU make to not export all variables.
++# Otherwise a system limit (for SysV at least) may be exceeded.
++.NOEXPORT:
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/close.c libgtop-1.0.13.new/sysdeps/darwin/close.c
+--- libgtop-1.0.13.old/sysdeps/darwin/close.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/close.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,7 @@
++#include <glibtop/close.h>
++
++/* Closes pipe to gtop server. */
++
++void
++glibtop_close_p (glibtop *server)
++{ }
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/close_suid.c libgtop-1.0.13.new/sysdeps/darwin/close_suid.c
+--- libgtop-1.0.13.old/sysdeps/darwin/close_suid.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/close_suid.c	Sun Aug 25 23:01:28 2002
+@@ -0,0 +1,30 @@
++/* $Id: libgtop-1.0.13-4.patch,v 1.1 2002/01/06 21:49:48 msek Exp $ */
++
++/* Copyright (C) 1998-99 Martin Baulig
++   This file is part of LibGTop 1.0.
++
++   Contributed by Martin Baulig <martin@home-of-linux.org>, April 1998.
++
++   LibGTop is free software; you can redistribute it and/or modify it
++   under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License,
++   or (at your option) any later version.
++
++   LibGTop is distributed in the hope that it will be useful, but WITHOUT
++   ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++   FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++   for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with LibGTop; see the file COPYING. If not, write to the
++   Free Software Foundation, Inc., 59 Temple Place - Suite 330,
++   Boston, MA 02111-1307, USA.
++*/
++
++#include <glibtop/close.h>
++
++/* Closes pipe to gtop server. */
++
++void
++glibtop_close_p (glibtop *server)
++{ }
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/cpu.c libgtop-1.0.13.new/sysdeps/darwin/cpu.c
+--- libgtop-1.0.13.old/sysdeps/darwin/cpu.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/cpu.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,68 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/cpu.h>
++
++#include <glibtop_suid.h>
++
++#include <mach/mach_init.h>
++#include <mach/mach_host.h>
++#include <mach/vm_map.h>
++
++static const unsigned long _glibtop_sysdeps_cpu =
++(1L << GLIBTOP_CPU_TOTAL)  + (1L << GLIBTOP_CPU_USER) +
++(1L << GLIBTOP_CPU_NICE)   + (1L << GLIBTOP_CPU_SYS) +
++(1L << GLIBTOP_CPU_IDLE)   + (1L << GLIBTOP_CPU_FREQUENCY) +
++(1L << GLIBTOP_XCPU_TOTAL) + (1L << GLIBTOP_XCPU_USER) +
++(1L << GLIBTOP_XCPU_NICE)  + (1L << GLIBTOP_XCPU_SYS) +
++(1L << GLIBTOP_XCPU_IDLE);
++
++/* Init function. */
++
++void
++glibtop_init_cpu_p (glibtop *server)
++{
++	server->sysdeps.cpu = _glibtop_sysdeps_cpu;
++}
++
++/* Provides information about cpu usage. */
++
++void
++glibtop_get_cpu_p (glibtop *server, glibtop_cpu *buf)
++{
++	processor_cpu_load_info_data_t *pinfo;
++	mach_msg_type_number_t info_count;
++	natural_t i, processor_count;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_CPU), 0);
++
++	memset (buf, 0, sizeof (glibtop_cpu));
++
++	if (host_processor_info (mach_host_self (),
++				 PROCESSOR_CPU_LOAD_INFO,
++				 &processor_count,
++				 (processor_info_array_t*)&pinfo,
++				 &info_count)) {
++		glibtop_warn_io_r (server, "host_processor_info (cpu)");
++		return;
++	}
++
++	for (i = 0; i < server->ncpu; i++) {
++		buf->xcpu_user [i] = pinfo[i].cpu_ticks [CPU_STATE_USER];
++		buf->xcpu_sys  [i] = pinfo[i].cpu_ticks [CPU_STATE_SYSTEM];
++		buf->xcpu_idle [i] = pinfo[i].cpu_ticks [CPU_STATE_IDLE];
++		buf->xcpu_nice [i] = pinfo[i].cpu_ticks [CPU_STATE_NICE];
++		buf->xcpu_total[i] = buf->xcpu_user [i] + buf->xcpu_sys  [i] +
++				     buf->xcpu_idle [i] + buf->xcpu_nice [i];
++
++		buf->user  += buf->xcpu_user [i];
++		buf->sys   += buf->xcpu_sys  [i];
++		buf->idle  += buf->xcpu_idle [i];
++		buf->nice  += buf->xcpu_nice [i];
++		buf->total += buf->xcpu_total[i];
++	}
++	vm_deallocate (mach_task_self (), (vm_address_t) pinfo, info_count);
++
++	buf->frequency = 100;
++	buf->flags = _glibtop_sysdeps_cpu;
++}
++
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/glibtop_machine.h libgtop-1.0.13.new/sysdeps/darwin/glibtop_machine.h
+--- libgtop-1.0.13.old/sysdeps/darwin/glibtop_machine.h	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/glibtop_machine.h	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,16 @@
++#ifndef __GLIBTOP_MACHINE_H__
++#define __GLIBTOP_MACHINE_H__
++
++BEGIN_LIBGTOP_DECLS
++
++typedef struct _glibtop_machine		glibtop_machine;
++
++struct _glibtop_machine
++{
++	uid_t uid, euid;		/* Real and effective user id */
++	gid_t gid, egid;		/* Real and effective group id */
++};
++
++END_LIBGTOP_DECLS
++
++#endif
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/glibtop_server.h libgtop-1.0.13.new/sysdeps/darwin/glibtop_server.h
+--- libgtop-1.0.13.old/sysdeps/darwin/glibtop_server.h	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/glibtop_server.h	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,52 @@
++/* $Id: libgtop-1.0.13-4.patch,v 1.1 2002/01/06 21:49:48 msek Exp $ */
++
++/* Copyright (C) 1998-99 Martin Baulig
++   This file is part of LibGTop 1.0.
++
++   Contributed by Martin Baulig <martin@home-of-linux.org>, April 1998.
++
++   LibGTop is free software; you can redistribute it and/or modify it
++   under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License,
++   or (at your option) any later version.
++
++   LibGTop is distributed in the hope that it will be useful, but WITHOUT
++   ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++   FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++   for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with LibGTop; see the file COPYING. If not, write to the
++   Free Software Foundation, Inc., 59 Temple Place - Suite 330,
++   Boston, MA 02111-1307, USA.
++*/
++
++#ifndef __GLIBTOP_SERVER_H__
++#define __GLIBTOP_SERVER_H__
++
++BEGIN_LIBGTOP_DECLS
++
++#define GLIBTOP_SUID_CPU		(1 << GLIBTOP_SYSDEPS_CPU)
++#define GLIBTOP_SUID_MEM		(1 << GLIBTOP_SYSDEPS_MEM)
++#define GLIBTOP_SUID_SWAP		(1 << GLIBTOP_SYSDEPS_SWAP)
++#define GLIBTOP_SUID_UPTIME		(1 << GLIBTOP_SYSDEPS_UPTIME)
++#define GLIBTOP_SUID_LOADAVG		(1 << GLIBTOP_SYSDEPS_LOADAVG)
++#define GLIBTOP_SUID_SHM_LIMITS		(1 << GLIBTOP_SYSDEPS_SHM_LIMITS)
++#define GLIBTOP_SUID_MSG_LIMITS		(1 << GLIBTOP_SYSDEPS_MSG_LIMITS)
++#define GLIBTOP_SUID_SEM_LIMITS		(1 << GLIBTOP_SYSDEPS_SEM_LIMITS)
++#define GLIBTOP_SUID_PROCLIST		(1 << GLIBTOP_SYSDEPS_PROCLIST)
++#define GLIBTOP_SUID_PROC_STATE		(1 << GLIBTOP_SYSDEPS_PROC_STATE)
++#define GLIBTOP_SUID_PROC_UID		(1 << GLIBTOP_SYSDEPS_PROC_UID)
++#define GLIBTOP_SUID_PROC_MEM		(1 << GLIBTOP_SYSDEPS_PROC_MEM)
++#define GLIBTOP_SUID_PROC_TIME		(1 << GLIBTOP_SYSDEPS_PROC_TIME)
++#define GLIBTOP_SUID_PROC_SIGNAL	(1 << GLIBTOP_SYSDEPS_PROC_SIGNAL)
++#define GLIBTOP_SUID_PROC_KERNEL	(1 << GLIBTOP_SYSDEPS_PROC_KERNEL)
++#define GLIBTOP_SUID_PROC_SEGMENT	(1 << GLIBTOP_SYSDEPS_PROC_SEGMENT)
++#define GLIBTOP_SUID_PROC_ARGS		(1 << GLIBTOP_SYSDEPS_PROC_ARGS)
++#define GLIBTOP_SUID_PROC_MAP		(1 << GLIBTOP_SYSDEPS_PROC_MAP)
++#define GLIBTOP_SUID_NETLOAD		(1 << GLIBTOP_SYSDEPS_NETLOAD)
++#define GLIBTOP_SUID_PPP		(1 << GLIBTOP_SYSDEPS_PPP)
++
++END_LIBGTOP_DECLS
++
++#endif
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/glibtop_suid.h libgtop-1.0.13.new/sysdeps/darwin/glibtop_suid.h
+--- libgtop-1.0.13.old/sysdeps/darwin/glibtop_suid.h	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/glibtop_suid.h	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,48 @@
++/* $Id: libgtop-1.0.13-4.patch,v 1.1 2002/01/06 21:49:48 msek Exp $ */
++
++/* Copyright (C) 1998-99 Martin Baulig
++   This file is part of LibGTop 1.0.
++
++   Contributed by Martin Baulig <martin@home-of-linux.org>, April 1998.
++
++   LibGTop is free software; you can redistribute it and/or modify it
++   under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License,
++   or (at your option) any later version.
++
++   LibGTop is distributed in the hope that it will be useful, but WITHOUT
++   ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++   FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++   for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with LibGTop; see the file COPYING. If not, write to the
++   Free Software Foundation, Inc., 59 Temple Place - Suite 330,
++   Boston, MA 02111-1307, USA.
++*/
++
++#ifndef __GLIBTOP_SUID_H__
++#define __GLIBTOP_SUID_H__
++
++BEGIN_LIBGTOP_DECLS
++
++static inline void glibtop_suid_enter (glibtop *server) {
++	setreuid (server->machine.uid, server->machine.euid);
++};
++
++static inline void glibtop_suid_leave (glibtop *server) {
++	if (setreuid (server->machine.euid, server->machine.uid))
++		_exit (1);
++};
++
++void
++glibtop_init_p (glibtop *server, const unsigned long features,
++		const unsigned flags);
++void
++glibtop_open_p (glibtop *server, const char *program_name,
++		const unsigned long features,
++		const unsigned flags);
++
++END_LIBGTOP_DECLS
++
++#endif
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/loadavg.c libgtop-1.0.13.new/sysdeps/darwin/loadavg.c
+--- libgtop-1.0.13.old/sysdeps/darwin/loadavg.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/loadavg.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,43 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/loadavg.h>
++
++#include <glibtop_suid.h>
++
++#include <stdlib.h>
++
++static const unsigned long _glibtop_sysdeps_loadavg =
++(1L << GLIBTOP_LOADAVG_LOADAVG);
++
++/* Init function. */
++
++void
++glibtop_init_loadavg_p (glibtop *server)
++{
++	server->sysdeps.loadavg = _glibtop_sysdeps_loadavg;
++}
++
++/* Provides load averange. */
++
++void
++glibtop_get_loadavg_p (glibtop *server, glibtop_loadavg *buf)
++{
++	double ldavg[3];
++	int i;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_LOADAVG), 0);
++
++	memset (buf, 0, sizeof (glibtop_loadavg));
++
++	if (getloadavg (ldavg, 3) != 3) {
++		glibtop_warn_io_r (server, "getloadavg");
++		return;
++	}
++
++	/* fill in the struct */
++	buf->flags = _glibtop_sysdeps_loadavg;
++	for (i = 0; i < 3; i++) {
++		buf->loadavg [i] = ldavg [i];
++	}
++}
++
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/mem.c libgtop-1.0.13.new/sysdeps/darwin/mem.c
+--- libgtop-1.0.13.old/sysdeps/darwin/mem.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/mem.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,48 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/mem.h>
++
++#include <glibtop_suid.h>
++
++#include <mach/mach_init.h>
++#include <mach/mach_host.h>
++#include <mach/host_info.h>
++
++static const unsigned long _glibtop_sysdeps_mem =
++(1L << GLIBTOP_MEM_TOTAL) + (1L << GLIBTOP_MEM_USED) +
++(1L << GLIBTOP_MEM_FREE);
++
++/* Init function. */
++
++void
++glibtop_init_mem_p (glibtop *server)
++{
++	server->sysdeps.mem = _glibtop_sysdeps_mem;
++}
++
++/* Provides information about memory usage. */
++
++void
++glibtop_get_mem_p (glibtop *server, glibtop_mem *buf)
++{
++	vm_statistics_data_t vm_info;
++	mach_msg_type_number_t info_count;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_MEM), 0);
++
++	memset (buf, 0, sizeof (glibtop_mem));
++
++	info_count = HOST_VM_INFO_COUNT;
++	if (host_statistics (mach_host_self (), HOST_VM_INFO,
++			     (host_info_t)&vm_info, &info_count)) {
++		glibtop_warn_io_r (server, "host_statistics (vm_statistics)");
++		return;
++	}
++
++	buf->total = (vm_info.active_count + vm_info.inactive_count +
++		      vm_info.free_count + vm_info.wire_count) * vm_page_size;
++	buf->free = vm_info.free_count   * vm_page_size;
++	buf->used = buf->total - buf->free;
++	buf->flags = _glibtop_sysdeps_mem;
++}
++
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/msg_limits.c libgtop-1.0.13.new/sysdeps/darwin/msg_limits.c
+--- libgtop-1.0.13.old/sysdeps/darwin/msg_limits.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/msg_limits.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,25 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/msg_limits.h>
++
++#include <glibtop_suid.h>
++
++static const unsigned long _glibtop_sysdeps_msg_limits = 0;
++
++/* Init function. */
++
++void
++glibtop_init_msg_limits_p (glibtop *server)
++{
++	server->sysdeps.msg_limits = _glibtop_sysdeps_msg_limits;
++}
++
++/* Provides information about sysv ipc limits. */
++
++void
++glibtop_get_msg_limits_p (glibtop *server, glibtop_msg_limits *buf)
++{
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_MSG_LIMITS), 0);
++
++	memset (buf, 0, sizeof (glibtop_msg_limits));
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/netload.c libgtop-1.0.13.new/sysdeps/darwin/netload.c
+--- libgtop-1.0.13.old/sysdeps/darwin/netload.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/netload.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,144 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/netload.h>
++#include <glibtop/xmalloc.h>
++
++#include <glibtop_suid.h>
++
++#include <sys/types.h>
++#include <sys/sysctl.h>
++#include <sys/socket.h>
++#include <net/if.h>
++#include <net/if_dl.h>
++#include <net/route.h>
++
++static const unsigned long _glibtop_sysdeps_netload =
++(1L << GLIBTOP_NETLOAD_IF_FLAGS) +
++(1L << GLIBTOP_NETLOAD_MTU) +
++/* (1L << GLIBTOP_NETLOAD_SUBNET) + */
++/* (1L << GLIBTOP_NETLOAD_ADDRESS) + */
++(1L << GLIBTOP_NETLOAD_PACKETS_IN) +
++(1L << GLIBTOP_NETLOAD_PACKETS_OUT) +
++(1L << GLIBTOP_NETLOAD_PACKETS_TOTAL) +
++(1L << GLIBTOP_NETLOAD_BYTES_IN) +
++(1L << GLIBTOP_NETLOAD_BYTES_OUT) +
++(1L << GLIBTOP_NETLOAD_BYTES_TOTAL) +
++(1L << GLIBTOP_NETLOAD_ERRORS_IN) +
++(1L << GLIBTOP_NETLOAD_ERRORS_OUT) +
++(1L << GLIBTOP_NETLOAD_ERRORS_TOTAL) +
++(1L << GLIBTOP_NETLOAD_COLLISIONS);
++
++/* Init function. */
++
++void
++glibtop_init_netload_p (glibtop *server)
++{
++	server->sysdeps.netload = _glibtop_sysdeps_netload;
++}
++
++/* Provides Network statistics. */
++
++void
++glibtop_get_netload_p (glibtop *server, glibtop_netload *buf,
++		       const char *interface)
++{
++	int mib[] = { CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST, 0 };
++	size_t bufsize;
++	char *rtbuf, *ptr, *eob;
++	struct if_msghdr *ifm;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_NETLOAD), 0);
++
++	memset (buf, 0, sizeof (glibtop_netload));
++
++	if (sysctl (mib, 6, NULL, &bufsize, NULL, 0) < 0)
++		return;
++
++	rtbuf = (char*)glibtop_malloc_r (server, bufsize);
++	if (rtbuf == NULL)
++		return;
++
++	if (sysctl (mib, 6, rtbuf, &bufsize, NULL, 0) < 0) {
++		glibtop_free_r (server, rtbuf);
++		return;
++	}
++
++	eob = rtbuf + bufsize;
++	ptr = rtbuf;
++	while (ptr < eob) {
++		struct sockaddr_dl *sdl;
++
++		ifm = (struct if_msghdr*) ptr;
++
++		if (ifm->ifm_type != RTM_IFINFO)
++			break;
++		ptr += ifm->ifm_msglen;
++
++		while (ptr < eob) {
++			struct if_msghdr *nextifm = (struct if_msghdr*) ptr;
++
++			if (nextifm->ifm_type != RTM_NEWADDR)
++				break;
++			ptr += nextifm->ifm_msglen;
++		}
++
++		sdl = (struct sockaddr_dl*) (ifm + 1);
++		if (sdl->sdl_family != AF_LINK)
++			continue;
++		if (strlen (interface) != sdl->sdl_nlen)
++			continue;
++		if (strcmp (interface, sdl->sdl_data) == 0)
++			goto FOUND;
++	}
++	glibtop_free_r (server, rtbuf);
++	return;
++
++FOUND:
++	if (ifm->ifm_flags & IFF_UP)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_UP;
++	if (ifm->ifm_flags & IFF_BROADCAST)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_BROADCAST;
++	if (ifm->ifm_flags & IFF_DEBUG)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_DEBUG;
++	if (ifm->ifm_flags & IFF_LOOPBACK)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_LOOPBACK;
++	if (ifm->ifm_flags & IFF_POINTOPOINT)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_POINTOPOINT;
++	if (ifm->ifm_flags & IFF_RUNNING)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_RUNNING;
++	if (ifm->ifm_flags & IFF_NOARP)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_NOARP;
++	if (ifm->ifm_flags & IFF_NOARP)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_PROMISC;
++	if (ifm->ifm_flags & IFF_ALLMULTI)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_ALLMULTI;
++	if (ifm->ifm_flags & IFF_OACTIVE)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_OACTIVE;
++	if (ifm->ifm_flags & IFF_SIMPLEX)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_SIMPLEX;
++	if (ifm->ifm_flags & IFF_LINK0)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_LINK0;
++	if (ifm->ifm_flags & IFF_LINK1)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_LINK1;
++	if (ifm->ifm_flags & IFF_LINK2)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_LINK2;
++	if (ifm->ifm_flags & IFF_ALTPHYS)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_ALTPHYS;
++	if (ifm->ifm_flags & IFF_MULTICAST)
++		buf->if_flags |= GLIBTOP_IF_FLAGS_MULTICAST;
++	buf->mtu		= ifm->ifm_data.ifi_mtu;
++	buf->subnet		= 0; /* FIXME */
++	buf->address		= 0; /* FIXME */
++	buf->packets_in		= ifm->ifm_data.ifi_ipackets;
++	buf->packets_out	= ifm->ifm_data.ifi_opackets;
++	buf->packets_total	= buf->packets_in + buf->packets_out;
++	buf->bytes_in		= ifm->ifm_data.ifi_ibytes;
++	buf->bytes_out		= ifm->ifm_data.ifi_obytes;
++	buf->bytes_total	= buf->bytes_in + buf->bytes_out;
++	buf->errors_in		= ifm->ifm_data.ifi_ierrors;
++	buf->errors_out		= ifm->ifm_data.ifi_oerrors;
++	buf->errors_total	= buf->errors_in + buf->errors_out;
++	buf->collisions		= ifm->ifm_data.ifi_collisions;
++	buf->flags		= _glibtop_sysdeps_netload;
++	glibtop_free_r (server, buf);
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/nosuid.c libgtop-1.0.13.new/sysdeps/darwin/nosuid.c
+--- libgtop-1.0.13.old/sysdeps/darwin/nosuid.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/nosuid.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,31 @@
++#include <glibtop.h>
++#include <glibtop/cpu.h>
++#include <glibtop/open.h>
++
++#include <mach/mach_host.h>
++#include <mach/mach_init.h>
++#include <mach/mach_interface.h>
++
++void
++glibtop_open_s (glibtop *server, const char *program_name,
++		const unsigned long features, const unsigned flags)
++{
++	processor_cpu_load_info_data_t *pinfo;
++	mach_msg_type_number_t info_count;   
++	natural_t processor_count;
++
++	if (host_processor_info (mach_host_self (),
++		PROCESSOR_CPU_LOAD_INFO,
++		&processor_count,
++		(processor_info_array_t*)&pinfo,
++		&info_count)) {
++		glibtop_error_io_r (server, "host_processor_info");
++	}
++	server->ncpu = (processor_count <= GLIBTOP_NCPU) ?
++		processor_count : GLIBTOP_NCPU;
++	vm_deallocate (mach_task_self (), (vm_address_t) pinfo, info_count);
++}
++
++void
++glibtop_close_s (glibtop *server)
++{ }
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/open.c libgtop-1.0.13.new/sysdeps/darwin/open.c
+--- libgtop-1.0.13.old/sysdeps/darwin/open.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/open.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,72 @@
++#include <glibtop.h>
++#include <glibtop/cpu.h>
++#include <glibtop/open.h>
++
++#include <mach/mach_host.h>
++#include <mach/mach_init.h>
++#include <mach/mach_interface.h>
++
++/* !!! THIS FUNCTION RUNS SUID ROOT - CHANGE WITH CAUTION !!! */
++
++void
++glibtop_init_p (glibtop *server, const unsigned long features,
++		const unsigned flags)
++{
++	glibtop_init_func_t *init_fkt;
++
++	if (server == NULL)
++		glibtop_error_r (NULL, "glibtop_init_p (server == NULL)");
++
++	/* Do the initialization, but only if not already initialized. */
++
++	if ((server->flags & _GLIBTOP_INIT_STATE_INIT) == 0) {
++		glibtop_open_p (server, "glibtop", features, flags);
++
++		for (init_fkt = _glibtop_init_hook_p; *init_fkt; init_fkt++)
++			(*init_fkt) (server);
++		
++		server->flags |= _GLIBTOP_INIT_STATE_INIT;
++	}
++}
++
++void
++glibtop_open_p (glibtop *server, const char *program_name,
++		const unsigned long features, const unsigned flags)
++{
++        processor_cpu_load_info_data_t *pinfo;
++        mach_msg_type_number_t info_count;
++        natural_t processor_count;
++
++	/* !!! WE ARE ROOT HERE - CHANGE WITH CAUTION !!! */
++
++	server->name = program_name;
++
++	server->machine.uid = getuid ();
++	server->machine.euid = geteuid ();
++	server->machine.gid = getgid ();
++	server->machine.egid = getegid ();
++
++	/* Drop priviledges. */	
++
++	if (setreuid (server->machine.euid, server->machine.uid))
++		_exit (1);
++
++	if (setregid (server->machine.egid, server->machine.gid))
++		_exit (1);
++	
++	/* !!! END OF SUID ROOT PART !!! */
++
++	/* Our effective uid is now those of the user invoking the server,
++	 * so we do no longer have any priviledges. */
++
++	if (host_processor_info (mach_host_self (),
++		PROCESSOR_CPU_LOAD_INFO,
++		&processor_count,
++		(processor_info_array_t*)&pinfo,
++		&info_count)) {
++		glibtop_error_io_r (server, "host_processor_info");
++	}
++	server->ncpu = (processor_count <= GLIBTOP_NCPU) ?
++		processor_count : GLIBTOP_NCPU;
++	vm_deallocate (mach_task_self (), (vm_address_t) pinfo, info_count);
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/open_suid.c libgtop-1.0.13.new/sysdeps/darwin/open_suid.c
+--- libgtop-1.0.13.old/sysdeps/darwin/open_suid.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/open_suid.c	Sun Aug 25 23:01:28 2002
+@@ -0,0 +1,102 @@
++/* $Id: libgtop-1.0.13-4.patch,v 1.1 2002/01/06 21:49:48 msek Exp $ */
++
++/* Copyright (C) 1998-99 Martin Baulig
++   This file is part of LibGTop 1.0.
++
++   Contributed by Martin Baulig <martin@home-of-linux.org>, April 1998.
++
++   LibGTop is free software; you can redistribute it and/or modify it
++   under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License,
++   or (at your option) any later version.
++
++   LibGTop is distributed in the hope that it will be useful, but WITHOUT
++   ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++   FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++   for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with LibGTop; see the file COPYING. If not, write to the
++   Free Software Foundation, Inc., 59 Temple Place - Suite 330,
++   Boston, MA 02111-1307, USA.
++*/
++
++#include <glibtop.h>
++#include <glibtop/cpu.h>
++#include <glibtop/open.h>
++#include <glibtop/xmalloc.h>
++
++#include <mach/mach_init.h>
++#include <mach/mach_host.h>
++
++/* !!! THIS FUNCTION RUNS SUID ROOT - CHANGE WITH CAUTION !!! */
++
++void
++glibtop_init_p (glibtop *server, const unsigned long features,
++		const unsigned flags)
++{
++	glibtop_init_func_t *init_fkt;
++
++	if (server == NULL)
++		glibtop_error_r (NULL, "glibtop_init_p (server == NULL)");
++
++	/* Do the initialization, but only if not already initialized. */
++
++	if ((server->flags & _GLIBTOP_INIT_STATE_INIT) == 0) {
++		glibtop_open_p (server, "glibtop", features, flags);
++
++		for (init_fkt = _glibtop_init_hook_p; *init_fkt; init_fkt++)
++			(*init_fkt) (server);
++		
++		server->flags |= _GLIBTOP_INIT_STATE_INIT;
++	}
++}
++
++void
++glibtop_open_p (glibtop *server, const char *program_name,
++		const unsigned long features, const unsigned flags)
++{
++	processor_cpu_load_info_data_t *pinfo;      
++	mach_msg_type_number_t info_count;
++	natural_t processor_count;
++
++	/* !!! WE ARE ROOT HERE - CHANGE WITH CAUTION !!! */
++
++	server->name = program_name;
++
++	server->machine.uid = getuid ();
++	server->machine.euid = geteuid ();
++	server->machine.gid = getgid ();
++	server->machine.egid = getegid ();
++
++	/* Setup machine-specific data */
++	server->machine.kd = kvm_open (NULL, NULL, NULL, O_RDONLY, "kvm_open");
++
++	if (server->machine.kd == NULL)
++		glibtop_error_io_r (server, "kvm_open");
++
++	/* Drop priviledges. */	
++	
++	if (setreuid (server->machine.euid, server->machine.uid))
++		_exit (1);
++	
++	if (setregid (server->machine.egid, server->machine.gid))
++		_exit (1);
++	
++	/* !!! END OF SUID ROOT PART !!! */
++		
++	/* Our effective uid is now those of the user invoking the server,
++	 * so we do no longer have any priviledges. */
++
++	if (host_processor_info (mach_host_self (),
++				 PROCESSOR_CPU_LOAD_INFO,
++				 &processor_count,
++				 (processor_info_array_t*)&pinfo,
++				 &info_count)) {
++		glibtop_error_io_r (server, "host_processor_info");
++	}
++	server->ncpu = (processor_count <= GLIBTOP_NCPU) ?
++		processor_count : GLIBTOP_NCPU;
++	vm_deallocate (mach_task_self (), (vm_address_t) pinfo, info_count);
++}
++
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/ppp.c libgtop-1.0.13.new/sysdeps/darwin/ppp.c
+--- libgtop-1.0.13.old/sysdeps/darwin/ppp.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/ppp.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,25 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/ppp.h>
++
++#include <glibtop_suid.h>
++
++static const unsigned long _glibtop_sysdeps_ppp = 0;
++
++/* Init function. */
++
++void
++glibtop_init_ppp_p (glibtop *server)
++{
++	server->sysdeps.ppp = _glibtop_sysdeps_ppp;
++}
++
++/* Provides PPP/ISDN information. */
++
++void
++glibtop_get_ppp_p (glibtop *server, glibtop_ppp *buf, unsigned short device)
++{
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_PPP), 0);
++
++	memset (buf, 0, sizeof (glibtop_ppp));
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/procargs.c libgtop-1.0.13.new/sysdeps/darwin/procargs.c
+--- libgtop-1.0.13.old/sysdeps/darwin/procargs.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/procargs.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,108 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/xmalloc.h>
++#include <glibtop/procargs.h>
++
++#include <glibtop_suid.h>
++
++#include <sys/param.h>
++#include <sys/sysctl.h>
++#include <limits.h>
++
++static const unsigned long _glibtop_sysdeps_proc_args =
++(1L << GLIBTOP_PROC_ARGS_SIZE);
++
++/* Init function. */
++
++void
++glibtop_init_proc_args_p (glibtop *server)
++{
++	server->sysdeps.proc_args = _glibtop_sysdeps_proc_args;
++}
++
++/* Provides detailed information about a process. */
++
++char *
++glibtop_get_proc_args_p (glibtop *server, glibtop_proc_args *buf,
++			 pid_t pid, unsigned max_len)
++{
++	char argbuf[4096];
++	char *start, *end, *str;
++	size_t bufsize = 4096;
++	int mib [3], length;
++	char *args;
++	int *ip;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_PROC_ARGS), 0);
++
++	memset (buf, 0, sizeof (glibtop_proc_args));
++
++	mib [0] = CTL_KERN;
++	mib [1] = KERN_PROCARGS;
++	mib [2] = pid;
++	
++	/* !!! THE FOLLOWING CODE RUNS SUID ROOT - CHANGE WITH CAUTION !!! */
++
++	glibtop_suid_enter (server);
++	if (sysctl (mib, 3, argbuf, &bufsize, NULL, 0) < 0) {
++		glibtop_suid_leave (server);
++		return NULL;
++	}
++	glibtop_suid_leave (server);
++
++	/* !!! END OF SUID ROOT PART !!! */
++
++    	end = &argbuf[bufsize];
++
++	ip = (int *)end - 2;
++	while (*--ip) {
++		if (ip == (int *)argbuf) {
++			return NULL;
++		}
++	}
++
++	start = (char *)(ip + 1);
++	while (*--ip) {
++		if (ip == (int *)argbuf) {
++			return NULL;
++		}
++	}
++	ip++;
++
++        if ((ip[0] & 0xbfff0000) == 0xbfff0000) {
++		ip += 2;
++		start = (char*)(ip + (strlen ((char*)ip) + 3) / 4);
++		while (!*start)
++			start++;
++	}
++
++	for (str = start + strlen (start); str < end - 1; str++) {
++		if (*str == '=') {
++			while (*str != '\0' && str > start)
++				str--;
++			break;
++		}
++	}
++	end = str;
++
++	if (start[0] == '-' || start[0] == '?' || start[0] <= ' ') {
++		return NULL;
++	}
++
++	length = end - start;
++	if (max_len != 0 && length > max_len)
++		length = max_len;
++	args = glibtop_malloc_r (server, length + 1);
++	if (args == NULL) {
++		glibtop_warn_io_r (server, "malloc(procargs)");
++		return NULL;
++	}
++
++	memcpy (args, start, length);
++	args [length] = '\0';
++
++	buf->size = length;
++	buf->flags = _glibtop_sysdeps_proc_args;
++
++	return args;
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/prockernel.c libgtop-1.0.13.new/sysdeps/darwin/prockernel.c
+--- libgtop-1.0.13.old/sysdeps/darwin/prockernel.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/prockernel.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,26 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/prockernel.h>
++
++#include <glibtop_suid.h>
++
++static const unsigned long _glibtop_sysdeps_proc_kernel = 0;
++
++/* Init function. */
++
++void
++glibtop_init_proc_kernel_p (glibtop *server)
++{
++	server->sysdeps.proc_kernel = _glibtop_sysdeps_proc_kernel;
++}
++
++/* Provides detailed information about a process. */
++
++void
++glibtop_get_proc_kernel_p (glibtop *server, glibtop_proc_kernel *buf,
++			   pid_t pid)
++{
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_PROC_KERNEL), 0);
++	
++	memset (buf, 0, sizeof (glibtop_proc_kernel));
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/proclist.c libgtop-1.0.13.new/sysdeps/darwin/proclist.c
+--- libgtop-1.0.13.old/sysdeps/darwin/proclist.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/proclist.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,83 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/proclist.h>
++#include <glibtop/xmalloc.h>
++
++#include <glibtop_suid.h>
++
++#include <sys/param.h>
++#include <sys/sysctl.h>  
++
++static const unsigned long _glibtop_sysdeps_proclist =
++(1L << GLIBTOP_PROCLIST_TOTAL) + (1L << GLIBTOP_PROCLIST_NUMBER) +
++(1L << GLIBTOP_PROCLIST_SIZE);
++
++/* Init function. */
++
++void
++glibtop_init_proclist_p (glibtop *server)
++{
++	server->sysdeps.proclist = _glibtop_sysdeps_proclist;
++}
++
++unsigned *
++glibtop_get_proclist_p (glibtop *server, glibtop_proclist *buf,
++			int64_t which, int64_t arg)
++{
++	unsigned count, total;
++	unsigned *pids_chain;
++	int i, mib[4];
++	struct kinfo_proc *kp;
++	size_t length;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_PROCLIST), 0);
++
++	memset (buf, 0, sizeof (glibtop_proclist));
++
++	mib [0] = CTL_KERN;
++	mib [1] = KERN_PROC;
++	mib [2] = (int)(which & GLIBTOP_KERN_PROC_MASK);
++	mib [3] = (int)arg;
++
++	if (sysctl (mib, 4, NULL, &length, NULL, 0) < 0) {
++		glibtop_warn_io_r (server, "sysctl (proclist)");
++		return NULL;
++	}
++	if ((kp = (struct kinfo_proc *) glibtop_malloc_r (server, length)) == NULL) {
++		glibtop_warn_io_r (server, "malloc (proclist)");
++		return NULL;
++	}
++	if (sysctl (mib, 4, kp, &length, NULL, 0) < 0) {
++		glibtop_warn_io_r (server, "sysctl (proclist)");
++		glibtop_free_r (server, kp);
++		return NULL;
++	}
++
++	count = length / sizeof (struct kinfo_proc);
++	pids_chain = glibtop_malloc_r (server, count * sizeof (unsigned));
++	if (pids_chain ==  NULL) {
++		glibtop_warn_io_r (server, "glibtop_realloc_r (proclist)");
++		glibtop_free_r (server, kp);
++		return NULL;
++	}
++
++	for (total = 0, i = 0; i < count; i++) {
++		if ((which & GLIBTOP_EXCLUDE_IDLE) &&
++		    (kp [i].kp_proc.p_stat != SRUN))
++			continue;
++		if ((which & GLIBTOP_EXCLUDE_SYSTEM) &&
++			 (kp [i].kp_eproc.e_pcred.p_ruid == 0))
++			continue;
++		pids_chain [total++] = (unsigned) kp [i].kp_proc.p_pid;
++	}
++
++	glibtop_free_r (server, kp);
++
++	buf->number = total;
++	buf->size = sizeof (unsigned);
++	buf->total = total * sizeof (unsigned);
++	buf->flags = _glibtop_sysdeps_proclist;
++
++	return pids_chain;
++}
++
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/procmap.c libgtop-1.0.13.new/sysdeps/darwin/procmap.c
+--- libgtop-1.0.13.old/sysdeps/darwin/procmap.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/procmap.c	Fri Oct 18 04:35:30 2002
+@@ -0,0 +1,113 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/xmalloc.h>
++#include <glibtop/procmap.h>
++
++#include <glibtop_suid.h>
++
++#include <mach/mach_init.h>
++#include <mach/mach_host.h>
++#include <mach/vm_map.h>
++
++static const unsigned long _glibtop_sysdeps_proc_map =
++(1L << GLIBTOP_PROC_MAP_TOTAL) + (1L << GLIBTOP_PROC_MAP_NUMBER) +
++(1L << GLIBTOP_PROC_MAP_SIZE);
++
++static const unsigned long _glibtop_sysdeps_proc_map_entry =
++(1L << GLIBTOP_MAP_ENTRY_START) + (1L << GLIBTOP_MAP_ENTRY_END) +
++(1L << GLIBTOP_MAP_ENTRY_OFFSET) + (1L << GLIBTOP_MAP_ENTRY_PERM);
++
++/* Init function. */
++
++void
++glibtop_init_proc_map_p (glibtop *server)
++{
++	server->sysdeps.proc_map = _glibtop_sysdeps_proc_map;
++}
++
++/* Provides detailed information about a process. */
++
++glibtop_map_entry *
++glibtop_get_proc_map_p (glibtop *server, glibtop_proc_map *buf,	pid_t pid)
++{
++	glibtop_map_entry *maps;
++	mach_port_t task;
++	vm_address_t address;
++	natural_t nesting_depth;
++	int n;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_PROC_MAP), 0);
++
++	memset (buf, 0, sizeof (glibtop_proc_map));
++
++	/* !!! THE FOLLOWING CODE RUNS SUID ROOT - CHANGE WITH CAUTION !!! */
++
++	glibtop_suid_enter (server);
++
++	if (task_for_pid (mach_task_self (), pid, &task) != KERN_SUCCESS) {
++		glibtop_suid_leave (server);
++		glibtop_warn_io_r (server, "task_for_pid (procmap)");
++		return NULL;
++	}
++
++	maps = NULL;
++	n = 0;
++	address = 0;
++	nesting_depth = 0;
++	while (1) {
++		vm_region_submap_info_data_64_t info;
++		mach_msg_type_number_t info_count;
++		vm_size_t size;
++
++		info_count = VM_REGION_SUBMAP_INFO_COUNT_64;
++		if (vm_region_recurse_64 (task, &address, &size, &nesting_depth,
++			(vm_region_recurse_info_64_t)&info, &info_count))
++			break;
++
++		if (info.is_submap) {
++			nesting_depth++;
++			continue;
++		}
++
++		maps = glibtop_realloc_r (server, maps, (n + 1) * sizeof (glibtop_map_entry));
++		if (!maps) {
++			glibtop_suid_leave (server);
++			return NULL;
++		}
++
++		memset (maps + n, 0, sizeof (glibtop_map_entry));
++
++		maps[n].start	= address;
++		maps[n].end	= address + size - 1;
++		maps[n].offset	= info.offset;
++		if (info.protection & VM_PROT_READ)
++			maps[n].perm |= GLIBTOP_MAP_PERM_READ;
++		if (info.protection & VM_PROT_WRITE) 
++			maps[n].perm |= GLIBTOP_MAP_PERM_WRITE;
++		if (info.protection & VM_PROT_EXECUTE)      
++			maps[n].perm |= GLIBTOP_MAP_PERM_EXECUTE;
++		if (info.share_mode == SM_PRIVATE ||
++		    info.share_mode == SM_PRIVATE_ALIASED)
++			maps[n].perm |= GLIBTOP_MAP_PERM_PRIVATE;
++		if (info.share_mode == SM_SHARED ||
++		    info.share_mode == SM_TRUESHARED ||
++		    info.share_mode == SM_SHARED_ALIASED)
++			maps[n].perm |= GLIBTOP_MAP_PERM_SHARED;
++
++		maps[n].flags	= _glibtop_sysdeps_proc_map_entry;
++
++		address += size;
++		n++;
++	}
++
++	glibtop_suid_leave (server);
++
++	/* !!! END OF SUID ROOT PART !!! */
++
++	buf->number	= n;
++	buf->size	= sizeof (glibtop_map_entry);
++	buf->total	= n * sizeof (glibtop_map_entry);
++	buf->flags	= _glibtop_sysdeps_proc_map;
++
++	return maps;
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/procmem.c libgtop-1.0.13.new/sysdeps/darwin/procmem.c
+--- libgtop-1.0.13.old/sysdeps/darwin/procmem.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/procmem.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,224 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/xmalloc.h>
++#include <glibtop/procmem.h>
++
++#include <glibtop_suid.h>
++
++#include <mach/mach_init.h>
++#include <mach/mach_host.h>
++#include <mach/mach_traps.h>
++#include <mach/task.h>
++#include <mach/vm_map.h>
++#include <mach/shared_memory_server.h>
++
++static const unsigned long _glibtop_sysdeps_proc_mem =
++(1L << GLIBTOP_PROC_MEM_SIZE)     + (1L << GLIBTOP_PROC_MEM_VSIZE) +
++(1L << GLIBTOP_PROC_MEM_RESIDENT) + (1L << GLIBTOP_PROC_MEM_SHARE) +
++(1L << GLIBTOP_PROC_MEM_RSS);
++
++/* Init function. */
++
++void
++glibtop_init_proc_mem_p (glibtop *server)
++{
++	server->sysdeps.proc_mem = _glibtop_sysdeps_proc_mem;
++}
++
++
++#define	SHARED_TABLE_SIZE	137
++#define	TEXT_SEGMENT_START	(GLOBAL_SHARED_TEXT_SEGMENT)
++#define TEXT_SEGMENT_END	(GLOBAL_SHARED_TEXT_SEGMENT + SHARED_TEXT_REGION_SIZE)
++#define	DATA_SEGMENT_START	(GLOBAL_SHARED_DATA_SEGMENT)
++#define DATA_SEGMENT_END	(GLOBAL_SHARED_DATA_SEGMENT + SHARED_DATA_REGION_SIZE)
++
++typedef struct shared_info shared_table[SHARED_TABLE_SIZE];
++typedef struct shared_info shared_info;
++struct shared_info {
++	unsigned obj_id;
++	unsigned share_mode;
++	unsigned page_count;
++	unsigned ref_count;
++	unsigned task_ref_count;
++	vm_size_t size;
++	shared_info *next;
++};
++
++static void
++shared_table_init (shared_table table)
++{
++	memset (table, 0, sizeof (shared_table));
++}
++
++static void
++shared_table_free (glibtop *server, shared_table table)
++{
++	int i;
++
++	for (i = 0; i < SHARED_TABLE_SIZE; i++) {
++		shared_info *info = table [i].next;
++
++		while (info) {
++			shared_info *next = info->next;
++			glibtop_free_r (server, info);
++			info = next;
++		}
++	}
++}
++
++static void
++shared_table_register (glibtop *server, shared_table table,
++		       vm_region_top_info_data_t *top, vm_size_t size)
++{
++	shared_info *info, *last;
++
++	info = last = &table [top->obj_id % SHARED_TABLE_SIZE];
++	while (info) {
++		if (info->obj_id == top->obj_id) {
++			info->task_ref_count++;
++			return;
++		}
++		last = info;
++		info = info->next;
++	}
++
++	info = glibtop_malloc_r (server, sizeof (shared_info));
++	if (info) {
++		info->obj_id = top->obj_id;
++		info->share_mode = top->share_mode;
++		info->page_count = top->shared_pages_resident;
++		info->ref_count = top->ref_count;
++		info->task_ref_count = 1;
++		info->size = size;
++		info->next = NULL;
++		last->next = info;
++	}
++}
++
++/* Provides detailed information about a process. */
++
++void
++glibtop_get_proc_mem_p (glibtop *server, glibtop_proc_mem *buf,
++			pid_t pid)
++{
++	task_basic_info_data_t tinfo;
++        mach_msg_type_number_t info_count;
++	vm_size_t vsize, resident, private, vprivate, shared;
++	kern_return_t retval;
++	shared_table stable;
++	vm_address_t address;
++	mach_port_t task;
++	int i, split;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_PROC_MEM), 0);
++
++	memset (buf, 0, sizeof (glibtop_proc_mem));
++
++	address = 0;
++	split = 0;
++	vsize = resident = private = vprivate = shared = 0;
++	shared_table_init (stable);
++
++	/* !!! THE FOLLOWING CODE RUNS SUID ROOT - CHANGE WITH CAUTION !!! */
++
++	glibtop_suid_enter (server);
++	retval = task_for_pid (mach_task_self (), pid, &task);
++	glibtop_suid_leave (server);
++
++	/* !!! END OF SUID ROOT PART !!! */
++
++	if (retval)
++		return;
++
++	info_count = TASK_BASIC_INFO_COUNT;
++	if (task_info (task, TASK_BASIC_INFO, (task_info_t)&tinfo, &info_count)) {
++		glibtop_warn_io_r (server, "task_info (procmem)");
++		return;
++	}
++	vsize = tinfo.virtual_size;
++	resident = tinfo.resident_size;
++
++	/* !!! THE FOLLOWING CODE RUNS SUID ROOT - CHANGE WITH CAUTION !!! */
++
++	glibtop_suid_enter (server);
++	while (1) {
++		vm_region_basic_info_data_64_t basic;
++		vm_region_top_info_data_t top;
++		mach_port_t object_name;
++		vm_size_t size;
++
++		info_count = VM_REGION_BASIC_INFO_COUNT_64;
++		if (vm_region_64 (task, &address, &size, VM_REGION_BASIC_INFO,
++				  (vm_region_info_t)&basic,
++				  &info_count, &object_name))
++			break;
++
++		info_count = VM_REGION_TOP_INFO_COUNT;
++		if (vm_region_64 (task, &address, &size, VM_REGION_TOP_INFO,
++			       (vm_region_info_t)&top,
++			       &info_count, &object_name))
++			break;
++
++		if (address >= TEXT_SEGMENT_START && address < DATA_SEGMENT_END) {
++			if (!split && top.share_mode == SM_EMPTY) {
++				if (basic.reserved)
++					split = 1;
++			}
++			if (top.share_mode != SM_PRIVATE) {
++				address += size;
++				continue;
++			}
++		}
++
++		switch (top.share_mode) {
++		case SM_COW:
++			if (top.ref_count == 1) {
++				private += top.private_pages_resident * vm_page_size;
++				private += top.shared_pages_resident * vm_page_size;
++				vprivate += size;
++			} else {
++				shared_table_register (server, stable, &top, size);
++				vprivate += top.private_pages_resident * vm_page_size;
++			}
++			break;
++		case SM_PRIVATE:
++			private += top.private_pages_resident * vm_page_size;
++			vprivate += size;
++			break;
++		case SM_SHARED:
++			shared_table_register (server, stable, &top, size);
++			break;
++		}
++
++		address += size;
++	}
++	glibtop_suid_leave (server);
++
++	/* !!! END OF SUID ROOT PART !!! */
++
++	for (i = 0; i < SHARED_TABLE_SIZE; i++) {
++		shared_info *sinfo = &stable[i];
++
++		while (sinfo) {
++			if (sinfo->share_mode == SM_SHARED &&
++			    sinfo->ref_count == sinfo->task_ref_count) {
++				private += sinfo->page_count * vm_page_size;
++				vprivate += sinfo->size;
++			} else {
++				shared += sinfo->page_count * vm_page_size;
++			}
++			sinfo = sinfo->next;
++		}
++	}
++	shared_table_free (server, stable);
++
++	if (split)
++		vsize -= DATA_SEGMENT_END - TEXT_SEGMENT_START;
++
++	buf->size     = vprivate;
++	buf->vsize    = vsize;
++	buf->resident = resident;
++	buf->share    = shared;
++	buf->rss      = private;
++	buf->flags    = _glibtop_sysdeps_proc_mem;
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/procsegment.c libgtop-1.0.13.new/sysdeps/darwin/procsegment.c
+--- libgtop-1.0.13.old/sysdeps/darwin/procsegment.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/procsegment.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,26 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/procsegment.h>
++
++#include <glibtop_suid.h>
++
++static const unsigned long _glibtop_sysdeps_proc_segment = 0;
++
++/* Init function. */
++
++void
++glibtop_init_proc_segment_p (glibtop *server)
++{
++	server->sysdeps.proc_segment = _glibtop_sysdeps_proc_segment;
++}
++
++/* Provides detailed information about a process. */
++
++void
++glibtop_get_proc_segment_p (glibtop *server, glibtop_proc_segment *buf,
++			    pid_t pid)
++{
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_PROC_SEGMENT), 0);
++	
++	memset (buf, 0, sizeof (glibtop_proc_segment));
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/procsignal.c libgtop-1.0.13.new/sysdeps/darwin/procsignal.c
+--- libgtop-1.0.13.old/sysdeps/darwin/procsignal.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/procsignal.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,54 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/procsignal.h>
++
++#include <glibtop_suid.h>
++
++#include <sys/param.h>
++#include <sys/sysctl.h>
++
++static const unsigned long _glibtop_sysdeps_proc_signal =
++(1L << GLIBTOP_PROC_SIGNAL_SIGNAL) +
++(1L << GLIBTOP_PROC_SIGNAL_BLOCKED) +
++(1L << GLIBTOP_PROC_SIGNAL_SIGIGNORE) +
++(1L << GLIBTOP_PROC_SIGNAL_SIGCATCH);
++
++/* Init function. */
++
++void
++glibtop_init_proc_signal_p (glibtop *server)
++{
++	server->sysdeps.proc_signal = _glibtop_sysdeps_proc_signal;
++}
++
++/* Provides detailed information about a process. */
++
++void
++glibtop_get_proc_signal_p (glibtop *server, glibtop_proc_signal *buf,
++			   pid_t pid)
++{
++	int mib[4];
++	size_t length;
++	struct kinfo_proc kinfo;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_PROC_SIGNAL), 0);
++	
++	memset (buf, 0, sizeof (glibtop_proc_signal));
++
++	mib [0] = CTL_KERN;
++	mib [1] = KERN_PROC;      
++	mib [2] = KERN_PROC_PID;
++	mib [3] = pid;
++
++	length = sizeof (struct kinfo_proc);
++	if (sysctl (mib, 4, &kinfo, &length, NULL, 0) < 0) {
++		glibtop_warn_io_r (server, "sysctl (procuid)");
++		return;
++	}
++
++	buf->signal[0]    = kinfo.kp_proc.p_siglist;
++	buf->blocked[0]   = kinfo.kp_proc.p_sigmask;
++	buf->sigignore[0] = kinfo.kp_proc.p_sigignore;
++	buf->sigcatch[0]  = kinfo.kp_proc.p_sigcatch;
++	buf->flags = _glibtop_sysdeps_proc_signal;
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/procstate.c libgtop-1.0.13.new/sysdeps/darwin/procstate.c
+--- libgtop-1.0.13.old/sysdeps/darwin/procstate.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/procstate.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,72 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/procstate.h>
++
++#include <glibtop_suid.h>
++
++#include <sys/param.h>
++#include <sys/sysctl.h>      
++
++static const unsigned long _glibtop_sysdeps_proc_state =
++(1L << GLIBTOP_PROC_STATE_CMD) + (1L << GLIBTOP_PROC_STATE_STATE) +
++(1L << GLIBTOP_PROC_STATE_UID) + (1L << GLIBTOP_PROC_STATE_GID);
++
++/* Init function. */
++
++void
++glibtop_init_proc_state_p (glibtop *server)
++{
++	server->sysdeps.proc_state = _glibtop_sysdeps_proc_state;
++}
++
++/* Provides detailed information about a process. */
++
++void
++glibtop_get_proc_state_p (glibtop *server, glibtop_proc_state *buf,
++			  pid_t pid)
++{
++	int mib[4];
++	size_t length;
++	struct kinfo_proc kinfo;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_PROC_STATE), 0);
++	
++	memset (buf, 0, sizeof (glibtop_proc_state));
++
++	mib [0] = CTL_KERN;
++	mib [1] = KERN_PROC;
++	mib [2] = KERN_PROC_PID;
++	mib [3] = pid;
++
++	length = sizeof (struct kinfo_proc);
++	if (sysctl (mib, 4, &kinfo, &length, NULL, 0) < 0) {
++		glibtop_warn_io_r (server, "sysctl (procstat)");
++		return;
++	}
++
++	strncpy (buf->cmd, kinfo.kp_proc.p_comm, sizeof (buf->cmd) - 1);
++	buf->cmd [sizeof (buf->cmd) - 1] = 0;
++	buf->uid = kinfo.kp_eproc.e_pcred.p_svuid;
++	buf->gid = kinfo.kp_eproc.e_pcred.p_svgid;
++	switch (kinfo.kp_proc.p_stat) {
++	case SIDL:
++		buf->state = 0;
++		break;
++	case SRUN:
++		buf->state = 'R';
++		break;
++	case SSLEEP:
++		buf->state = 'S';
++		break;
++	case SSTOP:
++		buf->state = 'T';
++		break;
++	case SZOMB:
++		buf->state = 'Z';
++		break;
++	default:
++		return;
++	}
++	buf->flags = _glibtop_sysdeps_proc_state;
++}
++
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/proctime.c libgtop-1.0.13.new/sysdeps/darwin/proctime.c
+--- libgtop-1.0.13.old/sysdeps/darwin/proctime.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/proctime.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,96 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/proctime.h>
++
++#include <glibtop_suid.h>
++
++#include <mach/mach_init.h>
++#include <mach/mach_host.h>
++#include <mach/mach_port.h>
++#include <mach/task.h>
++#include <mach/vm_map.h>
++#include <sys/types.h>
++#include <sys/sysctl.h>
++
++static const unsigned long _glibtop_sysdeps_proc_time =
++(1L << GLIBTOP_PROC_TIME_UTIME) + (1L << GLIBTOP_PROC_TIME_STIME) +
++(1L << GLIBTOP_PROC_TIME_FREQUENCY) + (1L << GLIBTOP_PROC_TIME_START_TIME);
++
++#define tv2sec(tv) (((u_int64_t) tv.seconds * 1000000) + (u_int64_t) tv.microseconds)
++
++/* Init function. */
++
++void
++glibtop_init_proc_time_p (glibtop *server)
++{
++	server->sysdeps.proc_time = _glibtop_sysdeps_proc_time;
++}
++
++/* Provides detailed information about a process. */
++
++void
++glibtop_get_proc_time_p (glibtop *server, glibtop_proc_time *buf,
++			 pid_t pid)
++{
++	unsigned int count;
++	task_basic_info_data_t ti;
++	task_thread_times_info_data_t tti;
++	task_port_t task;
++	time_value_t utime = {0, 0}, stime = {0, 0};
++	size_t length;
++	struct kinfo_proc kinfo;
++	int mib[] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, 0 };
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_PROC_TIME), 0);
++
++	memset (buf, 0, sizeof (glibtop_proc_time));
++
++	mib[3] = pid;
++	length = sizeof (kinfo);
++	if (sysctl (mib, 4, &kinfo, &length, NULL, 0) < 0) {
++		glibtop_suid_leave (server);
++		return;
++	}
++
++	/* !!! THE FOLLOWING CODE RUNS SUID ROOT - CHANGE WITH CAUTION !!! */
++
++	glibtop_suid_enter (server);
++
++	if (task_for_pid (mach_task_self(), pid, &task) != KERN_SUCCESS) {
++		glibtop_suid_leave (server);
++		return;
++	}
++
++	glibtop_suid_leave (server);
++
++	/* !!! END OF SUID ROOT PART !!! */
++
++	count = TASK_BASIC_INFO_COUNT;
++	if (task_info(task, TASK_BASIC_INFO, (task_info_t)&ti, &count) != KERN_SUCCESS) {
++		glibtop_warn_io_r (server, "task_info (proctime)");
++		if (task != mach_task_self())
++			mach_port_deallocate (mach_task_self(), task);
++		return;
++	}
++
++	count = TASK_THREAD_TIMES_INFO_COUNT;
++	if (task_info(task, TASK_THREAD_TIMES_INFO, (task_info_t)&tti, &count) != KERN_SUCCESS) {
++		glibtop_warn_io_r (server, "task_info (proctime)");
++		if (task != mach_task_self())
++			mach_port_deallocate (mach_task_self(), task);
++		return;
++	}
++
++	time_value_add (&utime, &ti.user_time);
++	time_value_add (&stime, &ti.system_time);
++	time_value_add (&utime, &tti.user_time);
++	time_value_add (&stime, &tti.system_time);
++
++	/* use the same frequency as cpu.c */
++	buf->utime  = tv2sec (utime) / 10000;
++	buf->stime  = tv2sec (stime) / 10000;
++	buf->frequency = 1000000 / 10000;
++	buf->start_time = kinfo.kp_proc.p_starttime.tv_sec;
++
++	buf->flags  = _glibtop_sysdeps_proc_time;
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/procuid.c libgtop-1.0.13.new/sysdeps/darwin/procuid.c
+--- libgtop-1.0.13.old/sysdeps/darwin/procuid.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/procuid.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,61 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/procuid.h>
++
++#include <glibtop_suid.h>
++
++#include <sys/param.h>
++#include <sys/sysctl.h>
++
++static const unsigned long _glibtop_sysdeps_proc_uid =
++(1L << GLIBTOP_PROC_UID_UID) + (1L << GLIBTOP_PROC_UID_EUID) +
++(1L << GLIBTOP_PROC_UID_GID) + (1L << GLIBTOP_PROC_UID_EGID) +
++(1L << GLIBTOP_PROC_UID_PID) + (1L << GLIBTOP_PROC_UID_PPID) +
++(1L << GLIBTOP_PROC_UID_PGRP) + (1L << GLIBTOP_PROC_UID_TTY) +
++(1L << GLIBTOP_PROC_UID_TPGID);
++
++/* Init function. */
++
++void
++glibtop_init_proc_uid_p (glibtop *server)
++{
++	server->sysdeps.proc_uid = _glibtop_sysdeps_proc_uid;
++}
++
++/* Provides detailed information about a process. */
++
++void
++glibtop_get_proc_uid_p (glibtop *server, glibtop_proc_uid *buf,
++			pid_t pid)
++{
++	int mib[4];
++	size_t length;
++	struct kinfo_proc kinfo;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_PROC_UID), 0);
++	
++	memset (buf, 0, sizeof (glibtop_proc_uid));
++
++	mib [0] = CTL_KERN;
++	mib [1] = KERN_PROC;
++	mib [2] = KERN_PROC_PID;
++	mib [3] = pid;
++
++	length = sizeof (struct kinfo_proc);
++	if (sysctl (mib, 4, &kinfo, &length, NULL, 0) < 0) {
++		glibtop_warn_io_r (server, "sysctl (procuid)");
++		return;
++	}
++
++	buf->uid      = kinfo.kp_eproc.e_pcred.p_ruid;
++	buf->euid     = kinfo.kp_eproc.e_pcred.p_svuid;
++	buf->gid      = kinfo.kp_eproc.e_pcred.p_rgid;
++	buf->egid     = kinfo.kp_eproc.e_pcred.p_svgid;
++	buf->ppid     = kinfo.kp_eproc.e_ppid;
++	buf->pgrp     = kinfo.kp_eproc.e_pgid;
++	buf->tpgid    = kinfo.kp_eproc.e_tpgid;
++	buf->nice     = kinfo.kp_proc.p_nice;
++	buf->priority = kinfo.kp_proc.p_priority;
++
++	buf->flags    = _glibtop_sysdeps_proc_uid;
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/sem_limits.c libgtop-1.0.13.new/sysdeps/darwin/sem_limits.c
+--- libgtop-1.0.13.old/sysdeps/darwin/sem_limits.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/sem_limits.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,25 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/sem_limits.h>
++
++#include <glibtop_suid.h>
++
++static const unsigned long _glibtop_sysdeps_sem_limits = 0;
++
++/* Init function. */
++
++void
++glibtop_init_sem_limits_p (glibtop *server)
++{
++	server->sysdeps.sem_limits = _glibtop_sysdeps_sem_limits;
++}
++
++/* Provides information about sysv sem limits. */
++
++void
++glibtop_get_sem_limits_p (glibtop *server, glibtop_sem_limits *buf)
++{
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_SEM_LIMITS), 0);
++	
++	memset (buf, 0, sizeof (glibtop_sem_limits));
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/shm_limits.c libgtop-1.0.13.new/sysdeps/darwin/shm_limits.c
+--- libgtop-1.0.13.old/sysdeps/darwin/shm_limits.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/shm_limits.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,25 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/shm_limits.h>
++
++#include <glibtop_suid.h>
++
++static const unsigned long _glibtop_sysdeps_shm_limits = 0;
++
++/* Init function. */
++
++void
++glibtop_init_shm_limits_p (glibtop *server)
++{
++	server->sysdeps.shm_limits = _glibtop_sysdeps_shm_limits;
++}
++
++/* Provides information about sysv ipc limits. */
++
++void
++glibtop_get_shm_limits_p (glibtop *server, glibtop_shm_limits *buf)
++{
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_SHM_LIMITS), 0);
++	
++	memset (buf, 0, sizeof (glibtop_shm_limits));
++}
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/siglist.c libgtop-1.0.13.new/sysdeps/darwin/siglist.c
+--- libgtop-1.0.13.old/sysdeps/darwin/siglist.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/siglist.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,38 @@
++#include <glibtop.h>
++#include <glibtop/signal.h>
++
++const glibtop_signame glibtop_sys_siglist [] =
++{ {  1, "SIGHUP",    NULL },	/* hangup */
++  {  2, "SIGINT",    NULL },	/* interrupt */
++  {  3, "SIGQUIT",   NULL },	/* quit */
++  {  4, "SIGILL",    NULL },	/* illegal instruction */
++  {  5, "SIGTRAP",   NULL },	/* trace trap */
++  {  6, "SIGTRAP",   NULL },	/* abort */
++  {  7, "SIGEMT",    NULL },	/* EMT instruction */
++  {  8, "SIGFPE",    NULL },	/* floating point exception */
++  {  9, "SIGKILL",   NULL },	/* kill */
++  { 10, "SIGBUS",    NULL },	/* bus error */
++  { 11, "SIGSEGV",   NULL },	/* segmentation violation */
++  { 12, "SIGSYS",    NULL },	/* bad argument to system call */
++  { 13, "SIGPIPE",   NULL },	/* write on a pipe with no one to read it */
++  { 14, "SIGALRM",   NULL },	/* alarm clock */
++  { 15, "SIGTERM",   NULL },	/* software termination signal from kill */
++  { 16, "SIGURG",    NULL },	/* urgent condition on IO channel */
++  { 17, "SIGSTOP",   NULL },	/* sendable stop signal not from tty */
++  { 18, "SIGTSTP",   NULL },	/* stop signal from tty */
++  { 19, "SIGCONT",   NULL },	/* continue a stopped process */
++  { 20, "SIGCHLD",   NULL },	/* to parent on child stop or exit */
++  { 21, "SIGTTIN",   NULL },	/* to readers pgrp upon background tty read */
++  { 22, "SIGTTOU",   NULL },	/* like TTIN for output */
++  { 23, "SIGIO",     NULL },	/* input/output possible signal */
++  { 24, "SIGXCPU",   NULL },	/* exceeded CPU time limit */
++  { 25, "SIGXFSZ",   NULL },	/* exceeded file size limit */
++  { 26, "SIGVTALRM", NULL },	/* virtual time alarm */
++  { 27, "SIGPROF",   NULL },	/* profiling time alarm */
++  { 28, "SIGWINCH",  NULL },	/* window size changes */
++  { 29, "SIGWINFO",  NULL },	/* information request */
++  { 30, "SIGUSR1",   NULL },	/* user defined signal 1 */
++  { 31, "SIGUSR2",   NULL },	/* user defined signal 2 */
++  {  0, NULL,        NULL }
++};
++
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/swap.c libgtop-1.0.13.new/sysdeps/darwin/swap.c
+--- libgtop-1.0.13.old/sysdeps/darwin/swap.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/swap.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,111 @@
++/* $Id: libgtop-1.0.13-4.patch,v 1.1 2002/01/06 21:49:48 msek Exp $ */
++
++/* Copyright (C) 1998-99 Martin Baulig
++   This file is part of LibGTop 1.0.
++
++   Contributed by Martin Baulig <martin@home-of-linux.org>, April 1998.
++
++   LibGTop is free software; you can redistribute it and/or modify it
++   under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License,
++   or (at your option) any later version.
++
++   LibGTop is distributed in the hope that it will be useful, but WITHOUT
++   ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++   FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++   for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with LibGTop; see the file COPYING. If not, write to the
++   Free Software Foundation, Inc., 59 Temple Place - Suite 330,
++   Boston, MA 02111-1307, USA.
++*/
++
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/swap.h>
++
++#include <glibtop_suid.h>
++
++#include <mach/mach_host.h>
++#include <mach/host_info.h>
++#include <mach/mach_init.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <sys/param.h>
++#include <sys/mount.h>
++#include <dirent.h>
++
++static const unsigned long _glibtop_sysdeps_swap =
++(1L << GLIBTOP_SWAP_TOTAL) + (1L << GLIBTOP_SWAP_USED) +
++(1L << GLIBTOP_SWAP_FREE) + (1L << GLIBTOP_SWAP_PAGEIN) +
++(1L << GLIBTOP_SWAP_PAGEOUT);
++
++/* Init function. */
++
++void
++glibtop_init_swap_p (glibtop *server)
++{
++	server->sysdeps.swap = _glibtop_sysdeps_swap;
++}
++
++/* Provides information about swap usage. */
++
++void
++glibtop_get_swap_p (glibtop *server, glibtop_swap *buf)
++{
++	vm_statistics_data_t vm_info;
++	mach_msg_type_number_t info_count;
++	DIR *dirp;
++	struct dirent *dp;
++	struct statfs sfs;
++	u_int64_t total, used;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_SWAP), 0);
++
++	memset (buf, 0, sizeof (glibtop_swap));
++
++	total = used = 0;
++
++	dirp = opendir ("/private/var/vm");
++	if (!dirp) {
++		glibtop_warn_io_r (server, "opendir (swap)");
++		return;
++	}
++	while ((dp = readdir (dirp)) != NULL) {
++		struct stat sb;
++		char fname [MAXNAMLEN];
++
++		if (strncmp (dp->d_name, "swapfile", 8))
++			continue;
++
++		strcpy (fname, "/private/var/vm/");
++		strcat (fname, dp->d_name);
++		if (stat (fname, &sb) < 0)
++			continue;
++
++		used += sb.st_size;
++	}
++	closedir (dirp);
++
++	if (statfs ("/private/var/vm", &sfs) < 0) {
++		glibtop_warn_io_r (server, "statfs (swap)");
++		return;
++	}
++	total = (u_int64_t)sfs.f_bfree * sfs.f_bsize + used;
++
++	info_count = HOST_VM_INFO_COUNT;
++	if (host_statistics (mach_host_self (), HOST_VM_INFO,
++			     (host_info_t) &vm_info, &info_count)) {
++		glibtop_warn_io_r (server, "host_statistics (swap)");
++		return;
++	}
++
++	buf->total    = total;
++	buf->used     = used;
++	buf->free     = total - used;
++	buf->pagein   = vm_info.pageins;
++	buf->pageout  = vm_info.pageouts;
++	buf->flags    = _glibtop_sysdeps_swap;
++}
++
+diff -Naur libgtop-1.0.13.old/sysdeps/darwin/uptime.c libgtop-1.0.13.new/sysdeps/darwin/uptime.c
+--- libgtop-1.0.13.old/sysdeps/darwin/uptime.c	Thu Jan  1 09:00:00 1970
++++ libgtop-1.0.13.new/sysdeps/darwin/uptime.c	Fri Oct 18 04:27:38 2002
+@@ -0,0 +1,44 @@
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/uptime.h>
++
++#include <glibtop_suid.h>
++
++#include <sys/param.h>
++#include <sys/sysctl.h>
++#include <time.h>
++
++static const unsigned long _glibtop_sysdeps_uptime =
++(1L << GLIBTOP_UPTIME_UPTIME);
++
++/* Init function. */
++
++void
++glibtop_init_uptime_p (glibtop *server)
++{
++	server->sysdeps.uptime = _glibtop_sysdeps_uptime;
++}
++
++/* Provides uptime and idle time. */
++
++void
++glibtop_get_uptime_p (glibtop *server, glibtop_uptime *buf)
++{
++	int mib [] = { CTL_KERN, KERN_BOOTTIME };
++	struct timeval boottime;
++	size_t size = sizeof (boottime);
++	time_t now;
++
++	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_UPTIME), 0);
++	
++	memset (buf, 0, sizeof (glibtop_uptime));
++
++	/* copied from gkrellm port */
++
++	if (sysctl (mib, 2, &boottime, &size, NULL, 0) == -1)
++		return;
++	time (&now);
++
++	buf->uptime = now - boottime.tv_sec + 30;
++	buf->flags = _glibtop_sysdeps_uptime;
++}
