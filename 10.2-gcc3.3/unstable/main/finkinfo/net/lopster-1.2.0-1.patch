@@ -1,0 +1,145 @@
+diff -Naur lopster-old/src/global.c lopster-new/src/global.c
+--- lopster-old/src/global.c	2003-03-04 15:21:31.000000000 -0500
++++ lopster-new/src/global.c	2003-05-16 03:45:24.000000000 -0400
+@@ -110,7 +110,8 @@
+   "Opera",
+   "Dillo",
+   "Galeon",
+-  "Konqueror"
++  "Konqueror",
++  "Mac OS X default"
+ };
+ 
+ char *UserClass[4] = {
+@@ -578,6 +579,9 @@
+   case BROWSER_KONQUEROR:
+     command = l_strdup_printf("kfmclient openURL \"%%s\"");
+     break;
++  case BROWSER_OSX:
++  	command = l_strdup_printf("launch -l '%%s'");
++  	break;
+   case BROWSER_NONE:
+   default:
+     break;
+@@ -661,6 +665,18 @@
+ int guess_mime(char *suffix) {
+   if (!l_strcasecmp(suffix, "mp3"))
+     return MIME_MP3;
++
++  else if (!l_strcasecmp(suffix, "aac"))
++    return MIME_MP3;
++  else if (!l_strcasecmp(suffix, "mp4"))
++    return MIME_MP3;
++  else if (!l_strcasecmp(suffix, "sit"))
++    return MIME_APPLICATION;
++  else if (!l_strcasecmp(suffix, "dmg"))
++    return MIME_APPLICATION;
++  else if (!l_strcasecmp(suffix, "hqx"))
++    return MIME_APPLICATION;
++
+   else if (!l_strcasecmp(suffix, "wav"))
+     return MIME_AUDIO;
+   else if (!l_strcasecmp(suffix, "au"))
+@@ -2998,7 +3014,7 @@
+   global.options.resume_timeout = 60;
+   global.options.check_lib_for_download = 1;
+   global.options.time_display = 0;
+-  global.options.browser = BROWSER_NETSCAPE;
++  global.options.browser = BROWSER_OSX;
+ 
+   global.options.down_speed[0] = SPEED_RED;
+   global.options.down_speed[1] = SPEED_YELLOW;
+@@ -3016,7 +3032,7 @@
+   global.options.graph_mode[1] = 2;
+   global.options.graph_show[0] = 2;
+   global.options.graph_show[1] = 2;
+-  global.options.ping_search=0;
++  global.options.ping_search=1;
+   global.options.search_show_folder=1;
+   global.options.max_chat_buffer = 30;
+   global.napigator.use_proxy = 0;
+@@ -3096,7 +3112,7 @@
+   global.allowed_ports = NULL;
+ 
+   global.auto_save = NULL;
+-  global.ping_command = l_strdup("/bin/ping -c 3 $IP");
++  global.ping_command = l_strdup("/sbin/ping -c 3 $IP");
+ 
+   global.browse_width[0] = 369;
+   global.browse_width[1] = 80;
+diff -Naur lopster-old/src/interface.c lopster-new/src/interface.c
+--- lopster-old/src/interface.c	2003-03-04 15:08:57.000000000 -0500
++++ lopster-new/src/interface.c	2003-05-16 02:11:49.000000000 -0400
+@@ -8900,6 +8900,7 @@
+   combo26_items = g_list_append (combo26_items, (gpointer) "Dillo");
+   combo26_items = g_list_append (combo26_items, (gpointer) "Galeon");
+   combo26_items = g_list_append (combo26_items, (gpointer) "Konqueror");
++  combo26_items = g_list_append (combo26_items, (gpointer) "Mac OS X default");
+   gtk_combo_set_popdown_strings (GTK_COMBO (combo26), combo26_items);
+   g_list_free (combo26_items);
+ 
+diff -Naur lopster-old/src/lopster.h lopster-new/src/lopster.h
+--- lopster-old/src/lopster.h	2003-03-04 15:08:57.000000000 -0500
++++ lopster-new/src/lopster.h	2003-05-16 02:09:22.000000000 -0400
+@@ -166,7 +166,8 @@
+ #define BROWSER_DILLO       6
+ #define BROWSER_GALEON      7
+ #define BROWSER_KONQUEROR   8
+-#define BROWSER_NO          9
++#define BROWSER_OSX			9
++#define BROWSER_NO          10
+ 
+ #define PIPE_AWAY_LOG    0x01
+ #define PIPE_CHWALLOP    0x02
+diff -Naur lopster-old/src/transfer.c lopster-new/src/transfer.c
+--- lopster-old/src/transfer.c	2003-03-04 15:08:57.000000000 -0500
++++ lopster-new/src/transfer.c	2003-05-16 03:12:53.000000000 -0400
+@@ -5907,6 +5907,7 @@
+   GtkCList *clist;
+   socket_t *socket;
+   upload_t *upload;
++  share_t *share;
+   int i1;
+ 
+   if (!userinfo) return;
+@@ -5915,10 +5916,15 @@
+   gtk_clist_freeze(clist);
+   for (i1 = 0; i1 < clist->rows; i1++) {
+     socket = gtk_clist_get_row_data(clist, i1);
+-    upload = socket->data;
+-    if (upload->data->user_info != userinfo) continue;
+-
+-    upload_update(socket);
++    if (socket->type == S_UPLOAD) {
++      upload = socket->data;
++      if (upload->data->user_info != userinfo) continue;
++      upload_update(socket);
++    } else if (socket->type == S_SHARE) {
++      share = socket->data;
++      if (share->data->user_info != userinfo) continue;
++      share_update(socket);
++    }
+   }
+   gtk_clist_thaw(clist);
+ }
+diff -Naur lopster-old/src/wizard.c lopster-new/src/wizard.c
+--- lopster-old/src/wizard.c	2003-03-04 15:08:58.000000000 -0500
++++ lopster-new/src/wizard.c	2003-05-16 04:04:30.000000000 -0400
+@@ -1040,7 +1040,7 @@
+                     (GtkAttachOptions) (0), 0, 0);
+   ww.page3_entry[0] = entry;
+ #ifdef HAVE_OGG
+-  gtk_entry_set_text (GTK_ENTRY (entry), "mp3 ogg");
++  gtk_entry_set_text (GTK_ENTRY (entry), "mp3 ogg aac mp4");
+ #else
+   gtk_entry_set_text (GTK_ENTRY (entry), "mp3");
+ #endif
+@@ -1071,7 +1071,7 @@
+                     (GtkAttachOptions) (GTK_EXPAND | GTK_FILL),
+                     (GtkAttachOptions) (0), 0, 0);
+   ww.page3_entry[3] = entry;
+-  gtk_entry_set_text(GTK_ENTRY(entry), "tgz tar gz exe bz2 zip rpm dep dll");
++  gtk_entry_set_text(GTK_ENTRY(entry), "tgz tar gz exe bz2 zip rpm dep dll sit dmg hqx");
+ 
+   entry = gtk_entry_new ();
+   gtk_widget_show (entry);
