@@ -5,7 +5,7 @@
 # Author: <thesin@users.sourceforge.net>
 # usage : /sys, /up, /fink, /playing
 #         /infosave, /infoshow, /infoload, /infohelp
-#         /enable <option>, /disable <option>, /conf <option> <value>
+#         /enable <option>, /disable <option, /conf <option> <value>
 # -----------------------------------------------------------------
 
 my $out;
@@ -672,7 +672,6 @@ sub get_devinfo {
         $TOOLVERS = "$1";
       }
     }
-
     
     foreach $infoline (@gcc_vers) {
       chomp($infoline);
@@ -682,8 +681,21 @@ sub get_devinfo {
         $GCCVERS = $1;
       }
     }
+
+    # now find the cctools version
+    if (-x "/usr/bin/ld") {
+      foreach(`what /usr/bin/ld`) {
+        if (/cctools-(\d+)/) {
+         $TOOLBUILD = $1;
+         last;
+        }
+      }
+    }
   } else {
-    $DEVTOOLS = "N/A";
+    $DEVTOOLS = "Not Installed";
+    $TOOLVERS = "N/A";
+    $TOOLBUILD = "N/A";
+    $GCCVERS = "N/A";
   }
 }
 
