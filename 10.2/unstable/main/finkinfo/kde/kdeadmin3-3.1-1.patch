@@ -1,0 +1,891 @@
+
+--- ./kpackage/TEPty.cpp	10 Jul 2002 03:05:46 -0000	1.1.1.2
++++ ./kpackage/TEPty.cpp	2 Dec 2002 00:52:24 -0000	1.2
+@@ -17,6 +17,7 @@
+ /*! \file
+ */
+ 
++
+ /*! \class TEPty
+ 
+     \brief Ptys provide a pseudo terminal connection to a program.
+@@ -64,7 +65,7 @@
+ #include <config.h>
+ #endif
+ 
+-#ifdef __sgi__
++#ifdef __sgi
+ #define __svr4__
+ #endif
+ 
+@@ -92,9 +93,19 @@
+ 
+ #include <sys/types.h>
+ #include <sys/ioctl.h>
++#include <time.h>
++
++#ifdef HAVE_SYS_TIME_H
+ #ifdef TIME_WITH_SYS_TIME
+-  #include <sys/time.h>
++#include <sys/time.h>
++#include <time.h>
++#else
++#include <sys/time.h>
+ #endif
++#else
++#include <time.h>
++#endif
++
+ #include <sys/resource.h>
+ #ifdef HAVE_SYS_STROPTS_H
+ #include <sys/stropts.h>
+@@ -102,12 +113,6 @@
+ #endif
+ #include <sys/wait.h>
+ 
+-#ifdef HAVE_UTEMPTER
+-extern "C" {
+-        #include <utempter.h>
+-}
+-#endif
+-
+ #include <errno.h>
+ #include <assert.h>
+ #include <fcntl.h>
+@@ -149,39 +154,70 @@
+ #include <bsdtty.h>
+ #endif
+ 
++#if defined(HAVE_PTY_H)
++#include <pty.h>
++#endif
++
+ #include <qintdict.h>
+-#include <qstring.h>
+ #include <sys/wait.h>
+ #include <sys/stat.h>
+ 
+ #include "TEPty.h"
+ #include "TEPty.moc"
+ 
++#define TTY_GROUP "tty"
+ 
+-#include <kapplication.h>
+-#include <kglobal.h>
+ #include <kstandarddirs.h>
++#include <klocale.h>
+ #include <kdebug.h>
+ 
+ #ifndef HERE
+ #define HERE fprintf(stdout,"%s(%d): here\n",__FILE__,__LINE__)
+ #endif
+ 
++// Small hack to keep it still compiling with KDE 3.0
++#include "kdeversion.h"
++#if KDE_VERSION <306
++  #undef HAVE_OPENPTY
++#endif
++
+ template class QIntDict<TEPty>;
+ 
++class KUtmpProcess : public KProcess
++{
++public:
++   int commSetupDoneC()
++   {
++     dup2(cmdFd, 0);
++     dup2(cmdFd, 1);
++     dup2(cmdFd, 3);
++     return 1;
++   }
++   int cmdFd;
++};
++
+ FILE* syslog_file = NULL; //stdout;
+ 
+ #define PTY_FILENO 3
+ #define BASE_CHOWN "konsole_grantpty"
+ 
+-int chownpty(int fd, int grant)
++int chownpty(int fd, bool grant)
+ // param fd: the fd of a master pty.
+-// param grant: 1 to grant, 0 to revoke
++// param grant: true to grant, false to revoke
+ // returns 1 on success 0 on fail
+ {
++  struct sigaction newsa, oldsa;
++  newsa.sa_handler = SIG_DFL;
++  newsa.sa_mask = sigset_t();
++  newsa.sa_flags = 0;
++  sigaction(SIGCHLD, &newsa, &oldsa);
++
+   pid_t pid = fork();
+   if (pid < 0)
+   {
++    // restore previous SIGCHLD handler
++    sigaction(SIGCHLD, &oldsa, NULL);
++
+     return 0;
+   }
+   if (pid == 0)
+@@ -194,17 +230,10 @@
+   }
+ 
+   if (pid > 0) {
+-    // ### FreeBSD seems to need the SIGCHLD sighandler resett to default for
+-    // waitpid() to work. - Brad
+-    struct sigaction newsa, oldsa;
+-    newsa.sa_handler = SIG_DFL;
+-    newsa.sa_mask = sigset_t();
+-    newsa.sa_flags = 0;
+-    sigaction(SIGCHLD, &newsa, &oldsa);
+-
+     int w;
++
+ retry:
+-    int rc = waitpid (pid, &w, 0);
++    int rc = waitpid(pid, &w, 0);
+     if ((rc == -1) && (errno == EINTR))
+       goto retry;
+ 
+@@ -226,17 +255,23 @@
+ 
+ void TEPty::setSize(int lines, int columns)
+ {
+-  wsize.ws_row = (unsigned short)lines;
+-  wsize.ws_col = (unsigned short)columns;
+-  if(fd < 0) return;
+-  ioctl(fd,TIOCSWINSZ,(char *)&wsize);
++  //kdDebug(1211)<<"TEPty::setSize()"<<endl;
++  m_WSize.ws_row = (unsigned short)lines;
++  m_WSize.ws_col = (unsigned short)columns;
++  if(m_MasterFd < 0) return;
++  ioctl(m_MasterFd, TIOCSWINSZ,(char *)&m_WSize);
++  //kdDebug(1211)<<"TEPty::setSize() done"<<endl;
+ }
+ 
+-void TEPty::donePty()
++void TEPty::commClose()
+ {
+-  int status = exitStatus();
+ #ifdef HAVE_UTEMPTER
+-  removeLineFromUtmp(ttynam, fd);
++  {
++     KUtmpProcess utmp;
++     utmp.cmdFd = m_MasterFd;
++     utmp << "/usr/sbin/utempter" << "-d" << ttynam;
++     utmp.start(KProcess::Block);
++  }
+ #elif defined(USE_LOGIN)
+   char *tty_name=ttyname(0);
+   if (tty_name)
+@@ -246,12 +281,15 @@
+         logout(tty_name);
+   }
+ #endif
+-  if (needGrantPty) chownpty(fd,FALSE);
+-  //  kdDebug() << "CLOSE........................\n";
+-  close(fd);
+-  emit done(status);
++  if (m_bNeedGrantPty) chownpty(m_MasterFd, false);
++
++  KProcess::commClose();
++}
+ 
+-  fd = openPty();
++void TEPty::donePty()
++{
++  int status = exitStatus();
++  emit done(status);
+ }
+ 
+ 
+@@ -263,7 +301,8 @@
+ /*!
+     start the client program.
+ */
+-int TEPty::run(const char* _pgm, QStrList & _args, const char* _term, int _addutmp)
++int TEPty::run(const char* _pgm, QStrList & _args, const char* _term, bool _addutmp,
++               const char* _konsole_dcop, const char* _konsole_dcop_session)
+ {
+   clearArguments();
+ 
+@@ -271,21 +310,46 @@
+   for (; it.current(); ++it )
+     arguments << it.current();
+   arguments.prepend(_pgm);
+-
++//  kdDebug() << "pgm = " << _pgm << endl;
+   term = _term;
+-  addutmp = _addutmp;
++  konsole_dcop = _konsole_dcop;
++  konsole_dcop_session = _konsole_dcop_session;
++  m_bAddUtmp = _addutmp;
++  if (m_MasterFd < 0)
++     return -1;
+ 
+   if (!start(NotifyOnExit, (Communication) (Stdout | NoRead)))
+      return -1;
+ 
++  if (m_SlaveFd >= 0)
++  {
++     close(m_SlaveFd);
++     m_SlaveFd = -1;
++  }
++
+   resume(); // Start...
+   return 0;
+ 
+ }
+ 
+-int TEPty::openPty()
+-{ int ptyfd = -1;
+-  needGrantPty = TRUE;
++void TEPty::setWriteable(bool writeable)
++{
++  struct stat sbuf;
++  stat(deviceName(), &sbuf);
++  if (writeable)
++    chmod(deviceName(), sbuf.st_mode | S_IWGRP);
++  else
++    chmod(deviceName(), sbuf.st_mode & ~(S_IWGRP|S_IWOTH));
++}
++
++void TEPty::openPty()
++{
++  m_bNeedGrantPty = true;
++
++#include <kdeversion.h>
++#if KDE_VERSION <306
++  #undef HAVE_OPENPTY  // Hack to make it compile for binner
++#endif
+ 
+   // Find a master pty that we can open ////////////////////////////////
+ 
+@@ -293,131 +357,118 @@
+   // be opened by several different methods.
+ 
+   // We try, as we know them, one by one.
+-
+-#if defined(HAVE_OPENPTY) && 0 //FIXME: some work needed.
+-#warning wheee
+-  if (ptyfd < 0)
+-  {
++#if defined(HAVE_OPENPTY) //FIXME: some work needed.
++  if (m_MasterFd < 0) {
+     int master_fd, slave_fd;
+-    char name[10]; // RTSL it shouldn't be any longer
+-    if (!openpty(&master_fd, &slave_fd, name, 0/*no termios*/,0 /*and again*/)) {
+-      ptyfd=master_fd;
+-      strncpy(ptynam, name, 50);
+-      strncpy(ttynam, name, 50);
+-      ttynam[5]='t';
+-      // one needs to look into who owns what to make sure chownpty is needed
+-      // FIXME: further, the logic of openPty has to adjusted to pass a file
+-      //        handle instead of a name.
++    if (openpty(&master_fd, &slave_fd, NULL, NULL, NULL) == 0) {
++      m_MasterFd = master_fd;
++      m_SlaveFd = slave_fd;
++#ifdef HAVE_PTSNAME
++      strncpy(ptynam, ptsname(master_fd), 50);
++#else
++      // Just a guess, maybe ttyname with return nothing.
++      strncpy(ptynam, ttyname(master_fd),50);
++#endif
++      strncpy(ttynam, ttyname(slave_fd), 50);
++
++      m_bNeedGrantPty = false;
++
++      /* Get the group ID of the special `tty' group.  */
++      struct group* p = getgrnam(TTY_GROUP);    /* posix */
++      gid_t gid = p ? p->gr_gid : getgid ();    /* posix */
++
++      if (fchown(slave_fd, (uid_t) -1, gid) < 0)
++      {
++         m_bNeedGrantPty = true;
++         fprintf(stderr,"konsole: cannot chown %s.\n",ttynam);
++         perror("Reason");
++      }
++      else if (chmod(ttynam, S_IRUSR|S_IWUSR|S_IWGRP) < 0)
++      {
++         m_bNeedGrantPty = true;
++         fprintf(stderr,"konsole: cannot chmod %s.\n",ttynam);
++         perror("Reason");
++      }
+     }
+   }
+ #endif
+ 
+ //#if defined(__sgi__) || defined(__osf__) || defined(__svr4__)
+ #if defined(HAVE_GRANTPT) && defined(HAVE_PTSNAME)
+-  if (ptyfd < 0)
++  if (m_MasterFd < 0)
+   {
+ #ifdef _AIX
+-    ptyfd = open("/dev/ptc",O_RDWR);
++    m_MasterFd = open("/dev/ptc",O_RDWR);
+ #else
+-    ptyfd = open("/dev/ptmx",O_RDWR);
++    m_MasterFd = open("/dev/ptmx",O_RDWR);
+ #endif
+-    if (ptyfd >= 0)
++    if (m_MasterFd >= 0)
+     {
+-      char *ptsn = ptsname(ptyfd);
++      char *ptsn = ptsname(m_MasterFd);
+       if (ptsn) {
+-          strncpy(ttynam, ptsname(ptyfd), 50);
+-          grantpt(ptyfd);
+-          needGrantPty = FALSE;
++          strncpy(ttynam, ptsname(m_MasterFd), 50);
++          grantpt(m_MasterFd);
++          m_bNeedGrantPty = false;
+       } else {
+       	  perror("ptsname");
+-	  close(ptyfd);
+-	  ptyfd = -1;
+-      }
+-    }
+-  }
+-#endif
+-
+-#if defined(TIOCGPTN) && 0 //FIXME: obsolete, to be removed if no one complains
+-  if (ptyfd > 0)
+-  {
+-    strcpy(ptynam,"/dev/ptmx");
+-    strcpy(ttynam,"/dev/pts/");
+-    ptyfd = open(ptynam,O_RDWR);
+-    if (ptyfd >= 0) // got the master pty
+-    { int ptyno;
+-      if (ioctl(ptyfd, TIOCGPTN, &ptyno) == 0)
+-      { struct stat sbuf;
+-        sprintf(ttynam,"/dev/pts/%d",ptyno);
+-        if (stat(ttynam,&sbuf) == 0 && S_ISCHR(sbuf.st_mode))
+-          needGrantPty = FALSE;
+-        else
+-        {
+-          close(ptyfd);
+-          ptyfd = -1;
+-        }
+-      }
+-      else
+-      {
+-        close(ptyfd);
+-        ptyfd = -1;
++	  close(m_MasterFd);
++	  m_MasterFd = -1;
+       }
+     }
+   }
+ #endif
+ 
+ #if defined(_SCO_DS) || defined(__USLC__) // SCO OSr5 and UnixWare, might be obsolete
+-  if (ptyfd < 0)
++  if (m_MasterFd < 0)
+   { for (int idx = 0; idx < 256; idx++)
+     { sprintf(ptynam, "/dev/ptyp%d", idx);
+       sprintf(ttynam, "/dev/ttyp%d", idx);
+       if (access(ttynam, F_OK) < 0) { idx = 256; break; }
+-      if ((ptyfd = open (ptynam, O_RDWR)) >= 0)
++      if ((m_MasterFd = open (ptynam, O_RDWR)) >= 0)
+       { if (access (ttynam, R_OK|W_OK) == 0) break;
+-        close(ptyfd); ptyfd = -1;
++        close(m_MasterFd); m_MasterFd = -1;
+       }
+     }
+   }
+ #endif
+ 
+-  if (ptyfd < 0) // Linux device names, FIXME: Trouble on other systems?
++  if (m_MasterFd < 0) // Linux device names, FIXME: Trouble on other systems?
+   { for (const char* s3 = "pqrstuvwxyzabcdefghijklmno"; *s3 != 0; s3++)
+     { for (const char* s4 = "0123456789abcdefghijklmnopqrstuvwxyz"; *s4 != 0; s4++)
+       { sprintf(ptynam,"/dev/pty%c%c",*s3,*s4);
+         sprintf(ttynam,"/dev/tty%c%c",*s3,*s4);
+-        if ((ptyfd = open(ptynam,O_RDWR)) >= 0)
++        if ((m_MasterFd = open(ptynam,O_RDWR)) >= 0)
+         { if (geteuid() == 0 || access(ttynam,R_OK|W_OK) == 0) break;
+-          close(ptyfd); ptyfd = -1;
++          close(m_MasterFd); m_MasterFd = -1;
+         }
+       }
+-      if (ptyfd >= 0) break;
++      if (m_MasterFd >= 0) break;
+     }
+   }
+ 
+-  if (ptyfd < 0)
++  if (m_MasterFd < 0)
+   {
+-    //FIXME: handle more gracefully.
+-    fprintf(stderr,"Can't open a pseudo teletype\n"); exit(1);
++    fprintf(stderr,"Can't open a pseudo teletype\n");
++    m_strError = i18n("Unable to open a suitable terminal device.");
++    return;
+   }
+ 
+-  if (needGrantPty && !chownpty(ptyfd,TRUE))
++  if (m_bNeedGrantPty && !chownpty(m_MasterFd, true))
+   {
+     fprintf(stderr,"konsole: chownpty failed for device %s::%s.\n",ptynam,ttynam);
+     fprintf(stderr,"       : This means the session can be eavesdroped.\n");
+     fprintf(stderr,"       : Make sure konsole_grantpty is installed in\n");
+     fprintf(stderr,"       : %s and setuid root.\n",
+-            KGlobal::dirs()->findResourceDir("exe", "konsole").local8Bit().data());
++            KGlobal::dirs()->findResourceDir("exe",
++                                             "konsole").local8Bit().data());
+   }
+ 
+-  fcntl(ptyfd,F_SETFL,O_NDELAY);
+-
+-  return ptyfd;
++  fcntl(m_MasterFd,F_SETFL,O_NDELAY);
+ }
+ 
+-//! only used internally. See `run' for interface
+-void TEPty::makePty(const char* dev, const char* pgm, QValueList<QCString> & args, const char* term, int )
+-{ 
+-  int sig;
+-  if (fd < 0) // no master pty could be opened
++int TEPty::makePty(bool _addutmp)
++{
++  if (m_MasterFd < 0) // no master pty could be opened
+   {
+   //FIXME:
+     fprintf(stderr,"opening master pty failed.\n");
+@@ -425,20 +476,23 @@
+   }
+ 
+ #ifdef HAVE_UNLOCKPT
+-  unlockpt(fd);
++  unlockpt(m_MasterFd);
+ #endif
+ 
+ #if defined(TIOCSPTLCK) && 0 //FIXME: obsolete, to removed if no one complains
+-  int flag = 0; ioctl(fd,TIOCSPTLCK,&flag); // unlock pty
++  int flag = 0; ioctl(m_MasterFd,TIOCSPTLCK,&flag); // unlock pty
+ #endif
+ 
+   // open and set all standard files to slave tty
+-  int tt = open(dev, O_RDWR);
++  int tt = m_SlaveFd; // Already opened?
++
++  if (tt < 0)
++    tt = open(ttynam, O_RDWR);
+ 
+   if (tt < 0) // the slave pty could be opened
+   {
+   //FIXME:
+-  //fprintf(stderr,"opening slave pty (%s) failed.\n",dev);
++  //fprintf(stderr,"opening slave pty (%s) failed.\n",ttynam);
+   //exit(1);
+   }
+ 
+@@ -450,7 +504,13 @@
+ 
+   // Stamp utmp/wtmp if we have and want them
+ #ifdef HAVE_UTEMPTER
+-  if (addutmp) addToUtmp(dev, "", fd);
++  if (_addutmp)
++  {
++     KUtmpProcess utmp;
++     utmp.cmdFd = m_MasterFd;
++     utmp << "/usr/sbin/utempter" << "-a" << ttynam << "";
++     utmp.start(KProcess::Block);
++  }
+ #endif
+ #ifdef USE_LOGIN
+   char *str_ptr;
+@@ -458,7 +518,9 @@
+   memset(&l_struct, 0, sizeof(struct utmp));
+ 
+   if (! (str_ptr=getlogin()) ) {
+-    abort();
++    if ( ! (str_ptr=getenv("LOGNAME"))) {
++      abort();
++    }
+   }
+   strncpy(l_struct.ut_name, str_ptr, UT_NAMESIZE);
+ 
+@@ -474,13 +536,22 @@
+   if (strncmp(str_ptr, "/dev/", 5) == 0)
+        str_ptr += 5;
+   strncpy(l_struct.ut_line, str_ptr, UT_LINESIZE);
+-  time(&l_struct.ut_time); 
++  time(&l_struct.ut_time);
+ 
+   login(&l_struct);
+ #endif
++  return tt;
++}
++
++//! only used internally. See `run' for interface
++void TEPty::startPgm(const char* pgm, QValueList<QCString> & args, const char* term)
++{
++  int sig;
++  int tt = makePty(m_bAddUtmp);
+ 
+   //reset signal handlers for child process
+-  for (sig = 1; sig < NSIG; sig++) signal(sig,SIG_DFL);
++  for (sig = 1; sig < NSIG; sig++)
++      signal(sig,SIG_DFL);
+ 
+   // Don't know why, but his is vital for SIGHUP to find the child.
+   // Could be, we get rid of the controling terminal by this.
+@@ -490,7 +561,7 @@
+   // We need to close all remaining fd's.
+   // Especially the one used by KProcess::start to see if we are running ok.
+   for (int i = 0; i < (int)rlp.rlim_cur; i++)
+-    if (i != tt && i != fd) close(i); //FIXME: (result of merge) Check if not closing fd is OK)
++    if (i != tt && i != m_MasterFd) close(i); //FIXME: (result of merge) Check if not closing fd is OK)
+ 
+   dup2(tt,fileno(stdin));
+   dup2(tt,fileno(stdout));
+@@ -516,7 +587,7 @@
+   ioctl(0, TIOCSPGRP, (char *)&pgrp);  // event propagation. Omitting this
+ #endif
+   setpgid(0,0);                        // is not noticeable with all
+-  close(open(dev, O_WRONLY, 0));       // clients (bash,vi). Because bash
++  close(open(ttynam, O_WRONLY, 0));       // clients (bash,vi). Because bash
+   setpgid(0,0);                        // heals this, use '-e' to test it.
+ 
+   /* without the '::' some version of HP-UX thinks, this declares
+@@ -536,46 +607,53 @@
+ // #define CERASE 0177
+ // #endif
+ 
+-#if defined (__FreeBSD__) || defined (__NetBSD__) || defined (__OpenBSD__) || defined (__bsdi__)
++#if defined (__FreeBSD__) || defined (__NetBSD__) || defined (__OpenBSD__) || defined (__bsdi__) || defined(__APPLE__)
+       ioctl(0,TIOCGETA,(char *)&ttmode);
+ #else
+-#   if defined (_HPUX_SOURCE) || defined(__Lynx__) || defined(_AIX)
++#   if defined (_HPUX_SOURCE) || defined(__Lynx__)
+       tcgetattr(0, &ttmode);
+ #   else
+       ioctl(0,TCGETS,(char *)&ttmode);
+ #   endif
+ #endif
++      if (!m_bXonXoff)
++         ttmode.c_iflag &= ~(IXOFF | IXON);
+       ttmode.c_cc[VINTR] = CTRL('C');
+       ttmode.c_cc[VQUIT] = CTRL('\\');
+       ttmode.c_cc[VERASE] = 0177;
+-#if defined (__FreeBSD__) || defined (__NetBSD__) || defined (__OpenBSD__) || defined (__bsdi__)
++#if defined (__FreeBSD__) || defined (__NetBSD__) || defined (__OpenBSD__) || defined (__bsdi__) || defined(__APPLE__)
+       ioctl(0,TIOCSETA,(char *)&ttmode);
+ #else
+-#   if defined(_HPUX_SOURCE) || defined(_AIX)
++#   ifdef _HPUX_SOURCE
+       tcsetattr(0, TCSANOW, &ttmode);
+ #   else
+       ioctl(0,TCSETS,(char *)&ttmode);
+ #   endif
+ #endif
+ 
+-  close(fd);
++  close(m_MasterFd);
+ 
+   // drop privileges
+-  setuid(getuid()); setgid(getgid());
++  setgid(getgid()); setuid(getuid());
+ 
+   // propagate emulation
+   if (term && term[0]) setenv("TERM",term,1);
++  if (konsole_dcop && konsole_dcop[0]) setenv("KONSOLE_DCOP",konsole_dcop,1);
++  if (konsole_dcop_session && konsole_dcop_session[0]) setenv("KONSOLE_DCOP_SESSION",konsole_dcop_session,1);
+ 
+   // convert QStrList into char*[]
+   unsigned int i;
+   char **argv = (char**)malloc(sizeof(char*)*(args.count()+1));
+-  for (i = 0; i<args.count(); i++) argv[i] = strdup(args[i]);
++  for (i = 0; i<args.count(); i++) {
++     argv[i] = strdup(args[i]);
++     }
++
+   argv[i] = 0L;
+ 
+-  ioctl(0,TIOCSWINSZ,(char *)&wsize);  // set screen size
++  ioctl(0,TIOCSWINSZ,(char *)&m_WSize);  // set screen size
+ 
+   // finally, pass to the new program
+-  //  kdDebug() << "We are ready to run the program " << pgm << endl;
++  //  kdDebug(1211) << "We are ready to run the program " << pgm << endl;
+   execvp(pgm, argv);
+   perror("exec failed");
+   exit(1);                             // control should never come here.
+@@ -584,11 +662,14 @@
+ /*!
+     Create an instance.
+ */
+-TEPty::TEPty()
++TEPty::TEPty() : pSendJobTimer(NULL)
+ {
+-  fd = openPty();
+-  //  kdDebug() << fd << "TEPty\n";
+-  connect(this, SIGNAL(receivedStdout(int, int &)), 
++  m_bXonXoff = false;
++  memset(&m_WSize, 0, sizeof(struct winsize));
++  m_SlaveFd = -1;
++  m_MasterFd = -1;
++  openPty();
++  connect(this, SIGNAL(receivedStdout(int, int &)),
+ 	  this, SLOT(DataReceived(int, int&)));
+   connect(this, SIGNAL(processExited(KProcess *)),
+           this, SLOT(donePty()));
+@@ -605,9 +686,8 @@
+ 
+ int TEPty::setupCommunication(Communication comm)
+ {
+-  //  kdDebug() << fd << "setupCommunication\n";
+-   if (fd <= 0) return 0;
+-   out[0] = fd;
++   if (m_MasterFd <= 0) return 0;
++   out[0] = m_MasterFd;
+    out[1] = dup(2); // Dummy
+    communication = comm;
+    return 1;
+@@ -615,40 +695,81 @@
+ 
+ int TEPty::commSetupDoneC()
+ {
+-  //  kdDebug() << fd << "commSetupDoneC\n";
+    QCString pgm = arguments.first();
+    arguments.pop_front();
+-   makePty(ttynam, pgm,arguments,term,addutmp);
++   startPgm(pgm,arguments,term);
+    return 0; // Never reached.
+ }
+ 
+ /*! sends a character through the line */
+ void TEPty::send_byte(char c)
+ {
+-  //  kdDebug() << fd << ":" << c << "send_byte\n";
+-  write(fd,&c,1);
++  send_bytes(&c,1);
+ }
+ 
+ /*! sends a 0 terminated string through the line */
+ void TEPty::send_string(const char* s)
+ {
+-  //    kdDebug() << fd << s << "send_bytes\n";
+-  write(fd,s,strlen(s));
++  send_bytes(s,strlen(s));
++}
++
++void TEPty::doSendJobs() {
++  int written;
++  while(!pendingSendJobs.isEmpty()) {
++    SendJob& job = pendingSendJobs.first();
++    written = write(m_MasterFd, job.buffer.data() + job.start, job.length);
++    if (written==-1) {
++      if ( errno!=EAGAIN && errno!=EINTR )
++        pendingSendJobs.remove(pendingSendJobs.begin());
++      return;
++    }else {
++      job.start += written;
++      job.length -= written;
++      if ( job.length == 0 )
++        pendingSendJobs.remove(pendingSendJobs.begin());
++    }
++  }
++  if (pSendJobTimer)
++    pSendJobTimer->stop();
++}
++
++void TEPty::appendSendJob(const char* s, int len)
++{
++  pendingSendJobs.append(SendJob(s,len));
++  if (!pSendJobTimer) {
++    pSendJobTimer = new QTimer(this);
++    connect(pSendJobTimer, SIGNAL(timeout()), this, SLOT(doSendJobs()) );
++  }
++  pSendJobTimer->start(0);
+ }
+ 
+ /*! sends len bytes through the line */
+ void TEPty::send_bytes(const char* s, int len)
+ {
+-  //  kdDebug() << len << s <<"\n";
+-  write(fd,s,len);
++  if (m_MasterFd < 0)
++    return;
++  if (!pendingSendJobs.isEmpty()) {
++    appendSendJob(s,len);
++  }else {
++    int written;
++    do {
++      written = write(m_MasterFd,s,len);
++      if (written==-1) {
++        if ( errno==EAGAIN || errno==EINTR )
++          appendSendJob(s,len);
++        return;
++      }
++      s += written;
++      len -= written;
++    } while(len>0);
++  }
+ }
+ 
+ /*! indicates that a block of data is received */
+ void TEPty::DataReceived(int,int &len)
+-{ 
++{
+   char buf[4096];
+-  len = read(fd, buf, 4096);
+-  //  kdDebug() << fd << len << " DataReceived\n";
++  len = read(m_MasterFd, buf, 4096);
+   if (len < 0)
+      return;
+ 
+@@ -660,3 +781,12 @@
+     fflush(syslog_file);
+   }
+ }
++
++void TEPty::lockPty(bool lock)
++{
++  if (lock)
++    suspend();
++  else
++    resume();
++}
++
+--- ./kpackage/TEPty.h	25 Jun 2002 01:52:05 -0000	1.1.1.1
++++ ./kpackage/TEPty.h	2 Dec 2002 00:52:24 -0000	1.2
+@@ -25,6 +25,8 @@
+ #include <qsocketnotifier.h>
+ #include <qtimer.h>
+ #include <qstrlist.h>
++#include <qvaluelist.h>
++#include <qmemarray.h>
+ 
+ class TEPty: public KProcess
+ {
+@@ -38,17 +40,22 @@
+   public:
+ 
+     /*!
+-        having a `run' separate from the constructor allows to make
+-        the necessary connections to the signals and slots of the
+-        instance before starting the execution of the client.
+-    */
+-    int run(const char* pgm, QStrList& args, const char* term, int addutmp);
++     * having a `run' separate from the constructor allows to make
++     * the necessary connections to the signals and slots of the
++     * instance before starting the execution of the client.
++     */
++    int run( const char* pgm, QStrList & args, const char* term, bool _addutmp,
++             const char* konsole_dcop = "", const char* konsole_dcop_session = "" );
++    void setWriteable(bool writeable);
++    void setXonXoff(bool _xonxoff) { m_bXonXoff = _xonxoff; }
++    int makePty(bool _addutmp);
++    int masterFd() { return m_MasterFd; }
++    QString error() { return m_strError; }
+ 
+   public slots:
+-
++    void lockPty(bool lock);
+     void send_bytes(const char* s, int len);
+     void setSize(int lines, int columns);
+-    void donePty();
+ 
+   signals:
+ 
+@@ -71,6 +78,8 @@
+     void send_string(const char* s);
+ 
+     const char* deviceName();
++
++    virtual void commClose();
+     
+   protected:
+       virtual int commSetupDoneC();
+@@ -78,23 +87,50 @@
+   
+   protected slots:
+       void DataReceived(int, int& len);
++  public slots:
++      void donePty();
+       
+   private:
+-    void makePty(const char* dev, const char* pgm, QValueList<QCString>& args, const char* term, int addutmp);
+-    int  openPty();
++    void startPgm(const char* pgm, QValueList<QCString> & args, const char* term);
++    void openPty();
++    void appendSendJob(const char* s, int len);
++
++  private slots:
++    void doSendJobs();
+ 
+   private:
+ 
+-    struct winsize wsize;
+-    int fd;
+-    bool             needGrantPty;
++    struct winsize m_WSize;
++    int m_MasterFd;
++    int m_SlaveFd;
++    bool             m_bNeedGrantPty;
++    bool             m_bXonXoff;
++    bool             m_bAddUtmp;
+     char ptynam[50]; // "/dev/ptyxx" | "/dev/ptmx"
+     char ttynam[50]; // "/dev/ttyxx" | "/dev/pts/########..."
+     const char *pgm;
++    QString m_strError;
++
++    // environment variables
+     const char *term;
+-    int addutmp;
++    const char *konsole_dcop;
++    const char *konsole_dcop_session;
++
++    struct SendJob {
++      SendJob() {}
++      SendJob(const char* b, int len) {
++        buffer.duplicate(b,len);
++        start = 0;
++        length = len;
++      }
++      QMemArray<char> buffer;
++      int start;
++      int length;
++    };
++    QValueList<SendJob> pendingSendJobs;
++    QTimer* pSendJobTimer;
+ 
+-friend int chownpty(int,int);
++  friend int chownpty(int, bool);
+ };
+ 
+ #endif
+--- ./ksysv/configure.in.in	25 Jun 2002 01:52:05 -0000	1.1.1.1
++++ ./ksysv/configure.in.in	2 Dec 2002 01:17:11 -0000	1.2
+@@ -2,6 +2,7 @@
+ AC_MSG_CHECKING(if ksysv can be compiled)
+ case "$host" in
+   *-*-*bsd*) ksysv_compile=no;;
++  *-*-*darwin*) ksysv_compile=no;;
+   *) ksysv_compile=yes;;
+ esac
+ AC_MSG_RESULT($ksysv_compile)
+--- ./kuser/configure.in.in	25 Jun 2002 01:52:05 -0000	1.1.1.1
++++ ./kuser/configure.in.in	2 Dec 2002 01:17:11 -0000	1.2
+@@ -1,3 +1,5 @@
++DO_NOT_COMPILE="$DO_NOT_COMPILE kuser"
++
+ dnl this is for kuser:
+ 
+ AC_DEFUN(KUSER_CRYPT_TESTS, [
+--- ./kxconfig/configure.in.in	10 Jul 2002 03:05:53 -0000	1.1.1.1
++++ ./kxconfig/configure.in.in	2 Dec 2002 01:17:11 -0000	1.2
+@@ -1,2 +1,4 @@
++DO_NOT_COMPILE="$DO_NOT_COMPILE kxconfig"
++
+ AC_CHECK_HEADERS([linux/pci.h])
+ 
+===================================================================
+diff -N ./secpolicy/configure.in.in
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ ./secpolicy/configure.in.in	2 Dec 2002 01:17:11 -0000	1.1
+@@ -0,0 +1 @@
++DO_NOT_COMPILE="$DO_NOT_COMPILE secpolicy"
