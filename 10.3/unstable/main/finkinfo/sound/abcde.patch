@@ -1,0 +1,247 @@
+diff -urN abcde-2.0.3.orig/Makefile abcde-2.0.3/Makefile
+--- abcde-2.0.3.orig/Makefile	Mon Jan 28 00:34:34 2002
++++ abcde-2.0.3/Makefile	Tue Apr  8 21:21:42 2003
+@@ -9,6 +9,7 @@
+ etcdir = ${DESTDIR}/etc
+ 
+ all:
++	perl -pi -e 's{/etc/abcde\.conf}{$(etcdir)/abcde\.conf}' abcde
+ 
+ clean:
+ 
+@@ -18,7 +19,9 @@
+ 	$(INSTALL) -m 755 -o 0 cddb-tool $(bindir)
+ 	$(INSTALL) -d -m 755 $(mandir)
+ 	$(INSTALL) -m 644 -o 0 abcde.1 $(mandir)
++	$(INSTALL) -d -m 755 $(etcdir)
+ 	$(INSTALL) -m 644 -o 0 abcde.conf $(etcdir)
++	$(INSTALL) -m 755 -o 0 seq $(bindir)
+ 
+ tarball:
+ 	@cd .. && tar czvf abcde_$(VERSION).orig.tar.gz \
+diff -urN abcde-2.0.3.orig/abcde abcde-2.0.3/abcde
+--- abcde-2.0.3.orig/abcde	Mon Jan 28 00:44:02 2002
++++ abcde-2.0.3/abcde	Tue Apr  8 21:22:46 2003
+@@ -9,6 +9,9 @@
+ # 
+ # Copyright for this work is to expire January 1, 2010, after which it
+ # shall be public domain.
++#
++# Ported to MacOS X by:
++# Evan Jones <ejones@uwaterloo.ca> http://www.eng.uwaterloo.ca/~ejones/
+ 
+ VERSION=2.0.3
+ 
+@@ -525,6 +528,8 @@
+ 			ERRORCODE=no_query
+ 			echo 503 > "$ABCDETEMPDIR/cddbquery"
+ 		else
++			# Make sure that cddb-tool knows about our WGET options
++			export WGET WGETOPTS
+ 			CDDBUSER=$(echo $HELLOINFO | cut -f1 -d'@')
+ 			CDDBHOST=$(echo $HELLOINFO | cut -f2- -d'@')
+ 			$CDDBTOOL query $CDDBURL $CDDBUSER $CDDBHOST $TRACKINFO > "$ABCDETEMPDIR/cddbquery"
+@@ -866,6 +871,11 @@
+ 	case "$CDROMREADERSYNTAX" in
+ 		cdparanoia) nice $READNICE $CDROMREADER -d $CDROM $UTRACKNUM "$WAVDATA" >&2 ;;
+ 		cdda2wav) nice $READNICE $CDROMREADER -H -D $CDROM -t $UTRACKNUM "$WAVDATA" >&2 ;;
++		cddafs)
++			# Find the track's mounted path
++			FILEPATH=$(mount | grep $CDROM | sed 's/^[^ ]* on \([^(]*\) (.*/\1/')
++			FILEPATH=$(find "$FILEPATH" | grep "/$UTRACKNUM ");
++			nice $READNICE $CDROMREADER "$FILEPATH" "$WAVDATA" >&2 ;;
+ 		debug) nice $READNICE $CDROMREADER -d $CDROM -w $UTRACKNUM-[:1] "$WAVDATA" >&2 ;;
+ 	esac
+ 	RETURN=$?
+@@ -886,10 +896,10 @@
+ CDDBSUBMIT=freedb-submit@freedb.org
+ HELLOINFO="$(whoami)@$(hostname)"
+ INTERACTIVE=y
+-CDROMREADERSYNTAX=cdparanoia
++CDROMREADERSYNTAX=cddafs
+ OUTPUTTYPE=ogg
+ ENCODERSYNTAX=default
+-OUTPUTFORMAT='${ARTISTFILE}/${TRACKFILE}.$OUTPUTTYPE'
++OUTPUTFORMAT='${ARTISTFILE}/${ALBUMFILE}/$TRACKNUM-${TRACKFILE}.${OUTPUTTYPE}'
+ VAOUTPUTFORMAT=${OUTPUTFORMAT}
+ PLAYLISTFORMAT='${ARTISTFILE}_-_${ALBUMFILE}.m3u'
+ PLAYLISTDATAPREFIX=''
+@@ -913,7 +923,8 @@
+ ID3V2=id3v2
+ CDPARANOIA=cdparanoia
+ CDDA2WAV=cdda2wav
+-WGET=wget
++CDDAFS=cp
++WGET=curl
+ CDDISCID=cd-discid
+ CDDBTOOL=cddb-tool
+ EJECT=eject
+@@ -933,7 +944,8 @@
+ ID3V2OPTS=
+ CDPARANOIAOPTS=
+ CDDA2WAVOPTS=
+-WGETOPTS=
++CDDAFSOPTS="-f"
++WGETOPTS="-f -s"
+ CDDBTOOLOPTS=
+ EJECTOPTS=
+ DISTMP3OPTS=
+@@ -957,7 +969,7 @@
+ USEID3=y
+ 
+ if [ -z "$OUTPUTDIR" ]; then
+-	OUTPUTDIR=$(pwd)
++	OUTPUTDIR="$HOME/Music"
+ fi
+ 
+ if [ -z "$WAVOUTPUTDIR" ]; then
+@@ -969,12 +981,12 @@
+ if [ -e /dev/cdroms/cdrom0 ]; then
+ 	CDROM=/dev/cdroms/cdrom0
+ else
+-	CDROM=/dev/cdrom
++	CDROM=/dev/disk1
+ fi
+ 
+ # Load system defaults
+-if [ -r /etc/abcde.conf ]; then
+-	. /etc/abcde.conf
++if [ -r /sw/etc/abcde.conf ]; then
++	. /sw/etc/abcde.conf
+ fi
+ # Load user preference defaults
+ if [ -r $HOME/.abcde.conf ]; then
+@@ -1027,6 +1039,10 @@
+ 		CDROMREADER="$CDDA2WAV"
+ 		CDROMREADEROPTS="$CDDA2WAVOPTS"
+ 		;;
++        cddafs)
++                CDROMREADER="$CDDAFS"
++                CDROMREADEROPTS="$CDDAFSOPTS"
++                ;;
+ esac
+ 
+ # If nothing has been specified, use oggenc for oggs and lame for mp3s
+diff -urN abcde-2.0.3.orig/abcde.conf abcde-2.0.3/abcde.conf
+--- abcde-2.0.3.orig/abcde.conf	Sun Jan 20 21:35:31 2002
++++ abcde-2.0.3/abcde.conf	Tue Apr  8 21:21:43 2003
+@@ -27,7 +27,7 @@
+ 
+ # CD reader program to use - currently recognized options are 'cdparanoia'
+ # and 'cdda2wav'.
+-#CDROMREADERSYNTAX=cdparanoia
++#CDROMREADERSYNTAX=cddafs
+ 
+ # Specify 'nice'ness of the encoder and of the CD reader.
+ # This is a relative 'nice'ness (that is, if the parent process is at a
+@@ -51,7 +51,7 @@
+ #ID3V2=id3v2
+ #CDPARANOIA=cdparanoia
+ #CDDA2WAV=cdda2wav
+-#WGET=wget
++#WGET=curl
+ #CDDISCID=cd-discid
+ #CDDBTOOL=cddb-tool
+ #EJECT=eject
+@@ -71,7 +71,8 @@
+ #ID3V2OPTS=
+ #CDPARANOIAOPTS=
+ #CDDA2WAVOPTS=
+-#WGETOPTS=
++#CDDAFSOPTS="-f"
++#WGETOPTS="-f -s"
+ #CDDBTOOLOPTS=
+ #EJECTOPTS=
+ #DISTMP3OPTS=
+@@ -96,15 +97,15 @@
+ #NOCDDBQUERY=n
+ 
+ # CD device you want to read from
+-#CDROM=/dev/cdrom
++#CDROM=/dev/disk1
+ 
+-# If you'd like to make a default location that overrides the current
+-# directory for putting mp3's, uncomment this.
+-#OUTPUTDIR=`pwd`
++# If you'd like to make a default location that overrides your Music
++# directory in your home directory for putting mp3's, uncomment this.
++#OUTPUTDIR="$HOME/Music"
+ 
+ # Or if you'd just like to put the temporary .wav files somewhere else
+ # you can specify that here
+-#WAVOUTPUTDIR=`pwd`
++#OUTPUTDIR="$HOME/Music"
+ 
+ # OUTPUTTYPE can be either "ogg" or "mp3".
+ #OUTPUTTYPE=ogg
+@@ -115,7 +116,7 @@
+ # OUTPUTTYPE, ALBUMFILE, ARTISTFILE, TRACKFILE, and TRACKNUM.
+ # Make sure to single-quote this variable. abcde will automatically create
+ # the directory portion of this filename.
+-#OUTPUTFORMAT='${ARTISTFILE}/${TRACKFILE}.${OUTPUTTYPE}'
++#OUTPUTFORMAT='${ARTISTFILE}/${ALBUMFILE}/$TRACKNUM-${TRACKFILE}.${OUTPUTTYPE}'
+ 
+ # Like OUTPUTFORMAT but for Various Artists discs.
+ #VAOUTPUTFORMAT='${ARTISTFILE}/${TRACKFILE}.${OUTPUTTYPE}'
+diff -urN abcde-2.0.3.orig/cddb-tool abcde-2.0.3/cddb-tool
+--- abcde-2.0.3.orig/cddb-tool	Sun Jan 20 21:29:23 2002
++++ abcde-2.0.3/cddb-tool	Tue Apr  8 21:21:43 2003
+@@ -20,6 +20,9 @@
+ #  - Submitted via: line is created by template, when it really should be in send.
+ #    Oh well.
+ 
++# Ported to MacOS X by:
++# Evan Jones <ejones@uwaterloo.ca> http://www.eng.uwaterloo.ca/~ejones/
++
+ VERSION=0.4.1
+ NAME=cddb-tool
+ 
+@@ -33,6 +36,7 @@
+ # assume a reasonable default if $WGET is undefined
+ if [ "$WGET" = "" ]; then
+ 	WGET=wget
++	WGETOPTS="-q -O -"
+ fi
+ 
+ usage() {
+@@ -164,7 +168,7 @@
+ 	shift 3
+ 	TRACKINFO="$@"
+ 	TRACKINFOPLUS=$(echo $TRACKINFO | tr ' ' '+')
+-	RESULTS=$($WGET -q -O - "$SERVER?cmd=cddb+query+$TRACKINFOPLUS\&hello=$HELLOINFO\&proto=3") || exit $LOOKUP_ERR
++	RESULTS=$($WGET $WGETOPTS "$SERVER?cmd=cddb+query+$TRACKINFOPLUS\&hello=$HELLOINFO\&proto=3") || exit $LOOKUP_ERR
+ 	echo $RESULTS | tr '\r' '\n' | tr -s '\n' | sed 's/^ //g'
+ 	;;
+ 
+@@ -175,7 +179,7 @@
+ 	CATEGORY="$4"
+ 	DISCID="$5"
+ 	HELLOINFO="$USER+$HOST+$NAME+$VERSION"
+-	$WGET -q -O - $CDDBDATA "$SERVER?cmd=cddb+read+$CATEGORY+$DISCID\&hello=$HELLOINFO\&proto=3" 2>/dev/null
++	$WGET $WGETOPTS $CDDBDATA "$SERVER?cmd=cddb+read+$CATEGORY+$DISCID\&hello=$HELLOINFO\&proto=3" 2>/dev/null
+ 	;;
+ 
+ 	help) help ;;
+diff -urN abcde-2.0.3.orig/seq abcde-2.0.3/seq
+--- abcde-2.0.3.orig/seq	Wed Dec 31 19:00:00 1969
++++ abcde-2.0.3/seq	Tue Apr  8 21:21:43 2003
+@@ -0,0 +1,19 @@
++#!/usr/bin/perl -w
++# A replacement for the GNU seq utility
++# Written by Evan Jones <ejones@uwaterloo.ca> in December, 2002
++# http://www.eng.uwaterloo.ca/~ejones/
++
++use strict;
++
++die "Usage: seq [start] [end]\n" if ( @ARGV != 2 );
++die "seq: Starting value must be an integer\n" if ( $ARGV[0] !~ /^-?\d+$/ );
++die "seq: Ending value must be an integer\n" if ( $ARGV[1] !~ /^
++?\d+$/ );
++die "seq: Starting value must be less than or equal to the ending value\n" if ( $ARGV[0] > $ARGV[1] );
++
++for ( my $i = $ARGV[0]; $i <= $ARGV[1]; ++ $i )
++{
++	print( "$i " );
++}
++
++print( "\n" );
