@@ -1,0 +1,605 @@
+
+--- kcoloredit/Makefile.am	10 Jul 2002 04:37:17 -0000	1.1.1.2
++++ kcoloredit/Makefile.am	5 Nov 2002 21:40:58 -0000	1.5
+@@ -17,6 +17,11 @@
+ kcolorchooser_LDADD = $(LIB_KDEUI)
+ kcolorchooser_LDFLAGS = $(all_libraries) $(KDE_RPATH)
+ 
++#lib_LTLIBRARIES = kcolorchooser.la
++#kcolorchooser_la_SOURCES = kcolorchooser.cpp
++#kcolorchooser_la_LIBADD = $(LIB_KDEUI) $(LIB_QT) $(LIB_KDECORE)
++#kcolorchooser_la_LDFLAGS = $(all_libraries) -module -avoid-version
++
+ noinst_HEADERS = color.h colorselector.h editablestreamhistory.h \
+ 	gradientselection.h imageselection.h kcoloredit.h kcoloreditdoc.h \
+ 	kcoloreditview.h kxycolorselector.h kzcolorselector.h \
+@@ -25,11 +30,6 @@
+ 
+ lnk_DATA = kcoloredit.desktop kcolorchooser.desktop
+ lnkdir = $(kde_appsdir)/Graphics/More
+-
+-install-data-local: uninstall.desktop
+-	$(mkinstalldirs) $(DESTDIR)$(kde_appsdir)/Graphics
+-	$(INSTALL_DATA) $(srcdir)/uninstall.desktop $(DESTDIR)$(kde_appsdir)/Graphics/kcoloredit.desktop 
+-	$(INSTALL_DATA) $(srcdir)/uninstall.desktop $(DESTDIR)$(kde_appsdir)/Graphics/kcolorchooser.desktop
+ 
+ KDE_ICON = kcoloredit kcolorchooser
+ 
+--- kdvi/dviwin.cpp	3 Mar 2003 02:52:42 -0000	1.1.1.8
++++ kdvi/dviwin.cpp	9 Apr 2003 23:17:39 -0000	1.2
+@@ -37,7 +37,7 @@
+ #include <klocale.h>
+ #include <kprinter.h>
+ #include <kprocess.h>
+-
++#include <kstandarddirs.h>
+ 
+ #include "dviwin.h"
+ #include "fontpool.h"
+@@ -503,6 +503,28 @@
+   // specials in PostScriptDirectory, and the headers in the
+   // PostScriptHeaderString.
+   PS_interface->clear();
++
++  // Files that reside under "tmp" or under the "data" resource are most
++  // likely remote files. We limit the files they are able to read to
++  // the directory they are in in order to limit the possibilities of a 
++  // denial of service attack.
++  bool restrictIncludePath = true;
++  QString tmp = KGlobal::dirs()->saveLocation("tmp", QString::null);
++  if (!filename.startsWith(tmp))
++  {
++     tmp = KGlobal::dirs()->saveLocation("data", QString::null);
++     if (!filename.startsWith(tmp))
++        restrictIncludePath = false;
++  }
++  
++  QString includePath;
++  if (restrictIncludePath)
++  {
++     includePath = filename;
++     includePath.truncate(includePath.findRev('/'));
++  }
++
++  PS_interface->setIncludePath(includePath);     
+ 
+   // We will also generate a list of hyperlink-anchors in the
+   // document. So declare the existing list empty.
+--- kdvi/font.cpp	2 Oct 2002 23:47:07 -0000	1.1.1.4
++++ kdvi/font.cpp	2 Oct 2002 23:55:44 -0000	1.6
+@@ -5,6 +5,7 @@
+ 
+ #include <kdebug.h>
+ #include <klocale.h>
++#include <sys/types.h>
+ #include <qapplication.h>
+ #include <qfile.h>
+ 
+--- kdvi/psgs.cpp	14 Aug 2002 18:51:42 -0000	1.1.1.3
++++ kdvi/psgs.cpp	9 Apr 2003 23:17:39 -0000	1.2
+@@ -59,6 +59,12 @@
+   DiskCache->clear();
+ }
+ 
++void ghostscript_interface::setIncludePath(const QString &_includePath) {
++  if (_includePath.isEmpty())
++     includePath = "*"; // Allow all files
++  else
++     includePath = _includePath+"/*";
++}
+ 
+ void ghostscript_interface::setPostScript(int page, QString PostScript) {
+   pageInfo *info = new pageInfo(PostScript);
+@@ -125,11 +131,13 @@
+   // Step 2: Call GS with the File
+   KProcess proc;
+   proc << "gs";
+-  proc << "-dNOPAUSE" << "-dBATCH" << "-sDEVICE=png256";
++  proc << "-dSAFER" << "-dPARANOIDSAFER" << "-dDELAYSAFER" << "-dNOPAUSE" << "-dBATCH" << "-sDEVICE=png256";
+   proc << QString("-sOutputFile=%1").arg(filename);
++  proc << QString("-sExtraIncludePath=%1").arg(includePath);
+   proc << QString("-g%1x%2").arg(pixel_page_w).arg(pixel_page_h); // page size in pixels
+   proc << QString("-r%1").arg(resolution);                       // resolution in dpi
+-  proc << PSfile.name();
++  proc << "-c" << "<< /PermitFileReading [ ExtraIncludePath ] /PermitFileWriting [] /PermitFileControl [] >> setuserparams .locksafe";
++  proc << "-f" << PSfile.name();
+   proc.start(KProcess::Block);
+   PSfile.unlink();
+   emit(setStatusBarText(QString::null));
+--- kdvi/psgs.h	14 Aug 2002 18:51:42 -0000	1.1.1.2
++++ kdvi/psgs.h	9 Apr 2003 23:17:39 -0000	1.2
+@@ -42,6 +42,9 @@
+   // 
+   void setPostScript(int page, QString PostScript);
+ 
++  // sets path from additional postscript files may be read
++  void setIncludePath(const QString &_includePath);
++
+   // Returns the graphics of the page, if possible. The functions
+   // returns a pointer to a QPixmap, or null. The referred QPixmap
+   // should be deleted after use.
+@@ -64,6 +67,8 @@
+   double                resolution;    // in dots per inch
+   int                   pixel_page_w; // in pixels
+   int                   pixel_page_h; // in pixels
++
++  QString               includePath;
+ 
+ signals:
+   /** Passed through to the top-level kpart. */
+--- kghostview/Makefile.am	2 Oct 2002 23:47:21 -0000	1.1.1.2
++++ kghostview/Makefile.am	29 Nov 2002 19:01:20 -0000	1.2
+@@ -7,8 +7,9 @@
+ 
+ bin_PROGRAMS = 	kghostview
+ kde_module_LTLIBRARIES = libkghostviewpart.la
++lib_LTLIBRARIES = libkghostview_shared.la kghostview.la
+ 
+-libkghostviewpart_la_SOURCES = dscparse.cpp kgv_miniwidget.cpp marklist.cpp \
++libkghostview_shared_la_SOURCES = dscparse.cpp kgv_miniwidget.cpp marklist.cpp \
+ 	messages.cpp infodialog.cpp gotodialog.cpp kgvshell.cpp kpswidget.cpp \
+ 	kgvpageview.cpp ps.c kgv_view.cpp scrollbox.cpp  kgvpagedecorator.cpp \
+ 	kgvconfigdialog.cpp kgvmainwidget.cpp dscparse_adapter.cpp \
+@@ -19,12 +20,26 @@
+ 	kgvpagedecorator.h kgvconfigdialog.h kgvmainwidget.h dscparse.h \
+ 	dscparse_adapter.h qttableview.h kdscerrordialog.h
+ 
++kghostview_la_SOURCES = kghostview_la_main.cpp
++kghostview_la_LDFLAGS = $(all_libraries) $(KDE_RPATH) -module -avoid-version
++kghostview_la_LIBADD  = libkghostview_shared.la
++
++kghostview_la_main.cpp: main.cpp
++	cat main.cpp > kghostview_la_main.cpp
++
+ kghostview_SOURCES = main.cpp
+ kghostview_LDFLAGS = $(all_libraries) $(KDE_RPATH)
+-kghostview_LDADD = libkghostviewpart.la
++kghostview_LDADD = libkghostview_shared.la
++
++libkghostviewpart_la_SOURCES = libkghostviewpart_la_dummy.cpp
++libkghostviewpart_la_LIBADD  = libkghostview_shared.la
++libkghostviewpart_la_LDFLAGS = $(all_libraries) $(KDE_RPATH) -module -avoid-version
++
++libkghostviewpart_la_dummy.cpp:
++	echo > libkghostviewpart_la_dummy.cpp
+ 
+-libkghostviewpart_la_LDFLAGS = $(all_libraries) $(KDE_PLUGIN) -module
+-libkghostviewpart_la_LIBADD = $(LIB_KFILE) $(LIB_KPARTS) -lkdeprint
++libkghostview_shared_la_LDFLAGS = $(all_libraries) $(KDE_RPATH) -avoid-version
++libkghostview_shared_la_LIBADD = $(LIB_KFILE) $(LIB_KPARTS) -lkdeprint $(LIB_QT) $(LIB_KDECORE) -lkdeui
+ 
+ METASOURCES = AUTO
+ EXTRA_DIST = kghostview.desktop 
+--- kghostview/kgv_miniwidget.cpp	4 Jan 2003 18:47:37 -0000	1.1.1.7
++++ kghostview/kgv_miniwidget.cpp	9 Apr 2003 23:17:42 -0000	1.2
+@@ -293,23 +293,22 @@
+     }
+ 
+     _tmpDSC->close();
+-    _pdfFileName = _fileName;
+-    _fileName = _tmpDSC->name();
+     _format = PDF;
+ 
+-    openPSFile();
++    openPSFile(_tmpDSC->name());
+ }
+ 
+-void KGVMiniWidget::openPSFile()
++void KGVMiniWidget::openPSFile(const QString &file)
+ {
++    QString fileName = file.isEmpty() ? _fileName : file;
+     kdDebug(4500) << "KGVMiniWidget::openPSFile" << endl;
+     
+-    FILE* fp = fopen( QFile::encodeName( _fileName ), "r");
++    FILE* fp = fopen( QFile::encodeName( fileName ), "r");
+     if( fp == 0 ) 
+     {
+ 	KMessageBox::error( _part->widget(),
+ 		i18n( "<qt>Error opening file <nobr><strong>%1</strong></nobr>: %2</qt>" )
+-		.arg( _fileName )
++		.arg( fileName )
+ 		.arg( strerror( errno ) ) );
+ 	emit canceled( "" );
+ 	return;
+@@ -320,9 +319,7 @@
+ 	_isFileOpen = true;    
+ 	scanDSC();
+ 	buildTOC();
+-	_psWidget->setFileName( dsc()->isStructured() 
+-	                            ? QString::null 
+-				    : _fileName );
++	_psWidget->setFileName( _fileName, dsc()->isStructured() );
+ 	emit completed();
+     }
+ }
+@@ -859,6 +856,7 @@
+             << "-dNOPAUSE"
+             << "-dBATCH"
+             << "-dSAFER"
++            << "-dPARANOIDSAFER"
+             << "-sDEVICE=pswrite"
+             << ( QCString("-sOutputFile=")+QFile::encodeName(saveFileName) )
+             << ( QString("-dFirstPage=")+QString::number( firstPage ) )
+@@ -867,7 +865,7 @@
+             << "save"
+             << "pop"
+             << "-f"
+-            << QFile::encodeName(_pdfFileName);
++            << QFile::encodeName(_fileName);
+ 
+     /*QValueList<QCString> args = process.args();
+     QValueList<QCString>::Iterator it = args.begin();
+@@ -1074,7 +1072,7 @@
+                           QString::null, 
+                           _part->widget(), 
+                           QString::null );
+-    if( !KIO::NetAccess::upload( _format == PDF ? _pdfFileName : _fileName,
++    if( !KIO::NetAccess::upload( _fileName,
+ 				 saveURL ) )
+ 	; // TODO: Proper error dialog
+ }
+@@ -1311,10 +1309,16 @@
+     
+     _process = new KProcess;
+     *_process << _ghostscriptPath
++              << "-dSAFER"
++              << "-dPARANOIDSAFER"
++              << "-dDELAYSAFER"
+               << "-dNODISPLAY"
+               << "-dQUIET"
+               << QString( "-sPDFname=%1" ).arg( pdfName )
+               << QString( "-sDSCname=%1" ).arg( dscName )
++              << "-c"
++              << "<< /PermitFileReading [ PDFname ] /PermitFileWriting [ DSCname ] /PermitFileControl [] >> setuserparams .locksafe"
++              << "-f"
+               << "pdf2dsc.ps"
+               << "-c"
+               << "quit";
+--- kghostview/kgv_miniwidget.h	14 Aug 2002 18:52:13 -0000	1.1.1.2
++++ kghostview/kgv_miniwidget.h	9 Apr 2003 23:17:42 -0000	1.2
+@@ -85,7 +85,7 @@
+     void clearTemporaryFiles();
+     
+     void uncompressFile();
+-    void openPSFile();
++    void openPSFile(const QString &file=QString::null);
+ 
+ protected slots:
+     void doOpenFile();
+@@ -116,7 +116,7 @@
+ /*- PRINTING and SAVING ---------------------------------------------------*/
+ 
+ // private data used: 
+-//   Document specific: _dsc, _fileName, _pdfFileName, _format, _origurl
++//   Document specific: _dsc, _fileName, _format, _origurl
+ //   View specific:     _currentPage, _marklist 
+ //   This section only: _printer, _tmpFromPDF
+     
+@@ -267,7 +267,6 @@
+     int _visiblePage;
+ 
+     QString _fileName;
+-    QString _pdfFileName;
+     QString _mimetype;
+ 
+     MarkList* _marklist;
+--- kghostview/kpswidget.cpp	2 Oct 2002 23:47:21 -0000	1.1.1.2
++++ kghostview/kpswidget.cpp	9 Apr 2003 23:17:42 -0000	1.2
+@@ -309,10 +309,11 @@
+     }
+ }
+ 
+-void KPSWidget::setFileName( const QString& fileName )
++void KPSWidget::setFileName( const QString& fileName, bool usePipe )
+ {
+-    if( _fileName != fileName )
++    if(( _fileName != fileName ) || (_usePipe != usePipe))
+     {
++        _usePipe = usePipe;
+ 	_fileName = fileName;
+ 	stopInterpreter();
+ 	_ghostscriptDirty = true;
+@@ -508,8 +509,11 @@
+     for( ; it != _ghostscriptArguments.end(); ++it )
+ 	*_process << (*it);
+     
+-    if( _fileName.isEmpty() )
+-	*_process << "-";
++    if( _usePipe )
++        *_process <<
++        // The following two lines are their to ensure that we are allowed to read _fileName
++        "-dDELAYSAFER" << "-sInputFile="+_fileName << "-c" <<
++        "<< /PermitFileReading [ InputFile ] /PermitFileWriting [] /PermitFileControl [] >> setuserparams .locksafe";
+     else
+ 	*_process << _fileName << "-c" << "quit";
+ 
+@@ -527,7 +531,7 @@
+     // Finally fire up the interpreter.
+     kdDebug(4500) << "KPSWidget: starting interpreter" << endl;
+     if( _process->start( KProcess::NotifyOnExit, 
+-              _fileName.isEmpty() ? KProcess::All : KProcess::AllOutput ) ) 
++              _usePipe ? KProcess::All : KProcess::AllOutput ) ) 
+     {
+ 	_interpreterBusy = true;
+ 	setCursor( waitCursor );
+@@ -648,7 +652,7 @@
+     if( !intConfig->platformFonts() )
+ 	arguments << "-dNOPLATFONTS";
+     
+-    arguments << "-dNOPAUSE" << "-dQUIET" << "-dSAFER";
++    arguments << "-dNOPAUSE" << "-dQUIET" << "-dSAFER" << "-dPARANOIDSAFER";
+ 
+     setGhostscriptArguments( arguments );
+ 
+--- kghostview/kpswidget.h	2 Oct 2002 23:47:21 -0000	1.1.1.2
++++ kghostview/kpswidget.h	9 Apr 2003 23:17:42 -0000	1.2
+@@ -134,10 +134,11 @@
+     bool sendPS( FILE*, unsigned int begin, unsigned int end );
+    
+     /**
+-     * Sets the filename of the ghostscript input. Usually we use a pipe for
+-     * communication and no filename will be needed.
++     * Sets the filename of the ghostscript input. 
++     * @p usePipe indicates whether we use a pipe for
++     * communication or let ghoscript read the file itself.
+      */
+-    void setFileName( const QString& );
++    void setFileName( const QString&, bool usePipe );
+ 
+     /**
+      * Set the bounding box of the drawable. See my comment in the source
+@@ -243,6 +244,7 @@
+     QString     _ghostscriptPath;
+     QStringList _ghostscriptArguments;
+     QString     _fileName;
++    bool        _usePipe;
+ 
+     /**
+      * Flag set when one of the properties _ghostscriptPath, 
+--- kmrml/kmrml/Makefile.am	2 Oct 2002 23:47:24 -0000	1.1.1.1
++++ kmrml/kmrml/Makefile.am	29 Nov 2002 19:01:20 -0000	1.2
+@@ -28,7 +28,7 @@
+ servicemenudir = $(kde_datadir)/konqueror/servicemenus
+ 
+ #############################################
+-CLEANFILES = dummy.cpp
++CLEANFILES = mrmlsearch_main.cpp
+ bin_PROGRAMS = mrmlsearch
+ lib_LTLIBRARIES = mrmlsearch.la
+ 
+@@ -36,9 +36,12 @@
+ mrmlsearch_la_LDFLAGS = $(all_libraries) -module -avoid-version
+ mrmlsearch_la_SOURCES = mrmlsearch.cpp
+ 
+-mrmlsearch_SOURCES = dummy.cpp
+-mrmlsearch_LDADD = mrmlsearch.la $(LIB_KDECORE)
++mrmlsearch_SOURCES = mrmlsearch_main.cpp
++mrmlsearch_LDADD   = $(LIB_KMRMLSTUFF) $(LIB_KDECORE)
+ mrmlsearch_LDFLAGS = $(all_libraries) $(KDE_RPATH)
++
++mrmlsearch_main.cpp: mrmlsearch.cpp
++	cat mrmlsearch.cpp > mrmlsearch_main.cpp
+ 
+ messages:
+ 	$(EXTRACTRC) */*.ui > rc.cpp
+--- kmrml/kmrml/server/Makefile.am	3 Mar 2003 02:53:03 -0000	1.1.1.2
++++ kmrml/kmrml/server/Makefile.am	3 Mar 2003 03:06:28 -0000	1.5
+@@ -3,8 +3,8 @@
+ INCLUDES = $(all_includes)
+ kded_daemonwatcher_la_SOURCES = watcher.cpp watcher.skel
+ # watcher.stub
+-kded_daemonwatcher_la_LDFLAGS = $(all_libraries) -module -avoid-version
+-kded_daemonwatcher_la_LIBADD = $(LIB_KSYCOCA)
++kded_daemonwatcher_la_LDFLAGS = $(all_libraries) -module -avoid-version $(QT_LDFLAGS)
++kded_daemonwatcher_la_LIBADD = $(LIB_KSYCOCA) $(LIB_KDECORE) $(LIB_QT) $(LIB_KDEUI) -lDCOP -lkded_main
+ 
+ METASOURCES = AUTO
+ 
+--- kooka/configure.in.in	25 Jun 2002 02:40:34 -0000	1.1.1.1
++++ kooka/configure.in.in	9 Apr 2003 23:27:39 -0000
+@@ -1,3 +1,4 @@
+ dnl AC_SEARCH_LIBS(pgm2asc,Pgm2asc)
+ dnl AC_CHECK_LIB(Pgm2asc,pgm2asc)
+ dnl should define HAVE_LIBPGM2ASC if available
++DO_NOT_COMPILE="kooka $DO_NOT_COMPILE"
+--- kpovmodeler/Makefile.am	29 Oct 2002 16:46:33 -0000	1.1.1.4
++++ kpovmodeler/Makefile.am	29 Nov 2002 19:01:21 -0000	1.6
+@@ -4,7 +4,7 @@
+ 
+ SUBDIRS = pics examples
+ 
+-kde_module_LTLIBRARIES = libkpovmodelerpart.la
++kde_module_LTLIBRARIES = libkpovmodelerpart.la libkpovmodeler_shared.la kpovmodeler.la
+ bin_PROGRAMS = kpovmodeler
+ 
+ 
+@@ -83,7 +83,7 @@
+ 	pmrendermode.cpp pmresourcelocator.cpp pmtruetypecache.cpp \
+ 	pmdocumentationmap.cpp
+ 
+-libkpovmodelerpart_la_SOURCES = $(pmallsources)
++libkpovmodeler_shared_la_SOURCES = $(pmallsources)
+ 
+ noinst_HEADERS = pmpart.h pmfactory.h pmview.h pmshell.h pmobjectdrag.h \
+ 	pmtreeview.h pmtreeviewitem.h pmerrordialog.h \
+@@ -159,13 +159,27 @@
+ 	\
+ 	version.h pmdocumentformat.h
+ 
+-libkpovmodelerpart_la_LDFLAGS = $(all_libraries) $(KDE_RPATH) $(KDE_PLUGIN) $(LIBFREETYPE_RPATH) 
+-libkpovmodelerpart_la_LIBADD = $(LIBFREETYPE_LIBS) $(LIB_KPARTS) -lglut -lGLU -lGL -lXmu -lXi
+-libkpovmodelerpart_la_METASOURCES = AUTO
++libkpovmodeler_shared_la_LDFLAGS = $(all_libraries) $(KDE_RPATH) $(LIBFREETYPE_RPATH) -avoid-version
++libkpovmodeler_shared_la_LIBADD = $(LIBFREETYPE_LIBS) $(LIB_KPARTS) -lglut -lGLU -lGL -lXmu -lXi $(LIB_QT) $(LIB_KDECORE) -lkio -lkdeui
++libkpovmodeler_shared_la_METASOURCES = AUTO
++
++libkpovmodelerpart_la_SOURCES = libkpovmodelerpart_la_dummy.cpp
++libkpovmodelerpart_la_LDFLAGS = $(all_libraries) -avoid-version -module
++libkpovmodelerpart_la_LIBADD  = libkpovmodeler_shared.la
++
++libkpovmodelerpart_la_dummy.cpp:
++	echo > libkpovmodelerpart_la_dummy.cpp
++
++kpovmodeler_la_SOURCES = kpovmodeler_la_main.cpp
++kpovmodeler_la_LDFLAGS = $(all_libraries) -avoid-version -module
++kpovmodeler_la_LIBADD  = libkpovmodeler_shared.la
++
++kpovmodeler_la_main.cpp: main.cpp
++	cat main.cpp > kpovmodeler_la_main.cpp
+ 
+ kpovmodeler_LDFLAGS = $(all_libraries) $(KDE_RPATH)
+ kpovmodeler_SOURCES = main.cpp
+-kpovmodeler_LDADD = libkpovmodelerpart.la $(LIB_KFILE)
++kpovmodeler_LDADD = libkpovmodeler_shared.la
+ 
+ #kpovmodeler_SOURCES = $(pmallsources) main.cpp
+ #kpovmodeler_LDFLAGS = $(all_libraries) $(KDE_RPATH)
+--- kruler/Makefile.am	29 Oct 2002 16:46:52 -0000	1.1.1.3
++++ kruler/Makefile.am	5 Nov 2002 21:40:59 -0000	1.2
+@@ -11,10 +11,6 @@
+ lnkdir = $(kde_appsdir)/Graphics/More
+ lnk_DATA = kruler.desktop
+ 
+-install-data-local: uninstall.desktop
+-	$(mkinstalldirs) $(DESTDIR)$(kde_appsdir)/Graphics
+-	$(INSTALL_DATA) $(srcdir)/uninstall.desktop $(DESTDIR)$(kde_appsdir)/Graphics/kruler.desktop
+-
+ appdir = $(kde_datadir)/kruler
+ app_DATA = eventsrc
+ 
+--- ksnapshot/Makefile.am	10 Jul 2002 04:38:27 -0000	1.1.1.2
++++ ksnapshot/Makefile.am	5 Nov 2002 21:40:59 -0000	1.2
+@@ -12,10 +12,6 @@
+ lnkdir = $(kde_appsdir)/Graphics/More
+ lnk_DATA = ksnapshot.desktop
+ 
+-install-data-local: uninstall.desktop
+-	$(mkinstalldirs) $(DESTDIR)$(kde_appsdir)/Graphics
+-	$(INSTALL_DATA) $(srcdir)/uninstall.desktop $(DESTDIR)$(kde_appsdir)/Graphics/ksnapshot.desktop
+-
+ KDE_ICON = ksnapshot
+ 
+ EXTRA_DIST = $(lnk_DATA)
+--- kuickshow/configure.in.in	10 Jul 2002 04:38:27 -0000	1.1.1.2
++++ kuickshow/configure.in.in	19 Oct 2002 21:02:42 -0000	1.2
+@@ -26,6 +26,8 @@
+     AC_MSG_RESULT($ac_imlib_config)
+     LIB_IMLIB=`$ac_imlib_config --libs`
+     AC_SUBST(LIB_IMLIB)
++    IMLIB_CFLAGS=`$ac_imlib_config --cflags`
++    AC_SUBST(IMLIB_CFLAGS)
+   fi
+ else
+   ac_imlib_config=`which imlib-config 2>/dev/null`
+--- kuickshow/src/Makefile.am	10 Jul 2002 04:38:37 -0000	1.1.1.2
++++ kuickshow/src/Makefile.am	29 Nov 2002 19:01:21 -0000	1.4
+@@ -1,25 +1,33 @@
+ ## Makefile.am for kuickshow
+ 
+ bin_PROGRAMS = kuickshow
+-lib_LTLIBRARIES = kuickshow.la
++lib_LTLIBRARIES = kuickshow.la libkuickshow_main.la
+ 
+ # set the include path for X, qt and KDE
+ INCLUDES = $(all_includes)
+ KDE_CXXFLAGS = $(IMLIB_CFLAGS)
+-CLEANFILES = dummy.cpp
++CLEANFILES = kuickshow_la_main.cpp
+ METASOURCES = AUTO
+ 
+-kuickshow_la_LDFLAGS = $(all_libraries) -module -avoid-version
+-kuickshow_la_LIBADD  = $(LIB_KDEPRINT) $(LIB_IMLIB)
+-kuickshow_la_SOURCES =	kuickshow.cpp \
+-	aboutwidget.cpp     generalwidget.cpp  kuickconfigdlg.cpp  main.cpp \
++libkuickshow_main_la_LDFLAGS = $(all_libraries) -avoid-version
++libkuickshow_main_la_LIBADD  = -lkdeprint $(LIB_IMLIB) $(LIB_KDECORE) \
++	$(LIB_KDEUI) $(LIB_KIO) $(LIB_QT) $(LIB_KDEFX)
++libkuickshow_main_la_SOURCES =	kuickshow.cpp \
++	aboutwidget.cpp     generalwidget.cpp  kuickconfigdlg.cpp \
+ 	defaultswidget.cpp  imagewindow.cpp    kuickdata.cpp  \
+ 	imdata.cpp filefinder.cpp kurlwidget.cpp filewidget.cpp \
+ 	kuickio.cpp kuick.cpp imlibwidget.cpp slideshowwidget.cpp printing.cpp
+ 
++kuickshow_la_SOURCES = kuickshow_la_main.cpp
++kuickshow_la_LDFLAGS = $(all_libraries) $(KDE_RPATH) -module -avoid-version
++kuickshow_la_LIBADD  = libkuickshow_main.la
++
++kuickshow_la_main.cpp: main.cpp
++	cat main.cpp > kuickshow_la_main.cpp
++
+ # now the kuickshow binary
+-kuickshow_LDADD = kuickshow.la $(LIB_KIO) $(LIB_IMLIB)
+-kuickshow_SOURCES = dummy.cpp
++kuickshow_LDADD = libkuickshow_main.la
++kuickshow_SOURCES = main.cpp
+ kuickshow_LDFLAGS = $(all_libraries) $(KDE_RPATH)
+ 
+ 
+--- kview/Makefile.am	29 Oct 2002 16:46:58 -0000	1.1.1.4
++++ kview/Makefile.am	29 Nov 2002 19:01:21 -0000	1.5
+@@ -5,21 +5,28 @@
+ METASOURCES = AUTO
+ 
+ bin_PROGRAMS = kview
+-lib_LTLIBRARIES = kview.la libkviewsupport.la
++lib_LTLIBRARIES = kview.la libkview_main.la libkviewsupport.la
+ 
+ noinst_HEADERS = kview.h kpreferencesdialog.h kpreferencesmodule.h kpluginselector.h kviewconfmodules.h
+ 
+ libkviewsupport_la_SOURCES = kpreferencesdialog.cpp kpreferencesmodule.cpp kpluginselector.cpp
+-libkviewsupport_la_LDFLAGS = $(all_libraries) -no-undefined -version-info 0:0
++libkviewsupport_la_LDFLAGS = $(all_libraries) -no-undefined -avoid-version
+ libkviewsupport_la_LIBADD  = $(LIB_KDEUI)
+ 
+-kview_SOURCES = dummy.cpp
++libkview_main_la_SOURCES = kviewconfmodules.cpp kview.cpp
++libkview_main_la_LDFLAGS = $(all_libraries) -no-undefined -avoid-version
++libkview_main_la_LIBADD  = libkviewsupport.la $(LIB_KPARTS) $(LIB_KIO)
++
++kview_SOURCES = kview_main.cpp
+ kview_LDFLAGS = $(all_libraries) $(KDE_RPATH)
+-kview_LDADD = kview.la
++kview_LDADD = libkview_main.la
++
++kview_main.cpp: main.cpp
++	cat main.cpp > kview_main.cpp
+ 
+-kview_la_SOURCES = kviewconfmodules.cpp kview.cpp main.cpp
++kview_la_SOURCES = main.cpp
+ kview_la_LDFLAGS = $(KDE_RPATH) $(all_libraries) -module -avoid-version
+-kview_la_LIBADD = $(LIB_KPARTS) libkviewsupport.la
++kview_la_LIBADD = libkview_main.la
+ 
+ lnkdir = $(kde_appsdir)/Graphics
+ lnk_DATA = kview.desktop
+--- kview/kviewviewer/Makefile.am	2 Oct 2002 23:48:00 -0000	1.1.1.3
++++ kview/kviewviewer/Makefile.am	29 Nov 2002 19:01:21 -0000	1.2
+@@ -7,7 +7,7 @@
+ 
+ libkviewviewer_la_SOURCES = imagesettings.cpp kviewkonqextension.cpp kviewviewer.cpp generalconfigwidget.ui confmodules.cpp
+ libkviewviewer_la_LDFLAGS = $(all_libraries) -avoid-version -module -no-undefined
+-libkviewviewer_la_LIBADD = $(LIB_KIO) $(LIB_KPARTS) $(LIB_KDEPRINT) $(top_builddir)/kview/libkviewsupport.la
++libkviewviewer_la_LIBADD = $(LIB_KIO) $(LIB_KPARTS) -lkdeprint $(top_builddir)/kview/libkviewsupport.la
+ 
+ METASOURCES = AUTO
+ 
+--- kviewshell/Makefile.am	29 Oct 2002 16:46:59 -0000	1.1.1.4
++++ kviewshell/Makefile.am	1 Dec 2002 17:02:07 -0000	1.7
+@@ -19,8 +19,8 @@
+ kviewerpart_la_LIBADD = ./libifaces.la $(LIB_KFILE) -lkparts
+ 
+ libkmultipage_la_SOURCES = kmultipage.cpp centeringScrollview.cpp kmultipageInterface.skel
+-libkmultipage_la_LDFLAGS = $(all_libraries)
+-libkmultipage_la_LIBADD = $(LIB_KFILE) -lkparts
++libkmultipage_la_LDFLAGS = $(all_libraries) -avoid-version
++libkmultipage_la_LIBADD = $(LIB_KFILE) -lkparts -lDCOP $(LIB_QT) $(LIB_KDEUI) $(LIB_KDECORE)
+ 
+ libkpagetest_la_SOURCES = kpagetest.cpp 
+ libkpagetest_la_LDFLAGS = $(all_libraries) $(KDE_PLUGIN)
+--- libkscan/configure.in.in	10 Jul 2002 04:38:45 -0000	1.1.1.2
++++ libkscan/configure.in.in	9 Apr 2003 23:27:42 -0000
+@@ -21,3 +21,4 @@
+ AC_SUBST(LIBSANE_LDFLAGS)
+ AC_SUBST(LIBSANE_INCLUDES)
+ 
++DO_NOT_COMPILE="libkscan $DO_NOT_COMPILE"
