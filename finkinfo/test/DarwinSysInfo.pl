@@ -135,7 +135,6 @@ sub disable_option {
 sub set_option {
   $option = shift;
   $func = shift;
-  IRC::print "$option, $func\n";
 
   if ($option =~ m/fink/i) {
     if ($func =~ m/enable/i) {
