@@ -1,0 +1,117 @@
+diff -Nru prime-0.8.0.orig/lib/engine/engine-userdict.rb prime-0.8.0/lib/engine/engine-userdict.rb
+--- prime-0.8.0.orig/lib/engine/engine-userdict.rb	Sat Mar 27 05:26:36 2004
++++ prime-0.8.0/lib/engine/engine-userdict.rb	Mon Apr  5 13:05:37 2004
+@@ -463,6 +463,36 @@
+       return
+     end
+ 
++    if (PRIME_LOCK_DIR and !PRIME_LOCK_DIR.empty?) then
++      unless @dictbuffer_learning.empty? then
++        lock = mylock(@file_dictbuffer_learning.path)
++        begin
++          @file_dictbuffer_learning.print(@dictbuffer_learning)
++        ensure
++          myunlock(lock)
++        end
++        @dictbuffer_learning = ""
++      end
++      unless @dictbuffer_cooccurrence.empty? then
++        lock = mylock(@file_dictbuffer_cooccurrence.path)
++        begin
++          @file_dictbuffer_cooccurrence.print(@dictbuffer_cooccurrence)
++        ensure
++          myunlock(lock)
++        end
++        @dictbuffer_cooccurrence = ""
++      end
++      unless @logbuffer.empty? then
++        lock = mylock(@file_logbuffer.path)
++        begin
++          @file_logbuffer.print(@logbuffer + "\n") 
++        ensure
++          myunlock(lock)
++        end
++        @logbuffer = ""
++      end
++      return
++    end
+     unless @dictbuffer_learning.empty? then
+       @file_dictbuffer_learning.flock(File::LOCK_EX|File::LOCK_NB)
+       @file_dictbuffer_learning.print(@dictbuffer_learning)
+@@ -574,6 +604,25 @@
+       return 0
+     else
+       return Math::log(number * (1.0 / @base_score) + 1)
++    end
++  end
++
++  def mylock(filename)
++    lockname = PRIME_LOCK_DIR + "/lock" +
++      File::expand_path(filename).gsub(/\//, ".")
++    lock = File::open(lockname, "w")
++    lock.flock(File::LOCK_EX|File::LOCK_NB)
++    lock
++  end
++
++  def myunlock(lock)
++    begin
++      File::unlink(lock.path)
++    rescue SystemCallError
++    end
++    begin
++      lock.close()
++    rescue SystemCallError
+     end
+   end
+ end
+diff -Nru prime-0.8.0.orig/lib/makedict/prime-sary.rb prime-0.8.0/lib/makedict/prime-sary.rb
+--- prime-0.8.0.orig/lib/makedict/prime-sary.rb	Fri Mar 26 02:19:51 2004
++++ prime-0.8.0/lib/makedict/prime-sary.rb	Mon Apr  5 12:50:53 2004
+@@ -67,6 +67,8 @@
+ 
+     filenames_index = []
+     ios_index = []
++    lock_index = []
++    lockname_index = []
+     offset_list = []
+     rules.each {|offset, suffix_offset|
+       filename_index = filename_dict + suffix_offset + ".ary"
+@@ -79,7 +81,15 @@
+         offset_list.push(offset)
+         filenames_index[offset] = filename_index
+         ios_index[offset] = open(filename_index, "w")
+-        ios_index[offset].flock(File::LOCK_EX)
++        if (PRIME_LOCK_DIR and !PRIME_LOCK_DIR.empty?) then
++          filename_lock = PRIME_LOCK_DIR + "/lock" +
++            File::expand_path(filename_index).gsub(/\//, ".")
++          lockname_index[offset] = filename_lock
++          lock_index[offset] = open(filename_lock, "w")
++          lock_index[offset].flock(File::LOCK_EX)
++        else
++          ios_index[offset].flock(File::LOCK_EX)
++        end
+       end
+     }
+ 
+@@ -97,6 +107,10 @@
+       }
+     end
+     offset_list.each{|offset|
++      if (PRIME_LOCK_DIR and !PRIME_LOCK_DIR.empty?) then
++        lock_index[offset].close()
++	File::unlink(lockname_index[offset])
++      end
+       ios_index[offset].close()
+       builder = Sary::Builder.new(filename_dict, filenames_index[offset])
+       builder.block_sort
+diff -Nru prime-0.8.0.orig/lib/prime-config.rb.in prime-0.8.0/lib/prime-config.rb.in
+--- prime-0.8.0.orig/lib/prime-config.rb.in	Sat Mar 27 05:26:35 2004
++++ prime-0.8.0/lib/prime-config.rb.in	Mon Apr  5 12:50:53 2004
+@@ -9,6 +9,7 @@
+ # the GNU General Public License version 2.
+ 
+ PRIME_USER_DIR    = ENV['PRIME_USER_DIR']    || ENV['HOME'] + '/.prime'
++PRIME_LOCK_DIR    = ENV['PRIME_LOCK_DIR']
+ PRIME_DATA_DIR    = ENV['PRIME_DATA_DIR']    || '@PRIME_DATA_DIR@'
+ PRIME_GRAMMAR_DIR = ENV['PRIME_GRAMMAR_DIR'] || '@PRIME_GRAMMAR_DIR@'
+ PRIME_CONFIG_DIR  = ENV['PRIME_CONFIG_DIR']  || '@PRIME_CONFIG_DIR@'

@@ -1,0 +1,357 @@
+
+--- gkrellm-1.2.12/src/gui.c	Tue Jan  1 21:07:32 2002
++++ gkrellm-1.2.12-patched/src/gui.c	Tue Jun 25 23:17:04 2002
+@@ -600,6 +600,15 @@
+ 	label = gtk_label_new("");
+ 	gtk_box_pack_start(GTK_BOX(vbox), label, TRUE, TRUE, 0);
+ 
++#if defined(__APPLE__)
++	buf = g_strdup_printf(_("Mac OS X code was contributed by:\n"
++						"Ben Hines <bhines@alumni.ucsd.edu>\n"
++						"and\n"
++						"Hajimu UMEMOTO <ume@mahoroba.org>"));
++	label = gtk_label_new(buf);
++	g_free(buf);
++	gtk_box_pack_start(GTK_BOX(vbox), label, TRUE, TRUE, 0);
++#endif
+ #if defined(__FreeBSD__)
+ 	buf = g_strdup_printf(_("FreeBSD code was contributed by:\n"
+ 						"Hajimu UMEMOTO <ume@mahoroba.org>"));
+--- gkrellm-1.2.13/src/fs.c	2002-06-30 19:20:15.000000000 -0700
++++ gkrellm-1.2.13-patched/src/fs.c	2002-07-28 19:31:36.000000000 -0700
+@@ -117,7 +117,9 @@
+ 
+ #if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
+ #include <sys/mount.h>
++#if !defined(__APPLE__)
+ #include <sys/cdio.h>
++#endif
+ #include <sys/wait.h>
+ 
+ #if defined(__FreeBSD__)
+@@ -171,7 +173,7 @@
+ 	}
+ #endif
+ 
+-#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
++#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+ static void
+ eject_bsd_cdrom(gchar *device)
+ 	{
+@@ -184,24 +186,8 @@
+ 		close(d);
+ 		}
+ 	}
+-#endif /* __FreeBSD__ || __NetBSD__ || __OpenBSD__ || __APPLE__ */
++#endif /* __FreeBSD__ || __NetBSD__ || __OpenBSD__  */
+ 
+-#if defined( __APPLE__)
+-static void
+-set_eject_command(void)
+-{
+-#if defined(WEXITSTATUS)
+-	gint	n;
+-
+-	n = system("hdiutil info > /dev/null 2>&1");
+-	if (WEXITSTATUS(n) == 0)
+-	{
+-		eject_tray_command = "hdiutil eject %s";
+-		close_tray_command = "disktool -o %s";
+-	}
+-#endif
+-}
+-#endif /* __APPLE__ */
+ 
+ #if defined(__FreeBSD__)
+ static void
+@@ -246,6 +232,38 @@
+ #endif /* __OpenBSD__ */
+ 
+ 
++
++#if defined( __APPLE__)
++#include <IOKit/storage/IOMediaBSDClient.h>
++
++static void
++eject_darwin_cdrom(gchar *device)
++{
++    gint	d;
++    
++    if ((d = open(device, O_RDONLY)) >= 0)
++            {
++            ioctl(d, DKIOCEJECT);
++            close(d);
++            }
++}
++            
++static void
++set_eject_command(void)
++{
++#if defined(WEXITSTATUS)
++	gint	n;
++
++	n = system("hdiutil info > /dev/null 2>&1");
++	if (WEXITSTATUS(n) == 0)
++	{
++		eject_tray_command = "hdiutil eject %s";
++		close_tray_command = "disktool -o %s";
++	}
++#endif
++}
++
++#endif /* __APPLE__ */
+ /* ----- Linux ------------------------------------------------------ */
+ 
+ #if defined(__linux__)
+@@ -670,8 +688,13 @@
+ setup_fs_interface(void)
+     {
+ 	uid = getuid();	/* only real root is allowed to mount/umount always */
+-
+-#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
++#if defined(__APPLE__)
++	get_mountlist = get_bsd_mounts_list;
++	get_fsusage = get_statfs_fsusage;
++	get_fstab_list = get_etc_fstab_list;
++	eject_cdrom = eject_darwin_cdrom;
++	set_eject_command();
++#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+ 	get_mountlist = get_bsd_mounts_list;
+ 	get_fsusage = get_statfs_fsusage;
+ 	get_fstab_list = get_etc_fstab_list;
+--- gkrellm-1.2.13/src/disk.c	2002-06-30 19:19:47.000000000 -0700
++++ gkrellm-1.2.13-patched/src/disk.c	2002-07-29 18:54:00.000000000 -0700
+@@ -29,7 +29,6 @@
+ |  2/25/2000  FreeBSD code contributed by Hajimu UMEMOTO ume@mahoroba.org
+ */
+ 
+-
+ #include "gkrellm.h"
+ #include "gkrellm_private_proto.h"
+ #include "cpu_disk.h"
+@@ -54,17 +53,143 @@
+ /* ----- Darwin ----------------------------------------------------- */
+ 
+ #if defined(__APPLE__)
+-#include <sys/dkstat.h>
+-#include <kvm.h>
+-static struct nlist nl[] = {
+-#define N_DK_NDRIVE	0
+-{ "_dk_ndrive" },
+-#define N_DK_XFER	1
+-{ "_dk_xfer" },
+-{ "" }
+-};
+-extern	kvm_t	*kvmd;
+-#endif
++/*  CoreFoundation has a "Style" which conflicts with gkrellm's Style */
++#define Style Style_OSX_Fix 
++#include <CoreFoundation/CoreFoundation.h>
++#include <IOKit/IOKitLib.h>
++#include <IOKit/storage/IOBlockStorageDriver.h>
++io_iterator_t       drivelist  = 0;  /* needs release */
++mach_port_t         masterPort = 0;
++
++static DiskMon *
++add_disk_device(gint major, gint minor)
++	{
++	return NULL;
++	}
++        
++static void
++read_darwin_disk()
++{
++    io_registry_entry_t drive      = 0;  /* needs release */
++    UInt64         totalReadBytes  = 0;
++    UInt64         totalReadCount  = 0;
++    UInt64         totalWriteBytes = 0;
++    UInt64         totalWriteCount = 0;
++    
++    kern_return_t status = 0;
++ 
++    GList		*list;
++    DiskMon		*disk; 
++    list 	= 	disk_mon_list->next;
++    while ( (drive = IOIteratorNext(drivelist)) )
++    {
++        CFNumberRef number          = 0;  /* don't release */
++        CFDictionaryRef properties  = 0;  /* needs release */
++        CFDictionaryRef statistics  = 0;  /* don't release */
++        UInt64 value                = 0;
++    
++        /* Obtain the properties for this drive object */
++                
++        status = IORegistryEntryCreateCFProperties (drive,
++                                                    (CFMutableDictionaryRef *) &properties,
++                                                    kCFAllocatorDefault,
++                                                    kNilOptions);
++        if (properties) {
++    
++            /* Obtain the statistics from the drive properties */
++            statistics = (CFDictionaryRef) CFDictionaryGetValue(properties, CFSTR(kIOBlockStorageDriverStatisticsKey));
++    
++            if (statistics) {
++                /* Obtain the number of bytes read from the drive statistics */
++                number = (CFNumberRef) CFDictionaryGetValue (statistics,
++                                                            CFSTR(kIOBlockStorageDriverStatisticsBytesReadKey));
++                if (number) {
++                        status = CFNumberGetValue(number, kCFNumberSInt64Type, &value);
++                        totalReadBytes += value;
++                }
++                /* Obtain the number of reads from the drive statistics */
++                number = (CFNumberRef) CFDictionaryGetValue (statistics,
++                                                            CFSTR(kIOBlockStorageDriverStatisticsReadsKey));
++                if (number) {
++                        status = CFNumberGetValue(number, kCFNumberSInt64Type, &value);
++                        totalReadCount += value;
++                }
++    
++                /* Obtain the number of writes from the drive statistics */
++                number = (CFNumberRef) CFDictionaryGetValue (statistics,
++                                                            CFSTR(kIOBlockStorageDriverStatisticsWritesKey));
++                if (number) {
++                        status = CFNumberGetValue(number, kCFNumberSInt64Type, &value);
++                        totalWriteCount += value;
++                }
++                /* Obtain the number of bytes written from the drive statistics */
++                number = (CFNumberRef) CFDictionaryGetValue (statistics,
++                                                            CFSTR(kIOBlockStorageDriverStatisticsBytesWrittenKey));
++                if (number) {
++                        status = CFNumberGetValue(number, kCFNumberSInt64Type, &value);
++                        totalWriteBytes += value;
++                }
++                /* Release resources */
++                CFRelease(properties); properties = 0;
++            }
++        
++        }
++        IOObjectRelease(drive); drive = 0;
++
++        disk = (DiskMon *) list->data;
++        disk->rblk =  (int)totalReadCount;
++        disk->wblk =  (int)totalWriteCount;
++        composite_disk->wblk += disk->wblk;
++        composite_disk->rblk += disk->rblk;
++        list = list->next;
++        
++    }
++    IOIteratorReset(drivelist);
++}
++
++static void
++register_disks(gboolean re_checking)
++{
++    DiskMon	*disk;
++    kern_return_t status = 0;
++    
++    io_registry_entry_t drive      = 0;  /* needs release */
++    io_registry_entry_t child      = 0;  /* needs release */
++    
++    if (re_checking)
++            return;
++    n_disks	= 0;
++            
++    /* get ports and services for drive stats */
++    /* Obtain the I/O Kit communication handle */
++    status = IOMasterPort(MACH_PORT_NULL, &masterPort);
++
++    /* Obtain the list of all drive objects */
++    status = IOServiceGetMatchingServices(masterPort,
++                                            IOServiceMatching("IOBlockStorageDriver"),
++                                            &drivelist);                      
++    while ( (drive = IOIteratorNext(drivelist)) )
++    {
++        /* Obtain the properties for this drive object */
++        n_disks++;
++        disk = g_new0(DiskMon, 1);
++        disk_mon_list = g_list_append(disk_mon_list, disk);
++            
++        if(!status)
++        status = IORegistryEntryGetChildEntry(drive, kIOServicePlane, &child );
++        disk->name = malloc(128);
++        
++        if(!status)
++        status = IORegistryEntryGetName(child, disk->name );
++        
++        IOObjectRelease(drive); drive = 0;
++    }
++    IOIteratorReset(drivelist);
++    
++    using_DiskN_names = FALSE;
++}
++
++#endif // APPLE
+ 
+ /* ----- FreeBSD ----------------------------------------------------- */
+ 
+@@ -88,13 +213,13 @@
+ #endif // __FreeBSD_version >= 300000
+ #endif // FreeBSD
+ 
+-#if defined(__FreeBSD__) || defined(__APPLE__)
++#if defined(__FreeBSD__)
+ static DiskMon *
+ add_disk_device(gint major, gint minor)
+ 	{
+ 	return NULL;
+ 	}
+-#if __FreeBSD_version < 300000 || defined(__APPLE__)
++#if __FreeBSD_version < 300000
+ static void
+ read_freebsd_disk()
+ 	{
+@@ -932,7 +1057,13 @@
+ 	{
+ 	gint	available = FALSE;
+ 
+-#if defined(__FreeBSD__) || defined(__APPLE__)
++#if defined(__APPLE__)
++	register_disks(FALSE);
++	read_system_disk_info = read_darwin_disk;	/* above */
++	available = TRUE;
++#endif
++
++#if defined(__FreeBSD__)
+ 	register_disks(FALSE);
+ 	read_system_disk_info = read_freebsd_disk;	/* above */
+ 	available = TRUE;
+@@ -1485,7 +1616,6 @@
+ 	check_for_new_disks();
+ 	if (n_disks == 0)
+ 		return;
+-
+ 	tabs = gtk_notebook_new();
+ 	gtk_notebook_set_tab_pos(GTK_NOTEBOOK(tabs), GTK_POS_TOP);
+ 	gtk_box_pack_start(GTK_BOX(tab_vbox), tabs, TRUE, TRUE, 0);
+--- gkrellm-1.2.13/src/cpu.c	2002-06-30 19:19:18.000000000 -0700
++++ gkrellm-1.2.13-patched/src/cpu.c	2002-07-28 19:01:23.000000000 -0700
+@@ -48,6 +48,7 @@
+ /* ----- Darwin  ---------------------------------------------------- */
+ #include <mach/mach_init.h>
+ #include <mach/mach_host.h>
++#include <mach/vm_map.h>
+ 
+ void read_darwin_cpu()
+ {
+@@ -593,7 +594,7 @@
+ #endif
+ 
+ 
+-#if !defined(__linux__) && !defined(__solaris__)
++#if !defined(__linux__) && !defined(__solaris__) && !defined(__APPLE__)
+ static void
+ register_glibtop_cpus(void)
+ 	{
+--- gkrellm-1.2.13/Makefile.top_enable_nls	2002-06-30 19:13:13.000000000 -0700
++++ gkrellm-1.2.13-patched/Makefile.top_enable_nls	2002-07-28 19:17:14.000000000 -0700
+@@ -139,8 +139,8 @@
+ darwin:
+ 	(cd po && ${MAKE} all)
+ 	(cd src && ${MAKE} GTK_CONFIG=gtk-config STRIP= GTOP_LIBS= GTOP_INCLUDE= \
+-		EXTRAOBJS= SYS_LIBS="-lkvm -lmd5" LINK_FLAGS="-flat_namespace -undefined warning" \
+-		CFLAGS+="-Ddlsym=dlsym_prepend_underscore" \
++		EXTRAOBJS= SYS_LIBS="-lkvm -lmd5 -framework IOKit" LINK_FLAGS="-flat_namespace \
++ -undefined warning" \
+ 		gkrellm )
+ 
+ netbsd:
