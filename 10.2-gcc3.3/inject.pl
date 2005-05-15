@@ -5,7 +5,7 @@
 #
 # Fink - a package manager that downloads source and installs it
 # Copyright (c) 2001 Christoph Pfisterer
-# Copyright (c) 2001-2003 The Fink Package Manager Team
+# Copyright (c) 2001-2004 The Fink Package Manager Team
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -26,9 +26,65 @@ $| = 1;
 use 5.006;  # perl 5.6.0 or newer required
 use strict;
 
+### We first test the version of fink and upgrade if necessary
+
+BEGIN {
+
+### If we are bootstrapping, init.(c)sh has not been run yet so we need
+### to add a path to @INC
+
+    BEGIN {
+	my $basepath = $ARGV[0];
+	if (defined $basepath) {
+	    unshift (@INC, "$basepath/lib/perl5");
+	}
+    }
+
+use Fink::FinkVersion qw(&fink_version);
+use Fink::Services qw(&execute);
+
+### determine the fink version; upgrade it if its too old, otherwise execute
+### update.pl
+
+my $fink_version = &fink_version;
+
+if ($fink_version lt "0.21.0") {
+
+    my $basepath = $ARGV[0];
+
+    if (not defined $basepath) {
+	die "Please either execute this script with a parameter, or first update to fink 0.21.0 or later.";
+    }
+
+### re-execute as root
+
+if ($> != 0) {
+  exit &execute("sudo ./inject.pl @ARGV");
+}
+umask oct("022");
+
+### copy description files for the fink package
+
+print "Copying fink...\n";
+
+if (-f "stable/main/finkinfo/base/fink.info") {
+    &execute("/bin/cp -f stable/main/finkinfo/base/fink.info $basepath/fink/dists/stable/main/finkinfo/base; /bin/chmod 644 $basepath/fink/dists/stable/main/finkinfo/base/fink.info");
+}
+
+if (-f "stable/main/finkinfo/base/fink.patch") {
+    &execute("/bin/cp -f stable/main/finkinfo/base/fink.patch $basepath/fink/dists/stable/main/finkinfo/base; /bin/chmod 644 $basepath/fink/dists/stable/main/finkinfo/base/fink.patch");
+}
+
+&execute("fink index; fink update fink");
+
+#exit &execute("./inject.pl $basepath @ARGV");
+exit &execute("./inject.pl @ARGV");
+
+}
+}
+
 use File::Find;
 use Fink::CLI qw(&print_breaking &prompt_boolean);
-use Fink::Services qw(&execute);
 use Fink::FinkVersion qw(&fink_version);
 use Fink::Command qw(cat);
 
