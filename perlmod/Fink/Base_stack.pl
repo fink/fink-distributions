@@ -33,7 +33,7 @@ sub value {
 	$options->{$param}->[0] = \$value;
     }
 
-    sub set_param {
+    sub set_param_sticky {
 	my $param = shift;
 	my $value = shift;
 	$options->{$param}->[1] = \$value;
@@ -48,6 +48,10 @@ sub value {
 	    unshift @{$options->{$param}}, undef;
 	}
 	weaken $options->{$param}->[-1];
+    }
+
+    sub set_param {
+	die sprintf "No such function %s at %s line %s\n", (caller(0))[3,1,2];
     }
 
     sub print_param {
@@ -77,7 +81,7 @@ $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
 param("foo");
 $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
 
-#set_param("foo","foo1");
+#set_param_sticky("foo","foo1");
 $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
 
 {
@@ -95,12 +99,14 @@ $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
     my $foo = "B";
     set_param_temp("foo",$foo);
     $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
-    my $foo = "C";
-    set_param_temp("foo",$foo);
+    my $foo2 = "C";
+    set_param_temp("foo",$foo2);
     $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
-    set_param("foo","woot");
+    $foo2 = "D";
     $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
-    set_param("foo",undef);
+    set_param_sticky("foo","woot");
+    $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
+    set_param_sticky("foo",undef);
     $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
 }
  
