@@ -1,7 +1,6 @@
 #!/usr/bin/perl -w
 
 use Scalar::Util qw(weaken);
-use List::Util qw(reduce);
 
 use Data::Dumper;
 
@@ -11,7 +10,13 @@ use constant DEBUG => 1;
 
 sub value {
     my $value = shift;
-    ref $value ? "$value=$$value" : defined $value ? $value : "undef";
+    ref $value
+	? defined $$value
+	    ? "$value=$$value"
+	    : "$value=undef"
+	: defined $value
+	    ? "$value"
+	    : "undef";
 }
 
 {
@@ -24,18 +29,15 @@ sub value {
 
     sub set_param_primary {
 	my $param = shift;
-	my $value = \$_[0];
-	shift;
-	$options->{$param}->[0] = $value;
+	my $value = shift;
+	$options->{$param}->[0] = \$value;
     }
 
     sub set_param {
 	my $param = shift;
-	my $value = \$_[0];
-	shift;
-	if ( 1 == push @{$options->{$param}}, $value ) {
-	    unshift @{$options->{$param}}, undef;
-	}
+	my $value = shift;
+	$options->{$param}->[1] = \$value;
+	splice @{$options->{$param}}, 2;
     }
 
     sub set_param_temp {
@@ -59,8 +61,13 @@ sub value {
     sub param {
 	my $param = shift;
 	DEBUG && print_param($param);
-	my $value = reduce { defined $b ? $b : $a } undef, @{$options->{$param}};
-	return defined $value ? $$value : undef;
+	my $value;
+	do {
+	    $value = $options->{$param}->[-1];
+	    return $$value if defined $value;
+	    pop @{$options->{$param}};
+	} while @{$options->{$param}};
+	return undef;
     }
 }
 
@@ -82,6 +89,19 @@ $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
 }
  
 $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
+$value = param("foo");DEBUG && printf "foo=%s\n",value $value;
 
-set_param("foo","foo2");
+{
+    my $foo = "B";
+    set_param_temp("foo",$foo);
+    $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
+    my $foo = "C";
+    set_param_temp("foo",$foo);
+    $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
+    set_param("foo","woot");
+    $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
+    set_param("foo",undef);
+    $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
+}
+ 
 $value = param("foo");DEBUG && printf "foo=%s\n",value $value;
