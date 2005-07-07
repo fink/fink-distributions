@@ -1,0 +1,158 @@
+diff -ruN ../gnome-vfs-2.10.1/libgnomevfs/gnome-vfs-cdrom.c gnome-vfs-2.10.1/libgnomevfs/gnome-vfs-cdrom.c
+--- ../gnome-vfs-2.10.1/libgnomevfs/gnome-vfs-cdrom.c	2005-02-09 11:00:47.000000000 -0600
++++ gnome-vfs-2.10.1/libgnomevfs/gnome-vfs-cdrom.c	2005-06-25 15:00:56.000000000 -0500
+@@ -143,6 +143,7 @@
+ #endif /* defined(__FreeBSD__) */
+ 	return type;
+ #else
++	#if !defined(__APPLE__)
+ 	*fd = open (vol_dev_path, O_RDONLY|O_NONBLOCK);
+ 	if (*fd  < 0) {
+ 		return -1;
+@@ -153,6 +154,7 @@
+ 		return -1;
+ 	}
+ 	return ioctl (*fd, CDROM_DISC_STATUS, CDSL_CURRENT);
++	#endif
+ #endif
+ }
+ 
+diff -ruN ../gnome-vfs-2.10.1/libgnomevfs/gnome-vfs-utils.c gnome-vfs-2.10.1/libgnomevfs/gnome-vfs-utils.c
+--- ../gnome-vfs-2.10.1/libgnomevfs/gnome-vfs-utils.c	2005-02-23 03:15:42.000000000 -0600
++++ gnome-vfs-2.10.1/libgnomevfs/gnome-vfs-utils.c	2005-06-25 14:45:08.000000000 -0500
+@@ -46,6 +46,9 @@
+ #include <sys/param.h>
+ #include <sys/stat.h>
+ #include <sys/types.h>
++#include <sys/param.h>
++#include <sys/mount.h>
++#define HAVE_STATVFS 0
+ #include <unistd.h>
+ 
+ #if HAVE_SYS_STATVFS_H
+diff -ruN ../gnome-vfs-2.10.1/modules/bzip2-method.c gnome-vfs-2.10.1/modules/bzip2-method.c
+--- ../gnome-vfs-2.10.1/modules/bzip2-method.c	2004-01-22 06:29:10.000000000 -0600
++++ gnome-vfs-2.10.1/modules/bzip2-method.c	2005-06-25 15:01:07.000000000 -0500
+@@ -37,13 +37,6 @@
+ 
+ #include <bzlib.h>
+ 
+-#ifdef HAVE_OLDER_BZIP2
+-#define BZ2_bzDecompressInit  bzDecompressInit
+-#define BZ2_bzCompressInit    bzCompressInit
+-#define BZ2_bzDecompress      bzDecompress
+-#define BZ2_bzCompress        bzCompress
+-#endif
+-
+ #define BZ_BUFSIZE   5000
+ 
+ struct _Bzip2MethodHandle {
+diff -ruN ../gnome-vfs-2.10.1/modules/pty-open.c gnome-vfs-2.10.1/modules/pty-open.c
+--- ../gnome-vfs-2.10.1/modules/pty-open.c	2005-02-09 07:10:44.000000000 -0600
++++ gnome-vfs-2.10.1/modules/pty-open.c	2005-06-25 14:45:08.000000000 -0500
+@@ -606,51 +606,6 @@
+ static char *
+ _gnome_vfs_pty_ptsname(int master)
+ {
+-#if defined(HAVE_PTSNAME_R)
+-	gsize len = 1024;
+-	char *buf = NULL;
+-	int i;
+-	do {
+-		buf = g_malloc0(len);
+-		i = ptsname_r(master, buf, len - 1);
+-		switch (i) {
+-		case 0:
+-			/* Return the allocated buffer with the name in it. */
+-#ifdef GNOME_VFS_DEBUG
+-			if (_gnome_vfs_debug_on(GNOME_VFS_DEBUG_PTY)) {
+-				fprintf(stderr, "PTY slave is `%s'.\n", buf);
+-			}
+-#endif
+-			return buf;
+-			break;
+-		default:
+-			g_free(buf);
+-			buf = NULL;
+-			break;
+-		}
+-		len *= 2;
+-	} while ((i != 0) && (errno == ERANGE));
+-#elif defined(HAVE_PTSNAME)
+-	char *p;
+-	if ((p = ptsname(master)) != NULL) {
+-#ifdef GNOME_VFS_DEBUG
+-		if (_gnome_vfs_debug_on(GNOME_VFS_DEBUG_PTY)) {
+-			fprintf(stderr, "PTY slave is `%s'.\n", p);
+-		}
+-#endif
+-		return g_strdup(p);
+-	}
+-#elif defined(TIOCGPTN)
+-	int pty = 0;
+-	if (ioctl(master, TIOCGPTN, &pty) == 0) {
+-#ifdef GNOME_VFS_DEBUG
+-		if (_gnome_vfs_debug_on(GNOME_VFS_DEBUG_PTY)) {
+-			fprintf(stderr, "PTY slave is `/dev/pts/%d'.\n", pty);
+-		}
+-#endif
+-		return g_strdup_printf("/dev/pts/%d", pty);
+-	}
+-#endif
+ 	return NULL;
+ }
+ 
+@@ -658,18 +613,11 @@
+ _gnome_vfs_pty_getpt(void)
+ {
+ 	int fd, flags;
+-#ifdef HAVE_GETPT
+-	/* Call the system's function for allocating a pty. */
+-	fd = getpt();
+-#elif defined(HAVE_POSIX_OPENPT)
+-	fd = posix_openpt(O_RDWR | O_NOCTTY);
+-#else
+ 	/* Try to allocate a pty by accessing the pty master multiplex. */
+ 	fd = open("/dev/ptmx", O_RDWR | O_NOCTTY);
+ 	if ((fd == -1) && (errno == ENOENT)) {
+ 		fd = open("/dev/ptc", O_RDWR | O_NOCTTY); /* AIX */
+ 	}
+-#endif
+ 	/* Set it to blocking. */
+ 	flags = fcntl(fd, F_GETFL);
+ 	flags &= ~(O_NONBLOCK);
+@@ -680,24 +630,13 @@
+ static int
+ _gnome_vfs_pty_grantpt(int master)
+ {
+-#ifdef HAVE_GRANTPT
+-	return grantpt(master);
+-#else
+ 	return 0;
+-#endif
+ }
+ 
+ static int
+ _gnome_vfs_pty_unlockpt(int fd)
+ {
+-#ifdef HAVE_UNLOCKPT
+-	return unlockpt(fd);
+-#elif defined(TIOCSPTLCK)
+-	int zero = 0;
+-	return ioctl(fd, TIOCSPTLCK, &zero);
+-#else
+ 	return -1;
+-#endif
+ }
+ 
+ static int
+--- gnome-vfs2-2.10.1-5/gnome-vfs-2.10.1/Makefile.in	2005-04-11 02:07:40.000000000 -0500
++++ gnome-vfs-2.10.1/Makefile.in	2005-06-26 03:05:08.000000000 -0500
+@@ -230,7 +230,6 @@
+ 	devel-docs				\
+ 	doc					\
+ 	programs				\
+-	test					\
+ 	monikers				\
+ 	po
+ 
