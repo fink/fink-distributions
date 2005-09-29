@@ -7,11 +7,9 @@ our @ISA = qw/ Tie::StdHandle /;
 
 use strict;
 
-our $fh_stash = {};
-
 =head1 NAME
 
-	Fink::IOFilter - a 'tee'ed tied-filehandle
+Fink::IOFilter - a 'tee'ed tied-filehandle
 
 =head1 SYNOPSIS
 
@@ -22,8 +20,8 @@ our $fh_stash = {};
 
 =head1 DESCRIPTION
 
-Fink::IOFilter is a tied filehandle for redirecting output into multiple
-places at once.
+Fink::IOFilter is a tied filehandle for redirecting output into
+multiple places at once.
 
 =head2 Methods
 
@@ -35,7 +33,6 @@ override those in that superclass:
 =item TIEHANDLE
 
 	tie NEW_FH, "Fink::IOFilter", $old_fh, $filename;
-	TIEHANDLE "Fink::IOFilter", $old_fh, $filename;
 
 Returns a writable filehandle bound to a newly-created Fink::IOFilter
 object. The filehandle $old_fh must already be opened for writing. The
@@ -58,21 +55,20 @@ sub TIEHANDLE {
 	return $self;
 }
 
-=item PRINT
+=item WRITE
 
-	print $tied_Fink::IOFilter $string;
-	print $tied_Fink::IOFilter @list;
+	$tied_IOFilter->WRITE($string, $bytes);
 
-Text printed to a filehandle tied to Fink::IOFilter is sent to $old_fh and
-written to $filename (as defined during the tie: see the TIEHANDLE
-method and tee_start function).
+This method implements the "write" function for the tied filehandle.
+Text is written to $old_fh and written to $filename (as defined during
+the tie: see the TIEHANDLE method and tee_start function).
 
 =cut
 
-sub PRINT {
+sub WRITE {
 	my $self = shift;
 	foreach (@{$self->{filehandles}}) {
-		print $_ @_;
+		Tie::StdHandle::WRITE($_,@_);
 	}
 }
 
@@ -88,7 +84,7 @@ underlying tie()able class.
 
 =item tee_start
 
-	Fink::IOFilter->tee_start($filehandle, $filename);
+	Fink::IOFilter->tee_start(*$filehandle, $filename);
 
 Wrapper for TIEHANDLE that starts tee'ing the existing open and
 writable $filehandle to the file $filename (appended if it already
