@@ -1,0 +1,374 @@
+diff -r 96be197f975c Makefile.in
+--- a/Makefile.in	Thu Nov 10 07:54:14 2005
++++ b/Makefile.in	Fri Nov 11 22:36:46 2005
+@@ -41,8 +41,8 @@
+ ISODATE :=	$(shell date +%Y-%m-%d)
+ 
+ #-----------------------------------------------------------------------
+-DIRT +=		$(shell find -name '*~')
+-DIRT +=		$(shell find -name '.\#*')
++DIRT +=		$(shell find . -name '*~')
++DIRT +=		$(shell find . -name '.\#*')
+ 
+ SRC +=		COPYING AUTHORS TODO Makefile.in \
+ 		configure.ac config/install-sh \
+@@ -163,7 +163,7 @@
+ 		(bash -c ". scripts/patchfns ; cd $$dir ;LC_ALL=C . $$i -h"); \
+ 		echo; \
+ 	done | \
+-	sed -e '/^Usage:/{s/^Usage: \?//;b}' -e '/^$$/!s/^/  /'
++	sed -f reference.sed
+ 
+ bin/guards.1 : bin/guards
+ 	mkdir -p $$(dirname $@)
+@@ -214,9 +214,8 @@
+ 	     -e 's:@DIFFSTAT''@:$(DIFFSTAT):g' \
+ 	     -e 's:@MTA''@:$(MTA):g' \
+ 	     -e 's:@LOCALEDIR''@:$(localedir):g' \
+-	     -e 's:@DOCSUBDIR''@:$(docdir)/$(PACKAGE)-$(VERSION):g' \
++	     -e 's:@DOCSUBDIR''@:$(docdir)/$(PACKAGE):g' \
+ 	     $< > $@
+-	@chmod --reference=$< $@
+ 
+ Makefile : Makefile.in
+ 	@echo "Please run ./configure by hand"
+@@ -238,11 +237,11 @@
+ 	@INSTALL@ -d $(BUILD_ROOT)$(LIB_DIR)
+ 	@INSTALL@ -m 755 -s $(LIB:%=lib/%) $(BUILD_ROOT)$(LIB_DIR)/
+ 
+-	@INSTALL@ -d $(BUILD_ROOT)$(docdir)/$(PACKAGE)-$(VERSION)/
++	@INSTALL@ -d $(BUILD_ROOT)$(docdir)/$(PACKAGE)/
+ 	@INSTALL@ -m 644 doc/README \
+-		$(BUILD_ROOT)$(docdir)/$(PACKAGE)-$(VERSION)/
++		$(BUILD_ROOT)$(docdir)/$(PACKAGE)/
+ 	@INSTALL@ -m 644 doc/quilt.pdf doc/README.MAIL \
+-		$(BUILD_ROOT)$(docdir)/$(PACKAGE)-$(VERSION)/
++		$(BUILD_ROOT)$(docdir)/$(PACKAGE)/
+ 
+ 	@INSTALL@ -d $(BUILD_ROOT)$(mandir)/man1
+ 	@INSTALL@ -m 644 $(MAN1) $(BUILD_ROOT)$(mandir)/man1/
+@@ -263,7 +262,7 @@
+ 		   $(notdir $(MAN1))) \
+ 	       $(BUILD_ROOT)$(etcdir)/bash_completion.d/quilt \
+ 	       $(BUILD_ROOT)$(etcdir)/quilt.quiltrc \
+-	       $(BUILD_ROOT)$(docdir)/$(PACKAGE)-$(VERSION)/
++	       $(BUILD_ROOT)$(docdir)/$(PACKAGE)/
+ 	$(MAKE_NLS) -C po uninstall BUILD_ROOT=$(BUILD_ROOT) \
+ 		LINGUAS="$(LINGUAS)" localedir=$(localedir)
+ 
+diff -r 96be197f975c lib/backup-files.c
+--- a/lib/backup-files.c	Thu Nov 10 07:54:14 2005
++++ b/lib/backup-files.c	Fri Nov 11 22:36:46 2005
+@@ -37,7 +37,7 @@
+ #include <errno.h>
+ #include <string.h>
+ #include <alloca.h>
+-#include <ftw.h>
++#include <dirent.h>
+ 
+ const char *progname;
+ 
+@@ -312,18 +312,85 @@
+ }
+ 
+ int
+-walk(const char *path, const struct stat *stat, int flag, struct FTW *ftw)
++searchdir_p (const char *path, int complain)
++{
++	struct stat st;
++
++	/* ignore missing files */
++	if (stat(path, &st) != 0) {
++		if (complain) perror (path);
++		return 0;
++	}
++	/* and non-directories */
++	if (!S_ISDIR(st.st_mode)) {
++		if (complain)
++			fprintf(stderr, "%s: not a directory\n", path);
++		return 0;
++	}
++	/* no access permission */
++	if (access(path, R_OK|X_OK) != 0) {
++		if (complain) perror (path);
++		return 0;
++	}
++
++	return 1;
++}
++
++int
++foreachdir (const char *root, int(*walk)(const char *))
++{
++	int errors = 0;
++	DIR *dir;
++
++	if (!searchdir_p(root, 1))
++		return 0;
++
++	dir = opendir(root);
++	if (dir) {
++		struct dirent *dp = 0;
++
++		while ((dp = readdir(dir))) {
++			if (strcmp(dp->d_name, ".")
++			   && strcmp(dp->d_name, "..")) {
++				char *path = alloca (2+ strlen (root) +
++						    strlen (dp->d_name));
++				sprintf (path, "%s/%s", root, dp->d_name);
++				if (searchdir_p (path, 0)) {
++					/* depth first recurse */
++					errors += foreachdir(path, walk);
++				} else {
++					struct stat st;
++					if (stat(path, &st) != 0) {
++						/* ignore missing files */
++						continue;
++					}
++					if (S_ISREG(st.st_mode)) {
++						/* process regular files */
++						errors += walk(path);
++					}
++				}
++			}
++			if (errors > 0) {
++				break;
++			}
++		}
++	}
++
++	if (closedir(dir) !=0) {
++		++errors;
++		perror(root);
++	}
++
++	return errors;
++}
++
++int
++ftwalk(const char *path)
+ {
+ 	size_t prefix_len=strlen(opt_prefix), suffix_len=strlen(opt_suffix);
+ 	size_t len = strlen(path);
+ 	char *p;
+ 
+-	if (flag == FTW_DNR) {
+-		perror(path);
+-		return 1;
+-	}
+-	if (!S_ISREG(stat->st_mode))
+-		return 0;
+ 	if (strncmp(opt_prefix, path, prefix_len))
+ 		return 0;  /* prefix does not match */
+ 	if (len < suffix_len || strcmp(opt_suffix, path + len - suffix_len))
+@@ -332,6 +399,7 @@
+ 	p = alloca(len - prefix_len - suffix_len + 1);
+ 	memcpy(p, path + prefix_len, len - prefix_len - suffix_len);
+ 	p[len - prefix_len - suffix_len] = '\0';
++
+ 	return process_file(p);
+ }
+ 
+@@ -424,13 +492,16 @@
+ 	}
+ 	for (; optind < argc; optind++) {
+ 		if (strcmp(argv[optind], "-") == 0) {
+-			char *dir = strdup(opt_prefix), *d = strrchr(dir, '/');
++			char *dir, *d;
++
++			dir = strdup(opt_prefix);
++			d = strrchr(dir, '/');
+ 			if (d)
+-				*(d+1) = '\0';
++				*d = '\0';
+ 			else
+ 				d = ".";
+-			status = nftw(dir, walk, 0, 0);
+-			free(dir);
++
++			foreachdir (dir, ftwalk);
+ 		} else
+ 			status = process_file(argv[optind]);
+ 		if (status)
+diff -r 96be197f975c quilt/diff.in
+--- a/quilt/diff.in	Thu Nov 10 07:54:14 2005
++++ b/quilt/diff.in	Fri Nov 11 22:36:46 2005
+@@ -338,7 +338,7 @@
+ 
+ 	if [ ${#files[@]} -gt 0 ] \
+ 	   && ! ( cd $QUILT_PC/$last_patch &&
+-		  cp -l --parents "${files[@]}" $workdir/ )
++		  mycpl $workdir/ "${files[@]}" )
+ 	then
+ 		printf $"Failed to copy files to temporary directory\n" >&2
+ 		die 1
+diff -r 96be197f975c quilt/mail.in
+--- a/quilt/mail.in	Thu Nov 10 07:54:14 2005
++++ b/quilt/mail.in	Fri Nov 11 22:36:46 2005
+@@ -52,8 +52,8 @@
+ 
+ msgid()
+ {
+-	local timestamp=$(date --utc "+%Y%m%d%H%M%S.%N")
+-	echo "$timestamp@$(hostname -f)"
++	local timestamp=$(date -u "+%Y%m%d%H%M%S.000000000")
++	echo "$timestamp@$(hostname)"
+ }
+ 
+ process_mail()
+@@ -73,7 +73,7 @@
+ 		| @MTA@ "$@"
+ 	else
+ 		local from_date=$(date "+%a %b %e %H:%M:%S %Y")
+-		echo "From ${LOGNAME:-$(whoami)}@$(hostname -f) $from_date"
++		echo "From ${LOGNAME:-$(whoami)}@$(hostname) $from_date"
+ 		@SED@ -e 's/^From />From /' $tmpfile
+ 		echo
+ 	fi
+@@ -154,7 +154,7 @@
+ (
+ 	cat <<-EOF
+ 	Message-Id: <$(msgid)>
+-	Date: $(date --rfc-822)
++	Date: $(date '+%a, %d %b %Y %H:%M:%S %z')
+ 	From: $opt_from
+ 	To: $(IFS=,; echo "${opt_to[*]}")
+ 	Cc: $(IFS=,; echo "${opt_cc[*]}")
+@@ -198,7 +198,11 @@
+ # increment the timestamp by one second and wait with sending until
+ # that time has arrived. This allows MUAs to show the messages in the
+ # correct order.
+-last_ts=$(date '+%s' -d "$(@SED@ -ne $'s/^Date:[ \t]*//p' $introduction)")
++#last_ts=$(date '+%s' -d "$(@SED@ -ne $'s/^Date:[ \t]*//p' $introduction)")
++# fink has no date available that does -d, so we fudge with the time now.
++# If the user edits the date field in the message patch 0 could end up
++# out of order wrt the actual patches. just a minor cosmetic nit.
++last_ts=$(date '+%s')
+ 
+ num=1
+ body=$(gen_tempfile)
+@@ -209,7 +213,7 @@
+ 	#	sleep 1
+ 	#done
+ 	((last_ts++))
+-	new_date="$(date --rfc-822 -d "1970/01/01 UTC $last_ts seconds")"
++	new_date="$(date -r $last_ts '+%a, %d %b %Y %H:%M:%S %z')"
+ 
+ 	cat_file $(patch_file_name $patch) \
+ 	| quilt_mail_patch_filter $patch > $body
+diff -r 96be197f975c quilt/pop.in
+--- a/quilt/pop.in	Thu Nov 10 07:54:14 2005
++++ b/quilt/pop.in	Fri Nov 11 22:36:46 2005
+@@ -52,7 +52,7 @@
+ {
+ 	local n=0 patch
+ 	applied_patches \
+-	| tac \
++	| perl -e 'print reverse <>' \
+ 	| if [ -n "$opt_all" ]
+ 	then
+ 		cat
+@@ -88,10 +88,10 @@
+ 		return 0
+ 	fi
+ 	
+-	local apply_ts=$(date -r "$QUILT_PC/$patch/.timestamp" '+%s') ts
++	local apply_ts=$(dater "$QUILT_PC/$patch/.timestamp" '+%s') ts
+ 	for file in $(files_in_patch $patch)
+ 	do
+-		ts=$(date -r $file '+%s' 2> /dev/null)
++		ts=$(dater $file '+%s' 2> /dev/null)
+ 		[ -z "$ts" ] && return 0
+ 		[ "$ts" -gt $apply_ts ] && return 0
+ 	done
+@@ -109,7 +109,7 @@
+ 	if [ -d $QUILT_PC/$patch ]
+ 	then
+ 		if ! rmdir $workdir ||  # note that this is racey...
+-		   ! cp -rl $QUILT_PC/$patch $workdir
++		   ! (for i in "$(find "$QUILT_PC/$patch" -type f)"; do mycpl $workdir $i; done)
+ 		then
+ 			printf $"Failed to copy files to temporary directory\n" >&2
+ 			rm -rf $workdir
+diff -r 96be197f975c scripts/dependency-graph.in
+--- a/scripts/dependency-graph.in	Thu Nov 10 07:54:14 2005
++++ b/scripts/dependency-graph.in	Fri Nov 11 22:36:46 2005
+@@ -241,7 +241,7 @@
+ 			print STDERR "$ENV{QUILT_PC}/$patch does not exist; skipping\n";
+ 			next;
+ 		}
+-		@files = split(/\n/, `cd $ENV{QUILT_PC}/$patch ; find -type f ! -name .timestamp`);
++		@files = split(/\n/, `cd $ENV{QUILT_PC}/$patch ; find . -type f ! -name .timestamp`);
+ 		@files = map { s:\./::; $_ } @files;
+ 	}
+ 	push @nodes, {number=>$n++, name=>$patch, file=>$patch,
+diff -r 96be197f975c scripts/inspect.in
+--- a/scripts/inspect.in	Thu Nov 10 07:54:14 2005
++++ b/scripts/inspect.in	Fri Nov 11 22:36:46 2005
+@@ -130,7 +130,7 @@
+ 		if ! [ -e $tmpdir/more-md5sums ]
+ 		then
+ 			( cd $RPM_BUILD_DIR
+-			find -type f \
++			find . -type f \
+ 			| sed -e 's:^.\/::' \
+ 			| xargs md5sum \
+ 			) > $tmpdir/more-md5sums
+diff -r 96be197f975c scripts/patchfns.in
+--- a/scripts/patchfns.in	Thu Nov 10 07:54:14 2005
++++ b/scripts/patchfns.in	Fri Nov 11 22:36:46 2005
+@@ -67,6 +67,27 @@
+ 
+ # ========================================================
+ 
++dater()
++{
++  ts=$(perl -e '@st = stat($ARGV[0]); print $st[9];' "$1")
++  fmt=$(date -r $ts "$2")
++
++  echo $fmt
++}
++
++mycpl ()
++{
++  target=$1
++  shift;
++
++  for src in "$@"
++  do
++    srcdir="${src%/*}"
++    test -n "$srcdir" && mkdir -p "$target/$srcdir"
++    ln $src "$target/$src"
++  done
++}
++
+ # Quote a string for use in a basic regular expression.
+ quote_bre()
+ {
+@@ -542,8 +563,7 @@
+ 		|| old_date=$'\t'"1970-01-01 00:00:00.000000000 +0000"
+ 	else
+ 		[ -n "$QUILT_NO_DIFF_TIMESTAMPS" ] \
+-		|| old_date=$'\t'$(date +'%Y-%m-%d %H:%M:%S.%N %z' \
+-					-r "$old_file")
++		|| old_date=$'\t'$(dater "$old_file" +'%Y-%m-%d %H:%M:%S.000000000 %z')
+ 	fi
+ 	if ! [ -s "$new_file" ]
+ 	then
+@@ -553,8 +573,7 @@
+ 		|| new_date=$'\t'"1970-01-01 00:00:00.000000000 +0000"
+ 	else
+ 		[ -n "$QUILT_NO_DIFF_TIMESTAMPS" ] \
+-		|| new_date=$'\t'$(date +'%Y-%m-%d %H:%M:%S.%N %z' \
+-					-r "$new_file")
++		|| new_date=$'\t'$(dater "$new_file" +'%Y-%m-%d %H:%M:%S.000000000 %z')
+ 	fi
+ 
+ 	@DIFF@ -N $QUILT_DIFF_OPTS $old_file $new_file \
+diff -r 96be197f975c reference.sed
+--- /dev/null	Thu Nov 10 07:54:14 2005
++++ b/reference.sed	Fri Nov 11 22:36:46 2005
+@@ -0,0 +1,3 @@
++/^Usage:/{s/^Usage: \?//;b
++}
++/^$$/!s/^/  /
