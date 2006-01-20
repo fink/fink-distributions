@@ -1,0 +1,106 @@
+diff -Naur libgtop-2.5.2/Makefile.in libgtop-2.5.2-new/Makefile.in
+--- libgtop-2.5.2/Makefile.in	Thu Mar 11 10:51:36 2004
++++ libgtop-2.5.2-new/Makefile.in	Fri Apr  9 14:38:37 2004
+@@ -145,7 +145,7 @@
+ sysdeps_dir = @sysdeps_dir@
+ sysdeps_suid_lib = @sysdeps_suid_lib@
+ 
+-SUBDIRS = po misc include sysdeps lib src examples doc
++SUBDIRS = po misc include sysdeps lib src doc
+ 
+ libgtopinclude_HEADERS = glibtop.h
+ libgtopincludedir = $(includedir)/libgtop-2.0
+diff -Naur libgtop-2.5.2/configure libgtop-2.5.2-new/configure
+--- libgtop-2.5.2/configure	Thu Mar 11 10:50:29 2004
++++ libgtop-2.5.2-new/configure	Fri Apr  9 12:34:33 2004
+@@ -20505,6 +20505,12 @@
+ 	      libgtop_use_machine_h=yes
+ 	      libgtop_need_server=yes
+ 	      ;;
++	    darwin*)
++	      libgtop_sysdeps_dir=darwin
++	      libgtop_use_machine_h=yes
++	      libgtop_need_server=yes
++	      libgtop_postinstall='chgrp kmem $(DESTDIR)$(bindir)/libgtop_server2 && chmod 6755 $(DESTDIR)/$(bindir)/libgtop_server2'
++	      ;;
+ 	    *)
+ 	      libgtop_sysdeps_dir=stub
+ 	      libgtop_use_machine_h=no
+@@ -30885,7 +30891,7 @@
+ 
+ 
+ 
+-                                                                                                                                                                                                                                                          ac_config_files="$ac_config_files Makefile libgtop.spec po/Makefile.in misc/Makefile include/Makefile include/glibtop/Makefile sysdeps/Makefile sysdeps/common/Makefile sysdeps/names/Makefile sysdeps/stub/Makefile sysdeps/stub_suid/Makefile sysdeps/sun4/Makefile sysdeps/osf1/Makefile sysdeps/linux/Makefile sysdeps/kernel/Makefile sysdeps/freebsd/Makefile sysdeps/solaris/Makefile sysdeps/aix/Makefile src/Makefile src/daemon/Makefile src/inodedb/Makefile lib/Makefile examples/Makefile doc/Makefile libgtop-2.0.pc"
++                                                                                                                                                                                                                                                          ac_config_files="$ac_config_files Makefile libgtop.spec po/Makefile.in misc/Makefile include/Makefile include/glibtop/Makefile sysdeps/Makefile sysdeps/common/Makefile sysdeps/names/Makefile sysdeps/stub/Makefile sysdeps/stub_suid/Makefile sysdeps/sun4/Makefile sysdeps/osf1/Makefile sysdeps/linux/Makefile sysdeps/kernel/Makefile sysdeps/freebsd/Makefile sysdeps/solaris/Makefile sysdeps/darwin/Makefile sysdeps/aix/Makefile src/Makefile src/daemon/Makefile src/inodedb/Makefile lib/Makefile examples/Makefile doc/Makefile libgtop-2.0.pc"
+ cat >confcache <<\_ACEOF
+ # This file is a shell script that caches the results of configure
+ # tests run on this system so they can be shared between configure
+@@ -31439,6 +31445,7 @@
+   "sysdeps/kernel/Makefile" ) CONFIG_FILES="$CONFIG_FILES sysdeps/kernel/Makefile" ;;
+   "sysdeps/freebsd/Makefile" ) CONFIG_FILES="$CONFIG_FILES sysdeps/freebsd/Makefile" ;;
+   "sysdeps/solaris/Makefile" ) CONFIG_FILES="$CONFIG_FILES sysdeps/solaris/Makefile" ;;
++  "sysdeps/darwin/Makefile" ) CONFIG_FILES="$CONFIG_FILES sysdeps/darwin/Makefile" ;;
+   "sysdeps/aix/Makefile" ) CONFIG_FILES="$CONFIG_FILES sysdeps/aix/Makefile" ;;
+   "src/Makefile" ) CONFIG_FILES="$CONFIG_FILES src/Makefile" ;;
+   "src/daemon/Makefile" ) CONFIG_FILES="$CONFIG_FILES src/daemon/Makefile" ;;
+diff -Naur libgtop-2.5.2/lib/read.c libgtop-2.5.2-new/lib/read.c
+--- libgtop-2.5.2/lib/read.c	Fri Mar  5 10:59:23 2004
++++ libgtop-2.5.2-new/lib/read.c	Fri Apr  9 12:34:33 2004
+@@ -60,6 +60,7 @@
+ void
+ glibtop_read_l (glibtop *server, size_t size, void *buf)
+ {
++	size_t done = 0;
+ 	int ret = 0;
+ 
+ 	glibtop_init_r (&server, 0, 0);
+@@ -71,7 +72,11 @@
+ 	if (server->socket) {
+ 		do_read (server->socket, buf, size);
+ 	} else {
+-		ret = read (server->input [0], buf, size);
++		while (ret >= 0 && done < size) {
++			ret = read (server->input [0], (char*)buf + done, size - done);
++			if (ret > 0)
++				done += ret;
++		}
+ 	}
+ 
+ 	if (ret < 0)
+diff -Naur libgtop-2.5.2/ltmain.sh libgtop-2.5.2-new/ltmain.sh
+--- libgtop-2.5.2/ltmain.sh	Tue Feb 17 14:55:01 2004
++++ libgtop-2.5.2-new/ltmain.sh	Fri Apr  9 12:34:33 2004
+@@ -2264,7 +2264,7 @@
+ 	   { test "$prefer_static_libs" = no || test -z "$old_library"; }; then
+ 	  if test "$installed" = no; then
+ 	    notinst_deplibs="$notinst_deplibs $lib"
+-	    need_relink=yes
++	    need_relink=no
+ 	  fi
+ 	  # This is a shared library
+ 	
+@@ -3745,8 +3745,24 @@
+ 	  eval test_cmds=\"$archive_expsym_cmds\"
+ 	  cmds=$archive_expsym_cmds
+ 	else
++         if test "x$verstring" = "x0.0"; then
++             tmp_verstring=
++           else
++             tmp_verstring="$verstring"
++           fi
++           save_deplibs="$deplibs"
++           for conv in $convenience; do
++             tmp_deplibs=
++             for test_deplib in $deplibs; do
++               if test "$test_deplib" != "$conv"; then
++                 tmp_deplibs="$tmp_deplibs $test_deplib"
++               fi
++             done
++             deplibs="$tmp_deplibs"
++           done
+ 	  eval test_cmds=\"$archive_cmds\"
+ 	  cmds=$archive_cmds
++	  deplibs="$save_deplibs"
+ 	  fi
+ 	fi
+ 

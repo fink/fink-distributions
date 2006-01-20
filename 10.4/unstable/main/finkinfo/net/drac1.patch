@@ -1,0 +1,475 @@
+diff -ruN drac.orig/Makefile drac/Makefile
+--- drac.orig/Makefile	Sun Jan 12 13:45:12 2003
++++ drac/Makefile	Thu Jun 19 15:10:17 2003
+@@ -5,9 +5,10 @@
+ 
+ # Paths
+ 
+-INSTALL = /usr/ucb/install
+-EBIN = /usr/local/sbin
+-MAN = /usr/local/man/man
++DESTDIR =
++INSTALL = /usr/bin/install
++EBIN = @FINKPREFIX@/sbin
++MAN = @FINKPREFIX@/share/man/man
+ 
+ # OS-Dependant settings
+ 
+@@ -33,26 +34,26 @@
+ # -DCIDR_KEY	# keys in CIDR format
+ # -DTERM_KD	# keys and data nul-terminated
+ 
+-DEFS = -DTI_RPC -DFCNTL_LOCK -DSYSINFO
++DEFS = -DSOCK_RPC -DFCNTL_LOCK -DGETHOST -DDASH_C
+ 
+ # Compiler flags 
+ CC = cc
+-RANLIB = :
+-CFLAGS = $(DEFS) -g -I/usr/local/src/db/db-4.1.25/build_unix
++RANLIB = /usr/bin/ranlib
++CFLAGS = $(DEFS) -g -fno-common -I@FINKPREFIX@/include/db4
+ #CFLAGS = $(DEFS) -g -I/usr/local/src/db/db-3.1.17/build_unix
+ #CFLAGS = $(DEFS) -g -I/usr/local/src/db/db-2.4.14/Unix
+ #CFLAGS = $(DEFS) -g -I/usr/local/src/db/db.1.85/PORT/sunos.5.2/include
+-LDLIBS = -L/usr/local/src/db/db-4.1.25/build_unix -lnsl -ldb-4.1
++LDLIBS = -L@FINKPREFIX@/lib -ldb-4.3
+ #LDLIBS = -L/usr/local/src/db/db-3.1.17/build_unix -lnsl -ldb
+ #LDLIBS = -L/usr/local/src/db/db-2.4.14/Unix -lnsl -ldb
+ #LDLIBS = -L/usr/local/src/db/db.1.85/PORT/sunos.5.2 -lnsl -ldb
+-TSTLIBS = -L. -ldrac -lnsl
+-RPCGENFLAGS = 
+-#RPCGENFLAGS = -C
++TSTLIBS = -L. -ldrac
++#RPCGENFLAGS = 
++RPCGENFLAGS = -C
+ 
+ # Man sections
+ MANLIB = 3
+-MANADM = 1m
++MANADM = 8
+ 
+ ## Nothing to change after this point
+ 
+@@ -70,6 +71,7 @@
+ # Final targets
+ 
+ CLIENT = testing
++CLIENT6 = testing6
+ SERVER = rpc.dracd
+ LIBRAR = libdrac.a
+ 
+@@ -86,13 +88,14 @@
+ LIB_OBJ = dracauth.o
+ SVC_OBJ = rpc.dracd.o
+ TST_OBJ = testing.o
++TST6_OBJ = testing6.o
+ H_OBJS = drac_xdr.o drac_svc.o drac_clnt.o $(SVC_OBJ) $(LIB_OBJ)
+ L_OBJS = $(LIB_OBJ) drac_xdr.o drac_clnt.o
+ S_OBJS = $(SVC_OBJ) drac_xdr.o drac_svc.o
+ 
+ # Rules
+ 
+-all: $(CLIENT) $(SERVER)
++all: $(CLIENT) $(CLIENT6) $(SERVER)
+ 
+ $(RPC_ALL): $(RPC_SRC) 
+ 	rpcgen $(RPCGENFLAGS) $(RPC_SRC)
+@@ -103,12 +106,18 @@
+ 
+ $(LIBRAR): $(L_OBJS)
+ 	rm -f $@
++	$(CC) -dynamiclib -install_name @FINKPREFIX@/lib/libdrac.1.dylib \
++	-compatibility_version 1.0 -current_version 1.12.0 \
++	-o libdrac.1.12.0.dylib $(L_OBJS)
+ 	ar cq $@ $(L_OBJS)
+ 	$(RANLIB) $@
+ 
+ $(CLIENT): $(TST_OBJ) $(LIBRAR)
+ 	$(CC) -o $(CLIENT) $(TST_OBJ) $(TSTLIBS)
+ 
++$(CLIENT6): $(TST6_OBJ) $(LIBRAR)
++	$(CC) -o $(CLIENT6) $(TST6_OBJ) $(TSTLIBS)
++
+ $(SERVER): $(S_OBJS) 
+ 	$(CC) -o $(SERVER) $(S_OBJS) $(LDLIBS)
+ 
+@@ -120,9 +129,9 @@
+ 	tar cf drac.tar $(PACKAGE)
+ 
+ install: $(SERVER)
+-	$(INSTALL) -c -o bin -g bin -m 0755 $(SERVER) $(EBIN)
++	$(INSTALL) -c -m 0755 $(SERVER) $(DESTDIR)$(EBIN)
+ 
+ install-man: $(SERVER).1m dracauth.3
+-	$(INSTALL) -c -m 0444 $(SERVER).1m $(MAN)$(MANADM)/$(SERVER).$(MANADM)
+-	$(INSTALL) -c -m 0444 dracauth.3 $(MAN)$(MANLIB)/dracauth.$(MANLIB)
++	$(INSTALL) -c -m 0444 $(SERVER).1m $(DESTDIR)$(MAN)$(MANADM)/$(SERVER).$(MANADM)
++	$(INSTALL) -c -m 0444 dracauth.3 $(DESTDIR)$(MAN)$(MANLIB)/dracauth.$(MANLIB)
+ 
+diff -ruN drac.orig/drac.x drac/drac.x
+--- drac.orig/drac.x	Mon Aug 10 20:01:18 1998
++++ drac/drac.x	Thu Jun 19 14:55:56 2003
+@@ -17,6 +17,10 @@
+ 	unsigned long ip_addr;	/* In network order */
+ };
+ 
++struct drac_add_parm6 {
++	char ip_addr6[16];	/* In network order */
++};
++
+ enum addstat {
+ 	ADD_SUCCESS,	/* Succeeded */
+ 	ADD_PERM,	/* Permission denied */
+@@ -32,4 +36,11 @@
+ 		addstat
+ 		DRACPROC_ADD(drac_add_parm) = 1;
+ 	} = 1;
++	version DRACVERS6 {
++		/*
++		* Update my passwd entry
++		*/
++		addstat
++		DRACPROC_ADD(drac_add_parm6) = 1;
++	} = 2;
+ } = 900101;
+diff -ruN drac.orig/dracauth.c drac/dracauth.c
+--- drac.orig/dracauth.c	Thu Jun 24 20:15:12 1999
++++ drac/dracauth.c	Thu Jun 19 15:01:54 2003
+@@ -135,4 +135,121 @@
+ 	return 0;
+ }
+ 
++int
++dracauth6(server, userip6, errmsg)
++       char *server; unsigned char userip6[16]; char **errmsg; {
++
++       CLIENT *clnt6;
++       addstat  *result;
++       drac_add_parm6  dracproc_add_2_arg;
++
++#ifdef TI_RPC
++       clnt6 = clnt_create(server, DRACPROG, DRACVERS6, "datagram_v");
++#endif
++#ifdef SOCK_RPC
++       clnt6 = clnt_create(server, DRACPROG, DRACVERS6, "udp");
++#endif
++       if (clnt6 == (CLIENT *) NULL) {
++               if ( errmsg ) *errmsg = clnt_spcreateerror(server);
++               return (-1);
++       }
++       memcpy(dracproc_add_2_arg.ip_addr6, userip6,
++               sizeof(dracproc_add_2_arg.ip_addr6));
++       result = dracproc_add_2(&dracproc_add_2_arg, clnt6);
++       if (result == (addstat *) NULL) {
++               if ( errmsg ) *errmsg = clnt_sperror(clnt, "call failed");
++               clnt_destroy(clnt6);
++               return (-2);
++       }
++       clnt_destroy(clnt6);
++       if ( errmsg ) {
++           switch (*result) {
++             case ADD_SUCCESS:
++               *errmsg = "Server reports add succeeded";
++               break;
++             case ADD_PERM:
++               *errmsg = "Server reports permission denied";
++               break;
++             case ADD_SYSERR:
++               *errmsg = "Server reports system error";
++               break;
++             default:
++               *errmsg = "Server reports unknown error";
++           }
++       }
++       return *result;
++}
++
++static CLIENT *clnt6;
++
++int
++dracconn6(server, errmsg)
++       char *server; char **errmsg; {
++
++#ifdef TI_RPC
++       clnt6 = clnt_create(server, DRACPROG, DRACVERS6, "datagram_v");
++#endif
++#ifdef SOCK_RPC
++       clnt6 = clnt_create(server, DRACPROG, DRACVERS6, "udp");
++#endif
++       if (clnt6 == (CLIENT *) NULL) {
++               if ( errmsg ) *errmsg = clnt_spcreateerror(server);
++               return (-1);
++       }
++       if ( errmsg ) *errmsg = "Connect succeeded";
++       return 0;
++}
++
++
++int
++dracsend6(userip6, errmsg)
++       unsigned char userip6[16]; char **errmsg; {
++
++       addstat  *result;
++       drac_add_parm6  dracproc_add_2_arg;
++
++       if (clnt6 == (CLIENT *) NULL) {
++               if ( errmsg ) *errmsg = "Not connected";
++               return (-1);
++       }
++       memcpy(dracproc_add_2_arg.ip_addr6, userip6,
++               sizeof(dracproc_add_2_arg.ip_addr6));
++       result = dracproc_add_2(&dracproc_add_2_arg, clnt6);
++       if (result == (addstat *) NULL) {
++               if ( errmsg ) *errmsg = clnt_sperror(clnt6, "call failed");
++               return (-2);
++       }
++       if ( errmsg ) {
++           switch (*result) {
++             case ADD_SUCCESS:
++               *errmsg = "Server reports add succeeded";
++               break;
++             case ADD_PERM:
++               *errmsg = "Server reports permission denied";
++               break;
++             case ADD_SYSERR:
++               *errmsg = "Server reports system error";
++               break;
++             default:
++               *errmsg = "Server reports unknown error";
++           }
++       }
++       return *result;
++}
++
++
++int
++dracdisc6(errmsg)
++       char **errmsg; {
++
++       if (clnt6 == (CLIENT *) NULL) {
++               if ( errmsg ) *errmsg = "Not connected";
++               return (-1);
++       }
++       clnt_destroy(clnt6);
++       clnt6 = (CLIENT *) NULL;
++       if ( errmsg ) *errmsg = "Disconnect succeeded";
++       return 0;
++}
++
+ /**/
+diff -ruN drac.orig/rpc.dracd.1m drac/rpc.dracd.1m
+--- drac.orig/rpc.dracd.1m	Thu Jul 23 09:13:59 1998
++++ drac/rpc.dracd.1m	Thu Jun 19 15:06:30 2003
+@@ -2,7 +2,7 @@
+ '\"macro stdmacro
+ .\" Copyright University of Manitoba 1998.
+ .nr X
+-.TH rpc.dracd 1M "22 Jul 1998"
++.TH rpc.dracd 8 "22 Jul 1998"
+ .SH NAME
+ rpc.dracd \- Dynamic Relay Authorization Control server
+ .SH SYNOPSIS
+@@ -16,13 +16,13 @@
+ \f4rpc.dracd\f1
+ is the Dynamic Relay Authorization Control server.
+ It uses the Berkeley db package to maintain a relay authorization
+-map for sendmail, by default \f4/etc/mail/dracd.db\f1.
++map for sendmail, by default \f4@FINKPREFIX@/var/lib/drac/dracd.db\f1.
+ POP and IMAP mail servers make an RPC call to add an entry to the
+ authorization cache after they have authenticated each user.
+ The daemon, rpc.dracd, adds or updates entries in the cache, and
+ periodically expires old entries.
+ Only trusted mail servers are permitted to communicate with rpc.dracd,
+-as controlled by \f4/etc/mail/dracd.allow\f1.
++as controlled by \f4@FINKPREFIX@/var/lib/drac/dracd.allow\f1.
+ If this file does not exist, all local IP addresses are permitted.
+ .SS Allow File Format
+ The Allow File file consists of entries of the form:
+@@ -58,10 +58,10 @@
+ .SH FILES
+ .PD 0
+ .TP 30
+-.B /etc/mail/dracd.db
++.B @FINKPREFIX@/var/lib/drac/dracd.db
+ default database file
+ .TP
+-.B /etc/mail/dracd.allow
++.B @FINKPREFIX@/etc/drac/dracd.allow
+ default allow file.
+ .PD
+ .SH SEE ALSO
+diff -ruN drac.orig/rpc.dracd.c drac/rpc.dracd.c
+--- drac.orig/rpc.dracd.c	Sun Jan 12 13:22:22 2003
++++ drac/rpc.dracd.c	Thu Jun 19 15:05:05 2003
+@@ -36,8 +36,8 @@
+ #endif
+ #include "drac.h"
+ 
+-#define DBFILE "/etc/mail/dracd.db"
+-#define ALFILE "/etc/mail/dracd.allow"
++#define DBFILE "@FINKPREFIX@/var/lib/drac/dracd.db"
++#define ALFILE "@FINKPREFIX@/etc/drac/dracd.allow"
+ 
+ struct net_def {
+     struct net_def *nd_next;
+@@ -354,6 +354,128 @@
+ 
+ 	/* Send result code back to client */
+ 	return (&result);
++}
++
++/* Add an entry to the database */
++addstat *
++#ifdef DASH_C
++dracproc_add_2_svc(argp, rqstp)
++#else
++dracproc_add_2(argp, rqstp)
++#endif
++       drac_add_parm6 *argp;
++       struct svc_req *rqstp; {
++
++       static addstat  result;
++       char buf[INET6_ADDRSTRLEN];
++#ifdef TI_RPC
++       struct netbuf *nb;
++       struct netconfig *nc;
++       char *cad, *pt;
++#endif
++#ifdef SOCK_RPC
++       struct sockaddr_in *si;
++#endif
++      struct in_addr client_ip;
++       struct in6_addr requ_ip;
++       DBT key, data;
++       char akey[INET6_ADDRSTRLEN+4], alimit[32];
++       struct net_def *nd;
++
++       result = ADD_SUCCESS;
++
++       /* Get the IP address of the client */
++#ifdef TI_RPC
++       if ( (nc = getnetconfigent(rqstp->rq_xprt->xp_netid)) == NULL
++           || (nb = svc_getrpccaller(rqstp->rq_xprt)) == NULL
++           || (cad = taddr2uaddr(nc, nb)) == NULL ) {
++           if (nc) freenetconfigent(nc);
++           result = ADD_SYSERR;
++           return (&result);
++       }
++       if ( (pt = strrchr(cad, '.')) != NULL ) *pt = '\0';
++       if ( (pt = strrchr(cad, '.')) != NULL ) *pt = '\0';
++       client_ip.s_addr = inet_addr(cad);
++       freenetconfigent(nc);
++       free(cad);
++#endif
++#ifdef SOCK_RPC
++       if ( (si = svc_getcaller(rqstp->rq_xprt)) == NULL ) {
++           result = ADD_SYSERR;
++           return (&result);
++       }
++       client_ip.s_addr = si->sin_addr.s_addr;
++#endif
++#ifdef DEBUG
++       fprintf(debugf, "Client Address: %s\n", inet_ntoa(client_ip));
++       fflush(debugf);
++#endif
++
++       /* Check agains the table of trusted clients */
++       for ( nd = net_tbl; nd != NULL; nd = nd->nd_next ) {
++           if ( (client_ip.s_addr & nd->nd_mask.s_addr)
++               == nd->nd_addr.s_addr ) break;
++       }
++       if ( nd == NULL ) {
++           result = ADD_PERM;
++           return (&result);
++       }
++
++       /* Set up for the add */
++       memcpy(requ_ip.s6_addr, argp->ip_addr6,
++               sizeof(requ_ip.s6_addr));
++#ifdef DEBUG
++       fprintf(debugf, "Requested IP Address: %s\n",
++               inet_ntop(AF_INET6, requ_ip.s6_addr, buf, sizeof(buf)));
++       fflush(debugf);
++#endif
++       memset(&key, 0, sizeof(DBT));
++       memset(&data, 0, sizeof(DBT));
++       inet_ntop(AF_INET6, requ_ip.s6_addr, akey, sizeof(akey)-4);
++#ifdef CIDR_KEY
++       strcat(akey, "/128");
++#endif
++       key.data = akey;
++#ifdef TERM_KD
++       key.size = strlen(akey) + 1;
++#else
++       key.size = strlen(akey);
++#endif
++       sprintf(alimit, "%lu", time((time_t *)NULL) + explimit);
++       data.data = alimit;
++#ifdef TERM_KD
++       data.size = strlen(alimit) + 1;
++#else
++       data.size = strlen(alimit);
++#endif
++
++       /* Do the add and sync, with locking */
++       if ( lockdb() == (-1) ) {
++           syslog(LOG_ERR, "dracproc_add_1 lockdb failed: %m");
++       }
++#if DB_VERSION_MAJOR < 2
++       errno = 0;
++       dbp->put(dbp, &key, &data, 0);
++#else
++       errno = dbp->put(dbp, NULL, &key, &data, 0);
++#endif
++       if ( errno != 0 ) {
++           syslog(LOG_ERR, "dracproc_add_1 put failed: %m");
++           result = ADD_SYSERR;
++       }
++#if DB_VERSION_MAJOR < 2
++       errno = 0;
++       dbp->sync(dbp, 0);
++#else
++       errno = dbp->sync(dbp, 0);
++#endif
++       if ( errno != 0 ) {
++           syslog(LOG_ERR, "dracproc_add_1 sync failed: %m");
++       }
++       (void)unlockdb();
++
++       /* Send result code back to client */
++       return (&result);
+ }
+ 
+ /* Expire old entries from the database */
+diff -ruN drac.orig/testing6.c drac/testing6.c
+--- drac.orig/testing6.c	Wed Dec 31 17:00:00 1969
++++ drac/testing6.c	Thu Jun 19 14:58:06 2003
+@@ -0,0 +1,28 @@
++/*
++ * Test client for dracauth
++ */
++
++#include <stdio.h>
++#include <sys/types.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++
++main(argc, argv)
++	int argc;
++	char *argv[];
++{
++        int rc;
++	char *host;
++	unsigned char ip6[16];
++	char *err;
++
++	if (argc < 3) {
++		printf("usage:  %s server_host client_addr\n", argv[0]);
++		exit(1);
++	}
++	host = argv[1];
++	inet_pton(AF_INET6, argv[2], ip6);
++	rc = dracauth6(host, ip6, &err);
++	if (rc != 0) printf("%s: %s\n", argv[0], err);
++}
