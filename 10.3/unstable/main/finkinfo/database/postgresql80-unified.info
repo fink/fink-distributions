@@ -1,7 +1,8 @@
 Package: postgresql80-unified
 Version: 8.0.6
-Revision: 11
+Revision: 12
 GCC: 3.3
+Architecture: powerpc
 CustomMirror: <<
 	afr-ZA: ftp://ftp.za.postgresql.org/mirror/ftp.postgresql.org
 	asi-CN: ftp://ftp.cn.postgresql.org/ftp.postgresql.org
@@ -121,7 +122,7 @@ CompileScript: <<
 	pushd ../postgis-1.1.0
 	./configure --prefix=%p --with-pgsql=%i/bin/pg_config && \
 	perl -pi -e 's,^PROJ_DIR=%p,PROJ_DIR=%i,; s,^PGFFEINCLUDES=.*,PGFEINCLUDES=-I%i/include/postgresql -I%i/include -I%p/include,; s,^PGBEINCLUDES=.*,PGBEINCLUDES=-I%i/include/postgresql -I%i/include -I%p/include,; s,^PGFELIBS=.*,PGFELIBS=-L%i/lib -L%p/lib -lpq,; s,^PGBELIBS=.*,PGBELIBS=-L%i/lib -L%p/lib -lpostgres,; s,^libdir=.*,libdir=%p/lib/postgresql-8.0,; s,^datadir=.*,datadir=%p/share/postgresql-8.0,; s,^DLFLAGS=.*,DLFLAGS=-no-cpp-precomp -undefined dynamic_lookup -multiply_defined suppress,;' Makefile.config && \
-	make || exit 3
+	make MODULE_FILENAME=%p/lib/postgresql-8.0/liblwgeom.1.so || exit 3
 	popd 
 
 <<
@@ -138,7 +139,11 @@ InstallScript: <<
 
 	# postgis
 	pushd ../postgis-1.1.0
-	make install DESTDIR=%d
+	make install DESTDIR=%d MODULE_FILENAME=%p/lib/postgresql-8.0/liblwgeom.1.so
+	popd
+
+	pushd %i/lib/postgresql-8.0
+	ln -s liblwgeom.1.so liblwgeom.1.0.so
 	popd
 
 	find %i/share -ls > /tmp/sharefiles-postgresql.txt
@@ -415,6 +420,60 @@ die () {
 # update daemonic init script if necessary
 daemonic install %N
 
+# get a nice port to run on
+while true; do
+	PGPORT=$RANDOM;
+	if [ "$PGPORT" -gt 10000 ] && [ "$PGPORT" -lt 20000 ]; then
+		break
+	fi
+done
+echo "- starting PostgreSQL on port $PGPORT"
+if %p/bin/pgsql.sh-8.0 start; then
+
+	sleep 5
+
+	# install the plpgsql language if possible
+	echo -e "- attempting to install the plpgsql language in the template1 database... \c"
+	%p/bin/createlang-8.0 -U postgres -p $PGPORT plpgsql template1 || ERROR="$?"
+	if [ $ERROR -eq 0 ]; then
+		echo "done"
+	elif [ $ERROR -gt 0 ] && [ $ERROR -ne 2 ]; then
+		echo "WARNING: an unknown error occurred inserting the plpgsql language"
+	else
+		:
+	fi
+
+	sleep 5
+
+	%p/bin/pgsql.sh-8.0 stop || echo "WARNING: unable to stop postgresql: run 'PGPORT=$PGPORT sudo %p/bin/pgsql.sh-8.0 stop' to try again"
+
+else
+
+	cat <<END
+WARNING: unable to start postgresql on an alternate port, not installing plpgsql!
+
+	If you wish to install it manually, run:
+
+		sudo -u postgres %p/bin/pgsql.sh-8.0 start
+		sudo -u postgres %p/bin/createlang-8.0 plpgsql template1
+
+END
+
+fi
+
+cat <<END
+WARNING: If you are using PostGIS, you will need to upgrade your PostGIS functions after starting up the
+	PostgreSQL database:
+
+		sudo -u postgres %p/bin/pgsql.sh-8.0 start
+		sudo -u postgres %p/bin/psql-8.0 -f %p/share/postgresql-8.0/lwpostgis_upgrade.sql -d <your_spatial_database>
+
+	To configure/install PostGIS for the first time, you should instead use:
+
+		sudo -u postgres %p/bin/pgsql.sh-8.0 start
+		sudo -u postgres %p/bin/psql-8.0 -f %p/share/postgresql-8.0/lwpostgis.sql -d <your_spatial_database>
+
+END
 <<
 PreRmScript: <<
 
