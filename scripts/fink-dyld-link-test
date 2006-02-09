@@ -1,0 +1,121 @@
+#!/usr/bin/perl -w
+
+# Find shared libraries that were probably compiled with some missing
+# -l flag(s).
+
+use strict;
+use File::Temp qw/ tempfile /;
+use Data::Dumper;
+
+use constant {
+    SEP_MAJOR => ('=' x72 . "\n"),
+    SEP_MINOR => ('-' x72 . "\n"),
+};
+
+unless (@ARGV) {
+    die "Usage: $0 [list of installed packages]\n";
+}
+
+print "Preparing...\n";
+
+# make a dummy source file for test compiles
+my($src_fh, $src) = tempfile( SUFFIX => '.c', UNLINK => 1);
+print $src_fh "int main() { return(0); }\n";
+close $src_fh;
+unless (&compile_okay($src)) {
+    die "Could not even compile test source without any libs!\n";
+}
+
+# store parallel arrays to @ARGV package names so we can keep
+# altering the last element during each pass and then dump the
+# output in the same order as the given package list
+my(@results, @summary);
+
+foreach my $pkg (@ARGV) {
+    push @results, {};        # hash of results for each library
+    push @summary, 'Passed';  # one-line summary for each package (worst result)
+
+    print SEP_MAJOR;
+
+    print "Testing package $pkg...\n";
+
+    # find all files in package
+    my %files = map { chomp; $_ => 1 } (`dpkg -L $pkg`);
+    if ($?) {
+	print $results[-1] = 'Could not read file list', "\n";
+	$summary[-1] = 'Package not tested';
+	next;
+    }
+
+    foreach my $file (keys %files) {
+	# find corresponding static/dynamic lib pairs
+	if ($file =~ s/\.a$//) {
+	    my $dylib;
+	    if (exists $files{"$file.dylib"}) {
+		$dylib = "$file.dylib";  # normal shared library for linker
+#	    } elsif (exists $files{"$file.so"}) {
+#		$dylib = "$file.so";     # probably bundle for dlopen() (skip)
+	    } else {
+		next;                    # no shared lib for this static one
+	    }
+
+	    print SEP_MINOR,"Examining $dylib...\n";
+
+	    # get list of all dynamic libs the dynamic lib links against
+	    my @dyld = `otool -L "$dylib"`;
+	    if ($?) {
+		print $results[-1]->{$dylib} = 'Could not read dyld links', "\n";
+		$summary[-1] = 'Some libs not tested';
+		next;
+	    }
+	    chomp @dyld;
+	    shift @dyld;  # remove otool header
+	    map { s/^\s+(.*?)\s+\(compatibility.*/$1/ } @dyld;
+
+	    my $okay = &compile_okay($src, ["$file.a"], \@dyld);
+	    $results[-1]->{$dylib} = $okay
+		? 'Okay'
+		: 'Deficient';
+	    $summary[-1] = 'Failed' unless $okay;
+	}
+    }
+}
+
+# lib-by-lib results
+print SEP_MAJOR, "Results:\n", Data::Dumper->Dump(\@results, \@ARGV);
+
+# package-by-package summary
+my $w = 0;
+map { $w = length $_ if length $_ > $w } @ARGV;  # widest value
+print SEP_MAJOR, "Summary:\n";
+for (0..$#ARGV) {
+    printf "  %-${w}s  %s\n", $ARGV[$_], $summary[$_];
+}
+
+sub compile_okay {
+    my $src = shift;
+    my $static = shift || [];
+    my $dynamic = shift || [];
+
+    my @cmd = (
+	# assume C++ so we don't have to guess about mangling
+	# TODO: match to ABI of pkg
+	'g++',
+	
+	# here's the magic: fail if any static lib symbol isn't
+	# defined in the dyld-linked libs, meaning the dynamic lib
+	# corresponding to the static one is probably missing dyld
+	# links to the libs that resolve these symbols
+	'-all_load',
+
+	# hide some common noise and test residue
+	'-multiply_defined', 'suppress',
+	'-bind_at_load',
+
+	# for kicks
+	#'-Wall',
+    );
+    push @cmd, $src, @$static, @$dynamic;
+    print "@cmd\n";
+    return !system(@cmd);
+}
