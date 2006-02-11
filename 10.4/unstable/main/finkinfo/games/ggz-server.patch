@@ -1,0 +1,90 @@
+diff -Naur server-old/game_servers/ggzcards/ai.c server-new/game_servers/ggzcards/ai.c
+--- server-old/game_servers/ggzcards/ai.c	2002-09-03 00:55:18.000000000 -0400
++++ server-new/game_servers/ggzcards/ai.c	2005-06-19 12:29:06.000000000 -0400
+@@ -40,7 +40,7 @@
+ #include <sys/types.h>
+ #include <sys/socket.h>
+ #include <unistd.h>
+-#include <wait.h>
++#include <sys/wait.h>
+ 
+ #include "ai.h"
+ #include "common.h"
+diff -Naur server-old/ggzd/client.c server-new/ggzd/client.c
+--- server-old/ggzd/client.c	2004-11-17 17:02:24.000000000 -0500
++++ server-new/ggzd/client.c	2005-06-19 12:29:06.000000000 -0400
+@@ -99,9 +99,8 @@
+ 	struct sockaddr_in addr;
+ 	GGZClient *client;
+ 	int addrlen = sizeof(addr);
+-	struct hostent hostbuf, *hp;
+-	char tmphstbuf[1024];
+-	int rc, herr;
++	struct hostent *hp;
++	int rc;
+ 
+ 	/* Get our arguments out of the arg buffer */
+ 	sock = *((int *)arg_ptr);
+@@ -122,14 +121,24 @@
+ 
+ 	rc = -1;
+ 	if (opt.perform_lookups) {
+-		rc = gethostbyaddr_r(&addr.sin_addr, sizeof(struct in_addr),
+-				     AF_INET, &hostbuf, tmphstbuf, 1024, &hp, &herr);
++		static pthread_mutex_t gethostbyaddr_mutex;
++		static int gethostbyaddr_mutex_inited = 0;
++		if (!gethostbyaddr_mutex_inited) {
++			gethostbyaddr_mutex_inited = 1;
++			pthread_mutex_init(&gethostbyaddr_mutex, NULL);
++		}
++		pthread_mutex_lock(&gethostbyaddr_mutex);
++		
++		hp = gethostbyaddr((char*)&addr.sin_addr, sizeof(struct in_addr),
++				     AF_INET);
+ 		/* Note if we get an error we don't bother expanding the */
+ 		/* buffer or so forth. Is the hostname vs. IP that important? */
+-		if(rc == 0) {
+-			strncpy(client->addr, hostbuf.h_name, sizeof(client->addr));
++		if(hp != NULL) {
++			strncpy(client->addr, hp->h_name, sizeof(client->addr));
+ 			client->addr[sizeof(client->addr)-1] = '\0';
+ 		}
++		
++		pthread_mutex_unlock(&gethostbyaddr_mutex);
+ 	}
+ 	if (rc < 0)
+ 		inet_ntop(AF_INET, &addr.sin_addr, client->addr, sizeof(client->addr));
+diff -Naur server-old/ggzd/control.c server-new/ggzd/control.c
+--- server-old/ggzd/control.c	2005-05-16 17:11:37.000000000 -0400
++++ server-new/ggzd/control.c	2005-06-19 19:00:20.000000000 -0400
+@@ -215,8 +215,6 @@
+ int main(int argc, char *argv[])
+ {
+ 	int main_sock, new_sock, status, flags;
+-	socklen_t addrlen;
+-	struct sockaddr_in addr;
+ 	fd_set active_fd_set, read_fd_set;
+ 	struct timeval tv;
+ 
+@@ -336,17 +334,12 @@
+ 			continue;
+ 		}
+ 
+-		addrlen = sizeof(addr);
+-		if ( (new_sock = accept(main_sock, (struct sockaddr*)&addr, &addrlen)) < 0) {
+-			switch (errno) {
+-			case EWOULDBLOCK:
+-			case ECONNABORTED:
+-			case EINTR:
++		new_sock = ggz_accept(main_sock);
++		if (new_sock < 0) {
++			if (new_sock == -1)
+ 				continue;
+-				break;
+-			default:
++			else
+ 				err_sys_exit("Error accepting connection");
+-			}
+ 		} else {
+ 			/* This is where to test for ignored IP addresses */
+ 			client_handler_launch(new_sock);
