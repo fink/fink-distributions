@@ -1,6 +1,6 @@
 Package: distcc
 Version: 2.18.3
-Revision: 27
+Revision: 28
 Description: Distributed compilation tool
 License: GPL
 Maintainer: Benjamin Reed <distcc@fink.racoonfink.com>
@@ -28,13 +28,19 @@ CompileScript: <<
 #!/bin/sh -ev
 	unset DISTCC_HOSTS
 	unset CCACHE_PREFIX
+	unset CCACHE_PATH
+	export CCACHE_DISABLE=1
 	./configure %c
 	perl -pi.bak -e 's,#define WITH_GNOME.*,#undef WITH_GNOME,g; s,#define WITH_GTK.*,#undef WITH_GTK,g;' src/config.h
 	make
 <<
 
 InstallScript: <<
-#!/bin/sh -ex
+#!/bin/sh -ev
+	unset DISTCC_HOSTS
+	unset CCACHE_PREFIX
+	unset CCACHE_PATH
+	export CCACHE_DISABLE=1
 	install -d -m 755 %i/bin
 	make install DESTDIR=%d
 	install -d -m 755 %i/etc
@@ -105,10 +111,13 @@ DISTCCD_ZEROCONF=1
 END
 
 	cat <<END > %i/bin/distccd-fink.sh
-#!/bin/sh
+#!/bin/sh -e
 
 source %p/etc/distccd.conf
 export DISTCC_MMAP
+
+export DISTCCD_PATH="%p/var/lib/distcc/translated:\$PATH"
+export DISTCC_TRANSLATE="true"
 
 DISTCCD_COMMAND="%p/bin/distccd --daemon --pid-file %p/var/run/distccd.pid"
 
@@ -136,10 +145,31 @@ END
 
 	chmod 755 %i/bin/distccd-fink.sh
 	install -d -m 755 %i/etc/profile.d
+
+	cat <<END > %i/etc/profile.d/distcc-default.sh
+if [ -z "\$CCACHE_PATH" ]; then
+	CCACHE_PATH="\$PATH"
+fi
+
+export CCACHE_PATH="%p/var/lib/distcc/untranslated:\$CCACHE_PATH"
+export PATH="\$PATH:%p/var/lib/distcc/untranslated"
+export CCACHE_PREFIX="%p/var/lib/distcc/gcc-translator.pl"
+END
+
+	cat <<END > %i/etc/profile.d/distcc-default.csh
+if ( ! $?CCACHE_PATH ) then
+	setenv CCACHE_PATH "$PATH"
+endif
+
+setenv CCACHE_PATH "%p/var/lib/distcc/untranslated:\$CCACHE_PATH"
+setenv PATH "\$PATH:%p/var/lib/distcc/untranslated"
+setenv CCACHE_PREFIX "%p/var/lib/distcc/gcc-translator.pl"
+END
+
 	cat <<END > %i/etc/profile.d/distcc.sh
 #### DO NOT EDIT BELOW HERE ####
-mkdir -p "%p/var/cache/distcc/\`id -u\`"
-DISTCC_DIR="%p/var/cache/distcc/\`id -u \`"
+mkdir -p "%p/var/cache/distcc/\`id -u\`" && export DISTCC_DIR="%p/var/cache/distcc/\`id -u \`"
+
 grep -q -E '^ *DISTCC_TRANS' %p/etc/distcc.conf    && export DISTCC_TRANS=\`grep DISTCC_TRANS %p/etc/distcc.conf | grep -v '^ *#' | tr -d \'\" | cut -d= -f2\` || :
 grep -q -E '^ *DISTCC_DIR' %p/etc/distcc.conf      && export DISTCC_DIR=\`grep DISTCC_DIR %p/etc/distcc.conf | grep -v '^ *#' | tr -d \'\" | cut -d= -f2\` || :
 grep -q -E '^ *DISTCC_MMAP' %p/etc/distcc.conf     && export DISTCC_MMAP=\`grep DISTCC_MMAP %p/etc/distcc.conf | grep -v '^ *#' | tr -d \'\" | cut -d= -f2\` || :
@@ -151,8 +181,8 @@ grep -q -E '^ *MAKEFLAGS' %p/etc/distcc.conf       && export MAKEFLAGS=\`grep MA
 END
 	cat <<END > %i/etc/profile.d/distcc.csh
 #### DO NOT EDIT BELOW HERE ####
-mkdir -p "%p/var/cache/distcc/\`id -u\`"
-setenv DISTCC_DIR "%p/var/cache/distcc/\`id -u\`"
+mkdir -p "%p/var/cache/distcc/\`id -u\`" && setenv DISTCC_DIR "%p/var/cache/distcc/\`id -u\`"
+
 grep -q -E '^ *DISTCC_TRANS' %p/etc/distcc.conf    && setenv DISTCC_TRANS \`grep DISTCC_TRANS %p/etc/distcc.conf | grep -v '^ *#' | tr -d \'\" | cut -d= -f2\` || :
 grep -q -E '^ *DISTCC_DIR' %p/etc/distcc.conf      && setenv DISTCC_DIR \`grep DISTCC_DIR %p/etc/distcc.conf | grep -v '^ *#' | tr -d \'\" | cut -d= -f2\` || :
 grep -q -E '^ *DISTCC_MMAP' %p/etc/distcc.conf     && setenv DISTCC_MMAP \`grep DISTCC_MMAP %p/etc/distcc.conf | grep -v '^ *#' | tr -d \'\" | cut -d= -f2\` || :
@@ -166,15 +196,15 @@ END
 	chmod 755 %i/etc/profile.d/*
 
 	DARWINVER=`uname -r | cut -d. -f1`
-	install -d -m 755 %i/var/lib/distcc
+	install -d -m 755 %i/var/lib/distcc/translated
+	install -d -m 755 %i/var/lib/distcc/untranslated
 	install -c -m 755 gcc-translator.pl %i/var/lib/distcc/
 	pushd %i/var/lib/distcc
 		for arch in powerpc i386; do
 			for version in "" "-3.3" "-4.0"; do
 				for gcc in cc c++ gcc g++; do
-					if [ -f "/usr/bin/${gcc}${version}" ]; then
-						ln -sf "%p/var/lib/distcc/gcc-translator.pl" "${arch}-apple-darwin${DARWINVER}-${gcc}${version}"
-					fi
+					ln -sf "%p/var/lib/distcc/gcc-translator.pl" "translated/${arch}-apple-darwin${DARWINVER}-${gcc}${version}"
+					ln -sf "/usr/bin/${gcc}${version}"           "untranslated/${arch}-apple-darwin${DARWINVER}-${gcc}${version}"
 				done
 			done
 		done
@@ -186,12 +216,12 @@ SplitOff: <<
 	Description: Enable distcc+ccache by default
 	Depends: %N (>= %v-%r), ccache (>= 2.2-0), ccache-default (>= 2.2-0)
 	DocFiles: COPYING*
-	RuntimeVars: CCACHE_PREFIX: %p/var/lib/distcc/gcc-translator.pl
+	Files: %p/etc/profile.d/distcc-default*
 <<
 
 PostInstScript: <<
-	mkdir -p %p/var/cache/distcc
-	chmod 1777 %p/var/cache/distcc
+	mkdir -p %p/var/cache/distcc >/dev/null 2>&1 || :
+	chmod 1777 %p/var/cache/distcc >/dev/null 2>&1 || :
 <<
 ConfFiles: %p/etc/distcc.conf %p/etc/distccd.conf
 DaemonicFile: <<
