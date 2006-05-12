@@ -36,13 +36,18 @@ if (-d "$ENV{HOME}/.xchat2") {
 } else {
   $configfile = "$ENV{HOME}/darwininfo.conf";
 }
-my $version = "0.4.2";
+my $version = "0.4.3";
 my $scriptname = "Darwin SysInfo";
 
 IRC::print "\0034Loading\003\002 $scriptname $version Script\002\n";
 
 # Try to load the config
 LoadConfig();
+
+if ($BASEPATH) {
+  IRC::print "\003\002Enabling Fink Perl Modules\002\n";
+  use lib $BASEPATH."/lib/perl5/";
+}
 
 IRC::print "\003\002Use \002\0034/infohelp\003\002 for more info and commands.\002\n";
 IRC::register("$scriptname", "$version", "", "");
@@ -387,25 +392,39 @@ sub get_cpu {
   chomp($ARCH = `uname -p`);
   if ($ARCH =~ /^powerpc/i) {
     $ARCH = "PowerPC";
-  } elsif ($ARCH =~ /^86/i) {
-    $ARCH = "x86";
+  } elsif ($ARCH =~ /^i386/i) {
+    $ARCH = "i386";
   } else {
     $ARCH = "Unknown";
   }
 
-  chomp($TYPE = `ioreg | grep $ARCH`);
-  if ($TYPE =~ /.+$ARCH,(.+)@.+/) {
-    $TYPE = $1;
+  my $truetype;
+  my $speed;
+  if ($ARCH eq "PowerPC") {
+    chomp($TYPE = `ioreg | grep $ARCH`);
+    if ($TYPE =~ /.+$ARCH,(.+)@.+/) {
+      $TYPE = $1;
+    } else {
+      $TYPE = "Unknown";
+    }
+
+    if ($TYPE eq "750") {
+      $truetype = "G3";
+    } elsif ($TYPE eq "970") {
+      $truetype = "G5";
+    } else {
+      $truetype = $TYPE;
+    }
+  } elsif ($ARCH eq "i386") {
+    chomp($TYPE=`sysctl machdep.cpu.brand_string`);
+    $TYPE =~ s/machdep.cpu.brand_string[ =|:] //;
+    ($truetype, $speed) = split(/CPU/, $TYPE);
+    $truetype =~ s/^\s*//;
+    $truetype =~ s/\s*$//;
+    $speed =~ s/^\s*//;
+    $speed =~ s/\s*$//;
   } else {
     $TYPE = "Unknown";
-  }
-
-  my $truetype;
-  if ($TYPE eq "750") {
-    $truetype = "G3";
-  } elsif ($TYPE eq "970") {
-    $truetype = "G5";
-  } else {
     $truetype = $TYPE;
   }
 
@@ -421,13 +440,23 @@ sub get_cpu {
     $MODEL = "#? $ARCH/$truetype";
   }
 
-  chomp($CPU = `ioreg -n $ARCH,$TYPE | grep '"clock-frequency" ='`);
-  if ($CPU =~ /\s*[<](.+)[>]\s*/) {
-    $CPU = hex($1)/1000000;
-    if (int($CPU) > 999) {
-      $CPU = sprintf("%.0fGHz", $CPU/1000);
+  if ($ARCH eq "PowerPC") {
+    chomp($CPU = `ioreg -n $ARCH,$TYPE | grep '"clock-frequency" ='`);
+    if ($CPU =~ /\s*[<](.+)[>]\s*/) {
+      $CPU = hex($1)/1000000;
+      if (int($CPU) > 999) {
+        $CPU = sprintf("%.0fGHz", $CPU/1000);
+      } else {
+        $CPU = sprintf("%.0fMHz", $CPU);
+      }
     } else {
-      $CPU = sprintf("%.0fMHz", $CPU);
+      $CPU = "Unknown ($CPU)";
+    }
+  } elsif ($ARCH eq "i386") {
+    if ($speed =~ /([0-9]?.?[0-9]+[M]?[G]?Hz$)/) {
+      $CPU = $1;
+    } else {
+      $CPU = "Unknown ($CPU)";
     }
   } else {
     $CPU = "Unknown ($CPU)";
@@ -607,6 +636,8 @@ sub get_uptime {
     $UPTIME = sprintf("%dd, %dm", $1, $2); 
   } elsif ($days =~ /\s{0,2}(.+):(.+)/) {
     $UPTIME = sprintf("%dh, %dm", $1, $2);
+  } elsif ($days =~ /\s{0,2}(.+) hrs{0,1}/) {
+    $UPTIME = sprintf("%dh", $1);
   } elsif ($days =~ /\s{0,1}(.+) mins{0,1}/) {
     $UPTIME = sprintf("%dm", $1);
   } else {
@@ -738,11 +769,13 @@ sub get_devinfo {
           $buildline = 0;
         } elsif ($versline) {
           if ($infoline =~ /\<string\>(.+)\<\/string\>/) {
-            $TOOLVERS = "Xcode $1";
+            $TOOLVERS = "XCode $1";
           }
           $versline = 0;
         } else {
           if ($infoline =~ /ProductBuildVersion/) {
+            $buildline = 1;
+          } elsif ($infoline =~ /BuildVersion/) {
             $buildline = 1;
           } elsif ($infoline =~ /CFBundleShortVersionString/) {
             $versline = 1;
@@ -753,7 +786,7 @@ sub get_devinfo {
 
     foreach $infoline (@gcc_vers) {
       chomp($infoline);
-      if ($infoline =~ /^cc \(GCC\) ([0-9.]+.*)/) {
+      if ($infoline =~ /\(GCC\) ([0-9.]+.*)/) {
         $GCCVERS = $1;
       } elsif ($infoline =~ /^([0-9.]+)/) {
         $GCCVERS = $1;
@@ -802,8 +835,8 @@ sub get_xmms_info {
     return 1;
   }
 
-  $pos_e = rindex ($song_file, ".");
-  $file_ext = substr ($song_file, $pos_e + 1);
+  $pos_e = rindex($song_file, ".");
+  $file_ext = substr($song_file, $pos_e + 1);
   $file_ext =~ tr/a-z/A-Z/;
   return 0;
 }
@@ -843,8 +876,8 @@ return this_file & this_name & this_time);
      return 1;
   }
 
-  $pos_e = rindex ($song_file, ".");
-  $file_ext = substr ($song_file, $pos_e + 1);
+  $pos_e = rindex($song_file, ".");
+  $file_ext = substr($song_file, $pos_e + 1);
   $file_ext =~ tr/a-z/A-Z/;
   return 0;
 }
