@@ -1571,3 +1571,93 @@
  bool_t
  xdr_fhandle(XDR *xdrs, fhandle objp)
  {
+--- kdebase-3.5.3/ksysguard/ksysguardd/ksysguardd.c	(revision 549512)
++++ kdebase-3.5.3/ksysguard/ksysguardd/ksysguardd.c	(working copy)
+@@ -207,15 +207,19 @@ static void dropPrivileges( void )
+ {
+   struct passwd *pwd;
+ 
+-  if ( ( pwd = getpwnam( "nobody" ) ) != NULL )
+-    setuid( pwd->pw_uid );
+-	else {
++  if ( ( pwd = getpwnam( "nobody" ) ) != NULL ) {
++    if ( !setgid(pwd->pw_gid) )
++      setuid(pwd->pw_uid);
++    if (!geteuid() && getuid() != pwd->pw_uid)
++      _exit(1);
++  }
++  else {
+     log_error( "User 'nobody' does not exist." );
+     /**
+       We exit here to avoid becoming vulnerable just because
+       user nobody does not exist.
+      */
+-    exit( 1 );
++    _exit(1);
+   }
+ }
+ 
+@@ -231,7 +235,7 @@ void makeDaemon( void )
+       chdir( "/" );
+       umask( 0 );
+       if ( createLockFile() < 0 )
+-        exit( 1 );
++        _exit( 1 );
+ 
+       dropPrivileges();
+       installSignalHandler();
+--- kdebase-3.5.3/drkonqi/main.cpp	(revision 549512)
++++ kdebase-3.5.3/drkonqi/main.cpp	(working copy)
+@@ -61,7 +61,8 @@ int main( int argc, char* argv[] )
+ {
+   // Drop privs.
+   setgid(getgid());
+-  setuid(getuid());
++  if (setuid(getuid()) < 0 && geteuid() != getuid())
++     exit (255);
+ 
+   // Make sure that DrKonqi doesn't start DrKonqi when it crashes :-]
+   setenv("KDE_DEBUG", "true", 1);
+--- kdebase-3.5.3/kdm/kfrontend/kgreeter.cpp	(revision 549445)
++++ kdebase-3.5.3/kdm/kfrontend/kgreeter.cpp	(working copy)
+@@ -251,7 +251,12 @@ KGreeter::insertUsers()
+ 	// XXX remove seteuid-voodoo when we run as nobody
+ 	if (!(ps = getpwnam( "nobody" )))
+ 		return;
+-	seteuid( ps->pw_uid );
++        if (setegid( ps->pw_gid )) 
++                return;
++        if (seteuid( ps->pw_uid )) {
++                setegid(0);
++                return;
++        }
+ 
+ 	QImage default_pix;
+ 	if (userView) {
+@@ -318,6 +323,7 @@ KGreeter::insertUsers()
+ 
+ 	// XXX remove seteuid-voodoo when we run as nobody
+ 	seteuid( 0 );
++        setegid( 0 );
+ }
+ 
+ void
+--- kdebase-3.5.3/kdm/backend/client.c	(revision 547560)
++++ kdebase-3.5.3/kdm/backend/client.c	(working copy)
+@@ -1537,16 +1542,6 @@ ReadDmrc()
+ 
+ 	if (!StrApp( &fname, p->pw_dir, "/.dmrc", (char *)0 ))
+ 		return GE_Error;
+-	if ((curdmrc = iniLoad( fname ))) {
+-		free( fname );
+-		return GE_Ok;
+-	}
+-
+-	if (errno != EACCES) {
+-		free( fname );
+-		return GE_NoFile;
+-	}
+-
+ 	if (pipe( pfd ))
+ 		return GE_Error;
+ 	if ((pid = Fork()) < 0) {
