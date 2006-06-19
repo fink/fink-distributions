@@ -1,7 +1,9 @@
-#!/usr/bin/perl
+#!/usr/bin/perl -w
+# -*- mode: Perl; tab-width: 4; -*-
 
 use File::Basename;
 use Getopt::Std;
+use strict;
 
 our ($opt_h, $opt_l, $opt_m, $opt_w, $opt_p, $opt_t, $opt_d, $opt_r);
 getopts('hlm:wptdr');
@@ -55,6 +57,7 @@ for my $tree (@TREES) {
 	if (open(FIND, "/usr/bin/find $tree -name '*.info' | /usr/bin/xargs md5sum |")) {
 		while (my $file = <FIND>) {
 			chomp $file;
+			my $md5sum;
 			($md5sum, $file) = split(/\s+/, $file);
 			if (open(INFO, $file)) {
 				my $firstpack = "";
@@ -119,6 +122,7 @@ for my $tree (@TREES) {
 }
 if (not defined $opt_t) {
 	for my $package (sort keys %PACKAGES) {
+		my $output;
 		if (not defined $opt_p) {
 			$output = $package . ":\n";
 		} else {
@@ -151,6 +155,7 @@ if (not defined $opt_t) {
 	for my $maint (sort keys %PACKAGES) {
 		print $maint . ":\n";
 		for my $package (sort keys %{$PACKAGES{$maint}}) {
+			my $output;
 			if (not defined $opt_p) {
 				$output = $package . ":\n";
 			} else {
