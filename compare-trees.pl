@@ -223,3 +223,4 @@ sub get_treestring {
 	return $treename . '/' . $stable . $file;
 }
 
+# vim: ts=4 sw=4 noet
