@@ -24,6 +24,8 @@ END
 	exit 0;
 }
 
+$ENV{PATH} = '/sw/bin:'.$ENV{PATH};
+
 my %PACKAGES;
 my @TREES;
 my $prefix;
@@ -50,7 +52,7 @@ for my $tree (@TREES) {
 	$treename =~ s#/*$##;
 	$treename =~ s#^.*/##;
 
-	if (open(FIND, "/usr/bin/find $tree -name '*.info' | /usr/bin/xargs /sw/bin/md5sum |")) {
+	if (open(FIND, "/usr/bin/find $tree -name '*.info' | /usr/bin/xargs md5sum |")) {
 		while (my $file = <FIND>) {
 			chomp $file;
 			($md5sum, $file) = split(/\s+/, $file);
