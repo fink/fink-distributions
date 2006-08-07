@@ -2525,53 +2525,81 @@ diff -ruN dpkg-1.10.21/lib/mlib.c dpkg-1.10.21-patched/lib/mlib.c
      case BUFFER_WRITE_VBUF:
        varbufaddbuf((struct varbuf *)data->data.ptr, buf, length);
 diff -Nurd dpkg-1.10.21.orig/main/help.c dpkg-1.10.21/main/help.c
---- dpkg-1.10.21.orig/main/help.c	2003-10-25 16:03:21.000000000 -0400
-+++ dpkg-1.10.21/main/help.c	2006-07-26 00:04:38.000000000 -0400
-@@ -273,6 +280,47 @@
-     for (r=1; arglist[r-1]; r++)
-       narglist[r]= arglist[r];
-     scriptexec= preexecscript(scriptpath,narglist);
+--- dpkg-1.10.21.orig/main/help.c	2003-10-25 16:03:21.000000000 +0400
++++ dpkg-1.10.21/main/help.c	2005-03-18 22:13:37.000000000 +0900
+@@ -187,7 +187,7 @@
+   }
+   if (f_debug & dbg_scripts) {
+     fprintf(stderr,"D0%05o: fork/exec %s (",dbg_scripts,path);
+-    while (*argv) fprintf(stderr," %s",*argv++);
++    while (*++argv) fprintf(stderr," %s",*argv);
+     fputs(" )\n",stderr);
+   }
+   instdirl= strlen(instdir);
+@@ -268,6 +268,54 @@
+   c1= m_fork();
+   if (!c1) {
+     const char **narglist;
 +
 +    /* FINK LOCAL begin */
 +
-+    char *wrapperscript;
-+    struct stat wrapper_stat;
++    char *scriptpath_wrapper;
++    const char *scriptexec_wrapper;
++    struct stat stab_wrapper;
 +
 +#define FINK_DPKG_SCRIPT_DIR "@PREFIX@/lib/fink/dpkg-wrappers"
 +
 +    // determine wrapper-script pathname
-+    asprintf(&wrapperscript, "%s/%s", FINK_DPKG_SCRIPT_DIR, scriptname);
-+    if (wrapperscript == NULL) ohshite(_("dpkg - error: could not allocate for fink script wrapper for %s.\n"), scriptpath);
++    asprintf(&scriptpath_wrapper, "%s/%s", FINK_DPKG_SCRIPT_DIR, scriptname);
++    if (scriptpath_wrapper == NULL) ohshite(_("dpkg - error: could not allocate for fink script wrapper for %s.\n"), scriptpath);
 +
-+    if (!stat(wrapperscript, &wrapper_stat)) {
-+      if ((wrapper_stat.st_mode & 0555) == 0555) {
++    // do we have the script?
++    int use_wrapper = 0;
++    if (!stat(scriptpath_wrapper, &stab_wrapper)) {
++      if ((stab_wrapper.st_mode & 0555) == 0555) {
 +	// only use it if it exists and is chmod a+rx
-+	debug(dbg_scripts,"Wrapper script '%s' will be used", wrapperscript);
-+	
-+	// Wrapper is called with "actual" script path as first arg,
-+	// followed by all "normal" dpkg script args.
-+
-+	narglist[0] = scriptexec;    // push actual script as first arg
-+	scriptexec = wrapperscript;  // will run the wrapper
-+
-+	// make a slot for the wrapper
-+	const char **narglist2;
-+	for (r=0; narglist[r]; r++) ;
-+	narglist2=nfmalloc((r+1)*sizeof(char*));
-+	for (r=0; narglist[r]; r++)
-+	  narglist2[r+1]= narglist[r];
-+	scriptexec= preexecscript(wrapperscript,narglist2);
-+
-+	narglist = narglist2;  // NB: this leaks narglist
++	debug(dbg_scripts,"Wrapper script '%s' will be used", scriptpath_wrapper);
++	use_wrapper = 1;
 +      } else {
-+	debug(dbg_scripts,"Wrapper script '%s' wrong perms", wrapperscript);
++	debug(dbg_scripts,"Wrapper script '%s' wrong perms", scriptpath_wrapper);
 +      }
 +    } else {
-+      debug(dbg_scripts,"Wrapper script '%s' does not exist", wrapperscript);
++      debug(dbg_scripts,"Wrapper script '%s' does not exist", scriptpath_wrapper);
 +    }
 +
-+    /* FINK LOCAL end */
++    if (use_wrapper) {
++      // have script, so use it
 +
++      // Wrapper is called with "actual" script path as first arg,
++      // followed by all "normal" dpkg script args.
++
++      for (r=0; arglist[r]; r++) ;
++      narglist=nfmalloc((r+2)*sizeof(char*));
++      for (r=1; arglist[r-1]; r++)
++	narglist[r+1]= arglist[r];
++      scriptexec= preexecscript(scriptpath,narglist+1);
++      narglist[1]=scriptexec;
++      scriptexec_wrapper= preexecscript(scriptpath_wrapper,narglist);
++      narglist[0]= scriptexec_wrapper;
++      execv(scriptexec_wrapper,narglist);
++	
++    } else {
++      // no script, so use original dpkg code
++
++      /* FINK LOCAL end */
++
+     for (r=0; arglist[r]; r++) ;
+     narglist=nfmalloc((r+1)*sizeof(char*));
+     for (r=1; arglist[r-1]; r++)
+@@ -275,6 +323,11 @@
+     scriptexec= preexecscript(scriptpath,narglist);
      narglist[0]= scriptexec;
      execv(scriptexec,narglist);
++
++    /* FINK LOCAL begin */
++    }
++    /* FINK LOCAL end */
++
      ohshite(desc,name);
+   }
+   script_catchsignals(); /* This does a push_cleanup() */
