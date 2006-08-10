@@ -1,8 +1,8 @@
 Info2: <<
-Package: postfix%type_pkg[-mysql]
-Version: 2.3.1
+Package: postfix%type_pkg[-mysql]%type_pkg[-ldap]
+Version: 2.3.2
 Revision: 1
-Type: -mysql (boolean)
+Type: -mysql (boolean), -ldap (boolean)
 
 Homepage: http://www.postfix.org/
 Description: Mail transfer agent that's fast and secure
@@ -54,19 +54,23 @@ the necessary header files.
 Now uses system's OpenSSL (via system-openssl-dev) and removed from crypto
 tree. Yay!
 
+Added -ldap variant. (Previously added -mysql variant).
+Refactored CompileScript to allow easy adding of new variants.
+Note to self: must add new variants to the upgrade SplitOffs and Replaces. :/
+
 Original maintainer: Daniel Parks <daniel@maywallacedesign.com>
 <<
 License: OSI-Approved
 Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
 
-Depends: daemonic, db43-ssl-shlibs | db43-shlibs, pcre-shlibs, cyrus-sasl2-shlibs, (%type_raw[-mysql] = -mysql) mysql14-shlibs
-BuildDepends: db43-ssl | db43, pcre, cyrus-sasl2-dev, system-openssl-dev, (%type_raw[-mysql] = -mysql) mysql14-dev
-Conflicts: postfix-release, postfix, postfix-mysql
-Replaces: postfix-release, postfix, postfix-mysql, postfix-tls (<< %v-%r), postfix-mysql-tls (<< %v-%r), postfix-unified (<< %v-%r), postfix-mysql-unified (<< %v-%r)
+Depends: daemonic, db43-ssl-shlibs | db43-shlibs, pcre-shlibs, cyrus-sasl2-shlibs, (%type_raw[-mysql] = -mysql) mysql14-shlibs, (%type_raw[-ldap] = -ldap) openldap23-shlibs
+BuildDepends: db43-ssl | db43, pcre, cyrus-sasl2-dev, system-openssl-dev, (%type_raw[-mysql] = -mysql) mysql14-dev, (%type_raw[-ldap] = -ldap) openldap23-dev
+Conflicts: postfix-release, postfix, postfix-mysql, postfix-ldap, postfix-mysql-ldap
+Replaces: postfix-release, postfix, postfix-mysql, postfix-ldap, postfix-mysql-ldap, postfix-tls (<< %v-%r), postfix-mysql-tls (<< %v-%r), postfix-unified (<< %v-%r), postfix-mysql-unified (<< %v-%r), postfix-ldap-tls (<< %v-%r), postfix-mysql-ldap-tls (<< %v-%r), postfix-ldap-unified (<< %v-%r), postfix-mysql-ldap-unified (<< %v-%r)
 Recommends: cyrus-sasl2
 
 Source: ftp://ftp.porcupine.org/mirrors/postfix-release/official/postfix-%v.tar.gz
-Source-MD5: c4969321233186f6fc386a10b858c63b
+Source-MD5: b1e482eea6a340041b8a637e62b15e3c
 
 PatchScript: <<
 sed 's|@FINKPREFIX@|%p|g ' <%a/%{ni}.patch | patch -p1
@@ -77,22 +81,8 @@ NoSetCPPFLAGS: true
 NoSetLDFLAGS: true
 CompileScript: <<
 #!/bin/sh -ev
-if [ "%type_raw[-mysql]" == "-mysql" ]; then
-  make makefiles CCARGS='-DDEF_COMMAND_DIR=\"%p/sbin\" \
-	-DDEF_CONFIG_DIR=\"%p/etc/postfix\" \
-	-DDEF_DAEMON_DIR=\"%p/lib/postfix\" \
-	-DDEF_MAILQ_PATH=\"%p/bin/mailq\" \
-	-DDEF_MANPAGE_DIR=\"%p/share/man\" \
-	-DDEF_NEWALIAS_PATH=\"%p/bin/newaliases\" \
-	-DDEF_README_DIR=\"%p/share/doc/%n/README_FILES\" \
-	-DDEF_HTML_DIR=\"%p/share/doc/%n/html\" \
-	-DDEF_QUEUE_DIR=\"%p/var/spool/postfix\" \
-	-DDEF_SENDMAIL_PATH=\"%p/sbin/sendmail\" \
-	-DUSE_TLS -DUSE_SASL_AUTH -DUSE_CYRUS_SASL -DHAS_MYSQL \
-	-I. -I../../include -I%p/include/mysql -I%p/lib/system-openssl/include -I%p/include/db4 -I%p/include/sasl -I%p/include' \
-	AUXLIBS="-L%p/lib/system-openssl/lib -L%p/lib -lssl -lcrypto -ldb -lsasl2 -lmysqlclient"
-else
-  make makefiles CCARGS='-DDEF_COMMAND_DIR=\"%p/sbin\" \
+#General build settings
+export build_args='-DDEF_COMMAND_DIR=\"%p/sbin\" \
 	-DDEF_CONFIG_DIR=\"%p/etc/postfix\" \
 	-DDEF_DAEMON_DIR=\"%p/lib/postfix\" \
 	-DDEF_MAILQ_PATH=\"%p/bin/mailq\" \
@@ -103,9 +93,26 @@ else
 	-DDEF_QUEUE_DIR=\"%p/var/spool/postfix\" \
 	-DDEF_SENDMAIL_PATH=\"%p/sbin/sendmail\" \
 	-DUSE_TLS -DUSE_SASL_AUTH -DUSE_CYRUS_SASL \
-	-I. -I../../include -I%p/lib/system-openssl/include -I%p/include/db4 -I%p/include/sasl -I%p/include' \
-	AUXLIBS="-L%p/lib/system-openssl/lib -L%p/lib -lssl -lcrypto -ldb -lsasl2"
+	-I. -I../../include'
+#General libraries
+export lib_args="-L%p/lib/system-openssl/lib -L%p/lib -lssl -lcrypto -ldb -lsasl2"
+
+#MySQL build settings
+if [ "%type_raw[-mysql]" == "-mysql" ]; then
+  export build_args="$build_args -DHAS_MYSQL -I%p/include/mysql"
+  export lib_args="$lib_args -lmysqlclient"
 fi
+
+#More general build settings
+export build_args="$build_args -I%p/lib/system-openssl/include -I%p/include/db4 -I%p/include/sasl -I%p/include"
+
+#LDAP build settings
+if [ "%type_raw[-ldap]" == "-ldap" ]; then
+  export build_args="$build_args -DHAS_LDAP"
+  export lib_args="$lib_args -lldap -llber"
+fi
+
+make makefiles CCARGS="$build_args" AUXLIBS="$lib_args"
 make
 <<
 
@@ -158,14 +165,14 @@ PreRmScript: <<
 	fi
 <<
 SplitOff: <<
-  Package: postfix%type_pkg[-mysql]-tls
-  Description: Upgrade package for postfix%type_pkg[-mysql]-tls
+  Package: postfix%type_pkg[-mysql]%type_pkg[-ldap]-tls
+  Description: Upgrade package for postfix%type_pkg[-mysql]%type_pkg[-ldap]-tls
   Depends: %N (= %v-%r)
   DocFiles: LICENSE
 <<
 SplitOff2: <<
-  Package: postfix%type_pkg[-mysql]-unified
-  Description: Upgrade package for postfix%type_pkg[-mysql]-unified
+  Package: postfix%type_pkg[-mysql]%type_pkg[-ldap]-unified
+  Description: Upgrade package for postfix%type_pkg[-mysql]%type_pkg[-ldap]-unified
   Depends: %N (= %v-%r)
   DocFiles: LICENSE
 <<
