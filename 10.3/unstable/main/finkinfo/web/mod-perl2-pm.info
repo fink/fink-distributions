@@ -1,7 +1,7 @@
 Info2: <<
 Package: mod-perl2-pm%type_pkg[perl]
 Version: 2.0.2
-Revision: 1002
+Revision: 2
 Architecture: (%type_pkg[perl] = 581) powerpc, (%type_pkg[perl] = 584) powerpc
 DocFiles: BRANCHING Changes INSTALL MANIFEST META.yml README README-SVN RELEASE STATUS SVN-MOVE
 Description: Embed perl in Apache 2
@@ -12,12 +12,12 @@ UpdatePOD: true
 
 Type: perl (5.8.1 5.8.4 5.8.6)
 
-BuildDepends: fink (>= 0.20.3), apache2-dev (>= 2.0.58-14), apr (>= 0.9.12-11), apr-common (>= 0.9.12-11), openldap23-dev, libiconv-dev, cyrus-sasl2-dev (>= 2.1.21-1), gdbm3, expat (>= 1.95.3-1), db44
+BuildDepends: fink (>= 0.20.3), apache2-ssl-dev | apache2-dev, apr-ssl | apr, apr-ssl-common | apr-common, openldap23-dev, libiconv-dev, cyrus-sasl2-dev (>= 2.1.21-1), gdbm3, expat (>= 1.95.3-1), db43-ssl | db43
 
 # The main splitoff isn't much good without the module, but we let it install
 # separately anyhow so that different pm5* don't conflict. It would suck if
 # -dev depended on conflicting pm5* packages.
-Depends: perl%type_pkg[perl]-core, apache2 (>= 2.0.58-14)
+Depends: perl%type_pkg[perl]-core, apache2-ssl | apache2
 Provides: apache-test-pm%type_pkg[perl]
 Conflicts: apache-test-pm%type_pkg[perl]
 Replaces: apache-test-pm%type_pkg[perl]
@@ -33,6 +33,9 @@ PatchScript: <<
 	
 	# Perl's PERLPATH isn't quite right, need to replace it with the right one
 	perl -i -pe "s|sub perl_config\b|sub perl_config_perlpath{'$PERL'}\$&|" lib/Apache2/Build.pm
+
+	# Don't nuke Apache::Test if available (needed for system-perl581 on 10.3)
+	perl -i -pe "s|if .apache_test_install|if 0|" Makefile.PL
 <<
 
 CompileScript: <<
@@ -44,7 +47,7 @@ CompileScript: <<
 	# Put arch in $archname
 	eval `perl%type_raw[perl] -V:archname`
 	
-	# Need to pass apxs2 location
+	# Need to pass apxs location
 	perl%type_raw[perl] Makefile.PL PERL="$PERL" PREFIX=%p \
 		INSTALLPRIVLIB=%p/lib/perl5/%type_raw[perl] \
 		INSTALLARCHLIB=%p/lib/perl5/%type_raw[perl]/$archname \
@@ -56,7 +59,7 @@ CompileScript: <<
 		INSTALLSITEMAN3DIR=%p/lib/perl5/%type_raw[perl]/man/man3 \
 		INSTALLBIN=%p/bin INSTALLSITEBIN=%p/bin INSTALLSCRIPT=%p/bin \
 		MP_APR_CONFIG=%p/bin/apr-config \
-		MP_APXS=%p/bin/apxs2
+		MP_APXS=%p/sbin/apxs
 	
 	make
 	
@@ -82,13 +85,6 @@ InstallScript: <<
 		INSTALLBIN=%i/bin INSTALLSITEBIN=%i/bin INSTALLSCRIPT=%i/bin \
 		MODPERL_AP_INCLUDEDIR=%i/include/apache2 \
 		MODPERL_AP_LIBEXECDIR=%i/lib/apache2/modules
-(
-cat <<EOF
-LoadModule perl_module %p/lib/apache2/modules/mod_perl.so
-EOF
-) >mod_perl.load
-	install -d -m 755 '%i/etc/apache2/mods-available'
-	/usr/bin/install -m 644 mod_perl.load %i/etc/apache2/mods-available
 <<
 
 DescDetail: <<
@@ -100,32 +96,38 @@ mod_perl 2.0 allows Apache 2.x to interact with Perl. Some of the features:
 
 SplitOff: <<
 	Package: libapache2-mod-perl2-perl%type_pkg[perl]
-	Files: lib/apache2 bin etc
+	Files: lib/apache2 bin
 	DocFiles: LICENSE
 	Depends: mod-perl2-pm%type_pkg[perl] (= %v-%r)
 	Replaces: %{ni}581, %{ni}584, %{ni}586
 	Conflicts: %{ni}581, %{ni}584, %{ni}586
-	ConfFiles: <<
-		%p/etc/apache2/mods-available/mod_perl.load
-	<<
 	PostInstScript: <<
-		echo "Enabling mod_perl module..."
-		%p/sbin/a2enmod mod_perl
-		if [ -f /Library/StartupItems/daemonic-apache2/daemonic-apache2 ]
- 		then
-   			echo "Restarting apache2..."
-   			%p/sbin/apache2ctl restart
- 		fi
-
-		exit 0
+		APXS=%p/sbin/apxs
+		MOD_PREFIX=`$APXS -q LIBEXECDIR`
+		MODULENAME=perl
+		MODULE=$MOD_PREFIX/mod_$MODULENAME.so
+		
+		echo "Enabling mod_$MODULENAME module..."
+		$APXS -e -a -n $MODULENAME $MODULE
+		
+		if test `ps -U www | grep -c %p/sbin/httpd` -ge 1; then
+			echo "Restarting apache2..."
+			%p/sbin/apachectl graceful
+		fi
 	<<
 	PreRmScript: <<
-		if [ "$1" != "remove" -a "$1" != "purge" ]; then
-			exit 0
+		APXS=%p/sbin/apxs
+		MOD_PREFIX=`$APXS -q LIBEXECDIR`
+		MODULENAME=perl
+		MODULE=$MOD_PREFIX/mod_$MODULENAME.so
+		
+		echo "Disabling mod_$MODULENAME module..."
+		$APXS -e -A -n $MODULENAME $MODULE
+		
+		if test `ps -U www | grep -c %p/sbin/httpd` -ge 1; then
+			echo "Restarting apache2..."
+			%p/sbin/apachectl graceful
 		fi
-
-		echo "Disabling mod_perl module..."
-		%p/sbin/a2dismod mod_perl
 	<<
 <<
 SplitOff2: <<
