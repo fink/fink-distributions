@@ -1,6 +1,6 @@
 Package: labplot
 Version: 1.6.0.pre1
-Revision: 3
+Revision: 4
 
 Source: mirror:sourceforge:labplot/LabPlot-%v.tar.bz2
 Source-MD5: 264beea916cec2e197ed428b7a97f7ca
@@ -9,58 +9,109 @@ Maintainer: Murali Vadivelu <murali1080@users.sourceforge.net>
 Homepage: http://labplot.sourceforge.net
 License: GPL
 
+# The dep on qhull seems fictitious _ even probably a builddep. Should correct the typo (?) in configure.in
+# where "AC_ARG_ENABLE(qhull,..." has '[USE_LIBUNDO="$enableval"]'. But anyway there seems to be no
+# provision for the moment for a "--enable-system-qhull".
 Depends: %N-shlibs (= %v-%r), qhull
-BuildDepends: arts-dev, audiofile, automake1.9, bzip2-dev, fftw3, fileutils, freetype219, gettext-tools, ghostscript, gsl, imagemagick10-dev, kdelibs3, kdelibs3-dev, koffice-dev, lcms, libart2, libgettext3-dev, libiconv-dev, libidn, libjasper1, libjpeg, libpng3, libtiff, libxml2-bin, ocaml, netcdf, pstoedit, qhull, qt3, x11-dev
+BuildDepends: <<
+arts-dev, audiofile, bzip2-dev, fftw3, freetype219, gettext-tools, ghostscript, gsl, imagemagick10-dev, 
+kdelibs3, kdelibs3-dev, koffice-dev (>= 1.6.0-1), lcms, libart2, libgettext3-dev, libiconv-dev, libidn,
+libjasper1, libjpeg, libpng3, libtiff, libxml2-bin, ocaml, netcdf, pstoedit, qt3, x11-dev
+<<
 
 TarFilesRename: src/labplot.desktop
 PatchScript: <<
-  sed 's,@PREFIX@,%p,g' < %a/%n.patch | patch -p1
-  perl -pi -e 's,^jpeg_incdirs=",$&%p/include ,' configure
+# configure searches a hard-coded list of paths
+  perl -pi.bak -e 's,^jpeg_incdirs=",$&%p/include ,' configure
+# trailing slashes are bad practice, and throw /bin/ln in disarray. Also, use relative paths.
+  perl -pi.bak -e 's,/( |$),\1,g; s,ln \-fs \$\(kde_htmldir\),ln -fs ../..,' doc/*/Makefile.in
+# to make sure flags to builddir precede those to %p/include (should rather fix the INCLUDES line...)
+  perl -pi.bak -e 's,^DEFAULT_INCLUDES.*,$& -I../liborigin -I../libundo,' src/Makefile.in
+# Was in the patch-file. Leaving aside for the moment _ a dylib can also be dlopened if need be.
+  perl -pi -e 's, \-module,,' src/Makefile.in
 <<
-SetCPPFLAGS: -I/usr/X11R6/include
-SetLDFLAGS: -Wl,-flat_namespace
-SetCXXFLAGS: -Os -fPIC -ffast-math
-SetCFLAGS: -Os -fPIC -ffast-math
 
-ConfigureParams: --mandir=%i/share/man --with-qt-includes=%p/include/qt --with-qt-libraries=%p/lib/qt3/lib --disable-fftw --enable-fftw3 --with-extra-includes=%p/include --with-extra-includes=%p/include/gsl --with-extra-libraries=%p/lib --enable-arts --enable-netcdf --enable-tiff --enable-gsl --enable-qhull --enable-ImageMagick --enable-audiofile --enable-jasper --enable-pstoedit --disable-warnings --enable-ocaml --disable-qsa --disable-cdf --enable-debug=full --enable-texvc --disable-dependency-tracking
+NoSetCPPFLAGS: true
+SetCPPFLAGS: -I/usr/X11R6/include -I%p/Library/Frameworks/R.framework/Versions/Current/Resources/include
+NoSetLDFLAGS: true
+SetLIBRARY_PATH: %p/Library/Frameworks/R.framework/Versions/Current/Resources/lib:%p/lib
+
+ConfigureParams: <<
+ ac_cv_prog_TEXVC="no" --mandir=%p/share/man --with-qt-includes=%p/lib/qt3/include --with-qt-libraries=%p/lib/qt3/lib \
+ --disable-fftw --enable-fftw3 --with-extra-includes=%p/include/gsl \
+ --enable-arts --enable-netcdf --enable-tiff --enable-gsl --enable-qhull \
+ --enable-ImageMagick --enable-audiofile --enable-jasper --enable-pstoedit \
+ --enable-ocaml --enable-system-qwtplot3d \
+ --disable-qsa --disable-cdf --enable-R --enable-texvc --disable-dependency-tracking
+<<
 
 DocFiles: COPYING ChangeLog FEATURES TODO AUTHORS CHANGES NEWS INSTALL README
 
 CompileScript: <<
+#!/bin/sh -ev
+
+export CPATH=%p/include
+export QWT3D_PATH=%p/lib/qt3/qwtplot3d
+
+if [ %m = "i386" ]; then 
+export CXXFLAGS='-Os -fPIC -ffast-math'
+export CFLAGS='-Os -fPIC -ffast-math'
+else
+export CXXFLAGS='-Os -fPIC -ffast-math -mtune=970 -maltivec'
+export CFLAGS='-Os -fPIC -ffast-math -mtune=970 -maltivec'
+fi
+
 ./configure %c
 make -j1
 <<
 
 InstallScript: <<
-make install prefix=%i
+#!/bin/sh -ev
 
-mkdir -p %i/share/doc/%n
-cp -r examples %i/share/doc/%n
-mkdir -p %i/bin
-rm %i/bin/labplot
-
+make install DESTDIR=%d
+rm -f %i/bin/labplot %i/bin/LabPlot
 cp src/.libs/LabPlot %i/bin/labplot
+
+# libs don't need executable flag
+chmod a-x %i/lib/*
+
 mv %i/share/doc/HTML %i/share/doc/kde
-mv %i/share/doc/kde/en/LabPlot %i/share/doc/kde/en/LabPlot.dir
-for i in `find %i/share/doc/kde/ -name LabPlot`; do echo $i; ln -sf %p/share/doc/kde/en/LabPlot/small_pics $i/small_pics; done
-mv %i/share/doc/kde/en/LabPlot.dir %i/share/doc/kde/en/LabPlot
+mkdir -p %i/share/doc/%n
+cp -R examples %i/share/doc/%n
 
 mkdir -p %i/etc/profile.d
-install -m 755 labplot.csh %i/etc/profile.d/
-install -m 755 labplot.sh %i/etc/profile.d/
+cat >> %i/etc/profile.d/%N.sh <<'EOF'
+#!/bin/sh
+export R_HOME=`R RHOME`
+if [ ${SSH_TTY} ]; then
+    export LIBGL_ALWAYS_INDIRECT=1
+fi
+EOF
+cat >> %i/etc/profile.d/%N.csh <<'EOF'
+#!/bin/csh
+setenv R_HOME `R RHOME`
+if ( $?SSH_TTY ) then
+    setenv LIBGL_ALWAYS_INDIRECT 1
+endif
+EOF
+chown root:admin %i/etc/profile.d/*
+chmod 755 %i/etc/profile.d/*
 <<
 
 SplitOff: <<
 Package: %N-shlibs
-Depends: arts-shlibs, audiofile-bin, fftw3-shlibs, gsl-shlibs, imagemagick, kdebase3, koffice-shlibs, libart2-shlibs, libgettext3-shlibs, libiconv-bin, libidn-shlibs, libjasper1-bin, libjpeg-bin, libpng3-shlibs, libtiff-shlibs, netcdf-shlibs, ocaml, pstoedit-bin, qt3-shlibs, x11
+Depends: <<
+audiofile-bin, fftw3-shlibs, gsl-shlibs, imagemagick, koffice-shlibs,
+libjasper1-bin, netcdf-shlibs, ocaml, pstoedit-bin, qwtplot3d, r-base
+<<
 
-Files: lib/libLabPlotcephes.1.5.0.dylib lib/libLabPlotqwtplot3d.dylib lib/libLabPlot.1.5.1.dylib lib/libLabPlotcephes.1.dylib lib/libLabPlotqwtplot3d.0.2.6.dylib lib/liborigin.dylib lib/libLabPlot.1.dylib lib/libLabPlotqwtplot3d.0.dylib lib/liborigin.0.0.1.dylib lib/libLabPlot.dylib lib/libLabPlotcephes.dylib lib/liborigin.0.dylib 
+Files: lib/*.*.dylib
 
 Shlibs: <<
-%p/lib/libLabPlotcephes.1.5.0.dylib 7.0.0 %n (>=1.6.0-1)
-%p/lib/libLabPlot.1.5.1.dylib  1.2.0 %n (>=1.6.0-1)
-%p/lib/libLabPlotqwtplot3d.0.2.6.dylib  3.0.0 %n (>=1.6.0-1)
-%p/lib/liborigin.0.0.1.dylib 1.0.0 %n (>=1.6.0-1)
+%p/lib/libLabPlotcephes.1.dylib 7.0.0 %n (>=1.6.0-1)
+%p/lib/libLabPlot.1.dylib  7.0.0 %n (>=1.6.0-1)
+%p/lib/libLabPlotqwtplot3d.0.dylib  3.0.0 %n (>=1.6.0-1)
+%p/lib/liborigin.0.dylib 1.0.0 %n (>=1.6.0-1)
 <<
 
 DocFiles: COPYING ChangeLog FEATURES TODO AUTHORS CHANGES NEWS INSTALL README
@@ -72,13 +123,25 @@ Will add qsa support sooner than later!
 <<
 
 DescPort: <<
-Set CPPFLAGS to allow building against Fink-installed X11 packages.
+SetCPPFLAGS to allow building against Fink's X11 packages.
+
+NoSetLDFLAGS and NoSetCPPFLAGS, and no '--with-extra..';
+using rather LIBRARY_PATH and CPATH, to get more correct
+ordering of flags (and since those are always obeyed).
+
+ac_cv_prog_TEXVC="no" in order that texvc be rebuilt even 
+if one (from a previous version) is already installed
 <<
 
 Description: Data analysis and visualisation
 DescDetail: <<
-LabPlot is a KDE program for two- and three-dimensional graphical presentation
-of data sets and functions. LabPlot allows you to work with multiple plots
-which each can have multiple graphs. The graphs can be produced from data
-or from functions, including user defined (up to 9 parameters).
+LabPlot is a KDE program for two- and three-dimensional
+graphical presentation of data sets and functions. 
+LabPlot allows you to work with multiple plots
+which each can have multiple graphs. The graphs can be 
+produced from data or from functions, including user 
+defined (up to 9 parameters).
+
+Many thanks goes to Jean-Francois Mertens for cleaning
+up the info file, big-time.
 <<
