@@ -1,0 +1,131 @@
+Info2: <<
+Package: lpsolve-extra
+Description: External Language Interfaces for lpsolve
+Version: 0.0
+Revision: 1
+# rev-up and adapt next line when version-increases of lpsolve or glpk
+Type: glpk (4.10), maj (5.5), full (5.5.0.9)
+
+BuildDepends: lpsolve%type_raw[maj]-dev (>= %type_raw[full]-3), glpk (>= %type_raw[glpk]-1), bison, flex, sed | ssed
+Depends: lpsolve%type_raw[maj]-shlibs (>= %type_raw[maj].0.0-1)
+
+# we need the lp_solve source again, for yacc_read.c lp_Hash.c lp_utils.c shared/{commonlib,myblas}.c and colamd/colamd.c
+Source: mirror:sourceforge:lpsolve/lp_solve_%type_raw[full]_source.tar.gz
+Source-MD5: 8c2823c8dc3d4cb80b7510b1d500635d
+# those are the real sources:
+Source2: mirror:sourceforge:lpsolve/lp_solve_%type_raw[full]_xli_MathProg_source.tar.gz
+Source2-MD5: 7d6ea901b2a50d385a0a4afacc7543c6
+Source3: mirror:sourceforge:lpsolve/lp_solve_%type_raw[full]_xli_CPLEX_source.tar.gz
+Source3-MD5: bc688f2ae35193ed3e58bdc44a544453
+Source4: mirror:sourceforge:lpsolve/lp_solve_%type_raw[full]_xli_DIMACS_source.tar.gz
+Source4-MD5: d5da33641a06af15000a2bd8e1c0c797
+Source5: mirror:sourceforge:lpsolve/lp_solve_%type_raw[full]_xli_LINDO_source.tar.gz
+Source5-MD5: fa61f257beb7565d99a83041e8835d09
+Source6: mirror:sourceforge:lpsolve/lp_solve_%type_raw[full]_bfp_GLPK_source.tar.gz
+Source6-MD5: 916c9cb74502b86753c5bc03193063be
+Source7: mirror:sourceforge:lpsolve/lp_solve_%type_raw[full]_bfp_LUSOL_source.tar.gz
+Source7-MD5: fd2008980ec4d79101d4b60937ac4ed4
+Source8: mirror:sourceforge:lpsolve/lp_solve_%type_raw[full]_bfp_etaPFI_source.tar.gz
+Source8-MD5: 9fa411b976fd8f2ded78cdc3c401b831
+# the following doesn't unzip well...
+#Source9: mirror:sourceforge:lpsolve/lp_solve_%type_raw[full]_doc.tar.gz
+#Source9-MD5: 6a922addc6e6b6a8c9baff19debb05a1
+#
+SourceDirectory: lp_solve_%type_raw[maj]
+
+PatchScript: <<
+#!/bin/sh -ev
+  # link as bundles, and strip
+  sed -ri -e "s,opts='',opts='-Os'\nopts=\"\$opts -fstrict-aliasing\"," -e "s, \-fpic,," -e 's:so="\-s.*:so="-bundle":' \
+	-e "s: \-lc \-lm: -Wl,-x -dead_strip -exported_symbols_list ../exp_sym:" */*/ccc
+  # One could use the lpsolve headers by adding in the beginning of the above perl cmd the subs :
+  # "s:\.\./\.\.:%p/include/lpsolve:g; " , but we have anyway to re-expand the lpsolve source for the .c files (cf supra).
+  # One could also add -llpsolve in the link line, and remove from $src all "%p/include/lpsolve/..."
+  # _ so we would no longer need the lpsolve source, but afraid of compilation under different -D's. 
+  # link with glpk instead of re-compiling:
+  perl -pi -e 's, \$\{glpk\},,; s,I\$\{glpkdir\},I%p,; s,\-Wl,-L%p/lib -lglpk $&,' {xli/xli_MathProg,bfp/bfp_GLPK}/ccc
+  # prior non-static declaration in lp_lib.h:2134 :
+  perl -pi -e 's,static (MYBOOL is_chsign),\1,' xli/xli_DIMACS/lp_Dimacs.c
+  # rm irrelevant files
+  rm -f xli/*/xli_* bfp/*/bfp_* */*/c*.bat */*.bat
+# from lpsolve pkg :
+  ## Dynamic library filenames on OS X end with ".dylib", not ".so". Also, give full path for dlopen.
+  perl -pi -e 's,liblpsolve%type_pkg[maj].so,%p/lib/liblpsolve.dylib,' lp_explicit.h
+## hard-code the paths to the modules, for the user's convenience (preserving the possibility to specify
+## a full path, absolute or relative), since fink doesn't give us a decent DYLD(_FALLBACK)_LIBRARY_PATH...
+  perl -pi.bak -e "s:( +)  strcat\(((bfp|xli)name), \".so\"\);:$&\n\1char finklib[127]=\"%p/lib/\";
+\1if(strrchr(\2,'/') != NULL) finklib[0]=0;
+\1strcat(finklib,\2);:;
+        s:(dlopen\().*name:\1finklib:" lp_lib.c
+# make the .bat scripts useable
+  sed -ri -e 's,^del,rm,' -e 's,\r$,,' lp_rlp.bat */*/*.bat
+<<
+CompileScript: <<
+#!/bin/sh -ev
+  for d in xli/xli_CPLEX xli/xli_LINDO; do cd $d; . ./*.bat; cd -; done
+  for d in bfp xli; do \
+	cd $d
+	D=`echo $d|tr "[:lower:]" "[:upper:]"`
+	sed -r -e '/EXPORTS/d' -e 's,^ +,_,' < lp_$D.def > exp_sym
+	for n in ${d}_*; do cd $n; sh -ev ccc; cd -; done
+	cd ..
+  done
+<<
+InstallScript: <<
+#!/bin/sh -ev
+  # bundles
+  mkdir -p %i/lib
+  cp -p */*/*.so %i/lib
+  chmod 644 %i/lib/*  
+  # Headers
+  for d in bfp xli; do \
+	cd $d
+	mkdir -p %i/include/lpsolve/$d
+	cp *.{def,h,c} %i/include/lpsolve/$d
+	for n in ${d}_* ; do mkdir -p %i/include/lpsolve/$d/$n; cp $n/*.h %i/include/lpsolve/$d/$n; done
+	cd ..
+  done
+  # the following should be in lpsolve
+  cp *.def %i/include/lpsolve
+  # the following are already in lpsolve
+  rm -f %i/include/lpsolve/bfp/{lp_BFP,bfp_LUSOL/lp_LUSOL}.h
+  # docs
+  sed -ri -e '/^(This directory|To build)/d' -e '/^$/d' xli/*/readme.txt
+  mkdir -p %i/share/doc/%n/examples/lpsolve %i/share/doc/%n/examples/DIMACS %i/share/doc/lpsolve%type_raw[maj]-shlibs
+  ln -s other/README.txt %i/share/doc/%n/README_lpsolve
+  ln -s ../lpsolve%type_raw[maj]-shlibs %i/share/doc/%n/other
+  ln -s ../%n %i/share/doc/lpsolve%type_raw[maj]-shlibs/extras
+  cp -p xli/xli_DIMACS/*.net xli/xli_DIMACS/*.htm %i/share/doc/%n/examples/DIMACS
+  ln -s examples/DIMACS %i/share/doc/%n/DIMACS
+  # And since we had anyway to expand the src of lpsolve, we can as well install its demo
+  # Here we delete the $src, and link instead with the dylib, forgetting our scruples about different '-D' flags ...
+  # for a demo, the risk is compensated by the gain in space : 18K vs > 600K
+  cd demo
+  sed -ri -e 's,\$src ,,' -e 's,\$math \$dl,%p/lib/liblpsolve.dylib -mdynamic-no-pic -Os -fstrict-aliasing -s -dead_strip,' ccc
+  sh -ev ./ccc
+  cp -p demo %i/share/doc/%n/examples/lpsolve
+  ln -s examples/lpsolve/demo %i/share/doc/%n/lpsolve_demo
+<<
+
+DocFiles: <<
+  bfp/bfp_LUSOL/LUSOL/LUSOL-overview.txt:overview_LUSOL
+  xli/xli_CPLEX/readme.txt:readme_CPLEX
+  xli/xli_LINDO/readme.txt:readme_LINDO
+  xli/xli_MathProg/readme.txt:readme_MathProg
+<<
+DescDetail: <<
+External Language Interfaces (XLI) and Basis Factorization Packages (BFP)
+for the linear (mixed integer) programming solver lpsolve.
+<<
+
+DescPackaging: <<
+<<
+
+DescUsage: <<
+For doc, cf http://lpsolve.sourceforge.net/%type_raw[maj]/
+For a (lpsolve, not lpsolve-extra) demo, type : %p/share/doc/%n/lpsolve_demo
+<<
+License: LGPL
+HomePage: http://sourceforge.net/projects/lpsolve/
+Maintainer: JF Mertens <jfmertens@users.sourceforge.net>
+<<
