@@ -1,41 +1,57 @@
+Info2: <<
 Package: lpsolve
 Description: Mixed Integer Linear Programming (ILP) solver
+Type: maj (5.5), min (0.9)
+#Version: %type_raw[maj].%type_raw[min]
 Version: 5.5.0.9
-Revision: 2
+Revision: 3
 
-Depends: %N5.5-shlibs (= %v-%r)
+BuildDepends: sed | ssed, bison, flex
+Depends: %N%type_raw[maj]-shlibs (= %v-%r)
 
 Source: mirror:sourceforge:%n/lp_solve_%v_source.tar.gz
 Source-MD5: 8c2823c8dc3d4cb80b7510b1d500635d
-SourceDirectory: lp_solve_5.5
+SourceDirectory: lp_solve_%type_raw[maj]
 
 PatchScript: <<
 #!/bin/sh -ev
 ## change the name of the lib, and correct install_name.
   sed -i.bak -e '{
-	s,liblpsolve55,liblpsolve,g
-	s,liblpsolve\.dylib,liblpsolve.5.5.0.dylib -install_name %p/lib/liblpsolve.5.5.dylib,
-# liblpsolv.a is useless on the link line (except if with -all_load, and then tail of the cmd is useless..), and let us strip.
-	s;b liblpsolve.a;b -single_module -Wl,-x -dead_strip;
-	}' lpsolve55/ccc.osx
+	s,lib%N%type_pkg[maj],lib%N,g
+	s,lib%N\.dylib,lib%N.%type_raw[maj].0.dylib -install_name %p/lib/lib%N.%type_raw[maj].dylib,
+# lib%N.a is useless on the link line (except if with -all_load, and then tail of the cmd is useless..), and let us strip.
+	s;b lib%N.a;b -single_module -Wl,-x -dead_strip -exported_symbols_list ../exp_sym;
+	}' %N%type_pkg[maj]/ccc.osx
 ## for executable, use dynamic linking, and -mdynamic-no-pic _ and strip :
-  sed -i.bak -e 's;\$src;-mdynamic-no-pic -s -dead_strip lp_solve.c ../lpsolve55/liblpsolve.dylib;' lp_solve/ccc.osx
+  sed -i.bak -e 's;\$src;-mdynamic-no-pic -s -dead_strip lp_solve.c ../%N%type_pkg[maj]/lib%N.dylib;' lp_solve/ccc.osx
 ## try adding -fstrict-aliasing to CFLAGS (comment out for the moment since gives a warning in lp_matrix.c 2308-2309)
 #  sed -i~ -e 's,\-O3,& -fstrict-aliasing -Wall,' lp*/ccc.osx
-## Dynamic library filenames on OS X end with ".dylib", not ".so"
-  sed -i.bak -e 's;".so";".dylib";' bfp/bfp_LUSOL/LUSOL/commonlib.c lp_lib.c shared/commonlib.c shared/myblas.c
+## Dynamic library filenames on darwin end with ".dylib", not ".so". Also, give full path for dlopen.
+  perl -pi -e 's,lib%N%type_pkg[maj].so,%p/lib/lib%N.dylib,' lp_explicit.h
+## hard-code the paths to the modules, for the user's convenience (preserving the possibility to specify
+## a full path, absolute or relative), since fink doesn't give us a decent DYLD(_FALLBACK)_LIBRARY_PATH...
+  perl -pi.bak -e "s:( +)  strcat\(((bfp|xli)name), \".so\"\);:$&\n\1char finklib[127]=\"%p/lib/\";
+\1if(strrchr(\2,'/') != NULL) finklib[0]=0;
+\1strcat(finklib,\2);:;
+	s:(dlopen\().*name:\1finklib:" lp_lib.c
+# make the .bat script useable
+  sed -ri -e 's,^del,rm,' -e 's,\r$,,' lp_rlp.bat
 <<
 
 CompileScript: <<
 #!/bin/sh -ev
 
+  # Run bison and flex
+  . ./lp_rlp.bat
+
   # Build the library
-  cd %n55
+  sed -r -e '/EXPORTS/d' -e 's,^ +,_,' < lp_solve.def > exp_sym
+  cd %N%type_pkg[maj]
   sh -ev ccc.osx
 
   # Symbolic links to library
-  ln -s lib%n.5.5.0.dylib lib%n.5.5.dylib
-  ln -s lib%n.5.5.dylib lib%n.dylib
+  ln -s lib%N.%type_raw[maj].0.dylib lib%N.%type_raw[maj].dylib
+  ln -s lib%N.%type_raw[maj].dylib lib%N.dylib
 
   # Build the lp_solve executable
   cd ../lp_solve
@@ -47,44 +63,49 @@ InstallScript: <<
 
   # Libraries
   mkdir -p %i/lib
-  cp -pPR %n55/lib%n.* %i/lib
+  cp -pPR %N%type_pkg[maj]/lib%N.* %i/lib
 
   # Headers
-  mkdir -p %i/include/lp_solve/bfp/bfp_LUSOL/LUSOL
-  mkdir -p %i/include/lp_solve/colamd
-  mkdir -p %i/include/lp_solve/shared
-  cp *.h %i/include/lp_solve
-  cp bfp/*.h %i/include/lp_solve/bfp
-  cp bfp/bfp_LUSOL/*.h %i/include/lp_solve/bfp/bfp_LUSOL
-  cp bfp/bfp_LUSOL/LUSOL/*.h %i/include/lp_solve/bfp/bfp_LUSOL/LUSOL
-  cp colamd/*.h %i/include/lp_solve/colamd
-  cp shared/*.h %i/include/lp_solve/shared
+  mkdir -p %i/include/%N/bfp/bfp_LUSOL/LUSOL
+  mkdir -p %i/include/%N/colamd
+  mkdir -p %i/include/%N/shared
+  cp *.h %i/include/%N
+  cp bfp/*.h %i/include/%N/bfp
+  cp bfp/bfp_LUSOL/*.h %i/include/%N/bfp/bfp_LUSOL
+  cp bfp/bfp_LUSOL/LUSOL/*.h %i/include/%N/bfp/bfp_LUSOL/LUSOL
+  cp colamd/*.h %i/include/%N/colamd
+  cp shared/*.h %i/include/%N/shared
+#  # Additional "headers" (for %N-extra):
+#  cp yacc_read.c lp_Hash.c lp_utils.c %i/include/%N
+#  cp shared/{commonlib,myblas}.c %i/include/%N/shared
+#  cp colamd/colamd.c %i/include/%N/colamd
 
   # Executable
   mkdir -p %i/bin
-  /usr/bin/install lp_solve/lp_solve %i/bin
+  install lp_solve/lp_solve %i/bin
 
   # link the doc files:
   mkdir -p %i/share/doc
-  ln -s %N5.5-shlibs %i/share/doc/%n
+  ln -s %N%type_raw[maj]-shlibs %i/share/doc/%n
 <<
 
 SplitOff: <<
-  Package: %N5.5-shlibs
-  Files: lib/lib%N.5*.dylib
-  Shlibs: %p/lib/lib%N.5.5.dylib 5.5.0 %n (>= 5.5.0.9-1)
+  Package: %N%type_raw[maj]-shlibs
+  Files: lib/lib%N.*.dylib
+  Shlibs: %p/lib/lib%N.%type_raw[maj].dylib %type_raw[maj].0 %n (>= %type_raw[maj].0.0-1)
+#  Shlibs: %p/lib/lib%N.%type_raw[maj].dylib 5.5.0 %n (>= 5.5.0.0-1)
   DocFiles: README.txt
 <<
 
 SplitOff2: <<
-  Package: %N5.5-dev
-  Depends: %N5.5-shlibs (= %v-%r)
+  Package: %N%type_raw[maj]-dev
+  Depends: %N%type_raw[maj]-shlibs (= %v-%r)
   BuildDependsOnly: true
   Files: include lib
   InstallScript: <<
-    # link the doc files:        
+    # link the doc files:
     mkdir -p %i/share/doc
-    ln -s %N5.5-shlibs %i/share/doc/%n  
+    ln -s %N%type_raw[maj]-shlibs %i/share/doc/%n  
   <<
 <<
 
@@ -108,19 +129,22 @@ of '-s' and '-gfull' in the compile stage :
 -fno-common, -single-module: 601776
 -fno-common, multiple-modules: 609436
 common; -single-module: 601832
+
+[Above figures from before using the exported_symbols_list; now size=509312]
 <<
 
 DescPackaging: <<
-Library name changed from "lpsolve55" to "lpsolve".
-So the install_name (and the splitoff-names) must contain "5.5"...
+Library name changed from "%N%type_pkg[maj]" to "%N".
+So the install_name (and the splitoff-names) must contain "%type_raw[maj]"...
 
 Use dynamic linking for the executable.
 
 The demo files are not packaged (neither source nor binary).
 <<
 
-DescUsage: documentation in http://lpsolve.sourceforge.net/5.5/
+DescUsage: documentation in http://%N.sourceforge.net/%type_raw[maj]/
 
 License: LGPL
-HomePage: http://sourceforge.net/projects/lpsolve/
+HomePage: http://sourceforge.net/projects/%N/
 Maintainer: Trevor Harmon <trevor@vocaro.com>
+<<
