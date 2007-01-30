@@ -31,14 +31,6 @@ Require modern tcltk to avoid bug in line-endings emitted from older tclsh
 
 Standard darwin malloc.h fix
 
-OTOH, GOM_PARSER_RETRIEVE_SELECTIONLIST is only a mild warning? But it
-does cause a cpp-precomp segfault (not necessarily cause/effect). Apple
-engineers say just -no-cpp-precomp and get on with our life; so be it.
-
-#I don't understand why when set_show in config.mk causes ": command
-#not found" when show=':', but making it always 'echo' seems to allow
-#the install.mk install-data-dir target to proceed.
-
 The build/install process doesn't understand how to install in a temp
 packaging location for later installation somewhere else, so need to
 fix the pathnames in some runtime scripts.
@@ -50,25 +42,11 @@ Patch install.mk to not install libs that we already have from other
 Fink packages. Set our Depends for each of those packages >= version
 that comes in Source tarball.
 
-#Put libgopenmol.* in lib instead of private bin. Still in its private
-#space since I don't know version info (so leave -avoid-version) so
-#cannot do -shlibs.
-
-#Patch plugins/config.mk.ac to link plugins as shared libraries
-#(.dylib) instead of bundles (.so), obeying dyld error message given
-#when using default options. Patch data/{gopenmol_guirc,gopenmolrc}.tcl
-#to use the platform-correct lib extension.
-
 Some plugins fail to load because "couldn't find procedure Thing_Init"
 (during a tcl "load" call for libthing.dylib). These functions all
 exist in the associated source files and it's not consistent which
 ones fail. It seems to depend on order loaded, so there may be
 something weird going on with memory or symbol namespaces.
-
-#I can't find a make target to use the src/plugins/*/*.tcl instead of
-#(or to first copy these into) data/autotcl/plugins/*.tcl so will
-#manually copy these during PatchScript (so do all patching to src/ not
-#data/).
 
 Disabled icon8 because there are too many compiling problems
 (non-portable code and old coding standards).
@@ -79,6 +57,7 @@ The rungOpenMol script just sets vars and calls the actual gopenmol,
 so put the vars in a profile.d and patch install.mk to not bother with
 the wrapper. Move the actual binary into %p/bin.
 
+The main "gopenmol" program is symlinked from %p/bin/gopenmol.
 Utility programs are in %p/lib/gOpenMol-%v/bin so you have to either
 add that to yout PATH or call the programs using the full pathname.
 This is so we don't conflict with (for example) imagemagick's convert
@@ -97,18 +76,24 @@ Fix prototypes in p_showc.c
 See https://postit.csc.fi/sympa/arc/gopenmol/2006-12/msg00002.html
     https://postit.csc.fi/sympa/arc/gopenmol/2006-12/msg00003.html
 
-nmedit failure if building shared, so disable shared for now,
+nmedit failure if building shared (misformatted symbol that doesn't 
+exist anyway),
   https://postit.csc.fi/sympa/arc/gopenmol/2007-01/msg00002.html
-which disables plugins. #define ENABLE_EXTENSIONS so that API macros
-are defined,
+Disabling shared disables plugins, which causes compiling to failm
   https://postit.csc.fi/sympa/arc/gopenmol/2007-01/msg00012.html
-and can compile.
+#define ENABLE_EXTENSIONS causes API macros to be defined, but still
+no compile due to missing makefile target,
+  https://postit.csc.fi/sympa/arc/gopenmol/2007-01/msg00012.html
+Hack gomapi.exp to remove bogus symbol.
+
+Library interface is not guaranteed to be stable (compatibility 0.0.0
+and placed in %v-specific path), so no hope for true Shlibs policy.
+Could off-load libs/headers into into %N%v-{shlibs,dev} if others need
+a stable way to link it.
 <<
 DescPackaging: <<
-Headers/libs/etc are all %v-dependent and in versioned path. Would
-have to recompile modules for new %v and place in new %v location? So
-scrapping %N-dev for now.
-<<
+  Starting in gopenmol-3.00-1, headers are in %p/lib/gOpenMol-%v/include
+  not %p/include, and %N-dev is re-absorbed into %N.
 DescUsage: <<
   May not run correctly over remote X11
 <<
@@ -119,9 +104,6 @@ Maintainer: Daniel Macks <dmacks@netspace.org>
 BuildDepends: tcltk-dev (>= 8.4.13-1), tclxml-dev, tclexpat-dev, freeglut, libjpeg, python24, g77, x11-dev
 Depends: tcltk (>= 8.4.13-1), tcltk-shlibs (>= 8.4.13-1), tcllib (>= 1.4-1), bwidget (>= 1.6.0), tclxml (>= 2.6-1), tclexpat (>= 2.6-1), freeglut-shlibs, libjpeg-shlibs, python24-shlibs, x11
 
-Conflicts: %N-dev (<< %v-%r)
-Replaces: %N-dev (<< %v-%r)
-
 Source: http://www.csc.fi/english/pages/g0penMol/Downloads/%n-%v-linux.tar.gz
 Source-MD5: 4e12ee6680c093a3bf056dde1d28fea2
 SourceDirectory: gOpenMol-%v
@@ -129,26 +111,28 @@ Patch: %n.patch
 PatchScript: <<
   perl -pi -e 's/<malloc.h>/<stdlib.h>/' `find . -name \*.\[hc\]`
   perl -pi -e 's#__fink_d__#%d#g;s#__fink_p__#%p#g' src/config.mk.ac src/unix/make/install.mk
-# cp -f src/plugins/{ball/ball.tcl,fchk203/fchk.tcl,filters/filters.tcl,sararea/surfarea.tcl,sym602/symmetry.tcl,vrml/vrml.tcl}  data/autotcl/plugins
 <<
-SetCPPFLAGS: -no-cpp-precomp
-ConfigureParams: --with-x --disable-shared --disable-deps
+ConfigureParams: --with-x --enable-shared --disable-deps
 CompileScript: <<
 #!/bin/sh -ev
   cd src
   TCLSH=%p/bin/tclsh PYTHON=%p/bin/python2.4 ./configure %c
-  perl -pi -e 's/.*def.*\s(ENABLE_EXTENSIONS).*/#define \1/' config.h
+# perl -pi -e 's/.*def.*\s(ENABLE_EXTENSIONS).*/#define \1/' config.h
   make all
 <<
 InstallScript: <<
   cd src; make prefix=%i install
-#  mkdir -p -m 0755 %i/share/doc/%n
-#  ln -s ../../gOpenMol-%v/help %i/share/doc/%n/html
-#  mv %i/share/gOpenMol-%v/docs/* %i/share/doc/%n
-#  rmdir %i/share/gOpenMol-%v/docs
-#  mv %i/share/gOpenMol-%v/utility %i/share/doc/%n
-#  rm %i/share/gOpenMol-%v/README-GLUT-win32.txt
-#  mv %i/share/gOpenMol-%v/{COPYRIGHT,README.txt} %i/share/doc/%n
+  ln -s %p/lib/gOpenMol-%v/bin/gopenmol %i/bin
+
+  mkdir -p -m 0755 %i/share/doc/%n
+  ln -s ../../gOpenMol-%v/help %i/share/doc/%n/html
+  mv %i/share/gOpenMol-%v/docs/* %i/share/doc/%n
+  rmdir %i/share/gOpenMol-%v/docs
+  mv %i/share/gOpenMol-%v/utility %i/share/doc/%n
+  rm %i/share/gOpenMol-%v/README-GLUT-win32.txt
+  mv %i/share/gOpenMol-%v/{COPYRIGHT,README.txt} %i/share/doc/%n
+
+  mv %i/include %i/lib/gOpenMol-%v
 <<
 RuntimeVars: <<
   GOM_ROOT: %p/lib/gOpenMol-%v
