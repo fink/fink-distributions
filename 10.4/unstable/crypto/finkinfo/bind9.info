@@ -1,0 +1,129 @@
+Info2: <<
+Package: bind9%type_pkg[ssl]
+Version: 9.3.999
+Revision: 1
+Type: v (9.4.0rc2), ssl (-ssl)
+# type[ssl]=. would give a 'unified' version _ but this leads in configure
+# to finding openssl too old, + to warning about potential security problems
+# so avoid till this is cleared up
+# Also: avoid clobbering the existing bind9 till this one is tested  :)
+Depends: %N-shlibs (=%v-%r), daemonic, db44-aes-shlibs | db44-shlibs
+# dep and bdep on pth2-shlibs and -dev seem to have disappeared
+# also bdeps on gdbm3
+BuildDepends: db44-aes | db44, (%type_raw[ssl] = -ssl) openssl097-dev, (%type_raw[ssl] = .) system-openssl-dev
+## "checking for .. " also needs tetex-base w3m libxml2-bin libxslt-bin
+## but configure would still have to be patched to find the docbook stuff (looks in hard-coded places).
+Conflicts: host, %{Ni}-ssl, %{Ni}
+Replaces: host, %{Ni}-ssl, %{Ni}
+Provides: host
+# the Provides is because other pkgs like xtraceroute depend on host and not on the alternative
+Source: ftp://ftp.isc.org/isc/%{Ni}/%type_raw[v]/bind-%type_raw[v].tar.gz
+# the patch file should be re-checked _ I updated the db.root part (was from 97...), but nothing else
+PatchScript: <<
+  sed 's|@FINKPREFIX@|%p|g' <%a/%{Ni}.patch | patch -p1
+  perl -pi -e 's,(\{d\}\.)so,\1dylib,; s,db\-4\.2,db-4.4,' configure
+<<
+SetCFLAGS: -Os -fstrict-aliasing
+SetLIBRARY_PATH: %p/lib
+NoSetLDFLAGS: true
+NoSetCPPFLAGS: true
+ConfigureParams: <<
+ --mandir=%i/share/man --infodir=%p/share/info --libexecdir=%p/lib --sysconfdir=%p/etc/bind --localstatedir=%p/var \
+ --enable-libbind --enable-threads --with-dlz-filesystem=yes --with-dlz-bdb=%p --with-libtool \
+ (%type_raw[ssl] = .) --with-openssl=%p/lib/system-openssl (%type_raw[ssl] = -ssl) --with-openssl=%p
+<<
+CompileScript: <<
+ #!/bin/sh -ev
+ export CPATH=%p/include/db4:%p/include
+ export STD_CDEFINES="-DDIG_SIGCHASE=1"
+ %{default_script}
+ make FAQ
+# The following commented out because it will change your system dns environment while running _ but should be run !
+# ( ./bin/tests/system/ifconfig.sh up; make -k check 2>&1|tee /tmp/bind9.test || true )
+<<
+InstallScript: <<
+  make install prefix=%i
+  mkdir -p %i/var/cache/bind
+  mkdir -p %i/etc/bind
+  cp etc/* %i/etc/bind
+  mv %i/bind/include %i/include/bind
+  rm -rf %i/bind
+  mkdir -p %i/share/doc; ln -s %N-shlibs %i/share/doc/%n
+<<
+PreInstScript: rm -fR %p/share/doc/%n
+ConfFiles: <<
+  %p/etc/bind/named.conf
+  %p/etc/bind/db.127
+  %p/etc/bind/db.0
+  %p/etc/bind/db.255
+  %p/etc/bind/db.local
+  %p/etc/bind/db.root
+<<
+DaemonicName: bind9
+DaemonicFile: <<
+<service>
+<description>Bind9 DNS Server</description>
+<message>Bind9 DNS Server</message>
+
+<daemon name="bind9">
+<executable background="yes">%p/sbin/named</executable>
+<!-- the daemon will background itself, but may take a while
+     to start up to the point where it does so -->
+<configfile>%p/etc/bind/named.conf</configfile>
+<parameters>-c %p/etc/bind/named.conf</parameters>
+<pidfile>%p/var/run/named.pid</pidfile>
+</daemon>
+
+</service>
+<<
+Splitoff: <<
+ Package: %N-shlibs
+ Depends: (%type_raw[ssl] = -ssl) openssl097-shlibs
+ Conflicts: %{Ni}-ssl-shlibs, %{Ni}-shlibs
+ Replaces: %{Ni}-ssl-shlibs, %{Ni}-shlibs
+ Files: lib/*.*.dylib
+ Shlibs: <<
+	%p/lib/libbind.4.dylib	5.0.0	%n	(>= 9.3.999-1)
+	%p/lib/libbind9.30.dylib	31.0.0	%n	(>= 9.3.999-1)
+	%p/lib/libdns.32.dylib	34.0.0	%n	(>= 9.3.999-1)
+	%p/lib/libisc.32.dylib	33.0.0	%n	(>= 9.3.999-1)
+	%p/lib/libisccc.30.dylib	31.0.0	%n	(>= 9.3.999-1)
+	%p/lib/libisccfg.30.dylib	31.0.0	%n	(>= 9.3.999-1)
+	%p/lib/liblwres.30.dylib	31.0.0	%n	(>= 9.3.999-1)
+ <<
+ DocFiles: CHANGES COPYRIGHT FAQ README
+<<
+Splitoff2: <<
+ Package: %N-dev
+ Conflicts: %{Ni}-ssl-dev, %{Ni}-dev, %{Ni} (<< 9.3.9)
+ Replaces: %{Ni}-ssl-dev, %{Ni}-dev, %{Ni} (<< 9.3.9)
+ Files: include lib bin/isc-config.sh
+ Depends: %N-shlibs (=%v-%r)
+ BuildDependsOnly: true
+ InstallScript: mkdir -p %i/share/doc; ln -s %N-shlibs %i/share/doc/%n
+<<
+Description: Berkeley Internet Name Domain
+DescDetail: <<
+The Berkeley Internet Name Domain (BIND) implements an Internet name server
+for Unix operating systems. The BIND consists of a server (or `daemon')
+called `named' and a resolver library. A name server is a network service
+that enables clients to name resources or objects and share this information
+with other objects in the network.
+<<
+DescPort: <<
+Update of bind9, + policy conformance ( making shared libs too, shlibs policy, etc), + cleanup, by jfm
+File is commented as to main points. Using this as a TODO :
+_ probably needs a good DescUsage field (from what I remember about bind from long ago)
+_ need to make the doc buildable (get a yes to all "docbook" questions at the end of configure..)
+_ other subdirs of contrib to make ? (dbus eg ?)
+_ go systematically through the test-failures
+	(in /tmp/bind9.test, after un-commenting the "make check" line )
+<<
+License: Public Domain
+DescPackaging: <<
+Previous packages by Matthew Flanagan <mpf@progsoc.org>
+<<
+Maintainer: None <fink-devel@lists.sourceforge.net>
+Homepage: http://www.isc.org/products/BIND/
+Source-MD5: 95daa3e6f70c979d8a64282011bb3419
+<<
