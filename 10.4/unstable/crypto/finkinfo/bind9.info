@@ -1,7 +1,7 @@
 Info2: <<
 Package: bind9%type_pkg[ssl]
 Version: 9.3.999
-Revision: 1
+Revision: 2
 Type: v (9.4.0rc2), ssl (-ssl)
 # type[ssl]=. would give a 'unified' version _ but this leads in configure
 # to finding openssl too old, + to warning about potential security problems
@@ -18,7 +18,11 @@ Replaces: host, %{Ni}-ssl, %{Ni}
 Provides: host
 # the Provides is because other pkgs like xtraceroute depend on host and not on the alternative
 Source: ftp://ftp.isc.org/isc/%{Ni}/%type_raw[v]/bind-%type_raw[v].tar.gz
-# the patch file should be re-checked _ I updated the db.root part (was from 97...), but nothing else
+Source-MD5: 95daa3e6f70c979d8a64282011bb3419
+Source2: ftp://ftp.internic.net/domain/named.root
+Source2-MD5: c17d2e4325d3fdcc247188e8f26a059e
+Source2ExtractDir: bind-%type_raw[v]/etc
+# the patch file should be re-checked. I updated _ ie, removed .. _ the named.root part (was from 97...), but nothing else
 PatchScript: <<
   sed 's|@FINKPREFIX@|%p|g' <%a/%{Ni}.patch | patch -p1
   perl -pi -e 's,(\{d\}\.)so,\1dylib,; s,db\-4\.2,db-4.4,' configure
@@ -28,8 +32,8 @@ SetLIBRARY_PATH: %p/lib
 NoSetLDFLAGS: true
 NoSetCPPFLAGS: true
 ConfigureParams: <<
- --mandir=%i/share/man --infodir=%p/share/info --libexecdir=%p/lib --sysconfdir=%p/etc/bind --localstatedir=%p/var \
- --enable-libbind --enable-threads --with-dlz-filesystem=yes --with-dlz-bdb=%p --with-libtool \
+ --mandir=%i/share/man --infodir=%p/share/info \
+ --with-libtool --enable-libbind --enable-threads --with-dlz-filesystem=yes --with-dlz-bdb=%p \
  (%type_raw[ssl] = .) --with-openssl=%p/lib/system-openssl (%type_raw[ssl] = -ssl) --with-openssl=%p
 <<
 CompileScript: <<
@@ -37,27 +41,38 @@ CompileScript: <<
  export CPATH=%p/include/db4:%p/include
  export STD_CDEFINES="-DDIG_SIGCHASE=1"
  %{default_script}
- make FAQ
-# The following commented out because it will change your system dns environment while running _ but should be run !
-# ( ./bin/tests/system/ifconfig.sh up; make -k check 2>&1|tee /tmp/bind9.test || true )
+<<
+InfoTest: <<
+  # the following may slightly change your system environment while running
+  TestScript: ( ./bin/tests/system/ifconfig.sh up; make -k check 2>&1|tee /tmp/bind9.test ) || true
 <<
 InstallScript: <<
   make install prefix=%i
   mkdir -p %i/var/cache/bind
-  mkdir -p %i/etc/bind
-  cp etc/* %i/etc/bind
+  chown 0:0 etc/*
+  cp -pPR etc %i
   mv %i/bind/include %i/include/bind
   rm -rf %i/bind
-  mkdir -p %i/share/doc; ln -s %N-shlibs %i/share/doc/%n
+  mkdir -p %i/share/doc/%n
+  ln -s ../%N-shlibs/COPYRIGHT %i/share/doc/%n
+  install -m 644 doc/arm/Bv9ARM.pdf %i/share/doc/%n
 <<
-PreInstScript: rm -fR %p/share/doc/%n
+PreInstScript: <<
+  ## in case existing one is a symlink (as in %r=1)
+  rm -f %p/share/doc/%n 2>/dev/null || :
+  ## save the conffiles to new name and location, so dpkg will allow users to keep them
+  ## (changed location to default in %r=2, so named finds the conffiles on its own)
+  for f in `ls -1 %p/etc/bind/* 2>/dev/null` ; do /bin/mv -n $f `sed -e 's,/bind,,' -e 's,etc/db\.,etc/named.,' <<<"$f"` ; done
+  rm -fR %p/etc/bind || :
+<<
+DocFiles: CHANGES FAQ README
 ConfFiles: <<
-  %p/etc/bind/named.conf
-  %p/etc/bind/db.127
-  %p/etc/bind/db.0
-  %p/etc/bind/db.255
-  %p/etc/bind/db.local
-  %p/etc/bind/db.root
+  %p/etc/named.conf
+  %p/etc/named.0
+  %p/etc/named.127
+  %p/etc/named.255
+  %p/etc/named.local
+  %p/etc/named.root
 <<
 DaemonicName: bind9
 DaemonicFile: <<
@@ -69,8 +84,8 @@ DaemonicFile: <<
 <executable background="yes">%p/sbin/named</executable>
 <!-- the daemon will background itself, but may take a while
      to start up to the point where it does so -->
-<configfile>%p/etc/bind/named.conf</configfile>
-<parameters>-c %p/etc/bind/named.conf</parameters>
+<configfile>%p/etc/named.conf</configfile>
+<parameters>-c %p/etc/named.conf</parameters>
 <pidfile>%p/var/run/named.pid</pidfile>
 </daemon>
 
@@ -91,7 +106,7 @@ Splitoff: <<
 	%p/lib/libisccfg.30.dylib	31.0.0	%n	(>= 9.3.999-1)
 	%p/lib/liblwres.30.dylib	31.0.0	%n	(>= 9.3.999-1)
  <<
- DocFiles: CHANGES COPYRIGHT FAQ README
+ DocFiles: COPYRIGHT
 <<
 Splitoff2: <<
  Package: %N-dev
@@ -111,13 +126,10 @@ that enables clients to name resources or objects and share this information
 with other objects in the network.
 <<
 DescPort: <<
-Update of bind9, + policy conformance ( making shared libs too, shlibs policy, etc), + cleanup, by jfm
+Update of bind9, + policy conformance (making shared libs too, shlibs policy, etc), + cleanup, by jfm
 File is commented as to main points. Using this as a TODO :
 _ probably needs a good DescUsage field (from what I remember about bind from long ago)
-_ need to make the doc buildable (get a yes to all "docbook" questions at the end of configure..)
 _ other subdirs of contrib to make ? (dbus eg ?)
-_ go systematically through the test-failures
-	(in /tmp/bind9.test, after un-commenting the "make check" line )
 <<
 License: Public Domain
 DescPackaging: <<
@@ -125,5 +137,4 @@ Previous packages by Matthew Flanagan <mpf@progsoc.org>
 <<
 Maintainer: None <fink-devel@lists.sourceforge.net>
 Homepage: http://www.isc.org/products/BIND/
-Source-MD5: 95daa3e6f70c979d8a64282011bb3419
 <<
