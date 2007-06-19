@@ -1,65 +1,109 @@
-diff -uNr ruby-1.8.4/Makefile.in ruby-1.8.4-new/Makefile.in
---- ruby-1.8.4/Makefile.in	2005-11-10 18:22:03.000000000 -0500
-+++ ruby-1.8.4-new/Makefile.in	2006-08-05 18:21:28.000000000 -0400
-@@ -47,12 +47,15 @@
- MAINLIBS = @MAINLIBS@
- MINIOBJS = @MINIOBJS@
+## Basic build system fixes
+--- configure.in        (revision 12175)
++++ configure.in        (working copy)
+@@ -150,4 +150,9 @@ fi
+ AC_PROG_CC
+ AC_PROG_GCC_TRADITIONAL
++if test "$GCC" = yes; then
++    linker_flag=-Wl,
++else
++    linker_flag=
++fi
+
+ RUBY_PROG_GNU_LD
+@@ -1392,12 +1397,8 @@ if test "$enable_shared" = 'yes'; then
+ fi
+ if test "$enable_rpath" = yes; then
+-    if test "$GCC" = yes; then
+-       LIBRUBYARG_SHARED='-Wl,-R -Wl,$(libdir) -L$(libdir) -L. '"$LIBRUBYARG_SHARED"
+-    else
+-       LIBRUBYARG_SHARED='-R $(libdir) -L$(libdir) -L. '"$LIBRUBYARG_SHARED"
+-    fi
++    LIBRUBYARG_SHARED="${linker_flag}-R ${linker_flag}\$(libdir) -L. -L\$(libdir) $LIBRUBYARG_SHARED"
+ fi
+
+-XLDFLAGS="$XLDFLAGS -L."
++LDFLAGS="-L. $LDFLAGS"
+ AC_SUBST(ARCHFILE)
+
+--- lib/mkmf.rb (revision 12191)
++++ lib/mkmf.rb (working copy)
+@@ -292,5 +292,10 @@ end
+ def libpathflag(libpath=$DEFLIBPATH|$LIBPATH)
+  libpath.map{|x|
+-    (x == "$(topdir)" ? LIBPATHFLAG : LIBPATHFLAG+RPATHFLAG) % x.quote
++    case x
++    when "$(topdir)", /\A\./
++      LIBPATHFLAG
++    else
++      LIBPATHFLAG+RPATHFLAG
++    end % x.quote
+  }.join
+ end
+@@ -1443,4 +1449,5 @@ def init_mkmf(config = CONFIG)
+  $LIBRUBYARG_SHARED = config['LIBRUBYARG_SHARED']
+  $DEFLIBPATH = $extmk ? ["$(topdir)"] : CROSS_COMPILING ? [] : ["$(libdir)"]
++  $DEFLIBPATH.unshift(".")
+  $LIBPATH = []
+  $INSTALLFILES = nil
+@@ -1535,6 +1541,6 @@ LINK_SO = config_string('LINK_SO') ||
+    "ld $(DLDFLAGS) -r -o $@ $(OBJS)\n"
+  else
+-    "$(LDSHARED) $(DLDFLAGS) $(LIBPATH) #{OUTFLAG}$@ " \
+-    "$(OBJS) $(LOCAL_LIBS) $(LIBS)"
++    "$(LDSHARED) #{OUTFLAG}$@ $(OBJS) " \
++    "$(LIBPATH) $(DLDFLAGS) $(LOCAL_LIBS) $(LIBS)"
+  end
+ LIBPATHFLAG = config_string('LIBPATHFLAG') || ' -L"%s"'
+
+## make miniruby not load already installed extensions
+--- ruby.c	2007-02-13 00:01:19.000000000 +0100
++++ ruby.c	2007-04-25 14:53:32.000000000 +0200
+@@ -235,6 +235,7 @@
+ void
+ ruby_init_loadpath()
+ {
++    char *argvptr;
+ #if defined LOAD_RELATIVE
+     char libpath[FILENAME_MAX+1];
+     char *p;
+@@ -287,6 +288,10 @@
+ 	ruby_incpush(getenv("RUBYLIB"));
+     }
  
-+extout = $(srcdir)/$(EXTOUT)
-+RUBYARCHDIR = $(extout)/$(arch)$(target_prefix)
 +
- RUBY_INSTALL_NAME=@RUBY_INSTALL_NAME@
- RUBY_SO_NAME=@RUBY_SO_NAME@
- EXEEXT = @EXEEXT@
- PROGRAM=$(RUBY_INSTALL_NAME)$(EXEEXT)
- RUBY = $(RUBY_INSTALL_NAME)
--MINIRUBY = @MINIRUBY@
-+MINIRUBY = DYLD_LIBRARY_PATH=$(topdir):$(extout):$(RUBYARCHDIR) @MINIRUBY@ -I$(RUBYARCHDIR) -I$(srcdir)
- RUNRUBY = @RUNRUBY@
++    argvptr = strrchr(origargv[0], '/');
++    if(!argvptr) argvptr = origargv[0];
++    if(!strstr(argvptr, "miniruby")) {
+ #ifdef RUBY_SEARCH_PATH
+     ruby_incpush(RUBY_RELATIVE(RUBY_SEARCH_PATH));
+ #endif
+@@ -307,6 +312,7 @@
+     if (rb_safe_level() == 0) {
+ 	ruby_incpush(".");
+     }
++    }
+ }
  
- #### End of system configuration section. ####
-@@ -101,7 +104,7 @@
- 
- $(PROGRAM):
- 		@$(RM) $@
--		$(PURIFY) $(CC) $(LDFLAGS) $(XLDFLAGS) $(MAINLIBS) $(MAINOBJ) $(EXTOBJS) $(LIBRUBYARG) $(LIBS) $(OUTFLAG)$@
-+		$(PURIFY) $(CC) $(XLDFLAGS) $(LDFLAGS) $(MAINLIBS) $(MAINOBJ) $(EXTOBJS) $(LIBRUBYARG) $(LIBS) $(OUTFLAG)$@
- 
- # We must `rm' the library each time this rule is invoked because "updating" a
- # MAB library on Apple/NeXT (see --enable-fat-binary in configure) is not
-diff -uNr ruby-1.8.4/common.mk ruby-1.8.4-new/common.mk
---- ruby-1.8.4/common.mk	2005-11-16 09:25:49.000000000 -0500
-+++ ruby-1.8.4-new/common.mk	2006-08-05 18:21:28.000000000 -0400
-@@ -56,10 +56,12 @@
- 		--make="$(MAKE)" \
- 		--mflags="$(MFLAGS)" \
- 		--make-flags="$(MAKEFLAGS)"
-+EXTMK_ARGS_ETC=	$(SCRIPT_ARGS) --extout="$(EXTOUT)" --extension etc --extstatic $(EXTSTATIC) --
- EXTMK_ARGS    =	$(SCRIPT_ARGS) --extout="$(EXTOUT)" --extension $(EXTS) --extstatic $(EXTSTATIC) --
- 
- all: $(MKFILES) $(PREP) $(RBCONFIG) $(LIBRUBY)
--	@$(MINIRUBY) $(srcdir)/ext/extmk.rb $(EXTMK_ARGS)
-+	$(MINIRUBY) $(srcdir)/ext/extmk.rb $(EXTMK_ARGS_ETC)
-+	$(MINIRUBY) $(srcdir)/ext/extmk.rb $(EXTMK_ARGS)
- prog: $(PROGRAM) $(WPROGRAM)
- 
- miniruby$(EXEEXT): config.status $(LIBRUBY_A) $(MAINOBJ) $(MINIOBJS) $(OBJS) $(DMYEXT)
-diff -uNr ruby-1.8.4/config.guess ruby-1.8.4-new/config.guess
---- ruby-1.8.4/config.guess	2004-07-16 22:23:52.000000000 -0400
-+++ ruby-1.8.4-new/config.guess	2006-08-05 18:21:28.000000000 -0400
-@@ -1200,7 +1200,7 @@
- 	    *86) UNAME_PROCESSOR=i686 ;;
- 	    powerpc) UNAME_PROCESSOR=powerpc ;;
- 	esac
--	echo ${UNAME_PROCESSOR}-apple-darwin${UNAME_RELEASE}
-+	echo ${UNAME_PROCESSOR}-apple-darwin
- 	exit 0 ;;
-     *:procnto*:*:* | *:QNX:[0123456789]*:*)
- 	UNAME_PROCESSOR=`uname -p`
-diff -uNr ruby-1.8.4/configure ruby-1.8.4-new/configure
---- ruby-1.8.4/configure	2005-12-24 07:36:33.000000000 -0500
-+++ ruby-1.8.4-new/configure	2006-08-05 18:21:28.000000000 -0400
-@@ -18175,7 +18175,7 @@
+ struct req_list {
+
+--- configure.in~       2007-04-25 15:31:14.000000000 +0200
++++ configure.in        2007-04-25 15:58:49.000000000 +0200
+@@ -1277,7 +1277,7 @@
+   PREP=fake.rb
+   RUNRUBY='$(MINIRUBY) -I`cd $(srcdir)/lib; pwd`'
+ else
+-  MINIRUBY='./miniruby$(EXEEXT)'
++  MINIRUBY='./miniruby$(EXEEXT) -I.'
+   PREP='miniruby$(EXEEXT)'
+   RUNRUBY='$(MINIRUBY) $(srcdir)/runruby.rb --extout=$(EXTOUT) --'
+ fi
+
+
+## tune module and libruby link options
+--- configure.in	2007-04-18 12:49:43.000000000 +0200
++++ configure.in	2007-04-19 14:23:04.000000000 +0200
+@@ -1052,7 +1052,7 @@
  	rhapsody*)	: ${LDSHARED='cc -dynamic -bundle -undefined suppress'}
  			: ${LDFLAGS=""}
  			rb_cv_dlopen=yes ;;
@@ -68,7 +112,7 @@ diff -uNr ruby-1.8.4/configure ruby-1.8.4-new/configure
  			: ${LDFLAGS=""}
  			: ${LIBPATHENV=DYLD_LIBRARY_PATH}
  			rb_cv_dlopen=yes ;;
-@@ -18918,7 +18918,7 @@
+@@ -1302,7 +1302,7 @@
      ;;
  esac
  
@@ -77,7 +121,7 @@ diff -uNr ruby-1.8.4/configure ruby-1.8.4-new/configure
  LIBRUBY_LDSHARED=$LDSHARED
  LIBRUBY_DLDFLAGS=$DLDFLAGS
  LIBRUBY_SO='lib$(RUBY_SO_NAME).so.$(MAJOR).$(MINOR).$(TEENY)'
-@@ -19003,9 +19003,9 @@
+@@ -1384,9 +1384,9 @@
  	;;
      darwin*)
  	LIBRUBY_SO='lib$(RUBY_SO_NAME).$(MAJOR).$(MINOR).$(TEENY).dylib'
@@ -90,63 +134,23 @@ diff -uNr ruby-1.8.4/configure ruby-1.8.4-new/configure
  	;;
      interix*)
  	LIBRUBYARG_SHARED='-L${libdir} -L. -l$(RUBY_SO_NAME)'
-diff -uNr ruby-1.8.4/ext/curses/extconf.rb ruby-1.8.4-new/ext/curses/extconf.rb
---- ruby-1.8.4/ext/curses/extconf.rb	2005-02-09 10:55:35.000000000 -0500
-+++ ruby-1.8.4-new/ext/curses/extconf.rb	2006-08-05 18:21:28.000000000 -0400
-@@ -7,9 +7,9 @@
- make=false
- have_library("mytinfo", "tgetent") if /bow/ =~ RUBY_PLATFORM
- have_library("tinfo", "tgetent") or have_library("termcap", "tgetent")
--if have_header(*curses=%w"ncurses.h") and have_library("ncurses", "initscr")
-+if have_header(*curses=%w"ncurses/curses.h") and have_library("ncurses", "initscr")
-   make=true
--elsif have_header(*curses=%w"ncurses/curses.h") and have_library("ncurses", "initscr")
-+elsif have_header(*curses=%w"ncurses.h") and have_library("ncurses", "initscr")
-   make=true
- elsif have_header(*curses=%w"curses_colr/curses.h") and have_library("cur_colr", "initscr")
-   curses.unshift("varargs.h")
-diff -uNr ruby-1.8.4/ext/dl/depend ruby-1.8.4-new/ext/dl/depend
---- ruby-1.8.4/ext/dl/depend	2003-10-23 04:59:42.000000000 -0400
-+++ ruby-1.8.4-new/ext/dl/depend	2006-08-08 02:42:39.000000000 -0400
-@@ -32,15 +32,15 @@
- 
- call.func: $(srcdir)/mkcall.rb ./dlconfig.rb
- 	@echo "Generating call.func"
--	@$(RUBY) $(srcdir)/mkcall.rb > $@
-+	DYLD_LIBRARY_PATH=$(topdir):$(extout):$(RUBYARCHDIR) $(topdir)/$(RUBY_INSTALL_NAME) -I../../.ext/*-darwin -I../.. -I../../lib $(srcdir)/mkcall.rb > $@
- 
- callback.func: $(srcdir)/mkcallback.rb ./dlconfig.rb
- 	@echo "Generating callback.func"
--	@$(RUBY) $(srcdir)/mkcallback.rb > $@
-+	DYLD_LIBRARY_PATH=$(topdir):$(extout):$(RUBYARCHDIR) $(topdir)/$(RUBY_INSTALL_NAME) -I../../.ext/*-darwin -I../.. -I../../lib $(srcdir)/mkcallback.rb > $@
- 
- cbtable.func: $(srcdir)/mkcbtable.rb ./dlconfig.rb
- 	@echo "Generating cbtable.func"
--	@$(RUBY) $(srcdir)/mkcbtable.rb > $@
-+	DYLD_LIBRARY_PATH=$(topdir):$(extout):$(RUBYARCHDIR) $(topdir)/$(RUBY_INSTALL_NAME) -I../../.ext/*-darwin -I../.. -I../../lib $(srcdir)/mkcbtable.rb > $@
- 
- debug:
- 	$(MAKE) CPPFLAGS="$(CPPFLAGS) -DDEBUG"
+## tune architecture (and binary extension directory name)
+--- config.guess	2007-04-19 14:41:42.000000000 +0200
++++ config.guess	2007-04-19 14:39:55.000000000 +0200
+@@ -1200,7 +1200,7 @@
+ 	    *86) UNAME_PROCESSOR=i686 ;;
+ 	    powerpc) UNAME_PROCESSOR=powerpc ;;
+ 	esac
+-	echo ${UNAME_PROCESSOR}-apple-darwin${UNAME_RELEASE}
++	echo ${UNAME_PROCESSOR}-apple-darwin
+ 	exit 0 ;;
+     *:procnto*:*:* | *:QNX:[0123456789]*:*)
+ 	UNAME_PROCESSOR=`uname -p`
 
-diff -uNr ruby-1.8.4/lib/cgi/.document ruby-1.8.4-new/lib/cgi/.document
---- ruby-1.8.4/lib/cgi/.document	2004-02-26 08:50:40.000000000 -0500
-+++ ruby-1.8.4-new/lib/cgi/.document	2006-08-05 18:21:28.000000000 -0400
-@@ -1,2 +1,2 @@
-+session
- session.rb
--
+## more miscellaneous tweaks
 diff -uNr ruby-1.8.4/lib/delegate.rb ruby-1.8.4-new/lib/delegate.rb
---- ruby-1.8.4/lib/delegate.rb	2005-09-28 10:23:24.000000000 -0400
-+++ ruby-1.8.4-new/lib/delegate.rb	2006-08-05 18:21:28.000000000 -0400
-@@ -140,7 +140,7 @@
- 	    rescue Exception
- 	      $@.delete_if{|s| /:in `__getobj__'$/ =~ s} #`
- 	      $@.delete_if{|s| /^\\(eval\\):/ =~ s}
--	      Kernel::raise
-+	      ::Kernel::raise
- 	    end
- 	  end
- 	EOS
+--- lib/delegate.rb  2005-09-28 10:23:24.000000000 -0400
++++ lib/delegate.rb      2006-08-05 18:21:28.000000000 -0400
 @@ -290,7 +290,7 @@
    }
    for method in methods
@@ -154,55 +158,5 @@ diff -uNr ruby-1.8.4/lib/delegate.rb ruby-1.8.4-new/lib/delegate.rb
 -      klass.module_eval <<-EOS
 +      klass.module_eval <<-EOS, __FILE__, __LINE__+1
          def #{method}(*args, &block)
- 	  begin
- 	    @_dc_obj.__send__(:#{method}, *args, &block)
---- ruby-1.8.5/lib/mkmf.rb.orig	2006-08-17 07:47:50.000000000 +0200
-+++ ruby-1.8.5/lib/mkmf.rb	2006-08-29 16:24:38.000000000 +0200
-@@ -1400,7 +1400,7 @@
-   $CFLAGS = with_config("cflags", arg_config("CFLAGS", config["CFLAGS"])).dup
-   $ARCH_FLAG = with_config("arch_flag", arg_config("ARCH_FLAG", config["ARCH_FLAG"])).dup
-   $CPPFLAGS = with_config("cppflags", arg_config("CPPFLAGS", config["CPPFLAGS"])).dup
--  $LDFLAGS = (with_config("ldflags") || "").dup
-+  $LDFLAGS = with_config("ldflags", arg_config("LDFLAGS", config["LDFLAGS"])).dup
-   $INCFLAGS = "-I$(topdir) -I$(hdrdir) -I$(srcdir)"
-   $DLDFLAGS = with_config("dldflags", arg_config("DLDFLAGS", config["DLDFLAGS"])).dup
-   $LIBEXT = config['LIBEXT'].dup
-@@ -1501,7 +1501,7 @@
-   if CONFIG["DLEXT"] == $OBJEXT
-     "ld $(DLDFLAGS) -r -o $@ $(OBJS)\n"
-   else
--    "$(LDSHARED) $(DLDFLAGS) $(LIBPATH) #{OUTFLAG}$@ " \
-+    "$(LDSHARED) $(LIBPATH) $(DLDFLAGS) #{OUTFLAG}$@ " \
-     "$(OBJS) $(LOCAL_LIBS) $(LIBS)"
-   end
- LIBPATHFLAG = config_string('LIBPATHFLAG') || ' -L"%s"'
---- ruby-1.8.5/lib/rdoc/ri/ri_display.rb~	2006-06-26 22:44:14.000000000 +0200
-+++ ruby-1.8.5/lib/rdoc/ri/ri_display.rb	2006-08-29 15:45:42.000000000 +0200
-@@ -210,7 +210,7 @@
- 
-   def setup_pager
-     unless @options.use_stdout
--      for pager in [ ENV['PAGER'], "less", "more", 'pager' ].compact.uniq
-+      for pager in [ ENV['PAGER'], "pager", "less", "more" ].compact.uniq
-         return IO.popen(pager, "w") rescue nil
-       end
-       @options.use_stdout = true
-diff -uNr ruby-1.8.4/ruby.c ruby-1.8.4-new/ruby.c
---- ruby-1.8.4/ruby.c	2005-12-11 19:36:52.000000000 -0500
-+++ ruby-1.8.4-new/ruby.c	2006-08-05 18:21:28.000000000 -0400
-@@ -982,7 +982,13 @@
- static struct {
-     char *begin, *end;
- } envspace;
-+
-+#ifdef __APPLE__
-+#include <crt_externs.h>
-+#define environ (*_NSGetEnviron())
-+#else
- extern char **environ;
-+#endif
- 
- static void
- set_arg0space()
-
- 	  	 
+          begin
+            @_dc_obj.__send__(:#{method}, *args, &block)
