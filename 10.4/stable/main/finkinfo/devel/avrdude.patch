@@ -1,0 +1,173 @@
+diff -w -u -r /tmp/avrdude-5.1/ser_posix.c ./ser_posix.c
+--- /tmp/avrdude-5.1/ser_posix.c	2005-08-29 18:30:05.000000000 -0700
++++ ./ser_posix.c	2006-04-03 09:08:25.000000000 -0700
+@@ -65,6 +65,9 @@
+   { 0,      0 }                 /* Terminator. */
+ };
+ 
++static struct termios original_termios;
++static int saved_original_termios;
++
+ static speed_t serial_baud_lookup(long baud)
+ {
+   struct baud_mapping *map = baud_lookup_table;
+@@ -75,7 +78,7 @@
+     map++;
+   }
+ 
+-  fprintf(stderr, "%s: serial_baud_lookup(): unknown baud rate: %ld", 
++  fprintf(stderr, "%s: serial_baud_lookup(): unknown baud rate: %ld\n", 
+           progname, baud);
+   exit(1);
+ }
+@@ -87,33 +90,38 @@
+   speed_t speed = serial_baud_lookup (baud);
+   
+   if (!isatty(fd))
+-    return -1;
++    return -ENOTTY;
+   
+   /*
+    * initialize terminal modes
+    */
+   rc = tcgetattr(fd, &termios);
+   if (rc < 0) {
+-    fprintf(stderr, "%s: ser_setspeed(): tcgetattr() failed, %s", 
+-            progname, strerror(errno));
++    fprintf(stderr, "%s: ser_setspeed(): tcgetattr() failed", 
++            progname);
+     return -errno;
+   }
+ 
+-  termios.c_iflag = 0;
+-  termios.c_oflag = 0;
+-  termios.c_cflag = 0;
++  /*
++   * copy termios for ser_close if we haven't already
++   */
++  if (! saved_original_termios++) {
++    original_termios = termios;
++  }
++
++  cfmakeraw(&termios);
++  termios.c_cflag &= ~CSIZE;
+   termios.c_cflag |=   (CS8 | CREAD | CLOCAL);
+-  termios.c_lflag = 0;
+   termios.c_cc[VMIN]  = 1;
+   termios.c_cc[VTIME] = 0;
+ 
+   cfsetospeed(&termios, speed);
+   cfsetispeed(&termios, speed);
+   
+-  rc = tcsetattr(fd, TCSANOW, &termios);
++  rc = tcsetattr(fd, TCSANOW | TCSAFLUSH, &termios);
+   if (rc < 0) {
+-    fprintf(stderr, "%s: ser_setspeed(): tcsetattr() failed, %s", 
+-            progname, strerror(errno));
++    fprintf(stderr, "%s: ser_setspeed(): tcsetattr() failed", 
++            progname);
+     return -errno;
+   }
+ 
+@@ -137,7 +145,7 @@
+   /*
+    * open the serial port
+    */
+-  fd = open(port, O_RDWR | O_NOCTTY /*| O_NONBLOCK*/);
++  fd = open(port, O_RDWR | O_NOCTTY | O_NONBLOCK);
+   if (fd < 0) {
+     fprintf(stderr, "%s: ser_open(): can't open device \"%s\": %s\n",
+             progname, port, strerror(errno));
+@@ -150,8 +158,8 @@
+   rc = ser_setspeed(fd, baud);
+   if (rc) {
+     fprintf(stderr, 
+-            "%s: ser_open(): can't set attributes for device \"%s\"\n",
+-            progname, port);
++            "%s: ser_open(): can't set attributes for device \"%s\": %s\n",
++            progname, port, strerror(-rc));
+     exit(1);
+   }
+ 
+@@ -161,7 +169,18 @@
+ 
+ static void ser_close(int fd)
+ {
+-  /* FIXME: Should really restore the terminal to original state here. */
++  /*
++   * restore original termios settings from ser_open
++   */
++  if (saved_original_termios) {
++    int rc = tcsetattr(fd, TCSANOW | TCSADRAIN, &original_termios);
++    if (rc) {
++      fprintf(stderr, 
++              "%s: ser_close(): can't reset attributes for device: %s\n",
++              progname, strerror(errno));
++    }
++    saved_original_termios = 0;
++  }
+ 
+   close(fd);
+ }
+diff -u avrdude-5.1/stk500.c avrdude-5.1-patch/stk500.c
+--- avrdude-5.1/stk500.c	2005-08-30 03:30:05.000000000 +0200
++++ avrdude-5.1-patch/stk500.c	2006-04-07 10:26:08.000000000 +0200
+@@ -625,13 +625,14 @@
+ static int stk500_paged_write(PROGRAMMER * pgm, AVRPART * p, AVRMEM * m, 
+                               int page_size, int n_bytes)
+ {
+-  unsigned char buf[16];
++  unsigned char buf[page_size + 16];  
+   int memtype;
+   unsigned int addr;
+   int a_div;
+   int block_size;
+   int tries;
+   unsigned int n;
++  unsigned int i;
+   int flash;
+ 
+   if (page_size == 0) {
+@@ -697,17 +698,19 @@
+   retry:
+     tries++;
+     stk500_loadaddr(pgm, addr/a_div);
+-    buf[0] = Cmnd_STK_PROG_PAGE;
+-    buf[1] = (block_size >> 8) & 0xff;
+-    buf[2] = block_size & 0xff;
+-    buf[3] = memtype;
+-    stk500_send(pgm, buf, 4);
+-
+-	stk500_send(pgm, &m->buf[addr], block_size);
+-
+-    buf[0] = Sync_CRC_EOP;
+-    stk500_send(pgm, buf, 1);
+-
++    
++    /* build command block and avoid multiple send commands as it leads to a crash
++        of the silabs usb serial driver on mac os x */
++    i = 0;
++    buf[i++] = Cmnd_STK_PROG_PAGE;
++    buf[i++] = (block_size >> 8) & 0xff;
++    buf[i++] = block_size & 0xff;
++    buf[i++] = memtype;
++    memcpy(&buf[i], &m->buf[addr], block_size);
++    i += block_size;
++    buf[i++] = Sync_CRC_EOP;
++    stk500_send( pgm, buf, i);
++    
+     stk500_recv(pgm, buf, 1);
+     if (buf[0] == Resp_STK_NOSYNC) {
+       if (tries > 33) {
+diff -u -r1.36 configure.ac
+--- avrdude-5.1/Makefile.in     2006-09-26 19:59:27.000000000 +0200
++++ avrdude-5.1-patched/Makefile.in     2006-09-26 19:59:03.000000000 +0200
+@@ -100,7 +100,7 @@
+        avrdude-stk500v2.$(OBJEXT) avrdude-term.$(OBJEXT) \
+        avrdude-usb_libusb.$(OBJEXT)
+ avrdude_OBJECTS = $(am_avrdude_OBJECTS)
+-avrdude_LDADD = $(LDADD)
++avrdude_LDADD = $(LDADD) -framework CoreFoundation -framework IOKit
+ DEFAULT_INCLUDES = -I. -I$(srcdir) -I.
+ depcomp = $(SHELL) $(top_srcdir)/depcomp
+ am__depfiles_maybe = depfiles
