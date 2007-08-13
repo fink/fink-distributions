@@ -1,0 +1,919 @@
+Index: trunk/ChangeLog
+===================================================================
+--- trunk/ChangeLog	(revision 18)
++++ trunk/ChangeLog	(revision 27)
+@@ -1,3 +1,56 @@
++2007-08-12  Don Scorgie  <Don@Scorgie.org>
++
++	* librarian/rarian-info.c:
++	Reuse filename in check_file
++	Reduces number of malloc by quite a margin
++	Should also (hopefully) fix
++	bug #11957
++
++	* librarian/rarian-info.c:
++	Fix crashing on entried without a filename
++	(bug #11896)
++	
++	* util/rarian-example.c:
++	Uncomment man and info that got done
++	accidently
++
++	* librarian/rarian-man.c:
++	Fix issue with man pages not showing their 
++	section.  Fix path reading from manpath prog
++	to correctly get last path (bug #11901)
++
++	* TODO:
++	Update TODO slightly
++
++	* MAINTAINERS:
++	Add MAINTAINERS file, since someone asked.
++
++	* util/rarian-sk-update.in: 
++	When not reading OMF's directly, make the update
++	script work again.
++
++2007-08-06  Don Scorgie  <Don@Scorgie.org>
++
++	* librarian/rarian-man.c:
++	* librarian/rarian-main.c:
++	* librarian/rarian-reg-utils.c:
++	* librarian/rarian-reg-full.c:
++	* util/rarian-sk-get-cl.cpp:
++	* util/rarian-sk-migrate.cpp:
++	Build fixes for Solaris and other non-Linux platforms
++	- Based on patch from Damien Carbery (bug #11792)
++	
++
++	* librarian/rarian-main.c: 
++	* librarian/rarian-man.c: 
++	strdup() environment variables to
++	allow freeing correctly
++	- Jan de Groot (bug #11799)
++	(And then fix the resulting segfault)
++	
++	* librarian/rarian-omf.cpp: 
++	Fix categories for omf files
++
+ 2007-07-31  Don Scorgie  <Don@Scorgie.org>
+ 
+ 	* configure.ac: 
+Index: trunk/librarian/rarian-main.c
+===================================================================
+--- trunk/librarian/rarian-main.c	(revision 18)
++++ trunk/librarian/rarian-main.c	(revision 27)
+@@ -178,8 +178,11 @@
+ 	char *next_colon = NULL;
+     char *home_dir = NULL;
+     char *home_data_dir = NULL;
++    char *home_env = NULL;
+ 
+-    home_data_dir = getenv ("XDG_DATA_HOME");
++    home_env = getenv ("XDG_DATA_HOME");
++    if (home_env)
++      home_data_dir = strdup(home_env);
+ 
+     if (!home_data_dir || !strcmp (home_data_dir, "")) {
+         home_dir = getenv ("HOME");
+@@ -215,6 +218,7 @@
+         path = "/usr/local/share/:/usr/share/";
+     }
+     cur_path = path;
++
+     do {
+     	char *int_path = NULL;
+     	char *check_path = NULL;
+@@ -229,6 +233,7 @@
+ 		process_omf_dir (int_path);
+ #endif
+ 		process_locale_dirs (check_path);
++
+ 		scan_directory (check_path);
+ 		if (int_path && *int_path) {
+ 			free (int_path);
+@@ -270,6 +275,7 @@
+ {
+     DIR * dirp = NULL;
+     struct dirent * dp = NULL;
++    struct stat buf;
+     char *path = NULL;
+     dirp = opendir (dir);
+ 
+@@ -277,35 +283,33 @@
+     	return;
+     }
+     while (1) {
+-        if ((dp = readdir(dirp)) != NULL) {
+-            if (dp->d_type == DT_REG) {
+-                char *tmp = NULL;
+-				char *suffix = NULL;
+-				/* Add extra 2 for separator and NULL.  Otherwise, it falls over */
+-                tmp = malloc (sizeof (char) * (strlen(dir)+strlen(dp->d_name)+2));
+-                sprintf (tmp, "%s/%s", dir, dp->d_name);
++      if ((dp = readdir(dirp)) != NULL) {
++	char *full_name = NULL;
++	full_name = malloc (sizeof(char)*(strlen (dp->d_name) + strlen(dir) + 2));
++	
++	sprintf (full_name, "%s/%s", dir, dp->d_name);
++	stat(full_name,&buf);
+ 
+-				suffix = strrchr (tmp, '.');
+-				if (!strcmp (suffix, ".document")) {
+-	                process_file (tmp);
+-				} else if (!strcmp (suffix, ".section")) {
+-					process_section (tmp);
+-				}
+-                free (tmp);
+-            } else if (dp->d_type == DT_DIR && strcmp (dp->d_name, ".") &&
+-            		   strcmp (dp->d_name, "..") &&
+-            		   strcmp (dp->d_name, "LOCALE")) {
+-            	char *tmp;
++	if (S_ISREG(buf.st_mode)) {
++	  char *suffix = NULL;
++	  
++	  suffix = strrchr (full_name, '.');
++	  if (!strcmp (suffix, ".document")) {
++	    process_file (full_name);
++	  } else if (!strcmp (suffix, ".section")) {
++	    process_section (full_name);
++	  }
++	} else if (S_ISDIR(buf.st_mode) && strcmp (dp->d_name, ".") &&
++		   strcmp (dp->d_name, "..") &&
++		   strcmp (dp->d_name, "LOCALE")) {
+ 
+-            	tmp = malloc (sizeof (char) * (strlen(dir)+strlen(dp->d_name)+2));
+-                sprintf (tmp, "%s/%s", dir, dp->d_name);
+-                scan_directory (tmp);
+-				free (tmp);
+-	        }
+-	    } else {
+-    	    goto done;
+-		}
++	  scan_directory (full_name);
+ 	}
++	free (full_name);
++      } else {
++	goto done;
++      }
++    }
+ 
+ done:
+ 	insert_orphans ();
+@@ -351,6 +355,7 @@
+   char *tmp = NULL;
+ 
+   struct dirent * dp = NULL;
++  struct stat buf;
+   
+   langs = rrn_language_get_langs ();
+   path = malloc (sizeof(char) * (strlen (dir)+6));
+@@ -390,9 +395,13 @@
+ 
+   while (1) {
+     if ((dp = readdir(dirp)) != NULL) {
+-      if (dp->d_type == DT_DIR && strcmp (dp->d_name, ".") &&
++      char *full_name;
++      full_name = malloc (sizeof(char) * (strlen(path) + strlen(dp->d_name) + 5));
++    sprintf (full_name, "%s/%s", path, dp->d_name);
++      stat(full_name,&buf);
++      free (full_name);
++      if (S_ISDIR(buf.st_mode) && strcmp (dp->d_name, ".") &&
+ 	  strcmp (dp->d_name, "..")) {
+-	
+ 	langs_iter = langs;
+ 	while (langs_iter && *langs_iter) {
+ 	  char *lang = (*langs_iter);
+Index: trunk/librarian/rarian-info.c
+===================================================================
+--- trunk/librarian/rarian-info.c	(revision 18)
++++ trunk/librarian/rarian-info.c	(revision 27)
+@@ -111,12 +111,24 @@
+ 
+   tmp++;
+   end_name = strchr(tmp, ':');
++  if (!end_name) {
++    fprintf (stderr, "Error: Malformed line (no ':').  Ignoring entry\n");
++    return;
++  }
+   begin_fname = strchr(end_name, '(');
++  if (!begin_fname) {
++    fprintf (stderr, "Error: Malformed line (no filename).  Ignoring entry\n");
++    return;
++  }
+   end_fname = strchr(begin_fname, ')');
++  if (!end_fname) {
++    fprintf (stderr, "Error: Malformed line (no filename close).  Ignoring entry\n");
++    return;
++  }
+   end_section = strchr(end_fname, '.');
+ 
+-  if (!end_section || !end_fname || !begin_fname || !end_name) {
+-    fprintf (stderr, "Error: Malformed line again.  Ignoring entry\n");
++  if (!end_section) {
++    fprintf (stderr, "Error: Malformed line (no section).  Ignoring entry\n");
+     return;
+   }
+ 
+@@ -170,6 +182,10 @@
+   InfoLink *iter;
+   struct stat fileinfo;
+ 
++  if (!current_entry->name) {
++    return FALSE;
++  }
++
+   /* First, look for an additional part on the filename */
+   tmp = strchr(current_entry->name, '/');
+   if (tmp) {
+@@ -207,8 +223,11 @@
+    * the most popular and working down.
+    * If and when we find it, we set the encoding
+    * (loose) and return */
++  /* Use the largest possible storage for filename */
+   filename = malloc(sizeof(char) * (strlen(current_entry->base_path) +
+-				    strlen(current_entry->name) + 10));
++				    (strlen(current_entry->name)*2) + 15));
++
++
+   sprintf (filename, "%s/%s.info.gz", current_entry->base_path,
+ 	   current_entry->name);
+   if (!stat(filename, &fileinfo)) {
+@@ -216,9 +235,6 @@
+     current_entry->base_filename = filename;
+     return TRUE;
+   }
+-  free(filename);
+-  filename = malloc(sizeof(char) * (strlen(current_entry->base_path) +
+-				    strlen(current_entry->name) + 5));
+   sprintf (filename, "%s/%s.gz", current_entry->base_path,
+ 	   current_entry->name);
+   if (!stat(filename, &fileinfo)) {
+@@ -226,9 +242,6 @@
+     current_entry->base_filename = filename;
+     return TRUE;
+   }
+-  free(filename);
+-  filename = malloc(sizeof(char) * (strlen(current_entry->base_path) +
+-				    strlen(current_entry->name) + 11));
+   sprintf (filename, "%s/%s.info.bz2", current_entry->base_path,
+ 	   current_entry->name);
+   if (!stat(filename, &fileinfo)) {
+@@ -236,9 +249,6 @@
+     current_entry->base_filename = filename;
+     return TRUE;
+   }
+-  free(filename);
+-  filename = malloc(sizeof(char) * (strlen(current_entry->base_path) +
+-				    strlen(current_entry->name) + 6));
+   sprintf (filename, "%s/%s.bz2", current_entry->base_path,
+ 	   current_entry->name);
+   if (!stat(filename, &fileinfo)) {
+@@ -246,9 +256,6 @@
+     current_entry->base_filename = filename;
+     return TRUE;
+   }
+-  free(filename);
+-  filename = malloc(sizeof(char) * (strlen(current_entry->base_path) +
+-				    strlen(current_entry->name) + 7));
+   sprintf (filename, "%s/%s.info", current_entry->base_path,
+ 	   current_entry->name);
+   if (!stat(filename, &fileinfo)) {
+@@ -256,9 +263,6 @@
+     current_entry->base_filename = filename;
+     return TRUE;
+   }
+-  free(filename);
+-  filename = malloc(sizeof(char) * (strlen(current_entry->base_path) +
+-				    (strlen(current_entry->name)*2) + 11));
+   sprintf (filename, "%s/%s/%s.info.gz", current_entry->base_path,
+ 	   current_entry->name, current_entry->name);
+   if (!stat(filename, &fileinfo)) {
+@@ -275,9 +279,6 @@
+     current_entry->base_filename = filename;
+     return TRUE;
+   }
+-  free(filename);
+-  filename = malloc(sizeof(char) * (strlen(current_entry->base_path) +
+-				    (strlen(current_entry->name)*2) + 6));
+   sprintf (filename, "%s/%s/%s.gz", current_entry->base_path,
+ 	   current_entry->name, current_entry->name);
+   if (!stat(filename, &fileinfo)) {
+@@ -294,9 +295,6 @@
+     current_entry->base_filename = filename;
+     return TRUE;
+   }
+-  free(filename);
+-  filename = malloc(sizeof(char) * (strlen(current_entry->base_path) +
+-				    (strlen(current_entry->name)*2) + 12));
+   sprintf (filename, "%s/%s/%s.info.bz2", current_entry->base_path,
+ 	   current_entry->name, current_entry->name);
+   if (!stat(filename, &fileinfo)) {
+@@ -313,9 +311,6 @@
+     current_entry->base_filename = filename;
+     return TRUE;
+   }
+-  free(filename);
+-  filename = malloc(sizeof(char) * (strlen(current_entry->base_path) +
+-				    (strlen(current_entry->name)*2) + 7));
+   sprintf (filename, "%s/%s/%s.bz2", current_entry->base_path,
+ 	   current_entry->name, current_entry->name);
+   if (!stat(filename, &fileinfo)) {
+@@ -332,9 +327,6 @@
+     current_entry->base_filename = filename;
+     return TRUE;
+   }
+-  free(filename);
+-  filename = malloc(sizeof(char) * (strlen(current_entry->base_path) +
+-				    (strlen(current_entry->name)*2) + 8));
+   sprintf (filename, "%s/%s/%s.info", current_entry->base_path,
+ 	   current_entry->name);
+   if (!stat(filename, &fileinfo)) {
+@@ -441,6 +433,15 @@
+ 	current_entry = NULL;
+       }
+       current_entry = malloc (sizeof(RrnInfoEntry));
++      current_entry->name = NULL;
++      current_entry->base_path = NULL;
++      current_entry->base_filename = NULL;
++      current_entry->category = NULL;
++      current_entry->section = NULL;
++      current_entry->doc_name = NULL;
++      current_entry->comment = NULL;
++
++
+       process_initial_entry (line);
+       
+ 
+Index: trunk/librarian/rarian-reg-utils.c
+===================================================================
+--- trunk/librarian/rarian-reg-utils.c	(revision 18)
++++ trunk/librarian/rarian-reg-utils.c	(revision 27)
+@@ -35,7 +35,7 @@
+ void     process_sect_line (char *line, RrnSect *sect);
+ void     process_sect_pair (RrnSect *sect, char *key, char *value);
+ int      rrn_reg_add_sect (RrnReg *reg, RrnSect *sect);
+-char *   process_path (RrnReg *reg);
++void     process_path (RrnReg *reg);
+ char *   process_section_path (char *owner_path, RrnSect *section);
+ 
+ 
+@@ -700,7 +700,7 @@
+     return;
+ }
+ 
+-char *
++void
+ process_path (RrnReg *reg)
+ {
+ 	char *prefix = NULL;
+Index: trunk/librarian/rarian-man.c
+===================================================================
+--- trunk/librarian/rarian-man.c	(revision 18)
++++ trunk/librarian/rarian-man.c	(revision 27)
+@@ -25,6 +25,7 @@
+ #include <unistd.h>
+ #include <dirent.h>
+ #include <string.h>
++#include <sys/stat.h>
+ #include "rarian-man.h"
+ #include "rarian-language.h"
+ #include "rarian-utils.h"
+@@ -112,7 +113,7 @@
+     exit (0);
+   } else {
+     /* Parent process */
+-    char *input;
++    char *input = NULL;
+     char *colon = NULL;
+     char *next = NULL;
+     int i, count = 0;
+@@ -126,10 +127,17 @@
+     close(infd[1]);
+     memset(input, 0, sizeof(char)*255);
+     
+-    input[read(infd[0],input,255)] = 0; // Read from child\u2019s stdout
+-    
++    input[read(infd[0],input,255)] = 0; // Read from child's stdout
++    if (*input != '\0') {
++      int i;
++      i = strlen(input);
++      input[i-1]='\0';
++    }
+     if (!input || *input == '\0') {
+-      input = getenv("MANPATH");
++      char *env = NULL;
++      env = getenv("MANPATH");
++      if (env)
++	input = strdup(env);
+     }
+     if (!input || *input == '\0') {
+       if (input)
+@@ -292,6 +300,7 @@
+ 
+   DIR * dirp = NULL;
+   struct dirent * dp = NULL;
++  struct stat buf;
+   int current;
+   
+   current = -1;
+@@ -310,43 +319,47 @@
+     
+     while (1) {
+       if ((dp = readdir(dirp)) != NULL) {
+-	if (dp->d_type == DT_REG || dp->d_type == DT_LNK) {
++	char *full_name;
++	
++	full_name = malloc (sizeof(char) * (strlen(dp->d_name) + strlen (path) + 3));
++	sprintf (full_name, "%s/%s", path, dp->d_name);
++			    
++	stat(full_name,&buf);
++	if (S_ISREG(buf.st_mode) || buf.st_mode & S_IFLNK) {
+ 	  char *tmp = NULL;
+ 	  char *suffix = NULL;
+ 	  RrnManEntry *entry;
+ 	  ManLink *link;
+ 	  char *subsect = NULL;
+-	  
+-	  /* Add extra 2 for separator and NULL.  Otherwise, it falls over */
+-	  tmp = malloc (sizeof (char) * (strlen(path)+strlen(dp->d_name)+2));
+-	  sprintf (tmp, "%s/%s", path, dp->d_name);
+-	  
++	  	  
+ 	  entry = malloc (sizeof(RrnManEntry));
+ 	  entry->name = get_name_for_file (dp->d_name, &subsect);
+-	  entry->path = tmp;
+-	  entry->section = subsect;
+-	  entry->comment = NULL;
+-	  current = find_key(subsect);
+-	  if (!check_for_dup (entry, current)) {
+-	    link = malloc (sizeof(ManLink));
+-	    link->reg = entry;
+-	    
+-	    if (mantail[current]) {
+-	      mantail[current]->next = link;
+-	      link->next = NULL;
+-	      link->prev = mantail[current];
+-	      mantail[current] = link;
++	  entry->path = full_name;
++	  if (subsect) {
++	    entry->section = subsect;
++	    entry->comment = NULL;
++	    current = find_key(subsect);
++	    if (!check_for_dup (entry, current)) {
++	      link = malloc (sizeof(ManLink));
++	      link->reg = entry;
++	      
++	      if (mantail[current]) {
++		mantail[current]->next = link;
++		link->next = NULL;
++		link->prev = mantail[current];
++		mantail[current] = link;
++	      } else {
++		manhead[current] = mantail[current] = link;
++		link->prev = link->next = NULL;
++	      }
+ 	    } else {
+-	      manhead[current] = mantail[current] = link;
+-	      link->prev = link->next = NULL;
++	      free (entry->name);
++	      free (entry->path);
++	      free (entry->section);
++	      if (entry->comment)
++		free (entry->comment);
++	      free (entry);
+ 	    }
+-	  } else {
+-	    free (entry->name);
+-	    free (entry->path);
+-	    free (entry->section);
+-	    if (entry->comment)
+-	      free (entry->comment);
+-	    free (entry);
+ 	  }	  
+ 	}
+       } else {
+@@ -384,13 +397,11 @@
+       if (!access (path, R_OK)) {
+ 	process_dir(path);
+       }
+-      process_dir (path);
+       free (path);
+       lang_iter++;
+     }
+     
+ 
+-
+     process_dir(*path_iter);
+     path_iter++;
+   }
+Index: trunk/librarian/rarian-reg-full.c
+===================================================================
+--- trunk/librarian/rarian-reg-full.c	(revision 18)
++++ trunk/librarian/rarian-reg-full.c	(revision 27)
+@@ -23,6 +23,7 @@
+ #include <unistd.h>
+ #include <stdio.h>
+ #include <string.h>
++#include <ctype.h>
+ 
+ #include "rarian-reg-full.h"
+ #include "rarian-reg-utils.h"
+@@ -39,8 +40,8 @@
+ 									  char *lang);
+ RrnSectFull * rrn_sect_new_full ();
+ void     rrn_sect_free_full (RrnSectFull *sect);
+-char *   process_path_full (RrnRegFull *reg);
+-char *   process_section_path_full (RrnListEntry *owner_paths, RrnSectFull *section);
++void     process_path_full (RrnRegFull *reg);
++void     process_section_path_full (RrnListEntry *owner_paths, RrnSectFull *section);
+ 
+ RrnRegFull *
+ rrn_reg_new_full ()
+@@ -619,7 +620,7 @@
+     return;
+ }
+ 
+-char *
++void
+ process_path_full (RrnRegFull *reg)
+ {
+ 	char *prefix = NULL;
+@@ -649,7 +650,7 @@
+ 	}
+ }
+ 
+-char *
++void
+ process_section_path_full (RrnListEntry *owner_paths, RrnSectFull *section)
+ {
+ 	char *tmp = NULL;
+Index: trunk/librarian/rarian-omf.cpp
+===================================================================
+--- trunk/librarian/rarian-omf.cpp	(revision 18)
++++ trunk/librarian/rarian-omf.cpp	(revision 27)
+@@ -39,7 +39,6 @@
+ static char *sk_series;
+ static char *new_series;
+ static char *type;
+-static char *categories;
+ 
+ static bool am_parsing = false;
+ 
+@@ -63,7 +62,7 @@
+         reg->uri = strdup ("");
+     } else if (e == REG_LANG) {
+       if (strcmp (pAttrib->Value(), "")) {
+-        lang = strdup (pAttrib->Value());
++        reg->lang = strdup (pAttrib->Value());
+       }
+     } else if (e == REG_SERIES) {
+       if (strcmp (pAttrib->Value(), "")) {
+@@ -72,15 +71,19 @@
+         }
+     } else if (e == REG_TYPE && strcmp (pAttrib->Value(), "")) {
+         if (!type) {
+-            type = strdup (pAttrib->Value());
++            reg->type = strdup (pAttrib->Value());
+         }
+     } else if (e == REG_TYPE && !strcmp (pAttrib->Value(), "")) {
+         /* Do nothing */
+     } else if (e == REG_CATEGORIES && strcmp (pAttrib->Value(), "")) {
+-		if (!categories) {
+-			categories = strdup (pAttrib->Value());
+-		}
+-	} else if (e == REG_CATEGORIES && !strcmp (pAttrib->Value(), "")) {
++      char *categories;
++      categories = strdup (pAttrib->Value());
++      
++      /* OMF files can only have 1 category. */
++      reg->categories = (char **) malloc (sizeof(char *) * 2);
++      reg->categories[0] = categories;
++      reg->categories[1] = NULL;
++    } else if (e == REG_CATEGORIES && !strcmp (pAttrib->Value(), "")) {
+ 		/* Do Nothing */
+     } else {
+       /* Ignore unknown elements */
+Index: trunk/configure.ac
+===================================================================
+--- trunk/configure.ac	(revision 18)
++++ trunk/configure.ac	(revision 27)
+@@ -154,6 +154,10 @@
+ 
+ AM_CONDITIONAL(ENABLE_EXTRACT, test x"$have_xslt" = xyes)
+ 
++AC_PATH_PROG(have_bash, bash)
++
++AC_SUBST(BASH, $have_bash)
++
+ # Checks for header files.
+ AC_CHECK_HEADERS(malloc.h)
+ 
+Index: trunk/TODO
+===================================================================
+--- trunk/TODO	(revision 18)
++++ trunk/TODO	(revision 27)
+@@ -1,68 +1,5 @@
+ A list of tasks that need doing in and around Rarian
+ 
+-Primary Goal
+-------------
+-
+-The current primary goal of Rarian is to get into decent enough state to be
+-proposed for GNOME 2.20 (Around September 2007).  To do this, a number of tasks
+-are required.
+-
+-When 2.18 is branched and work commences on 2.20 (Approx. April 2007),
+-   Rarian should be able to drop in as a scrollkeeper replacement immediately.
+-
+-This means, jhbuild should be adapted to build rarian instead of
+-   scrollkeeper and a full build of jhbuild moduleset for GNOME
+-   2.20should be able to run through and install correctly, with all
+-   current documentation available within yelp (within the jhbuild
+-   environment).
+-
+-Gnome-doc-utils needs some work to stop looking for scrollkeeper and
+-   instead install scrolls (or install omfs and run rarian-sk-update).
+-
+-Yelp will need a lot of work done to make full use of librarian.  In
+-   addition, several things need done to comply with the spec itself.
+-
+-A guide will need to be created for app developers on how to handle
+-   the New World Order.  This should cover how to call yelp and what
+-   needs to be done to ensure documentation shows up.
+-
+-3rd May 2007: Additional stuff needed now!
+-* Whatever is required from the yelp mega function
+-DONE Mostly completed
+-* Scrollkeeper replacements:
+-DONE scrollkeeper-config
+- - return various "useful" pieces of info:
+- (Pretty much direct from configure script)
+-DONE scrollkeeper-extract
+- - Applys stylesheets to xml docs
+-DONE scrollkeeper-gen-seriesid
+- - Generate series id's
+- - own program
+-DONE scrollkeeper-get-cl
+- - ???
+-DONE scrollkeeper-get-content-list
+- - ???
+-MOSTLY DONE scrollkeeper-get-extended-content-list
+- - doesn't copy with extended stuff (mainly because it isn't used)
+-DONE scrollkeeper-get-index-from-docpath
+- - No idea Blank
+-DONE scrollkeeper-get-toc-from-docpath
+- - No idea Blank
+-DONE scrollkeeper-get-toc-from-id
+- - No idea blank
+-DONE scrollkeeper-install
+- - rarian-sk-install
+-DONE scrollkeeper-preinstall
+- - rarian-sk-install
+- - Looks like I've actually got to do the preinstall stuff properly
+-DONE scrollkeeper-rebuilddb
+- - Rebuilds the internal tree (rarian-sk-update) - rarian-sk-rebuild
+-DONE scrollkeeper-uninstall
+- - rarian-sk-install
+-DONE scrollkeeper-update
+- - Adds file to tree (rarian-sk-update)
+-
+-
+ Now, on to stuff that needs doing within Rarian
+ ----------------------------------------------
+ 
+@@ -70,11 +7,8 @@
+ 
+ * Handle escape codes within strings as specified in Desktop Entry Spec
+ 
+-* Cleanup of code.  Add comments and API reference documentation
++* Cleanup of code.  Add comments and (better)API reference documentation
+ 
+-* Add more API.  Yelp will need many new functions to fully utilise the power
+-  of librarian
+-
+ * Add overview document, detailing how Rarian is built (for easy replacement)
+ 
+ * Test the bejeesus out of it.  Test on malformed files.  Ensure it doesn't
+@@ -85,3 +19,7 @@
+ * Ensure it can migrate and handle all omf files
+ 
+ * Add rarian-validate program to validate rarian files
++
++* Caching of info, man and document files on a per-user basis
++
++* Handle errors gracefully
+\ No newline at end of file
+Index: trunk/MAINTAINERS
+===================================================================
+--- trunk/MAINTAINERS	(revision 0)
++++ trunk/MAINTAINERS	(revision 27)
+@@ -0,0 +1,6 @@
++Please use the mailing list.  Info for it can be found at:
++http://lists.freedesktop.org/mailman/listinfo/rarian
++
++Other than that, the maintainers are:
++Don Scorgie <Don@Scorgie.org>
++and a small blue elf called Grundig, who doesn't have an email address.
+\ No newline at end of file
+Index: trunk/util/rarian-sk-rebuild.in
+===================================================================
+--- trunk/util/rarian-sk-rebuild.in	(revision 18)
++++ trunk/util/rarian-sk-rebuild.in	(revision 27)
+@@ -1,4 +1,4 @@
+-#!/bin/bash
++#!@BASH@
+ 
+ # Another simple wrapper script.  This time for scrollkeeper-rebuilddb
+ # This one is slightly more complex in that we have to run a command!
+Index: trunk/util/rarian-sk-get-cl.cpp
+===================================================================
+--- trunk/util/rarian-sk-get-cl.cpp	(revision 18)
++++ trunk/util/rarian-sk-get-cl.cpp	(revision 27)
+@@ -116,6 +116,8 @@
+     pParent->LinkEndChild (doc);
+ 
+   }
++
++  return 0;
+ }
+ 
+ void
+Index: trunk/util/rarian-example.c
+===================================================================
+--- trunk/util/rarian-example.c	(revision 18)
++++ trunk/util/rarian-example.c	(revision 27)
+@@ -96,7 +96,7 @@
+   char **cats =  rrn_info_get_categories ();
+   char **iter = cats;
+   
+-  /*  rrn_man_for_each ((RrnManForeachFunc) man_for_each, NULL);
++  rrn_man_for_each ((RrnManForeachFunc) man_for_each, NULL);
+   
+   while (iter && *iter) {
+     printf ("Info category: %s\n", *iter);
+@@ -104,12 +104,12 @@
+   }
+ 
+   rrn_info_for_each ((RrnInfoForeachFunc) info_for_each, NULL);
+-  */
++  
+   rrn_for_each((RrnForeachFunc) for_each_cb, NULL);
+ 
+   rrn_shutdown ();
+-  /*  rrn_info_shutdown ();
++  rrn_info_shutdown ();
+   rrn_man_shutdown ();
+-  */
++  
+   return 0;
+ }
+Index: trunk/util/rarian-sk-migrate.cpp
+===================================================================
+--- trunk/util/rarian-sk-migrate.cpp	(revision 18)
++++ trunk/util/rarian-sk-migrate.cpp	(revision 27)
+@@ -33,6 +33,7 @@
+ #include <rarian-reg-full.h>
+ 
+ #include <stdio.h>
++#include <sys/stat.h>
+ #include <sys/types.h>
+ #include <time.h>
+ 
+@@ -275,6 +276,7 @@
+ {
+     DIR * dirp = NULL;
+     struct dirent * dp = NULL;
++    struct stat buf;
+     char *path = NULL;
+ 
+     if (argc != 3 || access (argv[1], R_OK)) {
+@@ -285,7 +287,8 @@
+     dirp = opendir (argv[1]);
+     while (1) {
+         if ((dp = readdir(dirp)) != NULL) {
+-            if (dp->d_type == DT_REG && !strncmp (dp->d_name, argv[2], strlen (argv[2]))) {
++            stat(dp->d_name,&buf);
++            if (buf.st_mode == S_IFREG && !strncmp (dp->d_name, argv[2], strlen (argv[2]))) {
+                 process_file (argv[1], dp->d_name);
+             }
+         } else {
+Index: trunk/util/rarian-sk-config.in
+===================================================================
+--- trunk/util/rarian-sk-config.in	(revision 18)
++++ trunk/util/rarian-sk-config.in	(revision 27)
+@@ -1,4 +1,4 @@
+-#!/bin/bash
++#!@BASH@
+ 
+ # Yet another simple wrapper for scrollkeeper wierdness
+ # This one emulates scrollkeeper-config,
+Index: trunk/util/Makefile.am
+===================================================================
+--- trunk/util/Makefile.am	(revision 18)
++++ trunk/util/Makefile.am	(revision 27)
+@@ -79,49 +79,49 @@
+ install-exec-hook:
+ if ENABLE_SK_COMPAT
+ 	@echo Moving Files if needed
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-config ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-config; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-config ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-config ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-config; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-config ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-config $(DESTDIR)$(bindir)/scrollkeeper-config.real; fi
+ if ENABLE_EXTRACT
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-extract ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-extract; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-extract ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-extract ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-extract; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-extract ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-extract $(DESTDIR)$(bindir)/scrollkeeper-extract.real; fi
+ endif
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-gen-seriesid ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-gen-seriesid; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-gen-seriesid ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-gen-seriesid ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-gen-seriesid; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-gen-seriesid ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-gen-seriesid $(DESTDIR)$(bindir)/scrollkeeper-gen-seriesid.real; fi
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-get-cl ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-get-cl; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-get-cl ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-get-cl ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-get-cl; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-get-cl ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-get-cl $(DESTDIR)$(bindir)/scrollkeeper-get-cl.real; fi
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-get-content-list ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-get-content-list; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-get-content-list ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-get-content-list ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-get-content-list; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-get-content-list ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-get-content-list $(DESTDIR)$(bindir)/scrollkeeper-get-content-list.real; fi
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-get-extended-content-list ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-get-extended-content-list; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-get-extended-content-list ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-get-extended-content-list ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-get-extended-content-list; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-get-extended-content-list ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-get-extended-content-list $(DESTDIR)$(bindir)/scrollkeeper-get-extended-content-list.real; fi
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-get-index-from-docpath ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-get-index-from-docpath; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-get-index-from-docpath ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-get-index-from-docpath ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-get-index-from-docpath; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-get-index-from-docpath ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-get-index-from-docpath $(DESTDIR)$(bindir)/scrollkeeper-get-index-from-docpath.real; fi
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-docpath ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-docpath; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-docpath ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-docpath ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-docpath; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-docpath ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-docpath $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-docpath.real; fi
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-id ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-id; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-id ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-id ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-id; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-id ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-id $(DESTDIR)$(bindir)/scrollkeeper-get-toc-from-id.real; fi
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-install ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-install; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-install ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-install ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-install; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-install ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-install $(DESTDIR)$(bindir)/scrollkeeper-install.real; fi
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-preinstall ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-preinstall; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-preinstall ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-preinstall ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-preinstall; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-preinstall ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-preinstall $(DESTDIR)$(bindir)/scrollkeeper-preinstall.real; fi
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-rebuilddb ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-rebuilddb; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-rebuilddb ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-rebuilddb ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-rebuilddb; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-rebuilddb ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-rebuilddb $(DESTDIR)$(bindir)/scrollkeeper-rebuilddb.real; fi
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-uninstall ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-uninstall; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-uninstall ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-uninstall ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-uninstall; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-uninstall ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-uninstall $(DESTDIR)$(bindir)/scrollkeeper-uninstall.real; fi
+-	@if [[ -h $(DESTDIR)$(bindir)/scrollkeeper-update ]]; then rm $(DESTDIR)$(bindir)/scrollkeeper-update; \
+-	elif [[ -e $(DESTDIR)$(bindir)/scrollkeeper-update ]]; then \
++	@if [ -h $(DESTDIR)$(bindir)/scrollkeeper-update ]; then rm $(DESTDIR)$(bindir)/scrollkeeper-update; \
++	elif [ -e $(DESTDIR)$(bindir)/scrollkeeper-update ]; then \
+ 		mv $(DESTDIR)$(bindir)/scrollkeeper-update $(DESTDIR)$(bindir)/scrollkeeper-update.real; fi
+ 	@cd $(DESTDIR)$(bindir); ln -s rarian-sk-config scrollkeeper-config
+ if ENABLE_EXTRACT
+Index: trunk/util/rarian-sk-update.in
+===================================================================
+--- trunk/util/rarian-sk-update.in	(revision 18)
++++ trunk/util/rarian-sk-update.in	(revision 27)
+@@ -1,4 +1,4 @@
+-#!/bin/bash
++#!@BASH@
+ 
+ # This script is designed to replace scrollkeeper-update
+ # It iterates through all the directories specified using -o <dir_list>
+@@ -26,6 +26,7 @@
+ output_dir=${datadir}/help
+ package_version=@PACKAGE_VERSION@
+ real_convert[0]=$convert_dir
++skip_omf_translate=@ENABLE_OMF_READ@
+ 
+ # Print the version info for this file
+ print_version()
+@@ -316,7 +317,7 @@
+ 	echo "Verbosity turned on"
+ fi
+ 
+-if [ ! @ENABLE_OMF_READ@ ]
++if [ $skip_omf_translate = 0 ]
+ then
+ 
+ split_omf_dirs
