@@ -22,4 +22,4 @@ find "$SEARCH_PATH" "$@" -type f | grep -v -E '\.(sh|pl)$' | while read FILE; do
 		done
 	fi
 #done
-done | sort -u | xargs dpkg -S | cut -d: -f1 | sort -u | less
+done | sort -u | xargs dpkg -S | cut -d: -f1 | sort -u
