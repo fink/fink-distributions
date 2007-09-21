@@ -141,3 +141,211 @@ diff -Nurd -x'*~' esound-0.2.36.orig/esd_config.c esound-0.2.36/esd_config.c
  			      autospawned ESD, in milliseconds. */
  char esd_spawn_options[LINEBUF_SIZE] = "-terminate -nobeeps -as 2";
  
+diff -urN esound-0.2.36.orig/audio_coreaudio.c esound-0.2.36/audio_coreaudio.c
+--- esound-0.2.36.orig/audio_coreaudio.c	2003-06-18 08:12:23.000000000 -0400
++++ esound-0.2.36/audio_coreaudio.c	2007-09-07 18:53:46.000000000 -0400
+@@ -90,7 +90,7 @@
+ #define ARCH_esd_audio_devices
+ const char *esd_audio_devices()
+ {
+-    return "coreaudio API only";
++    return "Built-in Output, Built-in Input, etc.";
+ }
+ 
+ /*
+@@ -116,18 +116,158 @@
+     return (0);
+   }
+ 
+-  /********************** playback section ***************************/
+-  /* get default output device */
+-  propertySize = sizeof(gOutputDeviceID);
+-  status = AudioHardwareGetProperty(kAudioHardwarePropertyDefaultOutputDevice,
+-	                            &propertySize,
+-				    &gOutputDeviceID);
+-  if (status) {
+-    fprintf(stderr, "get default output device failed, status = %d\n",
+-	    (int)status);
+-    return (-2);
++  if (esd_audio_device) {
++    /* search for DeviceID of specified device */
++    UInt32 outSize;
++    UInt32 devIndex, numDevs;
++    UInt32 buffIndex, numChannels;
++    AudioDeviceID dev, *devList = NULL;
++    AudioBufferList *buffList = NULL;
++
++    outSize = 0;
++    status = AudioHardwareGetPropertyInfo(kAudioHardwarePropertyDevices, 
++                                          &outSize, 
++                                          NULL);
++    if (status || outSize == 0) {
++      fprintf(stderr, "get device list info failed, status = %d\n",
++              (int)status);
++      return (-2);
++    }
++    
++    numDevs = outSize/sizeof(AudioDeviceID);
++
++    /* allocate and get the device list */
++    devList = (AudioDeviceID*)malloc(outSize);
++    if (!devList) {
++      fprintf(stderr, "memory allocation failed\n");
++      return (-2);
++    }
++    status = AudioHardwareGetProperty(kAudioHardwarePropertyDevices, 
++                                      &outSize,
++                                      devList);
++    if (status) {
++      fprintf(stderr, "get device list failed, status = %d\n",
++              (int)status);
++      if (devList) free(devList);
++      return (-2);
++    }
++    
++    /* iterate through device list */
++    for (devIndex = 0; devIndex < numDevs; ++devIndex) {
++      outSize = LEN_DEVICE_NAME;
++      status = AudioDeviceGetProperty(devList[devIndex],
++                                      0,
++                                      0, 
++                                      kAudioDevicePropertyDeviceName,
++                                      &outSize, 
++                                      deviceName);
++      if (status) {
++        fprintf(stderr, "get device name failed, status = %d\n",
++                (int)status);
++        if (devList) free(devList);
++        return (-2);
++      }
++      
++      /* is this the specified device? */
++      if (strncmp(deviceName, esd_audio_device, strlen(esd_audio_device)) == 0) {
++        /* device found, now probe for num inputs/outputs */	
++        dev = devList[devIndex];
++        
++        /* get number of input channels */
++        outSize = 0;
++        numChannels = 0;
++        status = AudioDeviceGetPropertyInfo(dev,
++                                            0, 
++                                            1, 
++                                            kAudioDevicePropertyStreamConfiguration,
++                                            &outSize, 
++                                            NULL);
++        if(!status && (outSize != 0)) {
++          buffList = (AudioBufferList*)malloc(outSize);
++          if (!buffList) {
++            fprintf(stderr, "memory allocation failed\n");;
++            return (-2);
++          }
++          /* get the input stream configuration */
++          status = AudioDeviceGetProperty(dev, 
++                                          0, 
++                                          1, 
++                                          kAudioDevicePropertyStreamConfiguration, 
++                                          &outSize, 
++                                          buffList);
++          if(!status) {
++            /* count the total number of input channels in the stream */
++            for(buffIndex = 0; buffIndex < buffList->mNumberBuffers; ++buffIndex)
++              numChannels += buffList->mBuffers[buffIndex].mNumberChannels;
++          }	
++        }
++
++        /* set input device */
++        if (numChannels == 0)
++          gInputDeviceID = kAudioDeviceUnknown;
++        else
++          gInputDeviceID = dev;
++       
++
++        /* get number of output channels */
++        outSize = 0;
++        numChannels = 0;
++        status = AudioDeviceGetPropertyInfo(dev,
++                                            0, 
++                                            0, 
++                                            kAudioDevicePropertyStreamConfiguration,
++                                            &outSize, 
++                                            NULL);
++        if(!status && (outSize != 0)) {
++          buffList = (AudioBufferList*)malloc(outSize);
++          if (!buffList) {
++            fprintf(stderr, "memory allocation failed\n");
++            return (-2);
++          }
++          /* get the input stream configuration */
++          status = AudioDeviceGetProperty(dev, 
++                                          0, 
++                                          0, 
++                                          kAudioDevicePropertyStreamConfiguration, 
++                                          &outSize, 
++                                          buffList);
++          if(!status) {
++            // count the total number of input channels in the stream
++            for(buffIndex = 0; buffIndex < buffList->mNumberBuffers; ++buffIndex)
++              numChannels += buffList->mBuffers[buffIndex].mNumberChannels;
++          }	
++        }
++
++        if (numChannels == 0)
++          gOutputDeviceID = kAudioDeviceUnknown;
++        else
++          gOutputDeviceID = dev;
++
++        /* found specified device so break */
++        break;
++      }
++    }
++    if (devList) free(devList);
++    if (devIndex >= numDevs) {
++      fprintf(stderr, "device not found\n");
++      return (-2);
++    }
+   }
+ 
++  /********************** playback section ***************************/
++  if (gOutputDeviceID == kAudioDeviceUnknown) {
++    /* get default output device */
++    propertySize = sizeof(gOutputDeviceID);
++    status = AudioHardwareGetProperty(kAudioHardwarePropertyDefaultOutputDevice,
++                                      &propertySize,
++                                      &gOutputDeviceID);
++    if (status) {
++      fprintf(stderr, "get default output device failed, status = %d\n",
++              (int)status);
++      return (-2);
++    }
++  }
++  
+   if (gOutputDeviceID != kAudioDeviceUnknown) {
+     /* got default output device */
+     coreaudio_has_output_device = 1;
+@@ -206,15 +346,17 @@
+   }
+ 
+   /********************** record section ***************************/
+-  /* get default input device */
+-  propertySize = sizeof(gInputDeviceID);
+-  status = AudioHardwareGetProperty(kAudioHardwarePropertyDefaultInputDevice,
+-	                            &propertySize,
+-				    &gInputDeviceID);
+-  if (status) {
+-    fprintf(stderr, "get default input device failed, status = %d\n",
+-	    (int)status);
+-    return (-2);
++  if (gInputDeviceID == kAudioDeviceUnknown) {
++    /* get default input device */
++    propertySize = sizeof(gInputDeviceID);
++    status = AudioHardwareGetProperty(kAudioHardwarePropertyDefaultInputDevice,
++                                      &propertySize,
++                                      &gInputDeviceID);
++    if (status) {
++      fprintf(stderr, "get default input device failed, status = %d\n",
++              (int)status);
++      return (-2);
++    }
+   }
+ 
+   if (gInputDeviceID != kAudioDeviceUnknown) {
