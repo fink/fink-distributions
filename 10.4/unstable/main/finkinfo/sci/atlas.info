@@ -1,71 +1,117 @@
 Package: atlas
-Version: 3.7.11
+Version: 3.8.0
 Revision: 1
-Distribution: 10.4
 Description: Portably optimal linear algebra software
 DescDetail: <<
-The current version provides a complete BLAS and LAPACK API. 
+The current version provides a complete BLAS and LAPACK API.
 For many operations, ATLAS achieves performance on par
 with machine-specific tuned libraries.
-Files installed:
-cblas.h       : The C header file for the C interface to the BLAS.
-liblapack.a   : The LAPACK routines provided by ATLAS, plus the rest
-                of LAPACK from netlib.org.
-libcblas.a    : The ANSI C interface to the BLAS.
-libf77blas.a  : The Fortran77 interface to the BLAS.
-libatlas.a    : The main ATLAS library, providing low-level routines for
-                all interface libs.
-When answering "yes" whether to enable threads, one gets also the threaded
-variants libptcblas.a and libptf77blas.a
+Installs also LAPACK's docs and manpages.
+Headers: cblas.h clapack.h, plus the atlas headers
+Libraries installed:
+liblapack.a	: The LAPACK routines provided by ATLAS,
+		plus the rest of LAPACK from netlib.org.
+libcblas.a	: The ANSI C interface to the BLAS.
+libf77blas.a	: The Fortran77 interface to the BLAS.
+libatlas.a	: The main ATLAS library,
+		providing low-level routines for all interface libs.
+Plus the threaded variants libptcblas.a and libptf77blas.a,
+		and an all-encompassing libatlas.dylib
 <<
 DescPort: <<
 The optimized subset of LAPACK provided by ATLAS is merged
-with the full LAPACK from http://www.netlib.org/lapack. 
+with the full LAPACK from http://www.netlib.org/lapack.
 <<
 DescUsage: <<
-Order is important when linking!  Use:
--L%p/lib -llapack -lcblas -lf77blas -latlas 
-Must be run interactively (asks a lot of questions, use default answers
-unless you really know what you are doing). For "architecture" choose
-"UNKNOWN" if you have a G3.
+Order is important when linking! Use:
+-L%p/lib -llapack -lcblas -lf77blas -latlas
 <<
-Source: mirror:sourceforge:math-atlas/%n%v.tar.gz
-Source-MD5: d3c6f302a6dbcd3f30803e1392f20012
-Source2: http://www.netlib.org/lapack/lapack.tgz
-Source2-MD5: a24f59304f87b78cdc7da2ae59c98664
-License: BSD
-#Patch: %n.patch
-PatchScript: <<
-## perl -pi -e 's,faltivec,faltivec -save-temps,; s, \-j (2|%d),,' config.c
-## perl -pi -e 's, \-j (2|%d),,' config.c
-# perl -pi -e 's,ATL_(c|)prow2blkT\.c$,$& \-O2,' makes/Make.gpmm
-perl -pi -e 's|g77|g95|g' config.c
-perl -pi -e 's|g77|g95|g' ../LAPACK/INSTALL/make.inc.LINUX
-<<
-BuildDepends: g95 (>= 0.50-20060604)
+Source: mirror:sourceforge:math-atlas/%n%v.tar.bz2
+Source-MD5: fd42a00f36243bf4815d035b226ec305
+Source2: http://www.netlib.org/lapack/lapack-3.1.1.tgz
+Source2-MD5: 00b21551a899bcfbaa7b8443e1faeef9
 SourceDirectory: ATLAS
+License: BSD
+# since we're experimenting with building a dylib :
+BuildDependsOnly: true
+BuildDepends: gcc42, fink (>= 0.27.99)
+Depends: gcc42-shlibs 
+PatchScript: <<
+#!/bin/sh -ev
+# -ftree-loop-linear causes problems with xconfig.
+# -fgcse-after-reload -fsched-interblock -freorder-blocks also _ though they're implied by -O3 !
+cd ..; ln -s lapack-3.1.1 LAPACK
+cd LAPACK
+sed -e 's|g77|gfortran|g' < INSTALL/make.inc.LINUX > make.inc
+perl -pi -e 's,\.\./\.\./blas\$\(PLAT\)\.a,%b/../bld/lib/libptf77blas.a %b/../bld/lib/libptcblas.a %b/../bld/lib/libatlas.a,' \
+        make.inc
+<<
 CompileScript: <<
- (cd ../LAPACK; sed 's|-funroll-all-loops -fno-f2c -O3|-funroll-all-loops -O3|g' < INSTALL/make.inc.LINUX > make.inc; cd SRC; make all)
- (make CC=cc config; export ARCH=`ls -1t Make* | head -n1 | cut -f2 -d"."`; cp ../LAPACK/lapack_LINUX.a lib/$ARCH/liblapack.a; mv Make.$ARCH Make.$ARCH.orig; sed 's|gcc|cc|g' < Make.$ARCH.orig > Make.$ARCH; make install arch=$ARCH)
+#!/bin/sh -ev
+ if [ %m = 'i386' ]; then mflags="-mfpmath=sse -msse -msse2 -msse3 -m32"; iflags="-mfpmath=387"; else mflags=''; iflags=''; fi
+ lflags="-O3 -fomit-frame-pointer -fgcse-sm -fgcse-las -ftree-loop-linear $mflags"
+ iflags="-O3 -fomit-frame-pointer $iflags"
+ cd ../LAPACK
+ sed -i.bak -e "s;\(-funroll-all-loops\) -O3;\1 $lflags;" -e 's,^TIMER,\#TIMER,' -e '/INT_ETIME/s,^\# *,,' make.inc
+ make lapacklib
+# atlas 'forgets' scabs1 (not dcabs1 !), so we get it here..
+ cd BLAS/SRC; make scabs1.o; cd -
+ mkdir -p ../bld/lib
+ ar cr ../bld/lib/libf77blas.a BLAS/SRC/scabs1.o; ar cr ../bld/lib/libptf77blas.a BLAS/SRC/scabs1.o
+ cd ../bld
+ ../ATLAS/configure --prefix=%p --with-netlib-lapack=%b/../LAPACK/lapack_LINUX.a -v 2 \
+	-C sk gcc-4 -C dk gcc-4 -C sm gcc-4 -C dm gcc-4 -C xc gcc-4 -C ic gcc-4 -F ic "$iflags" -F if "$iflags"
+ make
+<<
+InfoTest: <<
+TestScript: <<
+#!/bin/sh -ev
+ cd ../LAPACK
+ mv lapack_LINUX.a lapack_LINUX.a~; ln -s ../bld/lib/liblapack.a lapack_LINUX.a
+ make lapack_testing blas_testing
+ # to get timing uncluttered by compilation times, we'll repeat the tests at the end of the log:
+ rm {BLAS,TESTING}/*.out
+ cd ../bld
+ make test pttest time
+ cd ../LAPACK
+ time { make blas_testing; cd TESTING; make ; }
+# here: real 3m10.903s; user 2m55.622s; sys 0m15.570s  (average of 3)
+<<
 <<
 InstallScript: <<
- mkdir -p %i/lib
- mkdir -p %i/include
- mkdir -p %i/share/doc/%n
- (export ARCH=`ls -1t Make* | head -n1 | cut -f2 -d"."`; ranlib lib/$ARCH/lib*a; cp lib/$ARCH/lib*a %i/lib)
- cp include/cblas.h %i/include
- cp doc/* %i/share/doc/%n
- cp README %i/share/doc/%n
- head -n31 config.c > %i/share/doc/%n/LICENSE
+#!/bin/sh -ev
+ mkdir -p %i/share/doc/%n/LAPACK
+ cp doc/* README %i/share/doc/%n
+ head -n29 bin/atlas_tee.c > %i/share/doc/%n/LICENSE
+ cp -pPR ../LAPACK/manpages/{blas/,}man %i/share
+ cp -pPR ../LAPACK/{html,COPYING,README} %i/share/doc/%n/LAPACK
+ ln -s html/index.html %i/share/doc/%n/LAPACK
+ cd ../bld/lib
+ # we first make a shared lib; easier to just write the command here than to fix lib/Makefile ...
+ # put this here to make sure it is after the testscript, else dylib might affect timings.
+ # dylib just made to experiment; not sure this should stay.
+ # The '-m' flag at the end is dirty trick to get around an "undefined symbol" for _MAIN__, from -lgfortranbegin;
+ # _ it swallows the immediately following -lgfortranbegin in the command transmitted to /usr/bin/libtool ...
+ # There are no undefined symbols w/o "from ..." in the resulting dylib.
+ # Is it the -all_load flag that causes the symbol "_main" from libgfortranbegin.a to be loaded ?
+ ###
+ # for now, we make an exported symbols list out of the external symbols of liblapack, libptcblas and libptf77blas
+  nm -mfg  liblapack.a libptf77blas.a libptcblas.a|fgrep ' (__TEXT,__text) external '|cut -f4 -d' ' > lst
+  gfortran -dynamiclib -single_module -all_load -install_name %p/lib/libatlas.dylib -o libatlas.dylib \
+	liblapack.a libptf77blas.a libptcblas.a libatlas.a -Wl,-x -dead_strip -exported_symbols_list lst -m
+ # lib still has %p/lib/gcc4.2/lib/libgcc_s.1.dylib unnecessarily among its load commands _
+ # don't know yet how to remove that cleanly (except by issuing the ld command myself ..)
+ cd ..
+ make install DESTDIR=%i
+ ranlib %i/lib/*.a
+ cp -p lib/*.dylib %i/lib
+ chmod -R a+rX %i/share
 <<
-PostInstScript: <<
- ranlib %p/lib/libatlas.a 
- ranlib %p/lib/libcblas.a
- ranlib %p/lib/libf77blas.a
- ranlib %p/lib/liblapack.a 
- ranlib %p/lib/libtstatlas.a 
- ranlib %p/lib/libptcblas.a || true
- ranlib %p/lib/libptf77blas.a || true
+Shlibs: !%p/lib/lib%n.dylib
+SplitOff: <<
+	Package: %N-doc
+	Files: share/man share/doc/%N/LAPACK
+	InstallScript: mkdir -p %i/share/doc; ln -s %N %i/share/doc/%n
 <<
 Homepage: http://math-atlas.sourceforge.net
 Maintainer: Jeffrey Whitaker <jswhit@fastmail.fm>
