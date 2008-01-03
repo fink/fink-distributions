@@ -1,6 +1,6 @@
 Package: atlas
 Version: 3.8.0
-Revision: 4
+Revision: 6
 Description: Portably optimal linear algebra software
 DescDetail: <<
 The current version provides a complete BLAS and LAPACK API.
@@ -16,9 +16,10 @@ libf77blas_unthreaded.a	: The Fortran77 interface to the BLAS.
 libatlas.a		: The main ATLAS library,
 			providing low-level routines for all interface libs.
   Plus on multiprocessor machines the threaded variants libptcblas.a and
-libptf77blas.a, and an all-encompassing libatlas.dylib.
+libptf77blas.a.
   libcblas.a and libf77blas.a are symlinks pointing to the threaded versions
 if available, else to the unthreaded versions.
+  The dylibs for latlas lcblas lf77bas and llapack are also installed
 <<
 DescPort: <<
 The optimized subset of LAPACK provided by ATLAS is merged
@@ -36,26 +37,38 @@ SourceDirectory: ATLAS
 License: BSD
 # since we're experimenting with building a dylib :
 BuildDependsOnly: true
-BuildDepends: gcc42, fink (>= 0.27.9)
-## validator would like "fink (>= 0.27.99)", but then users complain.. Just trying to get past the validator..
-Depends: gcc42-shlibs 
+BuildDepends: gcc42
 PatchScript: <<
 #!/bin/sh -ev
-# -ftree-loop-linear causes problems with xconfig.
-# -fgcse-after-reload -fsched-interblock -freorder-blocks also _ though they're implied by -O3 !
+## Try this (doesn't come out well with /usr/bin/sed, which doesn't respect initial spacing, but OK anyway):
+## Update according to http://www.cocoadev.com/index.pl?MacintoshModels (or any better source...)
+## might be more reliable, once one knows one is in a Apple-ppc type machine, to call `machine` ..
+## or else at least to solve the remaining unknown cases with that ...
+sed -i.bak -e '/PPCG4/,/PPCG5/c\
+            if (strstr(res, "7") || strstr(res, "8") || strstr(res, "9") || strstr(res, "11") || strstr(res, "12")) mach = PPCG5;\
+            else if (strstr(res, "1,2") || strstr(res, "c3") || strstr(res, "c5")) mach = PPCG4;\
+         }\
+         else if (strstr(res, "PowerBook"))\
+         {\
+            if (strstr(res, "5") || strstr(res, "6") || strstr(res, "3,2") || strstr(res, "3,3") || strstr(res, "3,4")) mach = PPCG4;\
+         }\
+         else if (strstr(res, "RackMac"))\
+         {\
+            if (strstr(res, "3")) mach = PPCG5;\
+            else mach = PPCG4;' \
+	CONFIG/src/backend/archinfo_freebsd.c
 cd ..; ln -s lapack-3.1.1 LAPACK
 cd LAPACK
-sed -e 's|g77|gfortran|g' < INSTALL/make.inc.LINUX > make.inc
-perl -pi -e 's,\.\./\.\./blas\$\(PLAT\)\.a,%b/../bld/lib/libptf77blas.a %b/../bld/lib/libptcblas.a %b/../bld/lib/libatlas.a,' \
-        make.inc
+sed -e 's,\.\./\.\./blas\$(PLAT)\.a,%b/../bld/lib/libptf77blas.a %b/../bld/lib/libptcblas.a %b/../bld/lib/libatlas.a,' \
+    -e 's|g77|gfortran|g' -e 's,^TIMER,\#TIMER,' -e '/INT_ETIME/s,^\# *,,' < INSTALL/make.inc.LINUX > make.inc
 <<
 CompileScript: <<
 #!/bin/sh -ev
  if [ %m = 'i386' ]; then mflags="-mfpmath=sse -msse -msse2 -msse3 -m32"; iflags="-mfpmath=387"; else mflags=''; iflags=''; fi
- lflags="-O3 -fomit-frame-pointer -fgcse-sm -fgcse-las -ftree-loop-linear $mflags"
- iflags="-O3 -fomit-frame-pointer $iflags"
+ lflags="-fPIC -O3 -fomit-frame-pointer -fgcse-sm -fgcse-las -ftree-loop-linear $mflags"
+ iflags="-fPIC -O3 -fomit-frame-pointer $iflags"
  cd ../LAPACK
- sed -i.bak -e "s;\(-funroll-all-loops\) -O3;\1 $lflags;" -e 's,^TIMER,\#TIMER,' -e '/INT_ETIME/s,^\# *,,' make.inc
+ sed -i.bak -e "s;\(-funroll-all-loops\) -O3;\1 $lflags;" make.inc
  make lapacklib
 # atlas 'forgets' scabs1 (not dcabs1 !), so we get it here..
  cd BLAS/SRC; make scabs1.o; cd -
@@ -66,7 +79,36 @@ CompileScript: <<
  export PATH=`pwd`:$PATH
  cd bld
  ../ATLAS/configure -v 2 --prefix=%p --with-netlib-lapack=%b/../LAPACK/lapack_LINUX.a -b 32 -F ic "$iflags" -F if "$iflags"
+ # m=`machine`; if test $m = ppc7400 -o $m = ppc7450 ; then \
+ #	sed -i.bak -e 's,^\( *ARCH =\).*,\1 PPCG432AltiVec,' -e 's,ARCHDEFS =,& -DATL_AVgcc' Make.inc ; fi
  make
+ cd lib
+ # Apparently on some machines (=monoprocesors ?) the threaded libs are not made;
+ # we first make atlas 'look the same' to all other pkgs, independently of the machine
+ if test -f libptcblas.a
+	then for C in c f77; do
+		mv lib${C}blas.a lib${C}blas_unthreaded.a
+		ln -s libpt${C}blas.a lib${C}blas.a
+	     done
+	else rm libptf77blas.a		# This is then the embryo we created with scabs1 above
+	     for C in c f77; do ln -s lib${C}blas.a lib${C}blas_unthreaded.a; done
+ fi
+ # We now make shared libs (experimental); easier to just write the commands here than to fix lib/Makefile ...
+ # We link 'manually', with ld, to avoid having unnecessary libs like lgcc_s among the load commands.
+ # This way the libs can be safely used in linking with any compiler: they will not bring themselves
+ # the wrong lgcc_s in the search list.
+ ld="ld -dynamic -dylib -single_module -dead_strip -x -all_load -L. -L%p/lib/gcc4.2/lib -ldylib1.o -dylib_install_name"
+ $ld %p/lib/libatlas.dylib libatlas.a -o libatlas.dylib -lSystemStubs -lSystem
+ $ld %p/lib/libcblas.dylib libcblas.a -o libcblas.dylib -latlas -lSystemStubs -lSystem
+ $ld %p/lib/libf77blas.dylib libf77blas.a -o libf77blas.dylib -lgfortran -latlas -lSystemStubs -lSystem
+ $ld %p/lib/liblapack.dylib liblapack.a -o liblapack.dylib -lf77blas -lgfortran -lcblas -latlas -lSystemStubs -lSystem
+ ## the next 4 lines are optional _ no idea of a correct exported symbols list for libatlas...
+ ## probably to be removed for a commit _ it gains an enormous decrease in the # of symbols exported by the lib,
+ ## but size goes down only from ~ 2.8M to 2.3M
+ # nm -mfgu liblapack.dylib libcblas.dylib libf77blas.dylib|fgrep ' (from libatlas'|sed -e 's, (from .*,,' -e 's,.* ,,'|sort -u > lst
+ # install_name_tool -id %p/lib/libatlas_full.dylib libatlas.dylib
+ # mv libatlas.dylib libatlas_full.dylib
+ # $ld %p/lib/libatlas.dylib libatlas.a -o libatlas.dylib -ldylib1.o -lSystem -exported_symbols_list lst
 <<
 InfoTest: <<
 TestScript: <<
@@ -91,43 +133,27 @@ InstallScript: <<
  cp -pPR ../LAPACK/manpages/{blas/,}man %i/share
  cp -pPR ../LAPACK/{html,COPYING,README} %i/share/doc/%n/LAPACK
  ln -s html/index.html %i/share/doc/%n/LAPACK
- cd ../bld/lib
- # Apparently on some machines some of the threaded libs are not made;
- # we first make atlas 'look the same' to all other pkgs, independently of the machine
- if test -f libptcblas.a
-	then for C in c f77; do
-		mv lib${C}blas.a lib${C}blas_unthreaded.a
-		ln -s libpt${C}blas.a lib${C}blas.a
-	     done
-	else rm libptf77blas.a
-	     for C in c f77; do ln -s lib${C}blas.a lib${C}blas_unthreaded.a; done
- fi
- # we first make a shared lib; easier to just write the command here than to fix lib/Makefile ...
- # put this here to make sure it is after the testscript, else dylib might affect timings.
- # dylib just made to experiment; not sure this should stay.
- # The '-m' flag at the end is dirty trick to get around an "undefined symbol" for _MAIN__, from -lgfortranbegin;
- # _ it swallows the immediately following -lgfortranbegin in the command transmitted to /usr/bin/libtool ...
- # There are no undefined symbols w/o "from ..." in the resulting dylib.
- # Is it the -all_load flag that causes the symbol "_main" from libgfortranbegin.a to be loaded ?
- ###
- # for now, we make an exported symbols list out of the external symbols of liblapack, libptcblas and libptf77blas
-  nm -mfg liblapack.a libf77blas.a libcblas.a|fgrep ' (__TEXT,__text) external '|cut -f4 -d' ' > lst
-  gfortran -dynamiclib -single_module -all_load -install_name %p/lib/liblapack_atlas.dylib -o liblapack_atlas.dylib \
-	liblapack.a libf77blas.a libcblas.a libatlas.a -Wl,-x -dead_strip -exported_symbols_list lst -m
- # lib still has %p/lib/gcc4.2/lib/libgcc_s.1.dylib unnecessarily among its load commands _
- # don't know yet how to remove that cleanly (except by issuing the ld command myself ..)
-#### changed the dylib's name from libatlas to something un-recognisable,
-#### to prevent octave linking with it, and becoming a different pkg  
- cd ..
+ cd ../bld
  make install DESTDIR=%i
- ranlib %i/lib/*.a
  cp -pPR lib/*.{a,dylib} %i/lib
- ranlib %i/lib/*.a
+ rm %i/lib/libtstatlas.a
+ find %i/lib -type f -name '*.a' -exec ranlib \{\} \;
  chmod -R a-x %i/lib
  chmod -R a+rX %i/share
 <<
-Shlibs: !%p/lib/liblapack_%n.dylib
-SplitOff: <<
+Splitoff: <<
+	Package: %N-shlibs
+	Depends: gcc42-shlibs
+	Files: lib/*.dylib
+	InstallScript: mkdir -p %i/share/doc; ln -s %N %i/share/doc/%n
+	Shlibs: <<
+	%p/lib/liblapack.dylib	0.0.0	%n	(>= 3.8.0-6)
+	%p/lib/libcblas.dylib	0.0.0	%n	(>= 3.8.0-6)
+	%p/lib/libf77blas.dylib	0.0.0	%n	(>= 3.8.0-6)
+	%p/lib/libatlas.dylib	0.0.0	%n	(>= 3.8.0-6)
+	<<
+<<
+SplitOff2: <<
 	Package: %N-doc
 	Files: share/man share/doc/%N/LAPACK
 	InstallScript: mkdir -p %i/share/doc; ln -s %N %i/share/doc/%n

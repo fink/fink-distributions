@@ -14,19 +14,22 @@ SourceDirectory: lp_solve_%type_raw[maj]
 
 PatchScript: <<
 #!/bin/sh -ev
-## change the name of the lib, and correct install_name.
+## no strict-aliasing for the lib, since it gives a warning in lp_matrix.c 2357-2358)
   sed -i.bak -e '{
-	s,lib%N%type_pkg[maj],lib%N,g
-	s,lib%N\.dylib,lib%N.%type_raw[maj].0.dylib -install_name %p/lib/lib%N.%type_raw[maj].dylib,
-# lib%N.a is useless on the link line (except if with -all_load, and then tail of the cmd is useless..), and let us strip.
-	s;b lib%N.a;b -single_module -Wl,-x -dead_strip -exported_symbols_list ../exp_sym;
-	}' %N%type_pkg[maj]/ccc.osx
-## for executable, use dynamic linking, and -mdynamic-no-pic _ and strip :
-  sed -i.bak -e 's;\$src;-mdynamic-no-pic -s -dead_strip lp_solve.c ../%N%type_pkg[maj]/lib%N.dylib;' lp_solve/ccc.osx
-## try adding -fstrict-aliasing to CFLAGS (comment out for the moment since gives a warning in lp_matrix.c 2308-2309)
-#  sed -i~ -e 's,\-O3,& -fstrict-aliasing -Wall,' lp*/ccc.osx
+	/fpic/d
+	s;\-shared.*;*.o -dynamiclib -single_module -Wl,-x -dead_strip -exported_symbols_list ../exp_sym -compatibility_version %type_raw[maj].0 -current_version %v -o lib%N.%v.dylib -install_name /sw/lib/lib%N.%type_raw[maj].dylib;
+	s,ar rv,ar rc,
+	/ranlib/d
+	s,%type_pkg[maj],.%v,
+	}' %N%type_pkg[maj]/ccc
+## for executable, use -mdynamic-no-pic, and strip. Also, link with the library:
+  sed -i.bak -e '{
+# should use -Os here, since far from time-critical code, but the resulting size would be identical...
+	s,\-O3,& -fstrict-aliasing -Wall,
+	s,\$src.*,-mdynamic-no-pic -s -dead_strip lp_solve.c ../%N%type_pkg[maj]/lib%N.dylib -o lp_solve,
+	}' lp_solve/ccc
 ## Dynamic library filenames on darwin end with ".dylib", not ".so". Also, give full path for dlopen.
-  perl -pi -e 's,lib%N%type_pkg[maj].so,%p/lib/lib%N.dylib,' lp_explicit.h
+  perl -pi.bak -e 's,lib%N%type_pkg[maj].so,%p/lib/lib%N.dylib,' lp_explicit.h
 ## hard-code the paths to the modules, for the user's convenience (preserving the possibility to specify
 ## a full path, absolute or relative), since fink doesn't give us a decent DYLD(_FALLBACK)_LIBRARY_PATH...
   perl -pi.bak -e "s:( +)  strcat\(((bfp|xli)name), \".so\"\);:$&\n\1char finklib[127]=\"%p/lib/\";
@@ -43,6 +46,12 @@ PatchScript: <<
 	s,3,6,
 	s,so,dylib,
 	}' {shared,bfp/bfp_LUSOL/LUSOL}/commonlib.c shared/myblas.c
+## if one wanted to remove all srcs compiled here from lpsolve-extra, one would need to uncomment the next 2 lines:
+#  tr ' ' '\n'<<<"allocINT createLink firstActiveLink is_nativeBLAS load_BLAS nextActiveLink removeLink sortByINT\
+# daxpy dscal idamax init_BLAS unload_BLAS allocREAL timeNow freeLink allocCHAR"|sed -r -e 's,^,   ,' >> lp_solve.def
+# this would cost 596 bytes in the size of the lib, and for the so's:
+# GLPK, CPLEX, LINDO: +4, LUSOL -3860, etaPFI +120, DIMACS, MathProg: -
+# Thus: not worthwhile (at least not till default bfp and xli are taken out of the lib...) 
 # make the .bat script usable
   sed -ri -e 's,^del,rm,' -e 's,\r$,,' lp_rlp.bat
 <<
@@ -56,15 +65,16 @@ CompileScript: <<
   # Build the library
   sed -r -e '/EXPORTS/d' -e 's,^ +,_,' < lp_solve.def > exp_sym
   cd %N%type_pkg[maj]
-  sh -ev ccc.osx
+  sh -ev ccc
 
   # Symbolic links to library
-  ln -s lib%N.%type_raw[maj].0.dylib lib%N.%type_raw[maj].dylib
+  ln -s lib%N.%v.dylib lib%N.%type_raw[maj].dylib
   ln -s lib%N.%type_raw[maj].dylib lib%N.dylib
+  ln -s lib%N.%v.a lib%N.a
 
   # Build the lp_solve executable
   cd ../lp_solve
-  sh -ev ccc.osx
+  sh -ev ccc
 <<
 
 InstallScript: <<
@@ -72,13 +82,13 @@ InstallScript: <<
 
   # Libraries
   mkdir -p %i/lib
-  cp -pPR %N%type_pkg[maj]/lib%N.* %i/lib
+  cp -pPR %N%type_pkg[maj]/lib%N* %i/lib
 
   # Headers
   mkdir -p %i/include/%N/bfp/bfp_LUSOL/LUSOL
   mkdir -p %i/include/%N/colamd
   mkdir -p %i/include/%N/shared
-  cp *.h %i/include/%N
+  cp *.{h,def} %i/include/%N
   cp bfp/*.h %i/include/%N/bfp
   cp bfp/bfp_LUSOL/*.h %i/include/%N/bfp/bfp_LUSOL
   cp bfp/bfp_LUSOL/LUSOL/*.h %i/include/%N/bfp/bfp_LUSOL/LUSOL
@@ -109,8 +119,9 @@ SplitOff: <<
 SplitOff2: <<
   Package: %N%type_raw[maj]-dev
   Depends: %N%type_raw[maj]-shlibs (= %v-%r)
+  Replaces: lpsolve-extra (<= 5.5.0.10-3)
   BuildDependsOnly: true
-  Files: include lib
+    Files: include lib
   InstallScript: <<
     # link the doc files:
     mkdir -p %i/share/doc
@@ -139,7 +150,8 @@ of '-s' and '-gfull' in the compile stage :
 -fno-common, multiple-modules: 609436
 common; -single-module: 601832
 
-[Above figures from before using the exported_symbols_list; now size=509312]
+[Above figures from before using the exported_symbols_list; now size=509400,
+ and adding -DINTEGERTIME would gain an additional 32 bytes, and -fno-common 56]
 <<
 
 DescPackaging: <<
