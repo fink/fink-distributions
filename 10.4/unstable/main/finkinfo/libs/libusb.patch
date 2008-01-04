@@ -1,13 +1,220 @@
-diff -urN libusb-0.1.8/darwin.c libusb-0.1.8.darwin/darwin.c
---- libusb-0.1.8/darwin.c	Tue Jan 27 14:36:31 2004
-+++ libusb-0.1.8.darwin/darwin.c	Wed Jan  5 19:43:17 2005
-@@ -689,7 +689,7 @@
-
-   /* there seems to be no way to determine how many bytes are actually written */
- #if !defined (LIBUSB_NO_TIMEOUT_INTERFACE)
--  if ( transferType == kUSBInterrupt )
-+  if ( transferType != kUSBInterrupt )     /*** DARWIN 0.1.8 FIX ***/
-     result = (*(device->interface))->WritePipeAsyncTO(device->interface, pipeRef,
- 						      bytes, size, 0, timeout,
- 						      write_completed, NULL);
-
+--- a/darwin.c	2006/02/25 18:40:17	1.61
++++ b/darwin.c	2007/05/02 20:03:49	1.62
+@@ -1,8 +1,10 @@
+ /*
+  * Darwin/MacOS X Support
+  *
+- * (c) 2002-2005 Nathan Hjelm <hjelmn@users.sourceforge.net>
++ * (c) 2002-2006 Nathan Hjelm <hjelmn@users.sourceforge.net>
+  *
++ * (06/26/2006):
++ *   - Bulk functions no longer use async transfer functions.
+  * (04/17/2005):
+  *   - Lots of minor fixes.
+  *   - Endpoint table now made by claim_interface to fix a bug.
+@@ -146,7 +148,6 @@
+ #define IO_OBJECT_NULL ((io_object_t)0)
+ #endif
+ 
+-/* Darwin/OS X impl does not use fd field, instead it uses this */
+ struct darwin_dev_handle {
+   usb_device_t **device;
+   usb_interface_t **interface;
+@@ -157,7 +158,6 @@
+   unsigned char *endpoint_addrs;
+ };
+ 
+-static CFMutableDictionaryRef matchingDict;
+ static IONotificationPortRef gNotifyPort;
+ static mach_port_t masterPort = MACH_PORT_NULL;
+ 
+@@ -223,6 +223,7 @@
+ static int usb_setup_iterator (io_iterator_t *deviceIterator)
+ {
+   int result;
++  CFMutableDictionaryRef matchingDict;
+ 
+   /* set up the matching dictionary for class IOUSBDevice and its subclasses.
+      It will be consumed by the IOServiceGetMatchingServices call */
+@@ -756,6 +757,70 @@
+   return -1;
+ }
+ 
++static int usb_bulk_transfer (usb_dev_handle *dev, int ep, char *bytes, u_int32_t size, int timeout, int usb_bt_read)
++{
++  struct darwin_dev_handle *device;
++
++  io_return_t result = -1;
++
++  int pipeRef;
++
++  u_int8_t  transferType, direction, number, interval;
++  u_int16_t maxPacketSize;
++
++  if (!dev)
++    USB_ERROR_STR ( -ENXIO, "libusb/darwin.c usb_bulk_transfer: Called with NULL device" );
++
++  if ((device = dev->impl_info) == NULL)
++    USB_ERROR_STR ( -ENOENT, "libusb/darwin.c usb_bulk_transfer: Device not open" );
++
++  /* interface is not open */
++  if (!device->interface)
++    USB_ERROR_STR(-EACCES, "libusb/darwin.c usb_bulk_transfer: Interface used before it was opened");
++
++
++  /* Set up transfer */
++  if ((pipeRef = ep_to_pipeRef(device, ep)) < 0)
++    USB_ERROR_STR ( -EINVAL, "libusb/darwin.c usb_bulk_transfer: Invalid pipe reference" );
++
++  (*(device->interface))->GetPipeProperties (device->interface, pipeRef, &direction, &number,
++					     &transferType, &maxPacketSize, &interval);
++  /* Transfer set up complete */
++
++  if (usb_debug > 0)
++    fprintf (stderr, "libusb/darwin.c usb_bulk_transfer: Transfering %i bytes of data on endpoint 0x%02x\n", size, ep);
++
++  /* Do bulk transfer */
++  if (transferType == kUSBInterrupt && usb_debug > 3)
++    fprintf (stderr, "libusb/darwin.c usb_bulk_transfer: USB pipe is an interrupt pipe. Timeouts will not be used.\n");
++
++#if !defined(LIBUSB_NO_TIMEOUT_INTERFACE)
++  if ( transferType != kUSBInterrupt) {
++    if (usb_bt_read != 0)
++      result = (*(device->interface))->ReadPipeTO (device->interface, pipeRef, bytes, (UInt32 *)&size, timeout, timeout);
++    else
++      result = (*(device->interface))->WritePipeTO (device->interface, pipeRef, bytes, size, timeout, timeout);
++
++    /* pipe bits may need to be cleared after a timeout. should this be done here or in user code? */
++    if (result == kIOUSBTransactionTimeout && (*(device->interface))->GetPipeStatus (device->interface, pipeRef) == kIOUSBPipeStalled)
++      usb_clear_halt (dev, ep);
++  } else
++#endif
++  {
++    if (usb_bt_read != 0)
++      result = (*(device->interface))->ReadPipe (device->interface, pipeRef, bytes, (UInt32 *)&size);
++    else
++      result = (*(device->interface))->WritePipe (device->interface, pipeRef, bytes, size);
++  }
++
++  if (result != kIOReturnSuccess)
++    USB_ERROR_STR (-darwin_to_errno (result), "libusb/darwin.c usb_bulk_transfer: %s", darwin_error_str (result));
++
++  return size;
++}
++
++#if 0
++/* NOT USED */
+ /* argument to handle multiple parameters to rw_completed */
+ struct rw_complete_arg {
+   UInt32        io_size;
+@@ -777,7 +842,7 @@
+   CFRunLoopStop(rw_arg->cf_loop);
+ }
+ 
+-static int usb_bulk_transfer (usb_dev_handle *dev, int ep, char *bytes, int size, int timeout,
++static int usb_bulk_transfer_async (usb_dev_handle *dev, int ep, char *bytes, int size, int timeout,
+ 			      rw_async_func_t rw_async, rw_async_to_func_t rw_async_to)
+ {
+   struct darwin_dev_handle *device;
+@@ -813,11 +878,12 @@
+   (*(device->interface))->GetPipeProperties (device->interface, pipeRef, &direction, &number,
+ 					     &transferType, &maxPacketSize, &interval);
+ 
+-  (*(device->interface))->CreateInterfaceAsyncEventSource(device->interface, &cfSource);
+-  CFRunLoopAddSource(CFRunLoopGetCurrent(), cfSource, kCFRunLoopDefaultMode);
+-
+   bzero((void *)&rw_arg, sizeof(struct rw_complete_arg));
+   rw_arg.cf_loop = CFRunLoopGetCurrent();
++  CFRetain (rw_arg.cf_loop);
++
++  (*(device->interface))->CreateInterfaceAsyncEventSource(device->interface, &cfSource);
++  CFRunLoopAddSource(rw_arg.cf_loop, cfSource, kCFRunLoopDefaultMode);
+   /* Transfer set up complete */
+ 
+   if (usb_debug > 0)
+@@ -842,11 +908,12 @@
+       (*(device->interface))->AbortPipe(device->interface, pipeRef);
+       CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true); /* Pick up aborted callback */
+       if (usb_debug)
+-	fprintf(stderr, "usb_bulk_read: input timed out\n");
++	fprintf(stderr, "usb_bulk_transfer: timed out\n");
+     }
+   }
+ 
+-  CFRunLoopRemoveSource(CFRunLoopGetCurrent(), cfSource, kCFRunLoopDefaultMode);
++  CFRunLoopRemoveSource(rw_arg.cf_loop, cfSource, kCFRunLoopDefaultMode);
++  CFRelease (rw_arg.cf_loop);
+   
+   /* Check the return code of both the write and completion functions. */
+   if (result != kIOReturnSuccess || (rw_arg.result != kIOReturnSuccess && 
+@@ -870,24 +937,16 @@
+ 
+   return rw_arg.io_size;
+ }
++#endif
+ 
+ int usb_bulk_write(usb_dev_handle *dev, int ep, char *bytes, int size, int timeout)
+ {
+   int result;
+-  rw_async_to_func_t to_func = NULL;
+-  struct darwin_dev_handle *device;
+   
+   if (dev == NULL || dev->impl_info == NULL)
+     return -EINVAL;
+ 
+-  device = dev->impl_info;
+-
+-#if !defined (LIBUSB_NO_TIMEOUT_INTERFACE)
+-  to_func = (*(device->interface))->WritePipeAsyncTO;
+-#endif
+-
+-  if ((result = usb_bulk_transfer (dev, ep, bytes, size, timeout,
+-				   (*(device->interface))->WritePipeAsync, to_func)) < 0)
++  if ((result = usb_bulk_transfer (dev, ep, bytes, size, timeout, 0)) < 0)
+     USB_ERROR_STR (result, "usb_bulk_write: An error occured during write (see messages above)");
+   
+   return result;
+@@ -896,28 +955,19 @@
+ int usb_bulk_read(usb_dev_handle *dev, int ep, char *bytes, int size, int timeout)
+ {
+   int result;
+-  rw_async_to_func_t to_func = NULL;
+-  struct darwin_dev_handle *device;
+   
+   if (dev == NULL || dev->impl_info == NULL)
+     return -EINVAL;
+ 
+   ep |= 0x80;
+-  
+-  device = dev->impl_info;
+ 
+-#if !defined (LIBUSB_NO_TIMEOUT_INTERFACE)
+-  to_func = (*(device->interface))->ReadPipeAsyncTO;
+-#endif
+-
+-  if ((result = usb_bulk_transfer (dev, ep, bytes, size, timeout,
+-				   (*(device->interface))->ReadPipeAsync, to_func)) < 0)
++  if ((result = usb_bulk_transfer (dev, ep, bytes, size, timeout, 1)) < 0)
+     USB_ERROR_STR (result, "usb_bulk_read: An error occured during read (see messages above)");
+   
+   return result;
+ }
+ 
+-/* interrupt endpoints seem to be treated just like any other endpoint under OSX/Darwin */
++/* interrupt endpoints appear to be treated the same as non-interrupt endpoints under OSX/Darwin */
+ int usb_interrupt_write(usb_dev_handle *dev, int ep, char *bytes, int size,
+ 	int timeout)
+ {
+@@ -1177,7 +1227,12 @@
+   if ((pipeRef = ep_to_pipeRef(device, ep)) == -1)
+     USB_ERROR(-EINVAL);
+ 
++#if (InterfaceVersion < 190)
+   result = (*(device->interface))->ClearPipeStall(device->interface, pipeRef);
++#else
++  /* newer versions of darwin support clearing additional bits on the device's endpoint */
++  result = (*(device->interface))->ClearPipeStallBothEnds(device->interface, pipeRef);
++#endif
+ 
+   if (result != kIOReturnSuccess)
+     USB_ERROR_STR(-darwin_to_errno(result), "usb_clear_halt(ClearPipeStall): %s", darwin_error_str(result));
