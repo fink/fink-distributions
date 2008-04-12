@@ -43,7 +43,7 @@ diff -Naur emacs-22.1.orig/Makefile.in emacs-22.1/Makefile.in
 -	   (cd $(DESTDIR)$(docdir); chown $${LOGNAME:-$$USERNAME} DOC*; chmod a+r DOC*; \
 +	     |(cd $(DESTDIR)${docdir}; umask 022; tar -xvf - --no-same-owner --no-same-permissions && cat > /dev/null) || exit 1; \
 +	   (cd $(DESTDIR)$(docdir); chmod a+r DOC*; \
- 	    if test "`echo DOC-*`" != "DOC-*"; then rm DOC; fi); \
+ 	    if test "`echo DOC-*`" != "DOC-*"; then rm -f DOC; fi); \
  	else true; fi
  	-unset CDPATH; \
 @@ -488,8 +487,7 @@
@@ -114,9 +114,9 @@ diff -Naur emacs-22.1.orig/lisp/startup.el emacs-22.1/lisp/startup.el
    "Non-nil if building Emacs overflowed pure space.")
  
 @@ -815,8 +819,20 @@
-     ;; Run the site-start library if it exists.  The point of this file is
-     ;; that it is run before .emacs.  There is no point in doing this after
-     ;; .emacs; that is useless.
+     ;; be loaded from site-run-file and wants to test if -q was given
+     ;; should check init-file-user instead, since that is already set.
+     ;; See cus-edit.el for an example.
 +
 +    ;; (if site-run-file
 +    ;;     (load site-run-file t t))
@@ -134,7 +134,7 @@ diff -Naur emacs-22.1.orig/lisp/startup.el emacs-22.1/lisp/startup.el
 +
  
      ;; Sites should not disable this.  Only individuals should disable
-     ;; the startup message.
+     ;; the startup screen.
 diff -Naur emacs-22.1.orig/mangle-info emacs-22.1/mangle-info
 --- emacs-22.1.orig/mangle-info	1970-01-01 00:00:00.000000000 +0000
 +++ emacs-22.1/mangle-info	2006-03-06 15:42:52.000000000 +0000
@@ -156,78 +156,3 @@ diff -Naur emacs-22.1.orig/mangle-info emacs-22.1/mangle-info
 +print ${PREMATCH};
 +print "$1($prefix/$2)";
 +print ${POSTMATCH};
-diff -ruN --exclude '*~' --exclude '*.orig' emacs-22.1/src/unexmacosx.c emacs-22.1.patched/src/unexmacosx.c
---- emacs-22.1/src/unexmacosx.c	2007-01-20 23:18:15.000000000 -0500
-+++ emacs-22.1.patched/src/unexmacosx.c	2007-11-14 21:44:17.000000000 -0500
-@@ -443,15 +443,13 @@
- 
-   while (num && num_unexec_regions < MAX_UNEXEC_REGIONS)
-     {
--      /* Subtract the size of trailing null pages from filesize.  It
-+      /* Subtract the size of trailing null bytes from filesize.  It
- 	 can be smaller than vmsize in segment commands.  In such a
--	 case, trailing pages are initialized with zeros.  */
--      for (p = ranges->address + ranges->size; p > ranges->address;
--	   p -= sizeof (int))
--	if (*(((int *) p)-1))
--	  break;
--      filesize = ROUNDUP_TO_PAGE_BOUNDARY (p - ranges->address);
--      assert (filesize <= ranges->size);
-+	 case, trailing bytes are initialized with zeros.  */
-+      for (p = ranges->address + ranges->size; p > ranges->address; p--)
-+      	if (*(((char *) p)-1))
-+      	  break;
-+      filesize = p - ranges->address;
- 
-       unexec_regions[num_unexec_regions].filesize = filesize;
-       unexec_regions[num_unexec_regions++].range = *ranges;
-@@ -503,11 +501,19 @@
- {
-   int i, n;
-   unexec_region_info r;
-+  vm_size_t padsize;
- 
-   qsort (unexec_regions, num_unexec_regions, sizeof (unexec_regions[0]),
- 	 &unexec_regions_sort_compare);
-   n = 0;
-   r = unexec_regions[0];
-+  padsize = r.range.address & (pagesize - 1);
-+  if (padsize)
-+    {
-+      r.range.address -= padsize;
-+      r.range.size += padsize;
-+      r.filesize += padsize;
-+    }
-   for (i = 1; i < num_unexec_regions; i++)
-     {
-       if (r.range.address + r.range.size == unexec_regions[i].range.address
-@@ -520,6 +526,17 @@
- 	{
- 	  unexec_regions[n++] = r;
- 	  r = unexec_regions[i];
-+	  padsize = r.range.address & (pagesize - 1);
-+	  if (padsize)
-+	    {
-+	      if ((unexec_regions[n-1].range.address
-+		   + unexec_regions[n-1].range.size) == r.range.address)
-+		unexec_regions[n-1].range.size -= padsize;
-+
-+	      r.range.address -= padsize;
-+	      r.range.size += padsize;
-+	      r.filesize += padsize;
-+	    }
- 	}
-     }
-   unexec_regions[n++] = r;
-@@ -562,6 +579,11 @@
-     case LC_TWOLEVEL_HINTS:
-       printf ("LC_TWOLEVEL_HINTS");
-       break;
-+#ifdef LC_UUID
-+    case LC_UUID:
-+      printf ("LC_UUID          ");
-+      break;
-+#endif
-     default:
-       printf ("unknown          ");
-     }
