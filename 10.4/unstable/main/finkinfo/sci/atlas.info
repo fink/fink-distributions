@@ -1,5 +1,5 @@
 Package: atlas
-Version: 3.8.1
+Version: 3.8.2
 Revision: 1
 Description: Portably optimal linear algebra software
 DescDetail: <<
@@ -32,7 +32,7 @@ Order is important when linking! Use:
 -L%p/lib -llapack -lcblas -lf77blas -latlas
 <<
 Source: mirror:sourceforge:math-atlas/%n%v.tar.bz2
-Source-MD5: 993b1c8ff3c9378f6a466ce5e82857f7
+Source-MD5: dd888f5d066c1fafeaaf2ae6b37e0b85
 Source2: http://www.netlib.org/lapack/lapack-3.1.1.tgz
 Source2-MD5: 00b21551a899bcfbaa7b8443e1faeef9
 SourceDirectory: ATLAS
@@ -42,23 +42,7 @@ BuildDependsOnly: true
 BuildDepends: gcc43
 PatchScript: <<
 #!/bin/sh -ev
-## Try this (doesn't come out well with /usr/bin/sed, which doesn't respect initial spacing, but OK anyway):
-## Update according to http://www.cocoadev.com/index.pl?MacintoshModels (or any better source...)
-## might be more reliable, once one knows one is in a Apple-ppc type machine, to call `machine` ..
-## or else at least to solve the remaining unknown cases with that ...
-sed -i.bak -e '/PPCG4/,/PPCG5/c\
-            if (strstr(res, "7") || strstr(res, "8") || strstr(res, "9") || strstr(res, "11") || strstr(res, "12")) mach = PPCG5;\
-            else if (strstr(res, "1,2") || strstr(res, "c3") || strstr(res, "c5")) mach = PPCG4;\
-         }\
-         else if (strstr(res, "PowerBook"))\
-         {\
-            if (strstr(res, "5") || strstr(res, "6") || strstr(res, "3,2") || strstr(res, "3,3") || strstr(res, "3,4")) mach = PPCG4;\
-         }\
-         else if (strstr(res, "RackMac"))\
-         {\
-            if (strstr(res, "3")) mach = PPCG5;\
-            else mach = PPCG4;' \
-	CONFIG/src/backend/archinfo_freebsd.c
+sed -i.bak -e '/PowerBook/,/RackMac/s,"c,"k,g' CONFIG/src/backend/archinfo_freebsd.c
 cd ..; ln -s lapack-3.1.1 LAPACK
 cd LAPACK
 sed -e 's,\.\./\.\./blas\$(PLAT)\.a,%b/../bld/lib/libptf77blas.a %b/../bld/lib/libptcblas.a %b/../bld/lib/libatlas.a,' \
@@ -66,7 +50,14 @@ sed -e 's,\.\./\.\./blas\$(PLAT)\.a,%b/../bld/lib/libptf77blas.a %b/../bld/lib/l
 <<
 CompileScript: <<
 #!/bin/sh -ev
- if [ %m = 'i386' ]; then mflags="-mfpmath=sse -msse -msse2 -msse3 -m32"; iflags="-mfpmath=387"; else mflags=''; iflags=''; fi
+ cflags=''
+ if [ %m = 'i386' ]
+	then mflags="-mfpmath=sse -msse -msse2 -msse3 -m32"; iflags="-mfpmath=387"
+	else mflags=''; iflags=''
+		if [ `machine|sed -e 's,ppc,,' -e 's,\([0-9]\).*,\1,'` != 9 ]
+			then cflags='-Si cputhrchk 0 -D c -DATL_AVgcc'
+		fi
+ fi
  lflags="-fPIC -O3 -fomit-frame-pointer -fgcse-sm -fgcse-las -ftree-loop-linear $mflags"
  iflags="-fPIC -O3 -fomit-frame-pointer $iflags"
  cd ../LAPACK
@@ -80,9 +71,7 @@ CompileScript: <<
  ln -s %p/bin/gcc-4 gcc
  export PATH=`pwd`:$PATH
  cd bld
- ../ATLAS/configure -v 2 --prefix=%p --with-netlib-lapack=%b/../LAPACK/lapack_LINUX.a -b 32 -F ic "$iflags" -F if "$iflags"
- # m=`machine`; if test $m = ppc7400 -o $m = ppc7450 ; then \
- #	sed -i.bak -e 's,^\( *ARCH =\).*,\1 PPCG432AltiVec,' -e 's,ARCHDEFS =,& -DATL_AVgcc' Make.inc ; fi
+ ../ATLAS/configure -v 2 --prefix=%p --with-netlib-lapack=%b/../LAPACK/lapack_LINUX.a -b 32 -F ic "$iflags" -F if "$iflags" $cflags
  make
  cd lib
  # Apparently on some machines (=monoprocesors ?) the threaded libs are not made;
@@ -117,13 +106,21 @@ TestScript: <<
 #!/bin/sh -ev
  cd ../LAPACK
  mv lapack_LINUX.a lapack_LINUX.a~; ln -s ../bld/lib/liblapack.a lapack_LINUX.a
- make -k lapack_testing blas_testing
+ ## first getting around an internal compiler error with gcc4.3.1 :
+ mv make.inc make.inc~
+ sed 's, -ftree-loop-linear,,' < make.inc~ > make.inc
+ cd TESTING/EIG
+ make cget35.o zget35.o
+ cd -
+ mv make.inc~ make.inc
+ ##
+ make -k lapack_testing blas_testing || :
  # to get timing uncluttered by compilation times, we'll repeat the tests at the end of the log:
  rm {BLAS,TESTING}/*.out
  cd ../bld
  make -k test pttest time
  cd ../LAPACK
- time { make -k blas_testing; cd TESTING; make -k ; }
+ time { make -k blas_testing; cd TESTING; make -k ; } || :
 # here: real 3m10.903s; user 2m55.622s; sys 0m15.570s  (average of 3)
 <<
 <<
