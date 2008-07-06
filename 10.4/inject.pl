@@ -5,7 +5,7 @@
 #
 # Fink - a package manager that downloads source and installs it
 # Copyright (c) 2001 Christoph Pfisterer
-# Copyright (c) 2001-2004 The Fink Package Manager Team
+# Copyright (c) 2001-2008 The Fink Package Manager Team
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -19,7 +19,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110, USA.
 #
 
 $| = 1;
@@ -131,9 +131,21 @@ if ($notlocated) {
     exit 1;
 }
 
-### parse config file for root method
+# can't use Fink::Bootstrap::find_rootmethod because the optional arguments
+# are not passed
 
-&find_rootmethod($basepath);
+#### parse config file for root method
+#
+#&find_rootmethod($basepath);
+
+### re-execute as root                                                          
+unshift(@ARGV, $basepath);
+
+if ($> != 0) {
+    exit &execute("sudo ./inject.pl @ARGV");
+}
+umask oct("022");
+
 
 ### determine the distribution
 
@@ -178,6 +190,27 @@ foreach $filename (@directories) {
 }
 }
 
+
+$param = shift;
+
+my ($second, $third);
+
+if (defined $ARGV[0]) {
+    $second = shift;
+} else {
+    $second = "";
+}
+
+if (defined $ARGV[0]) {
+    $third = shift;
+} else {
+    $third = "";
+}
+
+my $updates = 0;
+
+$updates = 1 unless (not ($second eq "-updates"));
+
 ### copy description files
 
 print "Copying...\n";
@@ -186,21 +219,27 @@ if (not -d "$basepath/fink/debs") {
   &execute("/bin/mkdir -p -m755 $basepath/fink/debs");
 }
 
+if (not $updates){
 if (&execute("/bin/cp -f README $basepath/fink/$dists/; /bin/chmod 644 $basepath/fink/$dists/README")) {
   print "ERROR: Can't copy README file.\n";
   exit 1;
-}
+}}
 
+if (not $updates){
 if (&execute("/bin/cp -f VERSION $basepath/fink/$dists/; /bin/chmod 644 $basepath/fink/$dists/VERSION")) {
   print "ERROR: Can't copy VERSION file.\n";
   exit 1;
-}
+}}
 
+# in the case of updates, we needed the file DISTRIBUTION in the tarball in
+# order to check correctness, but we do *not* install it
+if (not $updates){
 if (&execute("/bin/cp -f DISTRIBUTION $basepath/fink/$dists/; /bin/chmod 644 $basepath/fink/$dists/DISTRIBUTION")) {
   print "ERROR: Can't copy DISTRIBUTION file.\n";
   exit 1;
-}
+}}
 
+if (not $updates) {
 &execute("rm -f $basepath/fink/$dists/stamp-*");
 if (-f "stamp-cvs-live") {
   my @now = gmtime(time);
@@ -210,6 +249,7 @@ if (-f "stamp-cvs-live") {
   &execute("touch $basepath/fink/$dists/stamp-cvs-$timestamp");
 } else {
   &execute("cp stamp-* $basepath/fink/$dists/");
+}
 }
 
 sub wanted {
@@ -237,7 +277,7 @@ sub wanted {
 
 ### inform the user
 
-unless (defined $ARGV[0] and $ARGV[0] eq "-quiet") {
+unless ($second eq "-quiet" or $third eq "-quiet") {
   print "\n";
   &print_breaking("Your Fink installation in '$basepath' was updated with ".
 		  "new package description files. Please update the package ".
