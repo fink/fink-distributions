@@ -213,15 +213,33 @@ if (&execute("/bin/cp -f DISTRIBUTION $basepath/fink/$dists/; /bin/chmod 644 $ba
   exit 1;
 }
 
-&execute("rm -f $basepath/fink/$dists/stamp-*");
 if (-f "stamp-cvs-live") {
+    &execute("rm -f $basepath/fink/$dists/stamp-*");
   my @now = gmtime(time);
   my $timestamp = sprintf("%04d%02d%02d-%02d%02d",
 			  $now[5]+1900, $now[4]+1, $now[3],
 			  $now[2], $now[1]);
   &execute("touch $basepath/fink/$dists/stamp-cvs-$timestamp");
 } else {
-  &execute("cp stamp-* $basepath/fink/$dists/");
+# If our VERSION has four parts (separated by decimal points), then it is
+# an update tarball and we require that the distribution with a three-part
+# VERSION (the first three parts of ours) has already been installed.
+# This is tested using the stamp-rel-* files.
+    my $vers = cat "VERSION";
+    chomp($vers);
+    my @version = split(/\./, $vers);
+    if (exists $version[3]) {
+	if (-f "$basepath/fink/$dists/stamp-rel-$version[0].$version[1].$version[2]") {
+	    &execute("mv $basepath/fink/$dists/stamp-rel-$version[0].$version[1].$version[2] $basepath/fink/$dists/bak.stamp-rel-$version[0].$version[1].$version[2]");
+	    &execute("rm -f $basepath/fink/$dists/stamp-*");
+	    &execute("mv $basepath/fink/$dists/bak.stamp-rel-$version[0].$version[1].$version[2] $basepath/fink/$dists/stamp-rel-$version[0].$version[1].$version[2]");
+	} else {
+	    die "\nERROR: you must install dists-$version[0].$version[1].$version[2] before you install this distribution.\n";
+	}
+    } else {
+	&execute("rm -f $basepath/fink/$dists/stamp-*");
+    }
+    &execute("cp stamp-* $basepath/fink/$dists/");
 }
 
 sub wanted {
