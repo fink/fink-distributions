@@ -5,7 +5,7 @@
 #
 # Fink - a package manager that downloads source and installs it
 # Copyright (c) 2001 Christoph Pfisterer
-# Copyright (c) 2001-2004 The Fink Package Manager Team
+# Copyright (c) 2001-2008 The Fink Package Manager Team
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -19,7 +19,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110, USA.
 #
 
 $| = 1;
@@ -131,9 +131,21 @@ if ($notlocated) {
     exit 1;
 }
 
-### parse config file for root method
+# can't use Fink::Bootstrap::find_rootmethod because the optional arguments
+# are not passed
 
-&find_rootmethod($basepath);
+#### parse config file for root method
+#
+#&find_rootmethod($basepath);
+
+### re-execute as root                                                          
+unshift(@ARGV, $basepath);
+
+if ($> != 0) {
+    exit &execute("sudo ./inject.pl @ARGV");
+}
+umask oct("022");
+
 
 ### determine the distribution
 
@@ -201,15 +213,33 @@ if (&execute("/bin/cp -f DISTRIBUTION $basepath/fink/$dists/; /bin/chmod 644 $ba
   exit 1;
 }
 
-&execute("rm -f $basepath/fink/$dists/stamp-*");
 if (-f "stamp-cvs-live") {
+    &execute("rm -f $basepath/fink/$dists/stamp-*");
   my @now = gmtime(time);
   my $timestamp = sprintf("%04d%02d%02d-%02d%02d",
 			  $now[5]+1900, $now[4]+1, $now[3],
 			  $now[2], $now[1]);
   &execute("touch $basepath/fink/$dists/stamp-cvs-$timestamp");
 } else {
-  &execute("cp stamp-* $basepath/fink/$dists/");
+# If our VERSION has four parts (separated by decimal points), then it is
+# an update tarball and we require that the distribution with a three-part
+# VERSION (the first three parts of ours) has already been installed.
+# This is tested using the stamp-rel-* files.
+    my $vers = cat "VERSION";
+    chomp($vers);
+    my @version = split(/\./, $vers);
+    if (exists $version[3]) {
+	if (-f "$basepath/fink/$dists/stamp-rel-$version[0].$version[1].$version[2]") {
+	    &execute("mv $basepath/fink/$dists/stamp-rel-$version[0].$version[1].$version[2] $basepath/fink/$dists/bak.stamp-rel-$version[0].$version[1].$version[2]");
+	    &execute("rm -f $basepath/fink/$dists/stamp-*");
+	    &execute("mv $basepath/fink/$dists/bak.stamp-rel-$version[0].$version[1].$version[2] $basepath/fink/$dists/stamp-rel-$version[0].$version[1].$version[2]");
+	} else {
+	    die "\nERROR: you must install dists-$version[0].$version[1].$version[2] before you install this distribution.\n";
+	}
+    } else {
+	&execute("rm -f $basepath/fink/$dists/stamp-*");
+    }
+    &execute("cp stamp-* $basepath/fink/$dists/");
 }
 
 sub wanted {
