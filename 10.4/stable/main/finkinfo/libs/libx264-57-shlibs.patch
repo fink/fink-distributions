@@ -1,0 +1,113 @@
+diff -ruN x264-0.0.20071214.orig/Makefile x264-0.0.20071214/Makefile
+--- x264-0.0.20071214.orig/Makefile	2007-12-14 14:45:02.000000000 -0700
++++ x264-0.0.20071214/Makefile	2007-12-15 18:02:29.000000000 -0700
+@@ -77,10 +77,10 @@
+ 	ar rc libx264.a $(OBJS) $(OBJASM)
+ 	ranlib libx264.a
+ 
+-$(SONAME): .depend $(OBJS) $(OBJASM)
+-	$(CC) -shared -o $@ $(OBJS) $(OBJASM) -Wl,-soname,$(SONAME) $(LDFLAGS)
++$(SONAME): .depend $(OBJS) $(OBJASM) libx264.a
++	$(CC) -dynamiclib -o $@ $(OBJS) $(OBJASM) -install_name $(SOINSTALLPATH)/$(SONAME_INSTALL) -compatibility_version 1 -current_version 1 -Wl,-read_only_relocs,suppress $(LDFLAGS)
+ 
+-x264$(EXE): $(OBJCLI) libx264.a 
++x264$(EXE): $(OBJCLI) $(SONAME)
+ 	$(CC) -o $@ $+ $(LDFLAGS)
+ 
+ libx264gtk.a: muxers.o libx264.a
+@@ -157,7 +157,8 @@
+ 	install -m 644 x264.pc $(DESTDIR)$(libdir)/pkgconfig
+ 	install x264 $(DESTDIR)$(bindir)
+ 	ranlib $(DESTDIR)$(libdir)/libx264.a
+-	$(if $(SONAME), ln -sf $(SONAME) $(DESTDIR)$(libdir)/libx264.so)
++	$(if $(SONAME), ln -sf $(SONAME) $(DESTDIR)$(libdir)/libx264.dylib)
++	$(if $(SONAME), ln -sf $(SONAME) $(DESTDIR)$(libdir)/$(SONAME_INSTALL))
+ 	$(if $(SONAME), install -m 755 $(SONAME) $(DESTDIR)$(libdir))
+ 
+ install-gtk: libx264gtk.a
+diff -ruN x264-0.0.20071214.orig/configure x264-0.0.20071214/configure
+--- x264-0.0.20071214.orig/configure	2007-12-14 14:45:02.000000000 -0700
++++ x264-0.0.20071214/configure	2007-12-15 17:55:20.000000000 -0700
+@@ -15,7 +15,7 @@
+ echo "  --enable-gprof           adds -pg, doesn't strip"
+ echo "  --enable-visualize       enables visualization (X11 only)"
+ echo "  --enable-pic             build position-independent code"
+-echo "  --enable-shared          build libx264.so"
++echo "  --enable-shared          build libx264.dylib"
+ echo "  --extra-asflags=EASFLAGS add EASFLAGS to ASFLAGS"
+ echo "  --extra-cflags=ECFLAGS   add ECFLAGS to CFLAGS"
+ echo "  --extra-ldflags=ELDFLAGS add ELDFLAGS to LDFLAGS"
+@@ -122,10 +122,10 @@
+             ASFLAGS="$ASFLAGS ${opt#--extra-asflags=}"
+             ;;
+         --extra-cflags=*)
+-            CFLAGS="$CFLAGS ${opt#--extra-cflags=}"
++            CFLAGS="${opt#--extra-cflags=} $CFLAGS"
+             ;;
+         --extra-ldflags=*)
+-            LDFLAGS="$LDFLAGS ${opt#--extra-ldflags=}"
++            LDFLAGS="${opt#--extra-ldflags=} $LDFLAGS"
+             ;;
+         --enable-pthread)
+             pthread="auto" # can't skip detection, since it differs by OS
+@@ -401,7 +401,7 @@
+ 
+ if [ "$debug" != "yes" -a "$gprof" != "yes" ]; then
+     CFLAGS="$CFLAGS -s -fomit-frame-pointer"
+-    LDFLAGS="$LDFLAGS -s"
++    LDFLAGS="$LDFLAGS"
+ fi
+ 
+ if [ "$debug" = "yes" ]; then
+@@ -452,10 +452,14 @@
+ 
+ if [ "$shared" = "yes" ]; then
+     API=$(grep '#define X264_BUILD' < x264.h | cut -f 3 -d ' ')
+-    echo "SONAME=libx264.so.$API" >> config.mak
++    echo "SOINSTALLPATH=${prefix}/lib" >> config.mak
++    echo "SONAME_INSTALL=libx264.$API.dylib" >> config.mak
++    echo "SONAME=libx264.$API.0.0.dylib" >> config.mak
+     echo 'default: $(SONAME)' >> config.mak
+     if [ "$gtk" = "yes" ]; then
+-        echo "SONAMEGTK=libx264gtk.so.$API" >> gtk/config.mak
++        echo "SOINSTALLPATH=${prefix}/lib" >> gtk/config.mak
++        echo "SONAMEGTK_INSTALL=libx264gtk.$API.dylib" >> gtk/config.mak
++        echo "SONAMEGTK=libx264gtk.$API.0.0.dylib" >> gtk/config.mak
+     fi
+ fi
+ 
+diff -ruN x264-snapshot-20071214-2245.orig/gtk/Makefile x264-snapshot-20071214-2245/gtk/Makefile
+--- x264-snapshot-20071214-2245.orig/gtk/Makefile	2007-12-14 16:45:01.000000000 -0500
++++ x264-snapshot-20071214-2245/gtk/Makefile	2008-03-18 21:55:47.000000000 -0400
+@@ -52,8 +52,8 @@
+ all: $(ENCODE_BIN) $(TEST_BIN) $(MO_FILES) $(X264GTK_PC)
+ 
+ # Already provides iconv/intl
+-CPPFLAGS = -g `pkg-config --cflags gtk+-2.0 gthread-2.0` -I.. -DX264_DATA_DIR=\"${datadir}\"
+-LDFLAGS += `pkg-config --libs gtk+-2.0 gthread-2.0` ../libx264.a
++CPPFLAGS = -g -I.. `pkg-config --cflags gtk+-2.0 gthread-2.0` -DX264_DATA_DIR=\"${datadir}\"
++LDFLAGS += ../libx264.a `pkg-config --libs gtk+-2.0 gthread-2.0`
+ 
+ 
+ # gettext rules
+@@ -93,7 +93,7 @@
+ 
+ $(SONAMEGTK): $(OBJECTS_LIB)
+ 	@echo "  L: $(@F)"
+-	@$(CC) -shared -o $@ $(OBJECTS_LIB) -Wl,-soname,$(SONAMEGTK) $(LDFLAGS)
++	@$(CC) -dynamiclib -o $@ $(OBJECTS_LIB) -install_name $(SOINSTALLPATH)/$(SONAMEGTK_INSTALL) -compatibility_version 1 -current_version 1 $(LDFLAGS)
+ 
+ # Program : test
+ $(TEST_BIN): $(OBJECTS_LIB) $(OBJECTS_TEST)
+@@ -142,8 +142,9 @@
+ 	@install -d "$(DESTDIR)$(libdir)"
+ 	@echo "  I: $(DESTDIR)$(libdir)/libx264gtk.a"
+ 	@install -m 644 libx264gtk.a "$(DESTDIR)$(libdir)"
+-	@echo "  I: $(DESTDIR)$(libdir)/libx264gtk.so"
+-	@$(if $(SONAMEGTK), ln -sf $(SONAMEGTK) $(DESTDIR)$(libdir)/libx264gtk.so)
++	@echo "  I: $(DESTDIR)$(libdir)/libx264gtk.dylib"
++	@$(if $(SONAMEGTK), ln -sf $(SONAMEGTK) $(DESTDIR)$(libdir)/libx264gtk.dylib)
++	@$(if $(SONAMEGTK), ln -sf $(SONAMEGTK) $(DESTDIR)$(libdir)/$(SONAMEGTK_INSTALL))
+ 	@$(if $(SONAMEGTK), install -m 755 $(SONAMEGTK) $(DESTDIR)$(libdir))
+ 	@echo "  D: $(DESTDIR)$(bindir)"
+ 	@install -d "$(DESTDIR)$(bindir)"

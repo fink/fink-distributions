@@ -45,27 +45,6 @@ diff -Naur nautilus-2.6.3-old/components/notes/Makefile.in nautilus-2.6.3/compon
  
  server_in_files = Nautilus_View_notes.server.in.in
  
-diff -Naur nautilus-2.6.3-old/configure nautilus-2.6.3/configure
---- nautilus-2.6.3-old/configure	2004-06-14 17:32:36.000000000 -0400
-+++ nautilus-2.6.3/configure	2004-07-01 17:41:49.000000000 -0400
-@@ -24985,7 +24985,7 @@
- 
- LIBNAUTILUS_LIBS="`$PKG_CONFIG --libs $LIBNAUTILUS_MODULES`"
- 
--LIBNAUTILUS_IDL_INCLUDES="`$PKG_CONFIG --variable=idldir $LIBNAUTILUS_MODULES | $srcdir/add-include-prefix`"
-+LIBNAUTILUS_IDL_INCLUDES="`$PKG_CONFIG --variable=idldir $LIBNAUTILUS_MODULES | xargs -n1 /bin/echo ' -I \c'`"
- 
- 
- LIBNAUTILUS_EXTENSION_MODULES="glib-2.0 gtk+-2.0 gnome-vfs-2.0"
-@@ -24999,7 +24999,7 @@
- 
- CORE_LIBS="`$PKG_CONFIG --libs $CORE_MODULES` $CDDA_LIBS $LIBJPEG $x_libs"
- 
--CORE_IDL_INCLUDES="`$PKG_CONFIG --variable=idldir $CORE_MODULES | $srcdir/add-include-prefix`"
-+CORE_IDL_INCLUDES="`$PKG_CONFIG --variable=idldir $CORE_MODULES | xargs -n1 /bin/echo ' -I \c'`"
- 
- 
- COMPONENT_MODULES="eel-2.0 libbonoboui-2.0 gnome-vfs-module-2.0 gnome-desktop-2.0"
 diff -Naur nautilus-2.6.3-old/libnautilus/Makefile.in nautilus-2.6.3/libnautilus/Makefile.in
 --- nautilus-2.6.3-old/libnautilus/Makefile.in	2004-06-14 17:33:12.000000000 -0400
 +++ nautilus-2.6.3/libnautilus/Makefile.in	2004-07-02 09:02:20.000000000 -0400
@@ -162,3 +141,110 @@ diff -Naur nautilus-2.6.3-old/po/Makefile.in.in nautilus-2.6.3/po/Makefile.in.in
  gnulocaledir = $(datadir)/locale
  gettextsrcdir = $(datadir)/glib-2.0/gettext/po
  subdir = po
+
+diff -Naur nautilus-2.6.3-old/src/file-manager/fm-desktop-icon-view.c nautilus-2.6.3/src/file-manager/fm-desktop-icon-view.c
+--- nautilus-2.6.3-old/src/file-manager/fm-desktop-icon-view.c	2004-06-10 00:14:55.000000000 +1000
++++ nautilus-2.6.3/src/file-manager/fm-desktop-icon-view.c	2004-12-17 13:08:31.187503033 +1100
+@@ -163,6 +163,7 @@
+ net_workarea_changed (FMDesktopIconView *icon_view,
+ 		      GdkWindow         *window)
+ {
++	long *nworkareas = NULL;
+ 	long *workareas = NULL;
+ 	GdkAtom type_returned;
+ 	int format_returned;
+@@ -174,23 +175,57 @@
+ 
+ 	icon_container = get_icon_container (icon_view);
+ 
++	/* Find the number of desktops so we know how long the
++	 * workareas array is going to be (each desktop will have four
++	 * elements in the workareas array describing
++	 * x,y,width,height) */
+ 	gdk_error_trap_push ();
+ 	if (!gdk_property_get (window,
+-			       gdk_atom_intern ("_NET_WORKAREA", FALSE),
++			       gdk_atom_intern ("_NET_NUMBER_OF_DESKTOPS", FALSE),
+ 			       gdk_x11_xatom_to_atom (XA_CARDINAL),
+-			       0, G_MAXLONG, FALSE,
++			       0, 4, FALSE,
+ 			       &type_returned,
+ 			       &format_returned,
+ 			       &length_returned,
+-			       (guchar **) &workareas)) {
++			       (guchar **) &nworkareas)) {
++		g_warning("Can not caclulate _NET_NUMBER_OF_DESKTOPS");
++	}
++	if (gdk_error_trap_pop()
++	    || nworkareas == NULL
++	    || type_returned != gdk_x11_xatom_to_atom (XA_CARDINAL)
++	    || format_returned != 32)
++		g_warning("Can not calculate _NET_NUMBER_OF_DESKTOPS");
++	
++	/* Note : gdk_property_get() is broken (API documents admit
++	 * this).  As a length argument, it expects the number of
++	 * _bytes_ of data you require.  Internally, gdk_property_get
++	 * converts that value to a count of 32 bit (4 byte) elements.
++	 * However, the length returned is in bytes, but is calculated
++	 * via the count of returned elements * sizeof(long).  This
++	 * means on a 64 bit system, the number of bytes you have to
++	 * request does not correspond to the number of bytes you get
++	 * back, and is the reason for the workaround below.
++	 */ 
++	gdk_error_trap_push ();
++	if ((*nworkareas < 1) 
++	    || !gdk_property_get (window,
++				  gdk_atom_intern ("_NET_WORKAREA", FALSE),
++				  gdk_x11_xatom_to_atom (XA_CARDINAL),
++				  0, ((*nworkareas) * 4 * 4), FALSE,
++				  &type_returned,
++				  &format_returned,
++				  &length_returned,
++				  (guchar **) &workareas)) {
++		g_warning("Can not get _NET_WORKAREA");
+ 		workareas = NULL;
+ 	}
+ 
+ 	if (gdk_error_trap_pop ()
+ 	    || workareas == NULL
+ 	    || type_returned != gdk_x11_xatom_to_atom (XA_CARDINAL)
+-	    || (length_returned % 4) != 0
++	    || ((*nworkareas) * 4 * sizeof(long)) != length_returned
+ 	    || format_returned != 32) {
++		g_warning("Can not determine workarea, guessing at layout");
+ 		nautilus_icon_container_set_margins (icon_container,
+ 						     0, 0, 0, 0);
+ 	} else {
+@@ -200,6 +235,9 @@
+ 			icon_container, screen, workareas, length_returned / sizeof (long));
+ 	}
+ 
++	if (nworkareas != NULL)
++		g_free (nworkareas);
++
+ 	if (workareas != NULL)
+ 		g_free (workareas);
+ }
+diff -uNr nautilus-2.6.3/libnautilus-private/nautilus-global-preferences.c nautilus-2.6.3-new/libnautilus-private/nautilus-global-preferences.c
+--- nautilus-2.6.3/libnautilus-private/nautilus-global-preferences.c	2004-02-20 05:33:46.000000000 -0500
++++ nautilus-2.6.3-new/libnautilus-private/nautilus-global-preferences.c	2006-12-30 15:29:51.000000000 -0500
+@@ -38,6 +38,7 @@
+ #include <libgnome/gnome-util.h>
+ #include <libgnomevfs/gnome-vfs-mime-handlers.h>
+ #include <libgnomevfs/gnome-vfs-utils.h>
++#include <bonobo-activation-2.0/bonobo-activation/Bonobo_Activation_types.h>
+ 
+ /* Constants */
+ #define STRING_LIST_DEFAULT_TOKENS_DELIMETER ","
+diff -uNr nautilus-2.6.3/libnautilus-private/nautilus-mime-actions.h nautilus-2.6.3-new/libnautilus-private/nautilus-mime-actions.h
+--- nautilus-2.6.3/libnautilus-private/nautilus-mime-actions.h	2004-03-05 07:46:48.000000000 -0500
++++ nautilus-2.6.3-new/libnautilus-private/nautilus-mime-actions.h	2006-12-31 01:11:51.000000000 -0500
+@@ -26,7 +26,7 @@
+ #define NAUTILUS_MIME_ACTIONS_H
+ 
+ #include <libgnomevfs/gnome-vfs-mime-handlers.h>
+-
++#include <bonobo-activation-2.0/bonobo-activation/Bonobo_Activation_types.h>
+ #include <libnautilus-private/nautilus-file.h>
+ 
+ 
