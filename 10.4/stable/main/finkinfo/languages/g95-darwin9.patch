@@ -1,0 +1,133 @@
+diff -uNr gcc-4.0.3/gcc/config/rs6000/darwin-fallback.c gcc-4.0.3.patched/gcc/config/rs6000/darwin-fallback.c
+--- gcc-4.0.3/gcc/config/rs6000/darwin-fallback.c	2005-01-18 07:01:51.000000000 -0500
++++ gcc-4.0.3.patched/gcc/config/rs6000/darwin-fallback.c	2007-11-19 18:06:38.000000000 -0500
+@@ -261,9 +261,9 @@
+ };
+ 
+ #define UC_FLAVOR_SIZE \
+-  (sizeof (struct mcontext) - sizeof (ppc_vector_state_t))
++  (sizeof (struct __darwin_mcontext) - sizeof (ppc_vector_state_t))
+ 
+-#define UC_FLAVOR_VEC_SIZE (sizeof (struct mcontext))
++#define UC_FLAVOR_VEC_SIZE (sizeof (struct __darwin_mcontext))
+ 
+ #define UC_FLAVOR64_SIZE \
+   (sizeof (struct gcc_mcontext64) - sizeof (ppc_vector_state_t))
+@@ -354,33 +354,33 @@
+     }
+   else
+     {
+-      struct mcontext *m = uctx->uc_mcontext;
++      struct __darwin_mcontext *m = (struct __darwin_mcontext *)uctx->uc_mcontext;
+       int i;
+ 
+-      float_state = &m->fs;
+-      vector_state = &m->vs;
++      float_state = &m->__fs;
++      vector_state = &m->__vs;
+       
+-      new_cfa = m->ss.r1;
++      new_cfa = m->__ss.__r1;
+ 
+-      set_offset (CR2_REGNO, &m->ss.cr);
++      set_offset (CR2_REGNO, &m->__ss.__cr);
+       for (i = 0; i < 32; i++)
+-	set_offset (i, &m->ss.r0 + i);
+-      set_offset (XER_REGNO, &m->ss.xer);
+-      set_offset (LINK_REGISTER_REGNUM, &m->ss.lr);
+-      set_offset (COUNT_REGISTER_REGNUM, &m->ss.ctr);
++	set_offset (i, &m->__ss.__r0 + i);
++      set_offset (XER_REGNO, &m->__ss.__xer);
++      set_offset (LINK_REGISTER_REGNUM, &m->__ss.__lr);
++      set_offset (COUNT_REGISTER_REGNUM, &m->__ss.__ctr);
+ 
+       if (is_vector)
+-	set_offset (VRSAVE_REGNO, &m->ss.vrsave);
++	set_offset (VRSAVE_REGNO, &m->__ss.__vrsave);
+ 
+       /* Sometimes, srr0 points to the instruction that caused the exception,
+ 	 and sometimes to the next instruction to be executed; we want
+ 	 the latter.  */
+-      if (m->es.exception == 3 || m->es.exception == 4
+-	  || m->es.exception == 6
+-	  || (m->es.exception == 7 && !(m->ss.srr1 & 0x10000)))
+-	return_addr = m->ss.srr0 + 4;
++      if (m->__es.__exception == 3 || m->__es.__exception == 4
++	  || m->__es.__exception == 6
++	  || (m->__es.__exception == 7 && !(m->__ss.__srr1 & 0x10000)))
++	return_addr = m->__ss.__srr0 + 4;
+       else
+-	return_addr = m->ss.srr0;
++	return_addr = m->__ss.__srr0;
+     }
+ 
+   fs->cfa_how = CFA_REG_OFFSET;
+@@ -399,14 +399,14 @@
+   set_offset (ARG_POINTER_REGNUM, &return_addr);
+ 
+   for (i = 0; i < 32; i++)
+-    set_offset (32 + i, float_state->fpregs + i);
+-  set_offset (SPEFSCR_REGNO, &float_state->fpscr);
++    set_offset (32 + i, float_state->__fpregs + i);
++  set_offset (SPEFSCR_REGNO, &float_state->__fpscr);
+   
+   if (is_vector)
+     {
+       for (i = 0; i < 32; i++)
+-	set_offset (FIRST_ALTIVEC_REGNO + i, vector_state->save_vr + i);
+-      set_offset (VSCR_REGNO, vector_state->save_vscr);
++	set_offset (FIRST_ALTIVEC_REGNO + i, vector_state->__save_vr + i);
++      set_offset (VSCR_REGNO, vector_state->__save_vscr);
+     }
+ 
+   return true;
+diff -uNr gcc-4.0.3/gcc/config/rs6000/host-darwin.c gcc-4.0.3.patched/gcc/config/rs6000/host-darwin.c
+--- gcc-4.0.3/gcc/config/rs6000/host-darwin.c	2004-11-09 05:13:30.000000000 -0500
++++ gcc-4.0.3.patched/gcc/config/rs6000/host-darwin.c	2007-11-19 18:06:57.000000000 -0500
+@@ -33,10 +33,6 @@
+ static void segv_handler (int, siginfo_t *, void *);
+ static void darwin_rs6000_extra_signals (void);
+ 
+-/* This doesn't have a prototype in signal.h in 10.2.x and earlier,
+-   fixed in later releases.  */
+-extern int sigaltstack(const struct sigaltstack *, struct sigaltstack *);
+-
+ #undef HOST_HOOKS_EXTRA_SIGNALS
+ #define HOST_HOOKS_EXTRA_SIGNALS darwin_rs6000_extra_signals
+ 
+@@ -64,7 +60,7 @@
+      which case the next line will segfault _again_.  Handle this case.  */
+   signal (SIGSEGV, segv_crash_handler);
+ 
+-  faulting_insn = *(unsigned *)uc->uc_mcontext->ss.srr0;
++  faulting_insn = *(unsigned *)uc->uc_mcontext->__ss.__srr0;
+ 
+   /* Note that this only has to work for GCC, so we don't have to deal
+      with all the possible cases (GCC has no AltiVec code, for
+@@ -113,7 +109,7 @@
+     }
+ 
+   fprintf (stderr, "[address=%08lx pc=%08x]\n", 
+-	   uc->uc_mcontext->es.dar, uc->uc_mcontext->ss.srr0);
++	   uc->uc_mcontext->__es.__dar, uc->uc_mcontext->__ss.__srr0);
+   internal_error ("Segmentation Fault");
+   exit (FATAL_EXIT_CODE);
+ }
+--- gcc-4.0.3/gcc/config/darwin8.h.org	2007-11-28 23:49:46.000000000 -0500
++++ gcc-4.0.3/gcc/config/darwin8.h	2007-11-28 23:51:18.000000000 -0500
+@@ -32,3 +32,15 @@
+ #define LIB_SPEC "%{!static:\
+   %{!mlong-double-64:%{pg:-lSystemStubs_profile;:-lSystemStubs}} \
+   -lmx -lSystem}"
++
++#undef  ASM_OUTPUT_ALIGNED_COMMON
++#define ASM_OUTPUT_ALIGNED_COMMON(FILE, NAME, SIZE, ALIGN)              \
++  do {                                                                  \
++    unsigned HOST_WIDE_INT _new_size = (SIZE);                          \
++    fprintf ((FILE), ".comm ");                                         \
++    assemble_name ((FILE), (NAME));                                     \
++    if (_new_size == 0) _new_size = 1;                                  \
++    fprintf ((FILE), ","HOST_WIDE_INT_PRINT_UNSIGNED",%u\n",            \
++             _new_size, floor_log2 ((ALIGN) / BITS_PER_UNIT));          \
++  } while (0)
++
