@@ -1,40 +1,43 @@
 Package: svn
-Version: 1.5.0
-Revision: 2
+Version: 1.4.6
+Revision: 12
 Description: Subversion - svnserve, tools
 License: BSD
-Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
+Maintainer: Christian Schaffner <chris01@users.sourceforge.net>
 
 # Dependencies:
-Depends: %N15-shlibs (= %v-%r), daemonic
+Depends: %N-shlibs (= %v-%r), daemonic
 BuildDepends: <<
-	apr-dev (>= 0.9.12-10),
-	aprutil-dev (>= 0.9.12-10),
-	cyrus-sasl2-dev (>= 2.1.15-23),
-	db44-aes | db44,
-	expat1,
-	fink (>= 0.24.12-1),
-	gettext-bin,
-	gettext-tools,
-	io-string-pm,
-	libgettext3-dev,
-	libiconv-dev (>= 1.9.1-11),
-	libxml2 (>= 2.5.10-12),
-	neon26,
-	openldap23-dev (>= 2.3.24-10),
-	system-openssl-dev,
-	texinfo (>= 4.2-22)
+  fink (>= 0.24.12-1),
+  apr-dev (>= 0.9.12-10),
+  aprutil-dev (>= 0.9.12-10),
+  db44-aes | db44,
+  expat1,
+  libxml2 (>= 2.5.10-12),
+  neon26,
+  openldap23-dev (>= 2.3.24-10),
+  cyrus-sasl2-dev (>= 2.1.15-23),
+  system-openssl-dev,
+  texinfo (>= 4.2-22),
+  libiconv-dev (>= 1.9.1-11),
+  gettext-bin,
+  gettext-tools,
+  libgettext3-dev,
+  io-string-pm,
+  libtool14 (>= 1.5.10-1),
+  autoconf (>= 2.60-1),
+  automake1.10
 <<
 Conflicts: svn-client-ssl, svn-client (<= 0.26.0-2), apache2 (<< 2.0.47-1)
 Replaces: svn-client-ssl, svn-client (<= 1.1.1-11), svn-ssl
 
 # Unpack Phase:
 Source: http://subversion.tigris.org/downloads/subversion-%v.tar.bz2
-Source-MD5: 004b57643406dd10957ec87955702189
+Source-MD5: 9c7cf517362c1c9332b610339e5cce6b
 
 # Patch Phase:
-PatchFile: %n.patch
-PatchFile-MD5: 49aa2e29b010cdda19a73d2da49e2df5
+PatchFile: %n-%v.patch
+PatchFile-MD5: 82d93aba22bec8dc95941d4e426af82a
 PatchScript: <<
  sed -e 's|@FINKBUILD@|%b|g' -e 's|@FINKPREFIX@|%p|g' < %{PatchFile} | patch -p1
 <<
@@ -44,36 +47,82 @@ NoSetLDFLAGS: true
 NoSetLIBS: true
 SetLDFLAGS: -L%p/lib/system-openssl/lib -L%p/lib
 
-ConfigureParams: <<
-	--libexecdir='${prefix}/lib/svn15' \
-	--libdir='${prefix}/lib/svn15' \
-	--with-neon=%p \
-	--without-serf \
-	--with-apr=%p \
-	--with-apr-util=%p \
-	--without-apxs \
-	--without-apache \
-	--disable-mod-activation \
-	--without-jdk \
-	--disable-javahl \
-	--with-jikes=no \
-	--without-swig \
-	--with-berkeley-db=%p/include/db4:%p/lib \
-	--disable-neon-version-check
-<<
+ConfigureParams: --libexecdir='${prefix}/lib/svn' --mandir='${prefix}/share/man' --infodir='${prefix}/share/info' --with-neon=%p --with-apr=%p --with-apr-util=%p --enable-shared --without-apxs --without-apache --disable-mod-activation --without-jdk --disable-javahl --with-jikes=no --disable-swig-bindings --without-swig --without-python --without-perl --without-ruby --with-berkeley-db=%p/include/db4:%p/lib --disable-neon-version-check --disable-dependency-tracking
 GCC: 4.0
 CompileScript: <<
 #! /bin/sh -ev
+ # recreate configure with libtool 1.5
+ ./autogen.sh
+
  ### Configure shared
- export F77=no
- export RUBY=/usr/bin/false
- export PERL=/usr/bin/false
- ./configure %c
+ export F77=no; ./configure %c
 
  ### make everything shared
  make
 <<
-InfoTest: TestScript: make check || exit 2
+InfoTest: <<
+ TestConfigureParams: --disable-keychain
+ TestScript: <<
+#! /bin/sh -ev
+
+ ### Run tests over ra_local using BDB:
+ echo "Running tests over ra_local using BDB..."
+ make check CLEANUP=true FS_TYPE=bdb
+ 
+ ### Run tests over ra_local using fs_fs:
+ echo "Running tests over ra_local using fs_fs..."
+ make check CLEANUP=true FS_TYPE=fsfs
+
+ ### Run tests over ra_svn using BDB:
+ echo "Running tests over ra_svn using BDB..."
+ killall -v -u `whoami` svnserve || true
+ ./subversion/svnserve/svnserve -d -r `pwd`/subversion/tests/cmdline
+ sleep 1
+ make check CLEANUP=true BASE_URL=svn://localhost FS_TYPE=bdb
+ killall -v -u `whoami` svnserve || true
+
+ ### Run tests over ra_svn using fs_fs:
+ echo "Running tests over ra_svn using fs_fs..."
+ killall -v -u `whoami` svnserve || true
+ ./subversion/svnserve/svnserve -d -r `pwd`/subversion/tests/cmdline
+ sleep 1
+ make check CLEANUP=true BASE_URL=svn://localhost FS_TYPE=fsfs
+ killall -v -u `whoami` svnserve || true
+
+ ### Run tests over ra_dav using BDB:
+ if [ "`fink list -i -t libapache2-mod-svn | cut -f 3`" != "%v-%r" ]; then
+  echo 
+  echo 'WARNING:' 
+  echo 'libapache2-mod-svn-%v-%r needs to be installed for dav tests to work.' 
+  echo
+ else
+  echo "Running tests over ra_dav using BDB..."
+  /usr/bin/install -d %b/fink/apache2
+  %p/sbin/apache2ctl -f %b/fink/httpd.conf -k start
+  sleep 1
+  make check CLEANUP=true BASE_URL=http://localhost:52080 FS_TYPE=bdb
+  %p/sbin/apache2ctl -f %b/fink/httpd.conf -k stop
+  sleep 3
+ fi
+
+ ### Run tests over ra_dav using fs_fs:
+ if [ "`fink list -i -t libapache2-mod-svn | cut -f 3`" != "%v-%r" ]; then
+  echo 
+  echo 'WARNING:' 
+  echo 'libapache2-mod-svn-%v-%r needs to be installed for dav tests to work.' 
+  echo
+ else
+  echo "Running tests over ra_dav using fs_fs..."
+  /usr/bin/install -d %b/fink/apache2
+  %p/sbin/apache2ctl -f %b/fink/httpd.conf -k start
+  sleep 1
+  make check CLEANUP=true BASE_URL=http://localhost:52080 FS_TYPE=fsfs
+  %p/sbin/apache2ctl -f %b/fink/httpd.conf -k stop
+  sleep 3
+ fi
+<<
+# End InfoTest
+<<
 
 # Install Phase:
 DocFiles: BUGS CHANGES COMMITTERS COPYING HACKING INSTALL README
@@ -97,7 +146,7 @@ InstallScript: <<
  cp -r tools/diff %i/share/%n/tools
  cp -r tools/examples %i/share/%n/tools
  cp -r tools/hook-scripts %i/share/%n/tools
- cp -r tools/server-side %i/share/%n/tools
+ cp -r tools/test-scripts %i/share/%n/tools
  cp -r tools/xslt %i/share/%n/tools
  
  cp -r contrib %i/share/%n
@@ -170,35 +219,34 @@ PreInstScript: <<
 <<
 SplitOff: <<
   Description: Subversion - Development headers and libs
-  Package: %N15-dev
-  Depends: %N15-shlibs (= %v-%r)
+  Package: %N-dev
+  Depends: %N-shlibs (= %v-%r)
   BuildDependsOnly: True
-  Conflicts: svn-client-ssl (<= 0.26.0-2), svn-dev
-  Replaces: svn-ssl-dev, svn-client-ssl (<= 0.26.0-2), svn-dev
+  Conflicts: svn-client-ssl (<= 0.26.0-2), svn15-dev
+  Replaces: svn-ssl-dev, svn-client-ssl (<= 0.26.0-2), svn15-dev
   Files: <<
     include
-    lib/svn15/*.a
-    lib/svn15/*.la
-    lib/svn15/libsvn_client-1.dylib
-    lib/svn15/libsvn_delta-1.dylib
-    lib/svn15/libsvn_diff-1.dylib
-    lib/svn15/libsvn_fs-1.dylib
-    lib/svn15/libsvn_fs_base-1.dylib
-    lib/svn15/libsvn_fs_fs-1.dylib
-    lib/svn15/libsvn_fs_util-1.dylib
-    lib/svn15/libsvn_ra-1.dylib
-    lib/svn15/libsvn_ra_local-1.dylib
-    lib/svn15/libsvn_ra_neon-1.dylib
-    lib/svn15/libsvn_ra_svn-1.dylib
-    lib/svn15/libsvn_repos-1.dylib
-    lib/svn15/libsvn_subr-1.dylib
-    lib/svn15/libsvn_wc-1.dylib
+    lib/*.a
+    lib/*.la
+    lib/libsvn_client-1.dylib
+    lib/libsvn_delta-1.dylib
+    lib/libsvn_diff-1.dylib
+    lib/libsvn_fs-1.dylib
+    lib/libsvn_fs_base-1.dylib
+    lib/libsvn_fs_fs-1.dylib
+    lib/libsvn_ra-1.dylib
+    lib/libsvn_ra_dav-1.dylib
+    lib/libsvn_ra_local-1.dylib
+    lib/libsvn_ra_svn-1.dylib
+    lib/libsvn_repos-1.dylib
+    lib/libsvn_subr-1.dylib
+    lib/libsvn_wc-1.dylib
   <<
   DocFiles: COPYING HACKING
 <<
 SplitOff2: <<
   Description: Subversion - Shared libraries
-  Package: %N15-shlibs
+  Package: %N-shlibs
   Conflicts: svn-client-ssl (<= 0.26.0-2)
   Replaces: svn-ssl-shlibs, svn-client-ssl (<= 0.26.0-2)
   Depends: <<
@@ -214,57 +262,54 @@ SplitOff2: <<
     libgettext3-shlibs
   <<
   Files: <<
-    lib/svn15/libsvn_client-1.0.0.0.dylib
-    lib/svn15/libsvn_delta-1.0.0.0.dylib
-    lib/svn15/libsvn_diff-1.0.0.0.dylib
-    lib/svn15/libsvn_fs-1.0.0.0.dylib
-    lib/svn15/libsvn_fs_base-1.0.0.0.dylib
-    lib/svn15/libsvn_fs_fs-1.0.0.0.dylib
-    lib/svn15/libsvn_fs_util-1.0.0.0.dylib
-    lib/svn15/libsvn_ra-1.0.0.0.dylib
-    lib/svn15/libsvn_ra_local-1.0.0.0.dylib
-    lib/svn15/libsvn_ra_neon-1.0.0.0.dylib
-    lib/svn15/libsvn_ra_svn-1.0.0.0.dylib
-    lib/svn15/libsvn_repos-1.0.0.0.dylib
-    lib/svn15/libsvn_subr-1.0.0.0.dylib
-    lib/svn15/libsvn_wc-1.0.0.0.dylib
-    lib/svn15/libsvn_client-1.0.dylib
-    lib/svn15/libsvn_delta-1.0.dylib
-    lib/svn15/libsvn_diff-1.0.dylib
-    lib/svn15/libsvn_fs-1.0.dylib
-    lib/svn15/libsvn_fs_base-1.0.dylib
-    lib/svn15/libsvn_fs_fs-1.0.dylib
-    lib/svn15/libsvn_fs_util-1.0.dylib
-    lib/svn15/libsvn_ra-1.0.dylib
-    lib/svn15/libsvn_ra_local-1.0.dylib
-    lib/svn15/libsvn_ra_neon-1.0.dylib
-    lib/svn15/libsvn_ra_svn-1.0.dylib
-    lib/svn15/libsvn_repos-1.0.dylib
-    lib/svn15/libsvn_subr-1.0.dylib
-    lib/svn15/libsvn_wc-1.0.dylib
+    lib/libsvn_client-1.0.0.0.dylib
+    lib/libsvn_delta-1.0.0.0.dylib
+    lib/libsvn_diff-1.0.0.0.dylib
+    lib/libsvn_fs-1.0.0.0.dylib
+    lib/libsvn_fs_base-1.0.0.0.dylib
+    lib/libsvn_fs_fs-1.0.0.0.dylib
+    lib/libsvn_ra-1.0.0.0.dylib
+    lib/libsvn_ra_dav-1.0.0.0.dylib
+    lib/libsvn_ra_local-1.0.0.0.dylib
+    lib/libsvn_ra_svn-1.0.0.0.dylib
+    lib/libsvn_repos-1.0.0.0.dylib
+    lib/libsvn_subr-1.0.0.0.dylib
+    lib/libsvn_wc-1.0.0.0.dylib
+    lib/libsvn_client-1.0.dylib
+    lib/libsvn_delta-1.0.dylib
+    lib/libsvn_diff-1.0.dylib
+    lib/libsvn_fs-1.0.dylib
+    lib/libsvn_fs_base-1.0.dylib
+    lib/libsvn_fs_fs-1.0.dylib
+    lib/libsvn_ra-1.0.dylib
+    lib/libsvn_ra_dav-1.0.dylib
+    lib/libsvn_ra_local-1.0.dylib
+    lib/libsvn_ra_svn-1.0.dylib
+    lib/libsvn_repos-1.0.dylib
+    lib/libsvn_subr-1.0.dylib
+    lib/libsvn_wc-1.0.dylib
   <<
   Shlibs: <<
-    %p/lib/svn15/libsvn_client-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_delta-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_diff-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_fs-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_fs_base-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_fs_fs-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_fs_util-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_ra-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_ra_local-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_ra_neon-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_ra_svn-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_repos-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_subr-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
-    %p/lib/svn15/libsvn_wc-1.0.dylib 1.0.0 %n (>= 1.5.0-2)
+    %p/lib/libsvn_client-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_delta-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_diff-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_fs-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_fs_base-1.0.dylib 1.0.0 %n (>= 1.1.0-11)
+    %p/lib/libsvn_fs_fs-1.0.dylib 1.0.0 %n (>= 1.1.0-11)
+    %p/lib/libsvn_ra-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_ra_dav-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_ra_local-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_ra_svn-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_repos-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_subr-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_wc-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
   <<
   DocFiles: BUGS CHANGES COMMITTERS COPYING HACKING INSTALL README TRANSLATING
 <<
 SplitOff3: <<
   Description: Subversion - Client
   Package: svn-client
-  Depends: %N15-shlibs (= %v-%r)
+  Depends: %N-shlibs (= %v-%r)
   Replaces: svn-client-ssl, %N (<= 1.0.2-11)
   Files: <<
     bin/svn
@@ -334,17 +379,17 @@ Subversion is broken into these packages in fink:
   serving a repository via web-dav. Type 'fink describe libapache2-mod-svn'
   to get usage help.
 
-- The "%N15-shlibs" package contains the shared libraries for the other
+- The "%N-shlibs" package contains the shared libraries for the other
   packages. It is installed automatically by fink when needed.
 
-- The "%N15-dev" package contains the development headers and libraries.
+- The "%N-dev" package contains the development headers and libraries.
   It is installed automatically by fink when needed.
   
-- The "%N-swig-pm58x" packages contains the swig perl bindings to call
-  svn from perl. Type 'fink describe %N-swig-pm588' to get usage help.
+- The "%N-swig-pm586" package contains the swig perl bindings to call
+  svn from perl. Type 'fink describe %N-swig-pm586' to get usage help.
  
-- The "%N-swig-py2x" packages contains the swig python bindings to call
-  svn from python. Type 'fink describe %N-swig-py25' to get usage help.
+- The "%N-swig-py24" package contains the swig python bindings to call
+  svn from python. Type 'fink describe %N-swig-py24' to get usage help.
  
 - The "%N-swig-rb18" package contains the swig ruby bindings to call
   svn from ruby. Type 'fink describe %N-swig-rb18' to get usage help.
@@ -398,15 +443,29 @@ DescUsage: <<
    fink info svnadmin-db43
 <<
 DescPackaging: <<
+ To run the tests over ra_dav 'libapache2-mod-svn' needs to be already built
+ and installed.
+
  The "Replaces: %N (<= 1.1.1-11)" is needed since svnlook was 
  (incorrectly) in the svn-client package < 1.1.1 and was 
  moved to the main package in 1.1.1-11.
- 
- Renamed -dev and -shlibs and moved libs to lib/svn15 since libs
- were added/deleted. Packages should depend on svn15-dev/-shlibs
- and set LDFLAGS to -L%p/lib/svn15 to use svn 1.5.x.
 <<
 DescPort: <<
+Patch needed to stop relinking a .dylib in the install path, 
+but hardcoding the %p/lib path in the link command (i.e. %p) instead 
+of using %i
+
+The patch also fixes problem with dependency_libs in other packages 
+having -ldb-4.1 or libdb-4.1.la in there, so that libtool ignores 
+these.
+
+Tests patched to not fail if run as root.
+
+Many thanks to Peter O'Gorman for the help with the libtool patch.
+
+Many thanks to Ben Reser for fixing the perl bindings. The patch is
+alredy included in the upstream development tree.
+
 The swig java bindings don't work currently. Check out this thread:
 <http://www.contactor.se/~dast/svn/archive-2004-05/index.shtml#1055>
 
@@ -414,7 +473,5 @@ Added 'export F77=no;' to configure in order not to fail if the
 fort77 package is installed.
 
 svn-config is no longer available as of svn 1.4.
-
-Previously maintained by Christian Schaffner <chris01@users.sourceforge.net>
 <<
 Homepage: http://subversion.tigris.org/
