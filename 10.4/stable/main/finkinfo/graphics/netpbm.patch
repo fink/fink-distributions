@@ -12,3 +12,535 @@ diff -Naur netpbm-9.25.old/configure netpbm-9.25.new/configure
  #    push(@Makefile_config, "INSTALL = install\n");
      push(@Makefile_config, 'TIFFHDR_DIR = $(LOCALBASE)/include', "\n");
      push(@Makefile_config, 'TIFFLIB_DIR = $(LOCALBASE)/lib', "\n"); 
+--- netpbm-9.24/pnm/pstopnm.c.CAN-2005-2471	2005-08-10 13:12:38.000000000 +0200
++++ netpbm-9.24/pnm/pstopnm.c	2005-08-10 13:15:20.000000000 +0200
+@@ -480,7 +480,7 @@
+     
+     sprintf(ghostscript_command,
+             "gs -sDEVICE='%s' -sOutputFile='%s' -g'%dx%d' -r'%dx%d' "
+-            "-q -dNOPAUSE -",
++            "-q -dNOPAUSE -dPARANOIDSAFER -",
+             ghostscript_device, outfile_arg, 
+             xsize, ysize, xres, yres);
+ 
+--- netpbm-9.24/pnm/pnmtopng.c.CVE-2005-3632	2005-12-05 16:05:17.000000000 +0100
++++ netpbm-9.24/pnm/pnmtopng.c	2005-12-05 16:14:40.000000000 +0100
+@@ -205,7 +205,8 @@
+ FILE *tfp;
+ #endif
+ {
+-  char textline[256];
++#define MAXLINE 1024
++  char textline[MAXLINE];
+   int textpos;
+   int i, j;
+   int c;
+@@ -217,6 +218,7 @@
+   textpos = 0;
+   while ((c = getc (tfp)) != EOF) {
+     if (c != '\n' && c != EOF) {
++      if (textpos >= MAXLINE) continue;
+       textline[textpos++] = c;
+     } else {
+       textline[textpos++] = '\0';
+@@ -227,33 +229,41 @@
+         else
+           info_ptr->text[j].compression = 0;
+         cp = malloc (textpos);
++        if ( cp == NULL )
++          pm_error("out of memory");
+         info_ptr->text[j].key = cp;
+         i = 0;
+         if (textline[0] == '"') {
+           i++;
+-          while (textline[i] != '"' && textline[i] != '\n')
++          while (textline[i] != '"' && textline[i] != '\n' && i<textpos)
+             *(cp++) = textline[i++];
+           i++;
+         } else {
+-          while (textline[i] != ' ' && textline[i] != '\t' && textline[i] != '\n')
++          while (textline[i] != ' ' && textline[i] != '\t' && textline[i] != '\n' && i<textpos)
+             *(cp++) = textline[i++];
+         }
+         *(cp++) = '\0';
+         cp = malloc (textpos);
++        if ( cp == NULL )
++          pm_error("out of memory");
+         info_ptr->text[j].text = cp;
+-        while (textline[i] == ' ' || textline[i] == '\t')
++        while ((textline[i] == ' ' || textline[i] == '\t') && i<textpos)
+           i++;
+         strcpy (cp, &textline[i]);
+         info_ptr->text[j].text_length = strlen (cp);
+         j++;
+       } else {
+         j--;
++        if ( info_ptr->text[j].text_length + textpos <= 0 )
++          pm_error("allocation underflow");
+         cp = malloc (info_ptr->text[j].text_length + textpos);
++        if ( cp == NULL )
++          pm_error("out of memory");
+         strcpy (cp, info_ptr->text[j].text);
+         strcat (cp, "\n");
+         info_ptr->text[j].text = cp;
+         i = 0;
+-        while (textline[i] == ' ' || textline[i] == '\t')
++        while ((textline[i] == ' ' || textline[i] == '\t') && i<textpos)
+         i++;
+         strcat (cp, &textline[i]);
+         info_ptr->text[j].text_length = strlen (cp);
+--- netpbm-9.24/pnm/pnmtopng.c.pnmtopng-offbyone	2005-09-29 10:58:32.000000000 +0200
++++ netpbm-9.24/pnm/pnmtopng.c	2005-11-17 17:02:58.000000000 +0100
+@@ -576,8 +576,8 @@ static int convertpnm (ifp, afp, tfp)
+   int alpha_rows;
+   int alpha_cols;
+   int alpha_can_be_transparency_index;
+-  gray *alphas_of_color[MAXCOLORS];
+-  int alphas_of_color_cnt[MAXCOLORS];
++  gray *alphas_of_color[MAXCOLORS+1];
++  int alphas_of_color_cnt[MAXCOLORS+1];
+   int alphas_first_index[MAXCOLORS+1];
+   int mapping[MAXCOLORS];
+   int colors;
+--- netpbm-9.24/pnm/pnmindex.debiansecurity	2001-08-30 04:21:14.000000000 +0200
++++ netpbm-9.24/pnm/pnmindex	2004-01-22 15:27:01.243659161 +0100
+@@ -24,10 +24,6 @@
+   exit 1
+ }
+ 
+-if [ "$TMPDIR"x = ""x ] ; then
+-    TMPDIR=/tmp
+-fi
+-
+ while :; do
+     case "$1" in
+ 
+@@ -94,8 +90,10 @@
+ fi
+ 
+ #tmpfile=`tempfile -p pi -m 600`
+-tmpfile=$TMPDIR/pi.tmp.$$
+-rm -f $tmpfile
++#tmpfile=$TMPDIR/pi.tmp.$$
++#rm -f $tmpfile
++tmpdir=$(mktemp -d /tmp/pi.XXXXXXXX) || exit 1 #219019
++tmpfile="$tmpdir/pi.tmp"
+ maxformat=PBM
+ 
+ rowfiles=()
+@@ -105,7 +103,7 @@
+ 
+ if [ "$title"x != ""x ] ; then
+ #    rowfile=`tempfile -p pirow -m 600`
+-    rowfile=$TMPDIR/pi.${row}.$$
++    rowfile="$tmpdir/pi.${row}.$$"
+     pbmtext "$title" > $rowfile
+     rowfiles=(${rowfiles[*]} $rowfile )
+     row=$(($row + 1))
+@@ -153,7 +151,7 @@
+         esac
+     fi
+ 
+-    imagefile=$TMPDIR/pi.${row}.${col}.$$
++    imagefile="$tmpdir/pi.${row}.${col}.$$"
+     rm -f $imagefile
+     if [ "$back" = "-white" ]; then
+         pbmtext "$i" | pnmcat $back -tb $tmpfile - > $imagefile
+@@ -164,7 +162,7 @@
+     imagefiles=( ${imagefiles[*]} $imagefile )
+ 
+     if [ $col -ge $across ]; then
+-        rowfile=$TMPDIR/pi.${row}.$$
++        rowfile="$tmpdir/pi.${row}.$$"
+         rm -f $rowfile
+ 
+         if [ $maxformat != PPM -o "$doquant" = "false" ]; then
+@@ -189,7 +187,7 @@
+ # Now put the final partial row in its row file.
+ 
+ if [ ${#imagefiles[*]} -gt 0 ]; then
+-    rowfile=$TMPDIR/pi.${row}.$$
++    rowfile="$tmpdir/pi.${row}.$$"
+     rm -f $rowfile
+     if [ $maxformat != PPM -o "$doquant" = "false" ]; then
+         pnmcat $back -lr -jbottom ${imagefiles[*]} > $rowfile
+@@ -212,5 +210,9 @@
+ fi
+ rm -f ${rowfiles[*]}
+ 
++if [ -d "$tmpdir" ]; then
++    rm -rf "$tmpdir";
++fi
++
+ exit 0
+ 
+--- netpbm-9.24/pnm/pnmmargin.debiansecurity	1993-10-04 10:11:44.000000000 +0100
++++ netpbm-9.24/pnm/pnmmargin	2004-01-22 15:29:31.748349881 +0100
+@@ -11,11 +11,16 @@
+ # documentation.  This software is provided "as is" without express or
+ # implied warranty.
+ 
+-tmp1=/tmp/pnmm1$$
+-tmp2=/tmp/pnmm2$$
+-tmp3=/tmp/pnmm3$$
+-tmp4=/tmp/pnmm4$$
+-rm -f $tmp1 $tmp2 $tmp3 $tmp4
++#tmp1=/tmp/pnmm1$$
++#tmp2=/tmp/pnmm2$$
++#tmp3=/tmp/pnmm3$$
++#tmp4=/tmp/pnmm4$$
++#rm -f $tmp1 $tmp2 $tmp3 $tmp4
++tmpdir=$(mktemp -d /tmp/ppmmargin.XXXXXXX) || exit 1 #219019
++tmp1="$tmpdir/tmp1"
++tmp2="$tmpdir/tmp2"
++tmp3="$tmpdir/tmp3"
++tmp4="$tmpdir/tmp4"
+ 
+ color="-gofigure"
+ 
+@@ -83,4 +88,7 @@
+ pnmcat -tb $tmp3 $tmp4 $tmp3
+ 
+ # All done.
+-rm -f $tmp1 $tmp2 $tmp3 $tmp4
++#rm -f $tmp1 $tmp2 $tmp3 $tmp4
++if [ -d "$tmpdir" ]; then
++    rm -rf "$tmpdir"
++fi
+--- netpbm-9.24/pnm/anytopnm.debiansecurity	2000-07-26 03:54:08.000000000 +0200
++++ netpbm-9.24/pnm/anytopnm	2004-01-22 15:27:01.252657947 +0100
+@@ -22,6 +22,7 @@
+ fi
+ 
+ tmpfiles=""
++tmpdir=$(mktemp -d /tmp/anytopnm.XXXXXXXXXX) || exit 1 #219019
+ 
+ # Take out all spaces
+ # Find the filename extension for last-ditch efforts later
+@@ -29,8 +30,7 @@
+ 
+ # Sanitize the filename by making our own temporary files as safely as
+ # possible.
+-file="/tmp/atn.stdin.$$"
+-rm -f "$file"
++file="$tmpdir/atn.stdin"
+ if [ $# -eq 0 -o "$1" = "-" ] ; then
+ 	cat > "$file"
+ else
+@@ -57,10 +57,6 @@
+     cat < "$1" > "$file"
+ fi
+ 
+-tmpfiles="$tmpfiles $file"
+-
+-
+-
+ filetype=`file "$file" | cut -d: -f2-`
+ 
+ case "$filetype" in
+@@ -70,7 +66,7 @@
+     ;;
+ 
+     *uuencoded* )
+-    newfile="/tmp/atn.decode.$$"
++    newfile="$tmpdir/atn.decode"
+     rm -f "$newfile"
+     (echo begin 600 $newfile; tail +2 < "$file") | uudecode
+     tmpfiles="$tmpfiles $newfile"
+@@ -257,8 +253,7 @@
+ 
+ esac
+ 
+-
+-if [ "$tmpfiles" ] ; then
+-    rm -f $tmpfiles
++if [ -d "$tmpdir" ] ; then
++    rm -rf "$tmpdir"
+ fi
+ exit 0
+--- netpbm-9.24/ppm/ppmtompeg/parallel.c.debiansecurity	2001-08-31 22:48:30.000000000 +0200
++++ netpbm-9.24/ppm/ppmtompeg/parallel.c	2004-01-22 15:27:01.257657272 +0100
+@@ -20,6 +20,8 @@
+ /*==============*
+  * HEADER FILES *
+  *==============*/
++#define _BSD_SOURCE 1
++/* This makes sure that mkstemp() is in unistd.h */
+ 
+ #include <sys/types.h>
+ #include <sys/socket.h>
+@@ -557,6 +559,7 @@
+   register int y;
+   int	    numBytes;
+   unsigned long data;
++#define TMPFILE_TEMPLATE "/tmp/ppmtompeg.XXXXXX"
+   char    fileName[256];
+ 
+   Fsize_Note(frameNumber, yuvWidth, yuvHeight);
+@@ -575,7 +578,9 @@
+ 
+   if ( frameNumber != -1 ) {
+     if ( separateConversion ) {
+-      sprintf(fileName, "/tmp/foobar%d", machineNumber);
++      strcpy(fileName, TMPFILE_TEMPLATE);
++      if (-1 == mkstemp(fileName))
++	  pm_error( "could not create temporary convolution file");
+       filePtr = fopen(fileName, "wb");
+ 
+       /* read in stuff, SafeWrite to file, perform local conversion */
+--- netpbm-9.24/ppm/ppmtompeg/ppmtompeg.1.debiansecurity	2001-04-17 04:42:42.000000000 +0200
++++ netpbm-9.24/ppm/ppmtompeg/ppmtompeg.1	2004-01-22 15:27:01.259657002 +0100
+@@ -366,6 +366,9 @@
+ .SH VERSION
+ This is version 1.5 it contins new features and bug fixes from version 1.3.
+ .SH BUGS
++Not really a bug, but at least a limitation: If writing to an output file,
++ppmtompeg sometimes uses <filename>.* as temporary files.
++.LP
+ No known bugs, but if you find any, report them to mpeg-bugs@plateau.cs.berkeley.edu.
+ .HP
+ .SH AUTHORS
+--- netpbm-9.24/ppm/ppmfade.debiansecurity	2000-09-18 23:31:04.000000000 +0200
++++ netpbm-9.24/ppm/ppmfade	2004-01-22 15:27:01.264656327 +0100
+@@ -23,6 +23,7 @@
+ #
+ #-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+ use strict;
++use File::Temp "tempdir";
+ 
+ my $SPREAD =  1;
+ my $SHIFT =   2;
+@@ -125,20 +126,25 @@
+ 
+ print("Frames are " . $width . "W x " . $height . "H\n");
+ 
++#
++# We create a tmp-directory right here
++#
++my $tmpdir = tempdir("ppmfade.XXXXXX", CLEANUP => 1);
++
+ if ($first_file eq "undefined") {
+     print "Fading from black to ";
+-    system("ppmmake \\#000 $width $height >junk1$$.ppm");
++    system("ppmmake \\#000 $width $height >$tmpdir/junk1.ppm");
+ } else {
+     print "Fading from $first_file to ";
+-    system("cp", $first_file, "junk1$$.ppm");
++    system("cp", $first_file, "$tmpdir/junk1.ppm");
+ }
+ 
+ if ($last_file eq "undefined") {
+     print "black.\n";
+-    system("ppmmake \\#000 $width $height >junk2$$.ppm");
++    system("ppmmake \\#000 $width $height >$tmpdir/junk2.ppm");
+ } else {
+     print "$last_file\n";
+-    system("cp", $last_file, "junk2$$.ppm");
++    system("cp", $last_file, "$tmpdir/junk2.ppm");
+ }
+ 
+ #
+@@ -161,148 +167,150 @@
+     if ($mode eq $SPREAD) {
+         if ($i <= 10) {
+             my $n = $spline20[$i] * 100;
+-            system("ppmspread $n junk1$$.ppm >junk3$$.ppm");
++            system("ppmspread $n $tmpdir/junk1.ppm >$tmpdir/junk3.ppm");
+         } elsif ($i <= 20) {
+             my $n;
+             $n = $spline20[$i] * 100;
+-            system("ppmspread $n junk1$$.ppm >junk1a$$.ppm");
++            system("ppmspread $n $tmpdir/junk1.ppm >$tmpdir/junk1a.ppm");
+             $n = (1-$spline20[$i-10]) * 100;
+-            system("ppmspread $n junk2$$.ppm >junk2a$$.ppm");
++            system("ppmspread $n $tmpdir/junk2.ppm >$tmpdir/junk2a.ppm");
+             $n = $spline10[$i-10];
+-            system("ppmmix $n junk1a$$.ppm junk2a$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk1a.ppm $tmpdir/junk2a.ppm >$tmpdir/junk3.ppm");
+         } else {
+             my $n = (1-$spline20[$i-10])*100;
+-            system("ppmspread $n junk2$$.ppm >junk3$$.ppm");
++            system("ppmspread $n $tmpdir/junk2.ppm >$tmpdir/junk3.ppm");
+         }
+     } elsif ($mode eq $SHIFT) {
+         if ($i <= 10) {
+             my $n = $spline20[$i] * 100;
+-            system("ppmshift $n junk1$$.ppm >junk3$$.ppm");
++            system("ppmshift $n $tmpdir/junk1.ppm >$tmpdir/junk3.ppm");
+         } elsif ($i <= 20) {
+             my $n;
+             $n = $spline20[$i] * 100;
+-            system("ppmshift $n junk1$$.ppm >junk1a$$.ppm");
++            system("ppmshift $n $tmpdir/junk1.ppm >$tmpdir/junk1a.ppm");
+             $n = (1-$spline20[$i-10])*100;
+-            system("ppmshift $n junk2$$.ppm >junk2a$$.ppm");
++            system("ppmshift $n $tmpdir/junk2.ppm >$tmpdir/junk2a.ppm");
+             $n = $spline10[$i-10];
+-            system("ppmmix $n junk1a$$.ppm junk2a$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk1a.ppm $tmpdir/junk2a.ppm >$tmpdir/junk3.ppm");
+         } else {
+             my $n = (1-$spline20[$i-10]) * 100;
+-            system("ppmshift $n junk2$$.ppm >junk3$$.ppm");
++            system("ppmshift $n $tmpdir/junk2.ppm >$tmpdir/junk3.ppm");
+         }
+     } elsif ($mode eq $RELIEF) {
+         if ($i == 1) {
+-            system("ppmrelief junk1$$.ppm >junk1r$$.ppm");
++            system("ppmrelief $tmpdir/junk1.ppm >$tmpdir/junk1r.ppm");
+         }
+         if ($i <= 10) {
+             my $n = $spline10[$i];
+-            system("ppmmix $n junk1$$.ppm junk1r$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk1.ppm $tmpdir/junk1r.ppm >$tmpdir/junk3.ppm");
+         } elsif ($i <= 20) {
+             my $n = $spline10[$i-10];
+-            system("ppmmix $n junk1r$$.ppm junk2r$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk1r.ppm $tmpdir/junk2r.ppm >$tmpdir/junk3.ppm");
+         } else {
+             my $n = $spline10[$i-20];
+-            system("ppmmix $n junk2r$$.ppm junk2$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk2r.ppm $tmpdir/junk2.ppm >$tmpdir/junk3.ppm");
+         }
+         if ($i == 10) {
+-            system("ppmrelief junk2$$.ppm >junk2r$$.ppm");
++            system("ppmrelief $tmpdir/junk2.ppm >$tmpdir/junk2r.ppm");
+         }
+     } elsif ($mode eq $OIL) {
+         if ($i == 1) {
+-            system("ppmtopgm junk1$$.ppm | pgmoil >junko$$.ppm");
+-            system("rgb3toppm junko$$.ppm junko$$.ppm junko$$.ppm " .
+-                   ">junk1o$$.ppm");
++            system("ppmtopgm $tmpdir/junk1.ppm | pgmoil >$tmpdir/junko.ppm");
++            system("rgb3toppm $tmpdir/junko.ppm $tmpdir/junko.ppm $tmpdir/junko.ppm " .
++                   ">$tmpdir/junk1o.ppm");
+         }
+         if ($i <= 10) {
+             my $n = $spline10[$i];
+-            system("ppmmix $n junk1$$.ppm junk1o$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk1.ppm $tmpdir/junk1o.ppm >$tmpdir/junk3.ppm");
+         } elsif ($i <= 20) {
+             my $n = $spline10[$i-10];
+-            system("ppmmix $n junk1o$$.ppm junk2o$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk1o.ppm $tmpdir/junk2o.ppm >$tmpdir/junk3.ppm");
+         } else {
+             my $n = $spline10[$i-20];
+-            system("ppmmix $n junk2o$$.ppm junk2$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk2o.ppm $tmpdir/junk2.ppm >$tmpdir/junk3.ppm");
+         }
+         if ($i == 10) {
+-            system("ppmtopgm junk2$$.ppm | pgmoil >junko$$.ppm");
+-            system("rgb3toppm junko$$.ppm junko$$.ppm junko$$.ppm " .
+-                   ">junk2o$$.ppm");
++            system("ppmtopgm $tmpdir/junk2.ppm | pgmoil >$tmpdir/junko.ppm");
++            system("rgb3toppm $tmpdir/junko.ppm $tmpdir/junko.ppm $tmpdir/junko.ppm " .
++                   ">$tmpdir/junk2o.ppm");
+         }
+     } elsif ($mode eq $EDGE) {
+         if ($i == 1) {
+-            system("ppmtopgm junk1$$.ppm | pgmedge >junko$$.ppm");
+-            system("rgb3toppm junko$$.ppm junko$$.ppm junko$$.ppm " .
+-                   ">junk1o$$.ppm");
++            system("ppmtopgm $tmpdir/junk1.ppm | pgmedge >$tmpdir/junko.ppm");
++            system("rgb3toppm $tmpdir/junko.ppm $tmpdir/junko.ppm $tmpdir/junko.ppm " .
++                   ">$tmpdir/junk1o.ppm");
+         }
+         if ($i <= 10) {
+             my $n = $spline10[$i];
+-            system("ppmmix $n junk1$$.ppm junk1o$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk1.ppm $tmpdir/junk1o.ppm >$tmpdir/junk3.ppm");
+         } elsif ($i <= 20) {
+             my $n = $spline10[$i-10];
+-            system("ppmmix $n junk1o$$.ppm junk2o$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk1o.ppm $tmpdir/junk2o.ppm >$tmpdir/junk3.ppm");
+         } else {
+             my $n = $spline10[$i-20];
+-            system("ppmmix $n junk2o$$.ppm junk2$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk2o.ppm $tmpdir/junk2.ppm >$tmpdir/junk3.ppm");
+         }
+         if ($i == 10) {
+-            system("ppmtopgm junk2$$.ppm | pgmedge >junko$$.ppm");
+-            system("rgb3toppm junko$$.ppm junko$$.ppm junko$$.ppm " .
+-                   ">junk2o$$.ppm");
++            system("ppmtopgm $tmpdir/junk2.ppm | pgmedge >$tmpdir/junko.ppm");
++            system("rgb3toppm $tmpdir/junko.ppm $tmpdir/junko.ppm $tmpdir/junko.ppm " .
++                   ">$tmpdir/junk2o.ppm");
+         } 
+     } elsif ($mode eq $BENTLEY) {
+         if ($i == 1) {
+-            system("ppmtopgm junk1$$.ppm | pgmbentley >junko$$.ppm");
+-            system("rgb3toppm junko$$.ppm junko$$.ppm junko$$.ppm " .
+-                   ">junk1o$$.ppm");
++            system("ppmtopgm $tmpdir/junk1.ppm | pgmbentley >$tmpdir/junko.ppm");
++            system("rgb3toppm $tmpdir/junko.ppm $tmpdir/junko.ppm $tmpdir/junko.ppm " .
++                   ">$tmpdir/junk1o.ppm");
+         }
+         if ($i <= 10) {
+             my $n = $spline10[$i];
+-            system("ppmmix $n junk1$$.ppm junk1o$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk1.ppm $tmpdir/junk1o.ppm >$tmpdir/junk3.ppm");
+         } elsif ($i <= 20) {
+             my $n = $spline10[$i-10];
+-            system("ppmmix $n junk1o$$.ppm junk2o$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk1o.ppm $tmpdir/junk2o.ppm >$tmpdir/junk3.ppm");
+         } else {
+             my $n = $spline10[$i-20];
+-            system("ppmmix $n junk2o$$.ppm junk2$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk2o.ppm $tmpdir/junk2.ppm >$tmpdir/junk3.ppm");
+         }
+         if ($i == 10) {
+-            system("ppmtopgm junk2$$.ppm | pgmbentley >junko$$.ppm");
+-            system("rgb3toppm junko$$.ppm junko$$.ppm junko$$.ppm " .
+-                   ">junk2o$$.ppm");
++            system("ppmtopgm $tmpdir/junk2.ppm | pgmbentley >$tmpdir/junko.ppm");
++            system("rgb3toppm $tmpdir/junko.ppm $tmpdir/junko.ppm $tmpdir/junko.ppm " .
++                   ">$tmpdir/junk2o.ppm");
+         }
+     } elsif ($mode eq $BLOCK) {
+         if ($i <= 10) {
+             my $n = 1 - 1.9*$spline20[$i];
+-            system("pnmscale $n junk1$$.ppm | " .
+-                   "pnmscale -width $width -height $height >junk3$$.ppm");
++            system("pnmscale $n $tmpdir/junk1.ppm | " .
++                   "pnmscale -width $width -height $height >$tmpdir/junk3.ppm");
+         } elsif ($i <= 20) {
+             my $n = $spline10[$i-10];
+-            system("ppmmix $n junk1a$$.ppm junk2a$$.ppm >junk3$$.ppm");
++            system("ppmmix $n $tmpdir/junk1a.ppm $tmpdir/junk2a.ppm >$tmpdir/junk3.ppm");
+         } else {
+             my $n = 1 - 1.9*$spline20[31-$i];
+-            system("pnmscale $n junk2$$.ppm | " .
+-                   "pnmscale -width $width -height $height >junk3$$.ppm");
++            system("pnmscale $n $tmpdir/junk2.ppm | " .
++                   "pnmscale -width $width -height $height >$tmpdir/junk3.ppm");
+         }
+         if ($i == 10) {
+-            system("cp", "junk3$$.ppm", "junk1a$$.ppm");
+-            system("pnmscale $n junk2$$.ppm | " .
+-                   "pnmscale -width $width -height $height >junk2a$$.ppm");
++            system("cp", "$tmpdir/junk3.ppm", "$tmpdir/junk1a.ppm");
++            system("pnmscale $n $tmpdir/junk2.ppm | " .
++                   "pnmscale -width $width -height $height >$tmpdir/junk2a.ppm");
+         }    
+     } elsif ($mode eq $MIX) {
+         my $fade_factor = sqrt(1/($nframes-$i+1));
+-        system("ppmmix $fade_factor junk1$$.ppm junk2$$.ppm >junk3$$.ppm");
++        system("ppmmix $fade_factor $tmpdir/junk1.ppm $tmpdir/junk2.ppm >$tmpdir/junk3.ppm");
+     } else {
+         print("Internal error: impossible mode value '$mode'\n");
+     }
+ 
+     my $outfile = sprintf("%s.%04d.ppm", $base_name, $i);
+-    system("cp", "junk3$$.ppm", $outfile);
++    system("cp", "$tmpdir/junk3.ppm", $outfile);
+ }
+ 
+ #
+ #  Clean up shop.
+ #
+-system("rm junk*$$.ppm");
++#system("rm $tmpdir/junk*.ppm");
++# As the temporary files are automatically deleted, nothing is needed for
++# cleanup any more.
+ 
+ exit(0);
+ 
