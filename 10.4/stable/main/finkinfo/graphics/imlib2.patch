@@ -1,44 +1,105 @@
-diff -ru imlib2-1.1.0/configure imlib2-1.1.0-patched/configure
---- imlib2-1.1.0/configure	Mon Nov 25 10:28:47 2002
-+++ imlib2-1.1.0-patched/configure	Tue Nov 26 18:03:26 2002
-@@ -3716,11 +3716,11 @@
-     ;;
+
+--- imlib2-1.4.0/imlib2.pc.in	2007-03-23 05:32:39.000000000 -0400
++++ imlib2-1.4.0-new/imlib2.pc.in	2007-08-23 12:29:22.000000000 -0400
+@@ -6,6 +6,6 @@
+ Name: imlib2
+ Description: Powerful image loading and rendering library
+ Version: @VERSION@
+-Libs: -L${libdir} -lImlib2
+-Cflags: -I${includedir}
++Libs: -L@FINKPREFIX@/lib/freetype219/lib -L${libdir} -lImlib2 -lfreetype
++Cflags: -I@FINKPREFIX@/lib/freetype219/include -I${includedir}
  
-   darwin* | rhapsody*)
--    allow_undefined_flag='-undefined suppress'
-+    allow_undefined_flag='-undefined dynamic_lookup'
-     # FIXME: Relying on posixy $() will cause problems for
-     #        cross-compilation, but unfortunately the echo tests do not
-     #        yet detect zsh echo's removal of \ escapes.
--    archive_cmds='$CC $(test .$module = .yes && echo -bundle || echo -dynamiclib) $allow_undefined_flag -o $lib $libobjs $deplibs$linkopts -install_name $rpath/$soname $(test -n "$verstring" -a x$verstring != x0.0 && echo $verstring)'
-+    archive_cmds='$CC $(test .$module = .yes && echo -bundle || echo -dynamiclib) $allow_undefined_flag -o $lib $libobjs $deplibs$linkopts $(test .$module != .yes && echo -install_name $rpath/$soname $tmp_verstring)'
-     # We need to add '_' to the symbols in $export_symbols first
-     #archive_expsym_cmds="$archive_cmds"' && strip -s $export_symbols'
-     hardcode_direct=yes
---- imlib2-1.1.0/ltmain.sh.orig	Sun Sep  7 19:12:11 2003
-+++ imlib2-1.1.0/ltmain.sh	Tue Nov  4 20:26:40 2003
-@@ -2858,7 +2858,23 @@
- 	if test -n "$export_symbols" && test -n "$archive_expsym_cmds"; then
- 	  eval cmds=\"$archive_expsym_cmds\"
- 	else
--	  eval cmds=\"$archive_cmds\"
-+         if test "x$verstring" = "x0.0"; then
-+           tmp_verstring=
-+         else
-+           tmp_verstring="$verstring"
-+         fi
-+         save_deplibs="$deplibs"
-+         for conv in $convenience; do
-+       tmp_deplibs=
-+       for test_deplib in $deplibs; do
-+         if test "$test_deplib" != "$conv"; then
-+           tmp_deplibs="$tmp_deplibs $test_deplib"
-+         fi
-+       done
-+       deplibs="$tmp_deplibs"
-+         done
-+         eval cmds=\"$archive_cmds\"
-+         deplibs="$save_deplibs"
- 	fi
- 	IFS="${IFS= 	}"; save_ifs="$IFS"; IFS='~'
- 	for cmd in $cmds; do
+--- imlib2-1.4.0/src/modules/loaders/loader_argb.c	2007-04-09 18:40:40.000000000 -0400
++++ imlib2-1.4.0-new/src/modules/loaders/loader_argb.c	2007-08-23 12:36:18.000000000 -0400
+@@ -10,7 +10,7 @@
+ load(ImlibImage * im, ImlibProgressFunction progress,
+      char progress_granularity, char immediate_load)
+ {
+-   int                 w, h, alpha;
++   int                 w=0, h=0, alpha=0;
+    FILE               *f;
+ 
+    if (im->data)
+@@ -23,6 +23,8 @@
+    {
+       char                buf[256], buf2[256];
+ 
++      memset(buf, 0, sizeof(buf));
++      memset(buf2, 0, sizeof(buf));
+       if (!fgets(buf, 255, f))
+         {
+            fclose(f);
+--- imlib2-1.4.0/src/modules/loaders/loader_jpeg.c	2007-04-09 18:40:40.000000000 -0400
++++ imlib2-1.4.0-new/src/modules/loaders/loader_jpeg.c	2007-08-23 12:37:51.000000000 -0400
+@@ -94,8 +94,9 @@
+         im->w = w = cinfo.output_width;
+         im->h = h = cinfo.output_height;
+ 
+-        if (cinfo.rec_outbuf_height > 16)
++        if (cinfo.rec_outbuf_height > 16 || w < 1 || h < 1 || w > 8192 || h > 8192)
+           {
++             im->w = im->h = 0;
+              jpeg_destroy_decompress(&cinfo);
+              fclose(f);
+              return 0;
+--- imlib2-1.4.0/src/modules/loaders/loader_lbm.c	2007-04-09 18:40:40.000000000 -0400
++++ imlib2-1.4.0-new/src/modules/loaders/loader_lbm.c	2007-08-23 12:37:03.000000000 -0400
+@@ -437,6 +437,7 @@
+         }
+     }
+     if (!full || !ok) {
++        im->w = im->h = 0;
+         freeilbm(&ilbm);
+         return ok;
+     }
+@@ -451,12 +452,13 @@
+     cancel = 0;
+     plane[0] = NULL;
+ 
++    n = ilbm.depth;
++    if (ilbm.mask == 1) n++;
++
+     im->data = malloc(im->w * im->h * sizeof(DATA32));
+-    if (im->data) {
+-        n = ilbm.depth;
+-        if (ilbm.mask == 1) n++;
++    plane[0] = malloc(((im->w + 15) / 16) * 2 * n);
++    if (im->data && plane[0]) {
+ 
+-        plane[0] = malloc(((im->w + 15) / 16) * 2 * n);
+         for (i = 1; i < n; i++) plane[i] = plane[i - 1] + ((im->w + 15) / 16) * 2;
+ 
+         z = ((im->w + 15) / 16) * 2 * n;
+@@ -495,6 +497,7 @@
+    * the memory for im->data.
+    *----------*/
+     if (!ok) {
++        im->w = im->h = 0;
+         if (im->data) free(im->data);
+         im->data = NULL;
+     }
+--- imlib2-1.4.0/src/modules/loaders/loader_pnm.c	2007-04-09 18:40:40.000000000 -0400
++++ imlib2-1.4.0-new/src/modules/loaders/loader_pnm.c	2007-08-23 12:28:37.000000000 -0400
+@@ -68,7 +68,7 @@
+              int                 i = 0;
+ 
+              /* read numbers */
+-             while (c != EOF && !isspace(c))
++             while (c != EOF && i+1 < sizeof(buf) && !isspace(c))
+                {
+                   buf[i++] = c;
+                   c = fgetc(f);
+--- imlib2-1.4.0/src/modules/loaders/loader_tga.c	2007-04-09 18:40:40.000000000 -0400
++++ imlib2-1.4.0-new/src/modules/loaders/loader_tga.c	2007-08-23 12:44:11.000000000 -0400
+@@ -350,7 +350,9 @@
+                   else
+                      dataptr = im->data + (y * im->w);
+ 
+-                  for (x = 0; x < im->w; x++)   /* for each pixel in the row */
++                  for (x = 0;
++                       x < im->w && bufptr+bpp/8 < bufend;
++                       x++)   /* for each pixel in the row */
+                     {
+                        switch (bpp)
+                          {
