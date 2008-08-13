@@ -1,6 +1,6 @@
 Package: postgresql74-unified
-Version: 7.4.18
-Revision: 1022
+Version: 7.4.21
+Revision: 1
 Description: PostgreSQL open-source database
 License: BSD
 Maintainer: Benjamin Reed <postgresql74-unified@fink.racoonfink.com>
@@ -15,7 +15,6 @@ Depends: <<
 	%N-shlibs (>= %v-%r)
 <<
 BuildDepends: <<
-	autoconf (>= 2.60-1),
 	bison,
 	fink (>= 0.26.0-1),
 	libxml2,
@@ -124,7 +123,7 @@ CustomMirror: <<
 	nam-US: ftp://ftp22.us.postgresql.org/mirrors/ftp.postgresql.org
 <<
 Source: mirror:custom:source/v%v/postgresql-%v.tar.bz2
-Source-MD5: 94888d24c92c7a9f9d3f29e92e3cb926
+Source-MD5: b372d271bb30f703c241c7cc3d58f198
 PatchScript: sed -e 's|@BUILDDIR@|%b|g' -e 's|@INSTPREFIX@|%p|g' < %a/%n.patch | patch -p1
 
 SetMAKEFLAGS: -j1
@@ -147,7 +146,6 @@ CompileScript: <<
 	fi
 
 	# postgresql
-	autoconf && \
 	perl -pi -e 's,hardcode_direct=yes,hardcode_direct=no,g' configure && \
 	./configure %c && \
 	make includedir=%p/include/postgresql includedir_internal=%p/include/postgresql/internal includedir_server=%p/include/postgresql && \
@@ -528,6 +526,49 @@ die () {
 
 # update daemonic init script if necessary
 daemonic install %N
+
+# get a nice port to run on
+while true; do
+	PGPORT=$RANDOM;
+	if [ "$PGPORT" -gt 10000 ] && [ "$PGPORT" -lt 20000 ]; then
+		break
+	fi
+done
+export PGPORT
+echo "- starting PostgreSQL on port $PGPORT"
+if %p/bin/pgsql.sh-7.4 start >/tmp/pgstart-7.4.log 2>&1; then
+
+	sleep 5
+
+	ERROR=0
+	# install the plpgsql language if possible
+	printf -- "- attempting to install the plpgsql language in the template1 database... "
+	%p/bin/createlang-7.4 -U postgres -p $PGPORT plpgsql template1 >/tmp/createlang-7.4.log 2>&1 || ERROR="$?"
+	if [ $ERROR -eq 0 ]; then
+		echo "done"
+	elif [ $ERROR -gt 0 ] && [ $ERROR -ne 2 ]; then
+		echo "WARNING: an unknown error occurred inserting the plpgsql language"
+	else
+		:
+	fi
+
+	sleep 5
+
+	%p/bin/pgsql.sh-7.4 stop >/dev/null 2>&1 || echo "WARNING: unable to stop postgresql: run 'PGPORT=$PGPORT sudo %p/bin/pgsql.sh-7.4 stop' to try again"
+
+else
+
+	cat <<END
+WARNING: unable to start postgresql on an alternate port, not installing plpgsql!
+
+	If you wish to install it manually, run:
+
+		sudo %p/bin/pgsql.sh-7.4 start
+		sudo -u postgres %p/bin/createlang-7.4 plpgsql template1
+
+END
+
+fi
 <<
 PreRmScript: <<
 [ -x %p/var/postgresql-7.4/remove-alternatives.sh ] && %p/var/postgresql-7.4/remove-alternatives.sh
