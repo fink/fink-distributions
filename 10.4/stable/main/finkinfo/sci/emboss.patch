@@ -1,24 +1,1783 @@
-diff -Naur EMBOSS-4.1.0/ajax/ajjava.c EMBOSS-4.1.0-patched/ajax/ajjava.c
---- EMBOSS-4.1.0/ajax/ajjava.c	2006-06-20 05:12:35.000000000 -0400
-+++ EMBOSS-4.1.0-patched/ajax/ajjava.c	2007-04-06 12:09:04.000000000 -0400
-@@ -89,7 +89,7 @@
- #define _XOPEN_SOURCE
- #endif
+diff -Naur EMBOSS-5.0.0/ajax/Makefile.in EMBOSS-5.0.0-patched/ajax/Makefile.in
+--- EMBOSS-5.0.0/ajax/Makefile.in	2007-07-12 06:53:32.000000000 -0400
++++ EMBOSS-5.0.0-patched/ajax/Makefile.in	2007-12-03 20:09:43.000000000 -0500
+@@ -55,7 +55,8 @@
+ am__installdirs = "$(DESTDIR)$(libdir)" "$(DESTDIR)$(includedir)"
+ libLTLIBRARIES_INSTALL = $(INSTALL)
+ LTLIBRARIES = $(lib_LTLIBRARIES)
+-libajax_la_LIBADD =
++#libajax_la_LIBADD =
++libajaxg_la_LIBADD = libajax.la ../plplot/libeplplot.la
+ am__libajax_la_SOURCES_DIST = ajacd.c ajalign.c ajarr.c ajassert.c \
+ 	ajbase.c ajcall.c ajcod.c ajdan.c ajdmx.c ajdom.c ajdomain.c \
+ 	ajexcept.c ajfeat.c ajfile.c ajfmt.c ajgraphxml.c ajindex.c \
+@@ -85,7 +86,9 @@
+ 	$(libajax_la_LDFLAGS) $(LDFLAGS) -o $@
+ @ISCYGWIN_FALSE@am_libajax_la_rpath = -rpath $(libdir)
+ @ISCYGWIN_TRUE@am_libajax_la_rpath = -rpath $(libdir)
+-libajaxg_la_LIBADD =
++#libajaxg_la_LIBADD =
++libajaxg_la_LIBADD = libajax.la ../plplot/libeplplot.la
++libajaxg_la_DEPENDENCIES = libajax.la ../plplot/libeplplot.la
+ am__libajaxg_la_SOURCES_DIST = ajgraph.c ajhist.c
+ @ISCYGWIN_FALSE@am_libajaxg_la_OBJECTS = $(am__objects_2)
+ libajaxg_la_OBJECTS = $(am_libajaxg_la_OBJECTS)
+
+diff -Naur EMBOSS-5.0.0/ajax/ajindex.c EMBOSS-5.0.0-patched/ajax/ajindex.c
+--- EMBOSS-5.0.0/ajax/ajindex.c	2007-07-06 08:18:48.000000000 -0400
++++ EMBOSS-5.0.0-patched/ajax/ajindex.c	2008-03-06 05:47:31.000000000 -0500
+@@ -1364,7 +1364,7 @@
+     {
+ 	id = bucket->Ids[i];
+ 	len = BT_BUCKIDLEN(id->id);
+-	if((lptr-buf+1)+len > cache->pagesize) /* overflow */
++	if((lptr-buf+1) + (len+1+BT_DDOFFROFF) > cache->pagesize) /* overflow */
+ 	{
+     	    ajDebug("WriteBucket: Overflow\n");
+ 	    if(!overflow)		/* No overflow buckets yet */
+@@ -1986,6 +1986,9 @@
+     ajlong blockno  = 0L;
+     ajlong rblockno = 0L;
+     ajlong lblockno = 0L;
++    ajlong ibn      = 0L;
++    
++
+     AjPStr mediankey  = NULL;
+     ajlong medianless = 0L;
+     ajlong mediangtr  = 0L;
+@@ -2139,10 +2142,12 @@
+     }
  
--#if !defined(__ppc__) && !defined(__FreeBSD__)
-+#if !defined(__APPLE__) && !defined(__FreeBSD__)
- #include <crypt.h>
- #endif
  
-diff -Naur EMBOSS-4.1.0/emboss/jembossctl.c EMBOSS-4.1.0-patched/emboss/jembossctl.c
---- EMBOSS-4.1.0/emboss/jembossctl.c	2007-01-16 07:11:18.000000000 -0500
-+++ EMBOSS-4.1.0-patched/emboss/jembossctl.c	2007-04-06 12:09:29.000000000 -0400
-@@ -115,7 +115,7 @@
- #define _XOPEN_SOURCE
- #endif
+-    ipage = rpage;
++    ibn = rblockno;
+     if(strcmp(key->Ptr,mediankey->Ptr)<0)
+-	ipage = lpage;
++	ibn = lblockno;
  
--#if !defined(__ppc__) && !defined(__FreeBSD__)
-+#if !defined(__APPLE__) && !defined(__FreeBSD__)
- #include <crypt.h>
- #endif
++    ipage = ajBtreeCacheRead(cache,ibn);
++    
+     btreeInsertNonFull(cache,ipage,key,less,greater);
  
+ 
+@@ -2516,7 +2521,14 @@
+ 
+ static ajint btreeNumIdCompare(const void *a, const void *b)
+ {
+-    return (*(AjPBtNumId const *)a)->offset - (*(AjPBtNumId const *)b)->offset;
++  ajlong val;
++
++    val = (*(AjPBtNumId const *)a)->offset - (*(AjPBtNumId const *)b)->offset;
++
++    if(!val)
++      return 0;
++
++    return (val < 0L) ? -1 : 1;
+ }
+ 
+ 
+@@ -9895,7 +9907,7 @@
+ 
+ /* @funcstatic btreeInsertKeySec *****************************************
+ **
+-** Insert a secpndary key into a potentially full node
++** Insert a secondary key into a potentially full node
+ **
+ ** @param [u] cache [AjPBtcache] cache
+ ** @param [u] page [AjPBtpage] original page
+@@ -9936,7 +9948,8 @@
+     ajlong blockno  = 0L;
+     ajlong rblockno = 0L;
+     ajlong lblockno = 0L;
+-
++    ajlong ibn      = 0L;
++    
+     AjPStr mediankey  = NULL;
+     ajlong medianless = 0L;
+     ajlong mediangtr  = 0L;
+@@ -10090,10 +10103,12 @@
+     }
+ 
+ 
+-    ipage = rpage;
++    ibn = rblockno;
+     if(strcmp(key->Ptr,mediankey->Ptr)<0)
+-	ipage = lpage;
++	ibn = lblockno;
+ 
++    ipage = ajBtreeCacheRead(cache,ibn);
++    
+     btreeInsertNonFullSec(cache,ipage,key,less,greater);
+ 
+ 
+@@ -10258,7 +10273,7 @@
+ 	btreeWriteNode(cache,spage,kSarray,pSarray,skeys);
+ 	btreeWriteNode(cache,tpage,kTarray,pTarray,tkeys);
+ 	btreeWriteNode(cache,ppage,kParray,pParray,pkeys);
+-	if(!ppage->pageno)
++	if(ppage->pageno == cache->secrootblock)
+ 	    ppage->dirty = BT_LOCK;
+ 
+ 	i = 0;
+@@ -10355,7 +10370,7 @@
+ 	btreeWriteNode(cache,spage,kSarray,pSarray,skeys);
+ 	btreeWriteNode(cache,tpage,kTarray,pTarray,tkeys);
+ 	btreeWriteNode(cache,ppage,kParray,pParray,pkeys);
+-	if(!ppage->pageno)
++	if(ppage->pageno == cache->secrootblock)
+ 	    ppage->dirty = BT_LOCK;
+ 
+ 	i = 0;
+@@ -10668,7 +10683,7 @@
+ 	btreeWriteNode(cache,spage,kSarray,pSarray,skeys);
+ 	btreeWriteNode(cache,tpage,kTarray,pTarray,tkeys);
+ 	btreeWriteNode(cache,ppage,kParray,pParray,pkeys);
+-	if(!ppage->pageno)
++	if(ppage->pageno == cache->secrootblock)
+ 	    ppage->dirty = BT_LOCK;
+ 
+ 	page = ajBtreeCacheRead(cache,pSarray[skeys]);
+@@ -10726,7 +10741,7 @@
+ 	btreeWriteNode(cache,spage,kSarray,pSarray,skeys);
+ 	btreeWriteNode(cache,tpage,kTarray,pTarray,tkeys);
+ 	btreeWriteNode(cache,ppage,kParray,pParray,pkeys);
+-	if(!ppage->pageno)
++	if(ppage->pageno == cache->secrootblock)
+ 	    ppage->dirty = BT_LOCK;
+ 
+ 	page = ajBtreeCacheRead(cache,pSarray[0]);
+@@ -11956,8 +11971,14 @@
+ 
+ static ajint btreeOffsetCompare(const void *a, const void *b)
+ {
+-    return (*(AjPBtId const *)a)->offset -
+-		  (*(AjPBtId const *)b)->offset;
++  ajlong val;
++
++    val = (*(AjPBtId const *)a)->offset - (*(AjPBtId const *)b)->offset;
++
++    if(!val)
++      return 0;
++
++    return (val < 0L) ? -1 : 1;
+ }
+ 
+ 
+@@ -13386,6 +13407,8 @@
+     ajlong blockno  = 0L;
+     ajlong rblockno = 0L;
+     ajlong lblockno = 0L;
++    ajlong ibn      = 0L;
++
+     AjPStr mediankey  = NULL;
+     ajlong medianless = 0L;
+     ajlong mediangtr  = 0L;
+@@ -13534,13 +13557,15 @@
+     }
+ 
+ 
+-    ipage = rpage;
++    ibn = rblockno;
+     if(strcmp(key->Ptr,mediankey->Ptr)<0)
+-	ipage = lpage;
++	ibn = lblockno;
+ 
+     lpage->dirty = BT_DIRTY;
+     rpage->dirty = BT_DIRTY;
+ 
++    ipage = ajBtreeCacheRead(cache,ibn);
++    
+     btreeInsertNonFull(cache,ipage,key,less,greater);
+ 
+ 
+@@ -15020,6 +15045,8 @@
+     ajlong blockno  = 0L;
+     ajlong rblockno = 0L;
+     ajlong lblockno = 0L;
++    ajlong ibn      = 0L;
++
+     ajlong mediankey  = 0L;
+     ajlong medianless = 0L;
+     ajlong mediangtr  = 0L;
+@@ -15162,12 +15189,14 @@
+     }
+ 
+ 
+-    ipage = rpage;
++    ibn = rblockno;
+     if(key < mediankey)
+-	ipage = lpage;
++	ibn = lblockno;
+ 
+     lpage->dirty = BT_DIRTY;
+     rpage->dirty = BT_DIRTY;
++
++    ipage = ajBtreeCacheRead(cache,ibn);
+     
+     btreeNumInsertNonFull(cache,ipage,key,less,greater);
+ 
+@@ -15502,7 +15531,7 @@
+ 	btreeWriteNumNode(cache,spage,kSarray,pSarray,skeys);
+ 	btreeWriteNumNode(cache,tpage,kTarray,pTarray,tkeys);
+ 	btreeWriteNumNode(cache,ppage,kParray,pParray,pkeys);
+-	if(!ppage->pageno)
++	if(ppage->pageno == cache->secrootblock)
+ 	    ppage->dirty = BT_LOCK;
+ 
+ 	page = ajBtreeCacheRead(cache,pSarray[skeys]);
+@@ -15551,7 +15580,7 @@
+ 	btreeWriteNumNode(cache,spage,kSarray,pSarray,skeys);
+ 	btreeWriteNumNode(cache,tpage,kTarray,pTarray,tkeys);
+ 	btreeWriteNumNode(cache,ppage,kParray,pParray,pkeys);
+-	if(!ppage->pageno)
++	if(ppage->pageno == cache->secrootblock)
+ 	    ppage->dirty = BT_LOCK;
+ 
+ 	page = ajBtreeCacheRead(cache,pSarray[0]);
+@@ -15727,7 +15756,7 @@
+ 	btreeWriteNumNode(cache,spage,kSarray,pSarray,skeys);
+ 	btreeWriteNumNode(cache,tpage,kTarray,pTarray,tkeys);
+ 	btreeWriteNumNode(cache,ppage,kParray,pParray,pkeys);
+-	if(!ppage->pageno)
++	if(ppage->pageno == cache->secrootblock)
+ 	    ppage->dirty = BT_LOCK;
+ 
+ 	i = 0;
+@@ -15817,7 +15846,7 @@
+ 	btreeWriteNumNode(cache,spage,kSarray,pSarray,skeys);
+ 	btreeWriteNumNode(cache,tpage,kTarray,pTarray,tkeys);
+ 	btreeWriteNumNode(cache,ppage,kParray,pParray,pkeys);
+-	if(!ppage->pageno)
++	if(ppage->pageno == cache->secrootblock)
+ 	    ppage->dirty = BT_LOCK;
+ 
+ 	i = 0;
+diff -Naur EMBOSS-5.0.0/ajax/ajindex.h EMBOSS-5.0.0-patched/ajax/ajindex.h
+--- EMBOSS-5.0.0/ajax/ajindex.h	2007-07-11 12:07:25.000000000 -0400
++++ EMBOSS-5.0.0-patched/ajax/ajindex.h	2008-03-06 05:47:38.000000000 -0500
+@@ -38,6 +38,66 @@
+ #define TX_EXTENSION "xtx"
+ 
+ 
++/* Useful page filling values */
++
++/*
++ *  Length of integers after the ID string in a primary bucket 
++ *  i.e. dbno + dups + offset + refoffset
++ */
++#define BT_DDOFFROFF (sizeof(ajint) + sizeof(ajint) + sizeof(ajlong) +  \
++                      sizeof(ajlong))
++
++/*
++ *  Preamble before key lengths in an internal node
++ * i.e. nodetype+blocknumber+nkeys+totlen+left+right+overflow+prev
++ */
++#define BT_NODEPREAMBLE (sizeof(ajint) + sizeof(ajlong) + sizeof(ajint) + \
++    sizeof(ajint) + sizeof(ajlong) + sizeof(ajlong) + sizeof(ajlong) + \
++                         sizeof(ajlong))
++
++/*
++ *  This is the length of extra pointer required in primary index
++ *  page space calculations i.e. the total space taken by
++ *  key/pointer pairs in an internal page is:
++ *  BT_PTRLEN + ((keylenmax + sizeof(long))*nkeys)
++ *  This is because there is one more pointer than the
++ *  value of 'order' in a B+ tree.
++ */
++#define BT_PTRLEN sizeof(ajlong)
++
++
++/*
++ *  Length of extra space, on top of a key string, taken up by a
++ *  key in an internal node. This is an ajint holding the length
++ *  of a string plus the length of a block pointer (ajlong)
++ */
++#define BT_IDKEYEXTRA (sizeof(ajint) + sizeof(ajlong))
++
++
++/*
++ *  Preamble before key lengths in an id bucket
++ *  i.e. nodetype+nentries+overflow
++ */
++#define BT_BUCKPREAMBLE (sizeof(ajint) + sizeof(ajint) + sizeof(ajlong))
++
++
++/*
++ *  Size of a key in a key length table block in an internal node or bucket
++ */
++#define BT_KEYLENENTRY sizeof(ajint)
++
++/*
++ *  Size of an offset key
++ */
++#define BT_OFFKEYLEN sizeof(ajlong)
++
++/*
++ *  Length of integers per entry in a num bucket 
++ *  i.e. dbno + offset + refoffset
++ */
++#define BT_DOFFROFF (sizeof(ajint) + sizeof(ajlong) + sizeof(ajlong))
++    
++
+ 
+ 
+ /* @data AjPBtNode ***********************************************************
+diff -Naur EMBOSS-5.0.0/ajax/ajseqdb.c EMBOSS-5.0.0-patched/ajax/ajseqdb.c
+--- EMBOSS-5.0.0/ajax/ajseqdb.c	2007-07-06 08:22:40.000000000 -0400
++++ EMBOSS-5.0.0-patched/ajax/ajseqdb.c	2008-02-29 12:14:48.000000000 -0500
+@@ -4314,7 +4314,7 @@
+ 
+     if(!seqRegGcgId)
+     {
+-	seqRegGcgId =ajRegCompC("^>...([^ ]+) +([^ ]+) +([^ ]+) +([^ ]+) +([0-9]+)");
++	seqRegGcgId =ajRegCompC("^>...([^ ]+) +(Dummy Header|[^ ]+) +([^ ]+) +([^ ]+) +([0-9]+)");
+ 	seqRegGcgId2=ajRegCompC("^>[PF]1;([^ ]+)");
+     }
+ 
+@@ -4352,7 +4352,7 @@
+     else if(ajRegExec(seqRegGcgId2, line))
+     {
+ 	ajStrAssignC(&gcgtype, "ASCII");
+-	ajRegSubI(seqRegGcgId, 1, &tmpstr);
++	ajRegSubI(seqRegGcgId2, 1, &tmpstr);
+ 	ispir = ajTrue;
+     }
+     else
+@@ -5546,7 +5546,7 @@
+ 
+     if(!seqRegGcgId)
+     {
+-	seqRegGcgId =ajRegCompC("^>...([^ ]+) +([^ ]+) +([^ ]+) +([^ ]+) +([0-9]+)");
++	seqRegGcgId =ajRegCompC("^>...([^ ]+) +(Dummy Header|[^ ]+) +([^ ]+) +([^ ]+) +([0-9]+)");
+ 	seqRegGcgId2=ajRegCompC("^>[PF]1;([^ ]+)");
+     }
+ 
+@@ -5584,7 +5584,7 @@
+     else if(ajRegExec(seqRegGcgId2, line))
+     {
+ 	ajStrAssignC(&gcgtype, "ASCII");
+-	ajRegSubI(seqRegGcgId, 1, &tmpstr);
++	ajRegSubI(seqRegGcgId2, 1, &tmpstr);
+ 	ispir = ajTrue;
+     }
+     else
+diff -Naur EMBOSS-5.0.0/ajax/ajseqread.c EMBOSS-5.0.0-patched/ajax/ajseqread.c
+--- EMBOSS-5.0.0/ajax/ajseqread.c	2007-07-11 08:09:51.000000000 -0400
++++ EMBOSS-5.0.0-patched/ajax/ajseqread.c	2008-02-29 12:14:49.000000000 -0500
+@@ -604,7 +604,7 @@
+ /*     Feature  Gap,     ReadFunction, Multiset, Padding */
+   {"unknown",     "Unknown format",
+        AJFALSE, AJFALSE, AJTRUE,  AJTRUE,
+-       AJTRUE,  AJTRUE,  seqReadText, AJTRUE, 0},	/* alias for text */
++       AJTRUE,  AJTRUE,  seqReadText, AJFALSE, 0},	/* alias for text */
+   {"gcg",         "GCG sequence format",
+        AJFALSE, AJTRUE,  AJTRUE,  AJTRUE,
+        AJFALSE, AJTRUE,  seqReadGcg, AJFALSE, 0}, /* do first, headers mislead */
+@@ -6637,6 +6637,7 @@
+     else		     /* test for a SwissProt/SpTrEMBL entry */
+     {
+ 	if(ajStrFindC(seqReadLine, " PRT; ")>= 0  ||
++	   ajStrFindC(seqReadLine, " Unreviewed; ") >= 0 ||
+ 	   ajStrFindC(seqReadLine, " Reviewed; ") >= 0 ||
+ 	   ajStrFindC(seqReadLine, " Preliminary; ") >= 0 
+ 	   )
+@@ -6650,7 +6651,7 @@
+ 
+     ok = ajFileBuffGetStore(buff, &seqReadLine, seqin->Text, &thys->TextPtr);
+ 
+-    while(ok && !ajStrPrefixC(seqReadLine, "SQ   "))
++    while(ok && !ajStrPrefixC(seqReadLine, "SQ"))
+     {
+ 	bufflines++;
+ 
+@@ -7028,6 +7029,17 @@
+ 	}
+     }
+ 
++    if(!ajSeqIsNuc(thys))
++    {
++        ajFileBuffReset(buff);
++        ajStrDel(&tmpstr);
++        ajStrDel(&token);
++        ajStrDel(&datestr);
++        ajStrDel(&relstr);
++        ajStrTokenDel(&handle);
++        return ajFalse;
++    }
++
+     ajSeqSetNuc(thys);
+ 
+     ajFileBuffClear(buff, 0);
+@@ -7830,8 +7842,10 @@
+ 
+     if(ajStrMatchC(typstr, "Protein"))
+       ajSeqSetProt(thys);
+-    else
++    else if(ajSeqIsNuc(thys))
+       ajSeqSetNuc(thys);
++    else
++      ajSeqSetProt(thys);
+ 
+     ajFileBuffClear(buff, 0);
+ 
+diff -Naur EMBOSS-5.0.0/ajax/ajseqtype.c EMBOSS-5.0.0-patched/ajax/ajseqtype.c
+--- EMBOSS-5.0.0/ajax/ajseqtype.c	2007-02-09 13:30:59.000000000 -0500
++++ EMBOSS-5.0.0-patched/ajax/ajseqtype.c	2008-02-29 12:14:49.000000000 -0500
+@@ -160,7 +160,7 @@
+ ** - Phylip and some alignment output
+ ** ~ GCG for gaps at ends
+ ** * Staden for DNA but stop for protein (fix on input?)
+-** O Phylip (fix on input?)
++** O Phylip (fix on input?) - no longer possible: O is pyrrolysine in proteins
+ */
+ 
+ 
+@@ -174,14 +174,14 @@
+ char seqCharNuc[]       = "ACGTUBDHKMNRSVWXY?";
+ char seqCharNucPure[]   = "ACGTU";
+ char seqCharNucAmbig[]  = "BDHKMNRSVWXY?";
+-char seqCharGap[]       = ".~O-";	/* phylip uses O */
++char seqCharGap[]       = ".~-";	/* phylip uses O */
+ char seqCharNucDna[]    = "ACGTBDHKMNRSVWXY?";
+ char seqCharNucRna[]    = "ACGUBDHKMNRSVWXY?";
+-char seqCharGapany[]    = ".~O-";	/* phylip uses O */
++char seqCharGapany[]    = ".~-";	/* phylip uses O */
+ char seqCharGapdash[]   = "-";
+ char seqCharGapdot[]    = ".";
+ char seqGap = '-';		/* the (only) EMBOSS gap character */
+-char seqCharGapTest[]   = " .~O-";   /* phylip uses O - don't forget space */
++char seqCharGapTest[]   = " .~-";   /* phylip uses O - don't forget space */
+ char seqCharPhylo[]       = "?";	/* phylip uses ? for unknown or gap */
+ 
+ 
+diff -Naur EMBOSS-5.0.0/ajax/ajseqwrite.c EMBOSS-5.0.0-patched/ajax/ajseqwrite.c
+--- EMBOSS-5.0.0/ajax/ajseqwrite.c	2007-07-06 08:10:46.000000000 -0400
++++ EMBOSS-5.0.0-patched/ajax/ajseqwrite.c	2008-02-29 12:14:50.000000000 -0500
+@@ -2788,18 +2788,18 @@
+ 	{
+ 	    if(ilen + ajStrGetLen(cur) > 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "AC   ", cur);
++		ajFmtPrintF(outseq->File, "AC   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 
+@@ -2808,7 +2808,7 @@
+ 
+ 	}
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ";\n", cur);
++	ajFmtPrintF(outseq->File, ";\n");
+     }
+     
+     if(ajStrGetLen(outseq->Sv))
+@@ -2827,25 +2827,25 @@
+ 	{
+ 	    if(ilen+ajStrGetLen(cur) >= 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "KW   ", cur);
++		ajFmtPrintF(outseq->File, "KW   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 	    ajFmtPrintF(outseq->File, "%S", cur);
+ 	    ilen += ajStrGetLen(cur);
+ 	}
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ".\n", cur);
++	ajFmtPrintF(outseq->File, ".\n");
+     }
+     
+     if(ajStrGetLen(outseq->Tax))
+@@ -2859,25 +2859,25 @@
+ 	{
+ 	    if(ilen+ajStrGetLen(cur) >= 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "OC   ", cur);
++		ajFmtPrintF(outseq->File, "OC   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 	    ajFmtPrintF(outseq->File, "%S", cur);
+ 	    ilen += ajStrGetLen(cur);
+ 	}
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ".\n", cur);
++	ajFmtPrintF(outseq->File, ".\n");
+     }
+     
+     if(seqoutUfoLocal(outseq))
+@@ -2973,18 +2973,18 @@
+ 	{
+ 	    if(ilen + ajStrGetLen(cur) > 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "AC   ", cur);
++		ajFmtPrintF(outseq->File, "AC   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 
+@@ -2993,7 +2993,7 @@
+ 
+ 	}
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ";\n", cur);
++	ajFmtPrintF(outseq->File, ";\n");
+     }
+     
+     if(ajStrGetLen(outseq->Sv))
+@@ -3021,25 +3021,25 @@
+ 	{
+ 	    if(ilen+ajStrGetLen(cur) >= 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "KW   ", cur);
++		ajFmtPrintF(outseq->File, "KW   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 	    ajFmtPrintF(outseq->File, "%S", cur);
+ 	    ilen += ajStrGetLen(cur);
+ 	}
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ".\n", cur);
++	ajFmtPrintF(outseq->File, ".\n");
+     }
+     
+     if(ajStrGetLen(outseq->Tax))
+@@ -3053,25 +3053,25 @@
+ 	{
+ 	    if(ilen+ajStrGetLen(cur) >= 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "OC   ", cur);
++		ajFmtPrintF(outseq->File, "OC   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 	    ajFmtPrintF(outseq->File, "%S", cur);
+ 	    ilen += ajStrGetLen(cur);
+ 	}
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ".\n", cur);
++	ajFmtPrintF(outseq->File, ".\n");
+     }
+     
+     if(seqoutUfoLocal(outseq))
+@@ -3209,7 +3209,7 @@
+ 
+ 	}
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ";\nXX\n", cur);
++	ajFmtPrintF(outseq->File, ";\nXX\n");
+     }
+ 
+     /* no SV line in the new format - see the ID line */
+@@ -3237,7 +3237,7 @@
+ 			"DT   %D (Rel. %S, Last updated, Version %S)\n",
+ 			outseq->Date->ModDate, outseq->Date->ModRel,
+ 			outseq->Date->ModVer);
+- 	ajFmtPrintF(outseq->File, "XX\n", cur);
++ 	ajFmtPrintF(outseq->File, "XX\n");
+    }
+ 
+     if(ajStrGetLen(outseq->Desc))
+@@ -3250,7 +3250,7 @@
+ 	    ajFmtPrintF(outseq->File, "DE   %S\n", tmpline);
+ 	    tmpline = ajStrParseC(NULL, "\n");
+ 	}
+-	ajFmtPrintF(outseq->File, "XX\n", cur);
++	ajFmtPrintF(outseq->File, "XX\n");
+     }
+ 
+     if(ajListGetLength(outseq->Keylist))
+@@ -3261,25 +3261,25 @@
+ 	{
+ 	    if(ilen+ajStrGetLen(cur) >= 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "KW   ", cur);
++		ajFmtPrintF(outseq->File, "KW   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 	    ajFmtPrintF(outseq->File, "%S", cur);
+ 	    ilen += ajStrGetLen(cur);
+ 	}
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ".\nXX\n", cur);
++	ajFmtPrintF(outseq->File, ".\nXX\n");
+     }
+     
+     if(ajStrGetLen(outseq->Tax))
+@@ -3293,25 +3293,25 @@
+ 	{
+ 	    if(ilen+ajStrGetLen(cur) >= 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "OC   ", cur);
++		ajFmtPrintF(outseq->File, "OC   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 	    ajFmtPrintF(outseq->File, "%S", cur);
+ 	    ilen += ajStrGetLen(cur);
+ 	}
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ".\n", cur);
++	ajFmtPrintF(outseq->File, ".\n");
+     }
+     if(ajStrGetLen(outseq->Organelle))
+ 	ajFmtPrintF(outseq->File, "OG   %S\n", outseq->Organelle);
+@@ -3319,7 +3319,7 @@
+     if(ajStrGetLen(outseq->Tax) ||
+        ajStrGetLen(outseq->Organelle) ||
+        ajListGetLength(outseq->Taxlist) > 1)
+-	ajFmtPrintF(outseq->File, "XX\n", cur);
++	ajFmtPrintF(outseq->File, "XX\n");
+     
+     if(ajListGetLength(outseq->Reflist))
+     {
+@@ -3438,7 +3438,7 @@
+ 	    }
+ 	}
+ 	ajListIterDel(&it);
+-	ajFmtPrintF(outseq->File, "XX\n", cur);
++	ajFmtPrintF(outseq->File, "XX\n");
+     }
+ 
+     if(ajListGetLength(outseq->Cmtlist))
+@@ -3457,7 +3457,7 @@
+ 		    ajFmtPrintF(outseq->File, "CC   %S\n", tmpline);
+ 		tmpline = ajStrParseC(NULL, "\n");
+ 	    }
+-	    ajFmtPrintF(outseq->File, "XX\n", cur);
++	    ajFmtPrintF(outseq->File, "XX\n");
+ 	}
+ 	ajListIterDel(&it);
+     }
+@@ -3471,7 +3471,7 @@
+ 	if(!ajFeatWrite(outseq->Ftquery, outseq->Fttable))
+ 	    ajWarn("seqWriteEmbl features output failed UFO: '%S'",
+ 		   outseq->Ufo);
+-	ajFmtPrintF(outseq->File, "XX\n", cur);
++	ajFmtPrintF(outseq->File, "XX\n");
+     }
+     
+     ajSeqoutGetBasecount(outseq, b);
+@@ -3541,18 +3541,18 @@
+ 	{
+ 	    if(ilen + ajStrGetLen(cur) > 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "AC   ", cur);
++		ajFmtPrintF(outseq->File, "AC   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 
+@@ -3562,7 +3562,7 @@
+ 	}
+ 	
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ";\n", cur);
++	ajFmtPrintF(outseq->File, ";\n");
+     }
+     
+     if(ajStrGetLen(outseq->Desc))
+@@ -3579,18 +3579,18 @@
+ 	{
+ 	    if(ilen+ajStrGetLen(cur) >= 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "OC   ", cur);
++		ajFmtPrintF(outseq->File, "OC   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 	    ajFmtPrintF(outseq->File, "%S", cur);
+@@ -3598,7 +3598,7 @@
+ 	}
+ 	
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ".\n", cur);
++	ajFmtPrintF(outseq->File, ".\n");
+     }
+     
+     if(ajListGetLength(outseq->Keylist))
+@@ -3609,18 +3609,18 @@
+ 	{
+ 	    if(ilen+ajStrGetLen(cur) >= 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "KW   ", cur);
++		ajFmtPrintF(outseq->File, "KW   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 	    ajFmtPrintF(outseq->File, "%S", cur);
+@@ -3628,7 +3628,7 @@
+ 	}
+ 
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ".\n", cur);
++	ajFmtPrintF(outseq->File, ".\n");
+     }
+     
+     if(seqoutUfoLocal(outseq))
+@@ -3708,18 +3708,18 @@
+ 	{
+ 	    if(ilen + ajStrGetLen(cur) > 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "AC   ", cur);
++		ajFmtPrintF(outseq->File, "AC   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 
+@@ -3729,7 +3729,7 @@
+ 	}
+ 	
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ";\n", cur);
++	ajFmtPrintF(outseq->File, ";\n");
+     }
+     
+     if(ajStrGetLen(outseq->Desc))
+@@ -3746,18 +3746,18 @@
+ 	{
+ 	    if(ilen+ajStrGetLen(cur) >= 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "OC   ", cur);
++		ajFmtPrintF(outseq->File, "OC   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 	    ajFmtPrintF(outseq->File, "%S", cur);
+@@ -3765,7 +3765,7 @@
+ 	}
+ 	
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ".\n", cur);
++	ajFmtPrintF(outseq->File, ".\n");
+     }
+     
+     if(ajListGetLength(outseq->Keylist))
+@@ -3776,18 +3776,18 @@
+ 	{
+ 	    if(ilen+ajStrGetLen(cur) >= 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
++		ajFmtPrintF(outseq->File, ";\n");
+ 		ilen = 0;
+ 	    }
+ 
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "KW   ", cur);
++		ajFmtPrintF(outseq->File, "KW   ");
+ 		ilen = 6;
+ 	    }
+ 	    else
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
++		ajFmtPrintF(outseq->File, "; ");
+ 		ilen += 2;
+ 	    }
+ 	    ajFmtPrintF(outseq->File, "%S", cur);
+@@ -3795,7 +3795,7 @@
+ 	}
+ 
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ".\n", cur);
++	ajFmtPrintF(outseq->File, ".\n");
+     }
+     
+     if(seqoutUfoLocal(outseq))
+@@ -3918,23 +3918,20 @@
+ 	it   = ajListIterNewread(outseq->Acclist);
+ 	while((cur = (AjPStr) ajListIterGet(it)))
+ 	{
+-	    if(ilen + ajStrGetLen(cur) > 79)
+-	    {
+-		ajFmtPrintF(outseq->File, "\n", cur);
+-		ilen = 0;
+-	    }
+-
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "ACCESSION   ", cur);
+-		ilen = 12;
++		ajFmtPrintF(outseq->File, "ACCESSION  ");
++		ilen = 11;
+ 	    }
+-	    else
++	    if(ilen + ajStrGetLen(cur) > 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, " ", cur);
+-		ilen += 1;
++		ajFmtPrintF(outseq->File, "\n           ");
++		ilen = 11;
+ 	    }
+ 
++            ajFmtPrintF(outseq->File, " ");
++            ilen += 1;
++
+ 	    ajFmtPrintF(outseq->File, "%S", cur);
+ 	    ilen += ajStrGetLen(cur);
+ 
+@@ -3942,7 +3939,7 @@
+ 
+ 	ajListIterDel(&it) ;
+ 	if(ilen > 0)
+-	    ajFmtPrintF(outseq->File, "\n", cur);
++	    ajFmtPrintF(outseq->File, "\n");
+     }
+     
+     if(ajStrGetLen(outseq->Sv))
+@@ -3960,28 +3957,26 @@
+ 	it = ajListIterNewread(outseq->Keylist);
+ 	while((cur = (AjPStr) ajListIterGet(it)))
+ 	{
+-	    if(ilen+ajStrGetLen(cur) >= 79)
+-	    {
+-		ajFmtPrintF(outseq->File, ";\n", cur);
+-		ilen = 0;
+-	    }
+-
+ 	    if(ilen == 0)
+ 	    {
+-		ajFmtPrintF(outseq->File, "KEYWORDS    ", cur);
+-		ilen = 12;
++		ajFmtPrintF(outseq->File, "KEYWORDS   ");
++		ilen = 11;
+ 	    }
+-	    else
++	    if(ilen+ajStrGetLen(cur) >= 79)
+ 	    {
+-		ajFmtPrintF(outseq->File, "; ", cur);
+-		ilen += 2;
++		ajFmtPrintF(outseq->File, ";\n           ");
++		ilen = 11;
+ 	    }
++
++            ajFmtPrintF(outseq->File, "; ");
++            ilen += 2;
++
+ 	    ajFmtPrintF(outseq->File, "%S", cur);
+ 	    ilen += ajStrGetLen(cur);
+ 	}
+ 
+ 	ajListIterDel(&it) ;
+-	ajFmtPrintF(outseq->File, ".\n", cur);
++	ajFmtPrintF(outseq->File, ".\n");
+     }
+     
+     if(ajStrGetLen(outseq->Tax))
+@@ -3997,18 +3992,18 @@
+ 	    {
+ 		if(ilen+ajStrGetLen(cur) >= 79)
+ 		{
+-		    ajFmtPrintF(outseq->File, ";\n", cur);
++		    ajFmtPrintF(outseq->File, ";\n");
+ 		    ilen = 0;
+ 		}
+ 		
+ 		if(ilen == 0)
+ 		{
+-		    ajFmtPrintF(outseq->File, "            ", cur);
++		    ajFmtPrintF(outseq->File, "            ");
+ 		    ilen = 12;
+ 		}
+ 		else
+ 		{
+-		    ajFmtPrintF(outseq->File, "; ", cur);
++		    ajFmtPrintF(outseq->File, "; ");
+ 		    ilen += 2;
+ 		}
+ 		ajFmtPrintF(outseq->File, "%S", cur);
+@@ -4016,7 +4011,7 @@
+ 	    }
+ 
+ 	    ajListIterDel(&it) ;
+-	    ajFmtPrintF(outseq->File, ".\n", cur);
++	    ajFmtPrintF(outseq->File, ".\n");
+ 	}
+     }
+ 
+diff -Naur EMBOSS-5.0.0/emboss/dbxfasta.c EMBOSS-5.0.0-patched/emboss/dbxfasta.c
+--- EMBOSS-5.0.0/emboss/dbxfasta.c	2007-07-06 08:15:29.000000000 -0400
++++ EMBOSS-5.0.0-patched/emboss/dbxfasta.c	2008-02-29 12:17:19.000000000 -0500
+@@ -34,6 +34,8 @@
+ 
+ static AjPRegexp dbxfasta_wrdexp = NULL;
+ 
++static ajuint maxidlen = 0;
++static ajuint idtrunc  = 0;
+ 
+ static AjBool dbxfasta_NextEntry(EmbPBtreeEntry entry, AjPFile inf,
+ 				 AjPRegexp typeexp, ajint idtype);
+@@ -187,7 +189,9 @@
+     embBtreeDumpParameters(entry);
+     embBtreeCloseCaches(entry);
+     
+-
++    if(maxidlen)
++        ajUser("Resource idlen truncated %u IDs. Maximum ID length was %u.",
++               idtrunc, maxidlen);
+     embBtreeEntryDel(&entry);
+     ajStrDel(&tmpstr);
+     ajStrDel(&filename);
+@@ -431,12 +435,27 @@
+ 	return ajFalse;
+     }
+ 
++    if(ajStrGetLen(entry->id) > entry->idlen)
++    {
++        if(ajStrGetLen(entry->id) > maxidlen)
++        {
++            ajWarn("id '%S' too long, truncating to idlen %d",
++                   entry->id, entry->idlen);
++            maxidlen = ajStrGetLen(entry->id);
++        }
++        idtrunc++;
++        ajStrKeepRange(&entry->id,0,entry->idlen-1);
++    }
++    
+     ajStrFmtLower(&entry->id);
+ 
+     if(entry->do_accession && ajStrGetLen(ac))
+     {
+ 	str = ajStrNew();
+-	ajStrAssignS(&str,ac);
++        if(ajStrGetLen(ac) > entry->aclen)
++            ajStrAssignSubS(&str,ac,0,entry->aclen-1);
++        else
++            ajStrAssignS(&str,ac);
+ 	ajListPush(entry->ac,(void *)str);
+     }
+ 
+@@ -444,13 +463,17 @@
+ 	ajStrAssignS(&sv,gi);
+ 
+     if(entry->do_sv && ajStrGetLen(sv))
++        embBtreeFastaDE(sv, entry->sv, entry->svlen);
++/*
+     {
+ 	str = ajStrNew();
+ 	ajStrAssignS(&str,sv);
+ 	ajListPush(entry->ac,(void *)str);
+     }
+-    
++*/    
+     if(entry->do_description && ajStrGetLen(de))
++        embBtreeFastaDE(de, entry->de, entry->delen);
++/*
+ 	while(ajRegExec(dbxfasta_wrdexp,de))
+ 	{
+ 	    ajRegSubI(dbxfasta_wrdexp, 1, &tmpfd);
+@@ -459,7 +482,7 @@
+ 	    ajListPush(entry->de,(void *)str);
+ 	    ajRegPost(dbxfasta_wrdexp, &de);
+ 	}
+-
++*/
+ 
+     ajStrDel(&de);
+     ajStrDel(&ac);
+diff -Naur EMBOSS-5.0.0/emboss/psiphi.c EMBOSS-5.0.0-patched/emboss/psiphi.c
+--- EMBOSS-5.0.0/emboss/psiphi.c	2007-07-06 08:15:29.000000000 -0400
++++ EMBOSS-5.0.0-patched/emboss/psiphi.c	2007-07-27 05:28:27.000000000 -0400
+@@ -160,7 +160,7 @@
+     finishres = ajAcdGetInt("finishresiduenumber");
+ 
+     /* reserve memory for and read in structure */
+-    /* JISON */    pdb = ajPdbReadoldNew(pdbfile);
++    /* JISON */    pdb = ajPdbReadNew(pdbfile,0);
+     
+     /* check and set number of chain to be analysed */
+     highest = pdb->Nchn;
+@@ -440,6 +440,9 @@
+     ajint lowestres = 0;
+ 
+     AjPAtom inlist   = NULL;
++
++    if(!ajListGetLength(pdb->Chains[myindex]->Atoms))
++	ajFatal("Chain %d has no atoms",myindex+1);
+     
+     /* read first atom in list into memory, but keep it on list */
+     ajListPeek(pdb->Chains[myindex]->Atoms,
+diff -Naur EMBOSS-5.0.0/nucleus/embindex.c EMBOSS-5.0.0-patched/nucleus/embindex.c
+--- EMBOSS-5.0.0/nucleus/embindex.c	2007-07-06 08:15:00.000000000 -0400
++++ EMBOSS-5.0.0-patched/nucleus/embindex.c	2008-03-06 05:47:44.000000000 -0500
+@@ -24,6 +24,12 @@
+ #define KWLIMIT 12
+ 
+ 
++static AjPStr embindexLine      = NULL;
++static AjPStr embindexToken     = NULL;
++static AjPStr embindexTstr      = NULL;
++static AjPStr embindexPrefix    = NULL;
++static AjPStr embindexFormat    = NULL;
++static AjPStrTok embindexHandle = NULL;
+ 
+ 
+ static AjPFile btreeCreateFile(const AjPStr idirectory, const AjPStr dbname,
+@@ -51,12 +57,9 @@
+     AjPStr token     = NULL;
+     AjPStr str       = NULL;
+     
+-    line  = ajStrNew();
+-    token = ajStrNew();
+-    
+-    ajStrAssignC(&line, &MAJSTRGETPTR(kwline)[5]);
++    ajStrAssignSubS(&line, kwline, 5, -1);
+ 
+-    handle = ajStrTokenNewC(line,"\n;");
++    handle = ajStrTokenNewC(line,"\n\r;");
+ 
+     while(ajStrTokenNextParse(&handle,&token))
+     {
+@@ -64,7 +67,6 @@
+ 	ajStrTrimWhite(&token);
+ 	if(ajStrGetLen(token))
+ 	{
+-	    str = ajStrNew();
+ 	    if(maxlen)
+ 	    {
+ 		if(ajStrGetLen(token) > maxlen)
+@@ -77,6 +79,7 @@
+ 		ajStrAssignS(&str,token);
+ 	    ajStrFmtLower(&str);
+ 	    ajListPush(kwlist,(void *)str);
++	    str = NULL;
+ 	}
+     }
+ 
+@@ -109,12 +112,9 @@
+     AjPStr token     = NULL;
+     AjPStr str       = NULL;
+     
+-    line  = ajStrNew();
+-    token = ajStrNew();
+-    
+-    ajStrAssignC(&line, &MAJSTRGETPTR(txline)[5]);
++    ajStrAssignSubS(&line, txline, 5, -1);
+ 
+-    handle = ajStrTokenNewC(line,"\n;()");
++    handle = ajStrTokenNewC(line,"\n\r;()");
+ 
+     while(ajStrTokenNextParse(&handle,&token))
+     {
+@@ -123,7 +123,6 @@
+ 	ajStrTrimWhite(&token);
+ 	if(ajStrGetLen(token))
+ 	{
+-	    str = ajStrNew();
+ 	    if(maxlen)
+ 	    {
+ 		if(ajStrGetLen(token) > maxlen)
+@@ -136,6 +135,7 @@
+ 		ajStrAssignS(&str,token);
+ 	    ajStrFmtLower(&str);
+ 	    ajListPush(txlist,(void *)str);
++	    str = NULL;
+ 	}
+     }
+ 
+@@ -162,72 +162,54 @@
+ 
+ void embBtreeEmblAC(const AjPStr acline, AjPList aclist)
+ {
+-    AjPStr line      = NULL;
+-    AjPStrTok handle = NULL;
+-    AjPStr token     = NULL;
+-    AjPStr str       = NULL;
+-    AjPStr tstr      = NULL;
+-    AjPStr prefix    = NULL;
+-    AjPStr format    = NULL;
+     char *p          = NULL;
+     char *q          = NULL;
+     ajuint lo = 0;
+     ajuint hi = 0;
+     ajuint field = 0;
+     ajuint i;
++    AjPStr str = NULL;
+     
+-    line   = ajStrNew();
+-    token  = ajStrNew();
+-    tstr   = ajStrNew();
+-    prefix = ajStrNew();
+-    format = ajStrNew();
+-    
+-    ajStrAssignC(&line, &MAJSTRGETPTR(acline)[5]);
++    ajStrAssignSubS(&embindexLine, acline, 5, -1);
+ 
+-    handle = ajStrTokenNewC(line,"\n;");
++    ajStrTokenAssignC(&embindexHandle,embindexLine,"\n\r;");
+ 
+-    while(ajStrTokenNextParse(&handle,&token))
++    while(ajStrTokenNextParse(&embindexHandle,&embindexToken))
+     {
+-	ajStrTrimWhite(&token);
+-	if((p=strchr(MAJSTRGETPTR(token),(int)'-')))
++	ajStrTrimWhite(&embindexToken);
++	if((p=strchr(MAJSTRGETPTR(embindexToken),(int)'-')))
+ 	{
+ 	    q = p;
+ 	    while(isdigit((int)*(--q)));
+ 	    ++q;
+-	    ajStrAssignSubC(&tstr,q,0,(ajuint)(p-q-1));
+-	    ajStrToUint(tstr,&lo);
++	    ajStrAssignSubC(&embindexTstr,q,0,(ajuint)(p-q-1));
++	    ajStrToUint(embindexTstr,&lo);
+ 	    field = (ajuint) (p-q);
+-	    ajFmtPrintS(&format,"%%S%%0%uu",field);
++	    ajFmtPrintS(&embindexFormat,"%%S%%0%uu",field);
+ 	    
+ 	    ++p;
+ 	    q = p;
+ 	    while(!isdigit((int)*q))
+ 		++q;
+ 	    sscanf(q,"%u",&hi);
+-	    ajStrAssignSubC(&prefix,p,0,(ajuint)(q-p-1));
++	    ajStrAssignSubC(&embindexPrefix,p,0,(ajuint)(q-p-1));
+ 	    
+ 	    for(i=lo;i<=hi;++i)
+ 	    {
+-		str = ajStrNew();
+-		ajFmtPrintS(&str,MAJSTRGETPTR(format),prefix,i);
++		ajFmtPrintS(&str,MAJSTRGETPTR(embindexFormat),
++			    embindexPrefix,i);
+ 		ajListPush(aclist,(void *)str);
++		str = NULL;
+ 	    }
+ 	}
+ 	else
+ 	{
+-	    str = ajStrNew();
+-	    ajStrAssignS(&str,token);
++	    ajStrAssignS(&str,embindexToken);
+ 	    ajListPush(aclist,(void *)str);
++	    str = NULL;
+ 	}
+     }
+ 
+-    ajStrDel(&tstr);
+-    ajStrDel(&prefix);
+-    ajStrDel(&format);
+-    ajStrDel(&token);
+-    ajStrTokenDel(&handle);
+-    ajStrDel(&line);
+-    
+     return;
+ }
+ 
+@@ -253,16 +235,10 @@
+     AjPStr idstr      = NULL;
+     AjPStr svstr      = NULL;
+     
+-    line   = ajStrNew();
+-    token  = ajStrNew();
+-    idstr   = ajStrNew();
+-    svstr   = ajStrNew();
+-    
+-    ajStrAssignC(&line, &MAJSTRGETPTR(idline)[5]);
++    ajStrAssignSubS(&line, idline, 5, -1);
+ 
+-    handle = ajStrTokenNewC(line," \t\n;");
++    handle = ajStrTokenNewC(line," \t\n\r;");
+ 
+-    str = ajStrNew();
+     if(!ajStrTokenNextParse(&handle,&idstr))
+ 	return;
+     if(!ajStrTokenNextParse(&handle,&token))
+@@ -273,10 +249,13 @@
+     if(!ajStrMatchC(token, "SV"))
+ 	return;
+ 
++    str = ajStrNewRes(MAJSTRGETLEN(idstr)+MAJSTRGETLEN(svstr)+2);
++
+     ajFmtPrintS(&str,"%S.%S", idstr, svstr);
+ 
+     ajListPush(svlist,(void *)str);
+-
++    str = NULL;
++    
+     ajStrDel(&idstr);
+     ajStrDel(&svstr);
+     ajStrDel(&token);
+@@ -308,12 +287,9 @@
+     AjPStr token     = NULL;
+     AjPStr str       = NULL;
+     
+-    line  = ajStrNew();
+-    token = ajStrNew();
+-    
+-    ajStrAssignC(&line, &MAJSTRGETPTR(deline)[5]);
++    ajStrAssignSubS(&line, deline, 5, -1);
+ 
+-    handle = ajStrTokenNewC(line,"\n \t()");
++    handle = ajStrTokenNewC(line,"\n\r \t()");
+ 
+     while(ajStrTokenNextParse(&handle,&token))
+     {
+@@ -321,7 +297,6 @@
+ 	ajStrTrimWhite(&token);
+ 	if(ajStrGetLen(token))
+ 	{
+-	    str = ajStrNew();
+ 	    if(maxlen)
+ 	    {
+ 		if(ajStrGetLen(token) > maxlen)
+@@ -334,6 +309,7 @@
+ 		ajStrAssignS(&str,token);
+ 	    ajStrFmtLower(&str);
+ 	    ajListPush(delist,(void *)str);
++	    str = NULL;
+ 	}
+     }
+ 
+@@ -373,16 +349,10 @@
+     ajuint hi = 0;
+     ajuint field = 0;
+     ajuint i;
+-    
+-    line   = ajStrNew();
+-    token  = ajStrNew();
+-    tstr   = ajStrNew();
+-    prefix = ajStrNew();
+-    format = ajStrNew();
+-    
+-    ajStrAssignC(&line, &MAJSTRGETPTR(acline)[12]);
+ 
+-    handle = ajStrTokenNewC(line,"\n ");
++    ajStrAssignSubS(&line, acline, 12, -1);
++
++    handle = ajStrTokenNewC(line,"\n\r ");
+ 
+     while(ajStrTokenNextParse(&handle,&token))
+     {
+@@ -406,16 +376,16 @@
+ 	    
+ 	    for(i=lo;i<=hi;++i)
+ 	    {
+-		str = ajStrNew();
+ 		ajFmtPrintS(&str,MAJSTRGETPTR(format),prefix,i);
+ 		ajListPush(aclist,(void *)str);
++		str = NULL;
+ 	    }
+ 	}
+ 	else
+ 	{
+-	    str = ajStrNew();
+ 	    ajStrAssignS(&str,token);
+ 	    ajListPush(aclist,(void *)str);
++	    str = NULL;
+ 	}
+     }
+ 
+@@ -451,12 +421,9 @@
+     AjPStr token     = NULL;
+     AjPStr str       = NULL;
+     
+-    line  = ajStrNew();
+-    token = ajStrNew();
+-    
+-    ajStrAssignC(&line, &MAJSTRGETPTR(kwline)[8]);
++    ajStrAssignSubS(&line, kwline, 8, -1);
+ 
+-    handle = ajStrTokenNewC(line,"\n;");
++    handle = ajStrTokenNewC(line,"\n\r;");
+ 
+     while(ajStrTokenNextParse(&handle,&token))
+     {
+@@ -464,7 +431,6 @@
+ 	ajStrTrimWhite(&token);
+ 	if(ajStrGetLen(token))
+ 	{
+-	    str = ajStrNew();
+ 	    if(maxlen)
+ 	    {
+ 		if(ajStrGetLen(token) > maxlen)
+@@ -477,6 +443,7 @@
+ 		ajStrAssignS(&str,token);
+ 	    ajStrFmtLower(&str);
+ 	    ajListPush(kwlist,(void *)str);
++	    str = NULL;
+ 	}
+     }
+ 
+@@ -509,12 +476,9 @@
+     AjPStr token     = NULL;
+     AjPStr str       = NULL;
+     
+-    line  = ajStrNew();
+-    token = ajStrNew();
+-    
+-    ajStrAssignC(&line, &MAJSTRGETPTR(kwline)[10]);
++    ajStrAssignSubS(&line, kwline, 10, -1);
+ 
+-    handle = ajStrTokenNewC(line,"\n \t()");
++    handle = ajStrTokenNewC(line,"\n\r \t()");
+ 
+     while(ajStrTokenNextParse(&handle,&token))
+     {
+@@ -522,7 +486,6 @@
+ 	ajStrTrimWhite(&token);
+ 	if(ajStrGetLen(token))
+ 	{
+-	    str = ajStrNew();
+ 	    if(maxlen)
+ 	    {
+ 		if(ajStrGetLen(token) > maxlen)
+@@ -535,6 +498,7 @@
+ 		ajStrAssignS(&str,token);
+ 	    ajStrFmtLower(&str);
+ 	    ajListPush(kwlist,(void *)str);
++	    str = NULL;
+ 	}
+     }
+ 
+@@ -567,12 +531,9 @@
+     AjPStr token     = NULL;
+     AjPStr str       = NULL;
+     
+-    line  = ajStrNew();
+-    token = ajStrNew();
+-    
+-    ajStrAssignC(&line, &MAJSTRGETPTR(kwline)[9]);
++    ajStrAssignSubS(&line, kwline, 9, -1);
+ 
+-    handle = ajStrTokenNewC(line,"\n;()");
++    handle = ajStrTokenNewC(line,"\n\r;()");
+ 
+     while(ajStrTokenNextParse(&handle,&token))
+     {
+@@ -581,7 +542,6 @@
+ 	ajStrTrimWhite(&token);
+ 	if(ajStrGetLen(token))
+ 	{
+-	    str = ajStrNew();
+ 	    if(maxlen)
+ 	    {
+ 		if(ajStrGetLen(token) > maxlen)
+@@ -594,6 +554,7 @@
+ 		ajStrAssignS(&str,token);
+ 	    ajStrFmtLower(&str);
+ 	    ajListPush(kwlist,(void *)str);
++	    str = NULL;
+ 	}
+     }
+ 
+@@ -625,9 +586,7 @@
+     AjPStr token     = NULL;
+     AjPStr str       = NULL;
+     
+-    token = ajStrNew();
+-    
+-    handle = ajStrTokenNewC(kwline,"\n ");
++    handle = ajStrTokenNewC(kwline,"\n\r ");
+ 
+     while(ajStrTokenNextParse(&handle,&token))
+     {
+@@ -648,6 +607,7 @@
+ 		ajStrAssignS(&str,token);
+ 	    ajStrFmtLower(&str);
+ 	    ajListPush(kwlist,(void *)str);
++	    str = NULL;
+ 	}
+     }
+ 
+@@ -1156,11 +1116,16 @@
+     }
+ 
+     if(!ajNamGetValueC("CACHESIZE",&value))
++    {
+ 	entry->cachesize = BTREE_DEF_CACHESIZE;
++	ajUser("CACHESIZE defaults to %d", entry->cachesize);
++    }
+     else
+     {
+ 	if(ajStrToUint(value,&n))
++	{
+ 	    entry->cachesize = n;
++	}
+ 	else
+ 	{
+ 	    ajErr("Bad value for environment variable 'CACHESIZE'");
+@@ -1169,11 +1134,16 @@
+     }
+ 
+     if(!ajNamGetValueC("PAGESIZE",&value))
++    {
+ 	entry->pagesize = BTREE_DEF_PAGESIZE;
++	ajUser("PAGESIZE defaults to %d", entry->pagesize);
++    }
+     else
+     {
+ 	if(ajStrToUint(value,&n))
++	{
+ 	    entry->pagesize = n;
++	}
+ 	else
+ 	{
+ 	    ajErr("Bad value for environment variable 'PAGESIZE'");
+@@ -1182,37 +1152,83 @@
+     }
+ 
+     
+-    entry->idorder = (entry->pagesize - 60) / ((entry->idlen + 1) + 12);
+-    entry->idfill  = (entry->pagesize - 16) / (entry->idlen + 28);
+-    entry->acorder = (entry->pagesize - 60) / ((entry->aclen + 1) + 12);
+-    entry->acfill  = (entry->pagesize - 16) / (entry->aclen + 28);
+-    entry->svorder = (entry->pagesize - 60) / ((entry->svlen + 1) + 12);
+-    entry->svfill  = (entry->pagesize - 16) / (entry->svlen + 28);
+-
+-    entry->kworder = (entry->pagesize - 60) / ((entry->kwlen + 1) + 12);
+-    entry->kwfill  = (entry->pagesize - 16) / (entry->kwlen + 28);
+-    entry->deorder = (entry->pagesize - 60) / ((entry->delen + 1) + 12);
+-    entry->defill  = (entry->pagesize - 16) / (entry->delen + 28);
+-    entry->txorder = (entry->pagesize - 60) / ((entry->txlen + 1) + 12);
+-    entry->txfill  = (entry->pagesize - 16) / (entry->txlen + 28);
+-
+-    entry->kwsecorder = (entry->pagesize - 60) / ((entry->idlen + 1) + 12);
+-    entry->desecorder = (entry->pagesize - 60) / ((entry->idlen + 1) + 12);
+-    entry->txsecorder = (entry->pagesize - 60) / ((entry->idlen + 1) + 12);
+-
+-    entry->kwsecfill  = (entry->pagesize - 16) / (entry->idlen + 4);
+-    entry->desecfill  = (entry->pagesize - 16) / (entry->idlen + 4);
+-    entry->txsecfill  = (entry->pagesize - 16) / (entry->idlen + 4);
++    entry->idorder = (entry->pagesize - (BT_NODEPREAMBLE + BT_PTRLEN)) /
++        ((entry->idlen + 1) + BT_IDKEYEXTRA);
+ 
+-    entry->idsecorder = (entry->pagesize - 60) / 24;
+-    entry->idsecfill  = (entry->pagesize - 60) / 20;
++    entry->idfill  = (entry->pagesize - BT_BUCKPREAMBLE) /
++        ((entry->idlen + 1) + BT_KEYLENENTRY + BT_DDOFFROFF);
+ 
+-    entry->acsecorder = (entry->pagesize - 60) / 24;
+-    entry->acsecfill  = (entry->pagesize - 60) / 20;
++    entry->acorder = (entry->pagesize - (BT_NODEPREAMBLE + BT_PTRLEN)) /
++        ((entry->aclen + 1) + BT_IDKEYEXTRA);
++
++    entry->acfill  = (entry->pagesize - BT_BUCKPREAMBLE) /
++        ((entry->aclen + 1) + BT_KEYLENENTRY + BT_DDOFFROFF);
++
++    entry->svorder = (entry->pagesize - (BT_NODEPREAMBLE + BT_PTRLEN)) /
++        ((entry->svlen + 1) + BT_IDKEYEXTRA);
++
++    entry->svfill  = (entry->pagesize - BT_BUCKPREAMBLE) /
++        ((entry->svlen + 1) + BT_KEYLENENTRY + BT_DDOFFROFF);
++
++    entry->kworder = (entry->pagesize - (BT_NODEPREAMBLE + BT_PTRLEN)) /
++        ((entry->kwlen + 1) + BT_IDKEYEXTRA);
++
++    entry->kwfill  = (entry->pagesize - BT_BUCKPREAMBLE) /
++        ((entry->kwlen + 1) + BT_KEYLENENTRY + BT_DDOFFROFF);
++
++    entry->deorder = (entry->pagesize - (BT_NODEPREAMBLE + BT_PTRLEN)) /
++        ((entry->delen + 1) + BT_IDKEYEXTRA);
++
++    entry->defill  = (entry->pagesize - BT_BUCKPREAMBLE) /
++        ((entry->delen + 1) + BT_KEYLENENTRY + BT_DDOFFROFF);
++
++    entry->txorder = (entry->pagesize - (BT_NODEPREAMBLE + BT_PTRLEN)) /
++        ((entry->txlen + 1) + BT_IDKEYEXTRA);
++
++    entry->txfill  = (entry->pagesize - BT_BUCKPREAMBLE) /
++        ((entry->txlen + 1) + BT_KEYLENENTRY + BT_DDOFFROFF);
++
++ 
++    entry->idsecorder = (entry->pagesize - (BT_NODEPREAMBLE + BT_PTRLEN)) /
++        (BT_OFFKEYLEN + BT_IDKEYEXTRA);
++
++    entry->acsecorder = (entry->pagesize - (BT_NODEPREAMBLE + BT_PTRLEN)) /
++        (BT_OFFKEYLEN + BT_IDKEYEXTRA);
++
++    entry->svsecorder = (entry->pagesize - (BT_NODEPREAMBLE + BT_PTRLEN)) /
++        (BT_OFFKEYLEN + BT_IDKEYEXTRA);
++
++ 
++    entry->idsecfill  = (entry->pagesize - BT_BUCKPREAMBLE) /
++        BT_DOFFROFF;
++
++    entry->acsecfill  = (entry->pagesize - BT_BUCKPREAMBLE) /
++        BT_DOFFROFF;
++
++    entry->svsecfill  = (entry->pagesize - BT_BUCKPREAMBLE) /
++        BT_DOFFROFF;
++
++
++    /*
++     *  The secondary tree keys are the IDs of the entries containing
++     *  the keywords
++     */
++
++    entry->kwsecorder = (entry->pagesize - (BT_NODEPREAMBLE + BT_PTRLEN)) /
++        ((entry->idlen + 1) + BT_IDKEYEXTRA);
++    entry->desecorder = (entry->pagesize - (BT_NODEPREAMBLE + BT_PTRLEN)) /
++        ((entry->idlen + 1) + BT_IDKEYEXTRA);
++    entry->txsecorder = (entry->pagesize - (BT_NODEPREAMBLE + BT_PTRLEN)) /
++        ((entry->idlen + 1) + BT_IDKEYEXTRA);
++
++
++    entry->kwsecfill  = (entry->pagesize - BT_BUCKPREAMBLE) /
++        ((entry->idlen + 1) + BT_KEYLENENTRY);
++    entry->desecfill  = (entry->pagesize - BT_BUCKPREAMBLE) /
++        ((entry->idlen + 1) + BT_KEYLENENTRY);
++    entry->txsecfill  = (entry->pagesize - BT_BUCKPREAMBLE) /
++        ((entry->idlen + 1) + BT_KEYLENENTRY);
+ 
+-    entry->svsecorder = (entry->pagesize - 60) / 24;
+-    entry->svsecfill  = (entry->pagesize - 60) / 20;
+-    
+     ajStrDel(&value);
+ 
+     return;
+@@ -1251,7 +1267,7 @@
+ 					     entry->cachesize,
+ 					     entry->idsecorder, slevel,
+ 					     entry->idsecfill, count,
+-					     entry->kwlen);
++					     entry->idlen);
+ 	if(!entry->idcache)
+ 	    ajFatal("Cannot open ID index");
+ 	
+@@ -1267,7 +1283,7 @@
+ 					     entry->cachesize,
+ 					     entry->acsecorder, slevel,
+ 					     entry->acsecfill, count,
+-					     entry->kwlen);
++					     entry->aclen);
+ 	if(!entry->accache)
+ 	    ajFatal("Cannot open ACC index");
+ 
+@@ -1282,7 +1298,7 @@
+ 					     entry->cachesize,
+ 					     entry->svsecorder, slevel,
+ 					     entry->svsecfill, count,
+-					     entry->kwlen);
++					     entry->svlen);
+ 	if(!entry->svcache)
+ 	    ajFatal("Cannot open SV index");
+ 
+@@ -1414,6 +1430,44 @@
+ 
+ 
+ 
++#if 0
++
++/* @func embBtreeProbeCaches ***********************************************
++**
++** Close index files
++**
++** @param [u] entry [EmbPBtreeEntry] database data
++**
++** @return [AjBool] true on success
++** @@
++******************************************************************************/
++
++AjBool embBtreeProbeCaches(EmbPBtreeEntry entry)
++{
++
++    if(entry->do_id)
++    {
++	ajBtreeProbePriArray(entry->idcache);
++	ajBtreeProbeSecArray(entry->idcache);
++    }
++
++    if(entry->do_accession)
++    {
++	ajBtreeProbePriArray(entry->accache);
++	ajBtreeProbeSecArray(entry->accache);
++    }
++
++    if(entry->do_sv)
++    {
++	ajBtreeProbePriArray(entry->svcache);
++	ajBtreeProbeSecArray(entry->svcache);
++    }
++
++    return ajTrue;
++}
++
++#endif
++
+ 
+ /* @func embBtreeDumpParameters ***********************************************
+ **
+@@ -1454,3 +1508,23 @@
+ 
+     return ajTrue;
+ }
++
++
++/* @func embIndexExit **********************************************************
++**
++** Cleanup indexing internals on exit
++**
++** @return [void]
++******************************************************************************/
++
++void embIndexExit(void)
++{
++    ajStrDel(&embindexLine);
++    ajStrDel(&embindexToken);
++    ajStrDel(&embindexTstr);
++    ajStrDel(&embindexPrefix);
++    ajStrDel(&embindexFormat);
++    ajStrTokenDel(&embindexHandle);
++
++    return;
++}
