@@ -1,242 +1,161 @@
-
---- MPlayer-1.0rc1/Makefile	2006-10-22 18:32:31.000000000 -0400
-+++ MPlayer-1.0rc1-patched/Makefile	2007-07-13 17:03:13.000000000 -0400
-@@ -376,9 +376,9 @@
- LIBS_MPLAYER = libvo/libvo.a \
-                libao2/libao2.a \
-                input/libinput.a \
-+               $(COMMON_LIBS) \
-                $(MENU_LIBS) \
-                $(GUI_LIBS) \
--               $(COMMON_LIBS) \
-                $(VO_LIBS) \
-                $(AO_LIBS) \
-                $(STATIC_LIB) \
-@@ -388,8 +388,8 @@
+diff -rauN MPlayer-1.0rc2/libmpdemux/demux_audio.c MPlayer-1.0rc2-p1/libmpdemux/demux_audio.c
+--- MPlayer-1.0rc2/libmpdemux/demux_audio.c	2007-10-07 19:49:33.000000000 +0000
++++ MPlayer-1.0rc2-p1/libmpdemux/demux_audio.c	2008-02-05 18:23:02.000000000 +0000
+@@ -229,6 +229,8 @@
+           ptr += 4;
  
- ifeq ($(MENCODER),yes)
- LIBS_MENCODER = libmpcodecs/libmpencoders.a \
--                $(MP3LAME_LIB) \
-                 $(COMMON_LIBS) \
-+                $(MP3LAME_LIB) \
+           comment = ptr;
++          if (&comment[length] < comments || &comment[length] >= &comments[blk_len])
++            return;
+           c = comment[length];
+           comment[length] = 0;
  
- $(PRG_MENCODER): $(MENCODER_DEP)
- 	$(CC) $(CFLAGS) -o $(PRG_MENCODER) $(OBJS_MENCODER) $(LIBS_MENCODER)
---- MPlayer-1.0rc1/configure	2006-10-22 18:32:31.000000000 -0400
-+++ MPlayer-1.0rc1-patched/configure	2007-07-13 16:17:03.000000000 -0400
-@@ -1263,7 +1263,7 @@
+diff -rauN MPlayer-1.0rc2/libmpdemux/demux_mov.c MPlayer-1.0rc2-p1/libmpdemux/demux_mov.c
+--- MPlayer-1.0rc2/libmpdemux/demux_mov.c	2007-10-07 19:49:33.000000000 +0000
++++ MPlayer-1.0rc2-p1/libmpdemux/demux_mov.c	2008-02-05 18:24:01.000000000 +0000
+@@ -173,11 +173,12 @@
+     i=trak->chunkmap_size;
+     while(i>0){
+ 	--i;
+-	for(j=trak->chunkmap[i].first;j<last;j++){
++	j=FFMAX(trak->chunkmap[i].first, 0);
++	for(;j<last;j++){
+ 	    trak->chunks[j].desc=trak->chunkmap[i].sdid;
+ 	    trak->chunks[j].size=trak->chunkmap[i].spc;
+ 	}
+-	last=trak->chunkmap[i].first;
++	last=FFMIN(trak->chunkmap[i].first, trak->chunks_size);
+     }
  
-     echocheck "GCC & CPU optimization abilities"
+ #if 0
+@@ -235,6 +236,8 @@
+     s=0;
+     for(j=0;j<trak->durmap_size;j++){
+ 	for(i=0;i<trak->durmap[j].num;i++){
++	    if (s >= trak->samples_size)
++		break;
+ 	    trak->samples[s].pts=pts;
+ 	    ++s;
+ 	    pts+=trak->durmap[j].dur;
+@@ -246,6 +249,8 @@
+     for(j=0;j<trak->chunks_size;j++){
+ 	off_t pos=trak->chunks[j].pos;
+ 	for(i=0;i<trak->chunks[j].size;i++){
++	    if (s >= trak->samples_size)
++		break;
+ 	    trak->samples[s].pos=pos;
+ 	    mp_msg(MSGT_DEMUX, MSGL_DBG3, "Sample %5d: pts=%8d  off=0x%08X  size=%d\n",s,
+ 		trak->samples[s].pts,
+@@ -1568,8 +1573,7 @@
+ 			if( udta_len>udta_size)
+ 				udta_len=udta_size;
+ 			{
+-			char dump[udta_len-4];
+-			stream_read(demuxer->stream, (char *)&dump, udta_len-4-4);
++			stream_skip(demuxer->stream, udta_len-4-4);
+ 			udta_size -= udta_len;
+ 			}
+ 		    }
+diff -rauN MPlayer-1.0rc2/stream/stream_cddb.c MPlayer-1.0rc2-p1/stream/stream_cddb.c
+--- MPlayer-1.0rc2/stream/stream_cddb.c	2007-10-07 19:49:26.000000000 +0000
++++ MPlayer-1.0rc2-p1/stream/stream_cddb.c	2008-02-05 18:24:39.000000000 +0000
+@@ -53,6 +53,7 @@
+ #include "version.h"
+ #include "stream.h"
+ #include "network.h"
++#include "libavutil/intreadwrite.h"
  
--    if test -n "$proc"; then
-+    if false; then
-         case "$proc" in
- 	    601) _march='-mcpu=601' _mcpu='-mtune=601' ;;
- 	    603) _march='-mcpu=603' _mcpu='-mtune=603' ;;
-@@ -3577,7 +3577,7 @@
- EOF
-   if cc_check -framework Carbon -framework QuickTime -framework CoreAudio; then 
-     _macosx=yes
--    _macosx_frameworks="-framework Carbon -framework QuickTime -framework CoreAudio -framework AudioUnit -framework AudioToolbox"
-+    _macosx_frameworks="-framework Carbon -framework QuickTime -framework CoreAudio -framework AudioUnit -framework AudioToolbox -framework IOKit"
-     _def_macosx='#define MACOSX 1'
-     _aosrc="$_aosrc ao_macosx.c"
-     _aomodules="macosx $_aomodules"
-@@ -4940,15 +4940,15 @@
- if test "$_openal" = auto ; then
-   _openal=no
- cat > $TMPC << EOF
--#include <AL/al.h>
-+#include <OpenAL/al.h>
- int main(void) {
-   alSourceQueueBuffers(0, 0, 0);
- //  alGetSourcei(0, AL_SAMPLE_OFFSET, 0);
-   return 0;
- }
- EOF
--  if cc_check -lopenal ; then
--    _ld_openal="-lopenal"
-+  if cc_check "-framework OpenAL"; then
-+    _ld_openal="-framework OpenAL"
-     _openal=yes
+ #define DEFAULT_FREEDB_SERVER	"freedb.freedb.org"
+ #define DEFAULT_CACHE_DIR	"/.cddb/"
+@@ -453,8 +454,9 @@
+ 		} else {
+ 			len = ptr2-ptr+1;
+ 		}
++		len = FFMIN(sizeof(album_title) - 1, len);
+ 		strncpy(album_title, ptr, len);
+-		album_title[len-2]='\0';
++		album_title[len]='\0';
+ 	}
+ 	mp_msg(MSGT_DEMUX, MSGL_STATUS, MSGTR_MPDEMUX_CDDB_ParseOKFoundAlbumTitle, album_title);
+ 	return 0;
+@@ -490,8 +492,9 @@
+ 				} else {
+ 					len = ptr2-ptr+1;
+ 				}
++				len = FFMIN(sizeof(album_title) - 1, len);
+ 				strncpy(album_title, ptr, len);
+-				album_title[len-2]='\0';
++				album_title[len]='\0';
+ 			}
+ 			mp_msg(MSGT_DEMUX, MSGL_STATUS, MSGTR_MPDEMUX_CDDB_ParseOKFoundAlbumTitle, album_title);
+ 			return cddb_request_titles(cddb_data);
+diff -rauN MPlayer-1.0rc2/stream/url.c MPlayer-1.0rc2-p1/stream/url.c
+--- MPlayer-1.0rc2/stream/url.c	2007-10-07 19:49:26.000000000 +0000
++++ MPlayer-1.0rc2-p1/stream/url.c	2008-02-05 18:26:16.000000000 +0000
+@@ -328,6 +328,7 @@
+ 		}
+ 	}
+ 	
++	tmp = NULL;
+ 	while(i < len) {
+ 		// look for the next char that must be kept
+ 		for  (j=i;j<len;j++) {
+diff -ur MPlayer-1.0rc2/configure MPlayer-1.0rc2-p1/configure
+--- MPlayer-1.0rc2/configure	2007-10-08 05:49:33.000000000 +1000
++++ MPlayer-1.0rc2-p1/configure	2008-03-10 19:47:42.000000000 +1100
+@@ -2275,9 +2275,11 @@
+     test "$_sse2"     != no && _sse2=yes
+     test "$_ssse3"    != no && _ssse3=yes
+     test "$_mtrr"     != no && _mtrr=yes
++    _inc_extra="$_inc_extra -mmmx -msse -msse2 -msse3 -mssse3 -m3dnow"
+   fi
+   if ppc; then
+     _altivec=yes
++    _inc_extra="$_inc_extra -maltivec"
    fi
  fi
-@@ -7200,7 +7200,7 @@
- if darwin ; then
-   CFLAGS="$CFLAGS -mdynamic-no-pic -falign-loops=16 -DSYS_DARWIN -DCONFIG_DARWIN -shared-libgcc"  
-   if x86 ; then
--  CFLAGS="$CFLAGS -arch i386 -isysroot /Developer/SDKs/MacOSX10.4u.sdk"
-+  CFLAGS="$CFLAGS -arch i386"
-   fi
-   if [ "$_cc_major" = 3 ] && [ "$_cc_minor" -lt 1 ]; then
-     CFLAGS="$CFLAGS -no-cpp-precomp"
---- MPlayer-1.0rc1/etc/example.conf	2006-10-22 18:32:31.000000000 -0400
-+++ MPlayer-1.0rc1-patched/etc/example.conf	2007-07-13 15:04:03.000000000 -0400
-@@ -17,7 +17,7 @@
- ##################
- 
- # Specify default video driver (see -vo help for a list).
--#vo=xv
-+#vo=sdl
- 
- # Use SDL video with the aalib subdriver by default.
- #vo = sdl:aalib
-@@ -44,7 +44,7 @@
- #monitor-dotclock = 30M-300M
- 
- # Start in fullscreen mode by default.
--#fs=yes
-+#fs=no
- 
- # Change to a different videomode when going fullscreen.
- #vm=yes
-@@ -71,7 +71,7 @@
- ##################
- 
- # Specify default audio driver (see -ao help for a list).
--#ao=oss
-+#ao=sdl
- 
- # Use SDL audio driver with the esd subdriver by default.
- #ao = sdl:esd
---- MPlayer-1.0rc1/libao2/ao_openal.c	2006-10-22 18:32:25.000000000 -0400
-+++ MPlayer-1.0rc1-patched/libao2/ao_openal.c	2007-07-13 16:09:04.000000000 -0400
-@@ -10,8 +10,8 @@
- #include <stdlib.h>
- #include <stdio.h>
- #include <inttypes.h>
--#include <AL/alc.h>
--#include <AL/al.h>
-+#include <OpenAL/alc.h>
-+#include <OpenAL/al.h>
- 
- #include "config.h"
- #include "mp_msg.h"
---- MPlayer-1.0rc1/libvo/aclib_template.c	2006-10-22 18:32:26.000000000 -0400
-+++ MPlayer-1.0rc1-patched/libvo/aclib_template.c	2007-07-13 14:37:37.000000000 -0400
-@@ -258,7 +258,7 @@
- 	if(i>=BLOCK_SIZE/64)
- 		asm volatile(
- 			"xor %%"REG_a", %%"REG_a"	\n\t"
--			".balign 16		\n\t"
-+			".p2align 4		\n\t"
- 			"1:			\n\t"
- 				"movl (%0, %%"REG_a"), %%ebx 	\n\t"
- 				"movl 32(%0, %%"REG_a"), %%ebx 	\n\t"
-@@ -270,7 +270,7 @@
- 
- 			"xor %%"REG_a", %%"REG_a"	\n\t"
- 
--				".balign 16		\n\t"
-+				".p2align 4		\n\t"
- 				"2:			\n\t"
- 				"movq (%0, %%"REG_a"), %%mm0\n"
- 				"movq 8(%0, %%"REG_a"), %%mm1\n"
---- MPlayer-1.0rc1/loader/stubs.s	2006-10-22 18:32:30.000000000 -0400
-+++ MPlayer-1.0rc1-patched/loader/stubs.s	2007-07-13 14:38:07.000000000 -0400
-@@ -1,6 +1,6 @@
- 	.data
- .LC0:	.string	"Called unk_%s\n"
--       .balign 4
-+       .p2align 2
- .globl unk_exp1
- unk_exp1:
- 	pushl %ebp
---- MPlayer-1.0rc1/loader/wrapper.S	2006-10-22 18:32:30.000000000 -0400
-+++ MPlayer-1.0rc1-patched/loader/wrapper.S	2007-07-13 14:39:06.000000000 -0400
-@@ -15,12 +15,12 @@
- .section .text
- .globl null_call
- 	.type null_call, @function
--	.balign 16,0x90
-+	.p2align 4,0x90
- null_call:
- 	ret
- .globl wrapper
- 	.type wrapper, @function
--	.balign 16,0x90
-+	.p2align 4,0x90
- wrapper:
- 	pusha			# store registers (EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI) 
- 	pushf			# store flags
-@@ -53,7 +53,7 @@
- 	
- 	jmp *wrapper_target	# wrapper_target should return at .Lwrapper_return
- 
--	.balign 16, 0x90
-+	.p2align 4, 0x90
- .Lwrapper_return:	
- 	pushl caller_return	# restore the original return address
- 	pusha			# more for reference sake here
---- MPlayer-1.0rc1/mp3lib/Makefile	2006-10-22 18:32:26.000000000 -0400
-+++ MPlayer-1.0rc1-patched/mp3lib/Makefile	2007-07-13 14:58:20.000000000 -0400
-@@ -9,18 +9,18 @@
- SRCS = sr1.c
- ifeq ($(TARGET_ARCH_X86),yes)
- SRCS += decode_i586.c
--ifeq ($(TARGET_MMX),yes)
--SRCS += decode_MMX.c dct64_MMX.c tabinit_MMX.c
--endif
-+#ifeq ($(TARGET_MMX),yes)
-+#SRCS += decode_MMX.c dct64_MMX.c tabinit_MMX.c
-+#endif
- ifeq ($(TARGET_3DNOW),yes)
- SRCS += dct36_3dnow.c dct64_3dnow.c
- endif
- ifeq ($(TARGET_3DNOWEX),yes)
- SRCS += dct36_k7.c dct64_k7.c
- endif
--ifeq ($(TARGET_SSE),yes)
--SRCS += dct64_sse.c
--endif
-+#ifeq ($(TARGET_SSE),yes)
-+#SRCS += dct64_sse.c
-+#endif
- endif
- ifeq ($(TARGET_ARCH_POWERPC),yes)
- ifeq ($(TARGET_ALTIVEC),yes)
---- MPlayer-1.0rc1/mp3lib/decode_MMX.c	2006-10-22 18:32:26.000000000 -0400
-+++ MPlayer-1.0rc1-patched/mp3lib/decode_MMX.c	2007-07-13 14:39:16.000000000 -0400
-@@ -91,7 +91,7 @@
- 	"pushl %%ecx\n\t"
- 	"leal "MANGLE(mp3lib_decwins)"(%%ebx,%%ebx,1), %%edx\n\t"
- 	"shrl $1, %%ecx\n\t"
--".balign 16\n\t"
-+".p2align 4\n\t"
- ".L03:\n\t"
-         "movq  (%%edx),%%mm0\n\t"
-         "movq  64(%%edx),%%mm4\n\t"
-@@ -169,7 +169,7 @@
- ".next_loop:\n\t"
-         "subl $64,%%esi\n\t"
-         "movl $7,%%ecx\n\t"
--".balign 16\n\t"
-+".p2align 4\n\t"
- ".L04:\n\t"
-         "movq  (%%edx),%%mm0\n\t"
-         "movq  64(%%edx),%%mm4\n\t"
---- MPlayer-1.0rc1/mp3lib/sr1.c	2006-10-22 18:32:26.000000000 -0400
-+++ MPlayer-1.0rc1-patched/mp3lib/sr1.c	2007-07-13 14:56:51.000000000 -0400
-@@ -52,6 +52,9 @@
- static long outscale = 32768;
- #include "tabinit.c"
- 
-+#undef HAVE_MMX
-+#undef HAVE_SSE
-+
- #if 1
- extern int mplayer_audio_read(char *buf,int size);
- 
---- MPlayer-1.0rc1/stream/stream_cddb.c	2006-10-22 18:32:25.000000000 -0400
-+++ MPlayer-1.0rc1-patched/stream/stream_cddb.c	2007-07-13 15:27:51.000000000 -0400
-@@ -207,6 +207,10 @@
- 	close(drive);
- 	return tochdr.ending_track;
- }
-+#else
-+int read_toc(const char *dev) {
-+  return NULL;
-+}
+
+@@ -7486,7 +7486,7 @@
+ # to use its own copy of the library)
+ echocheck "DVD support (libdvdnav)"
+ if test "$_dvdnav" = auto ; then
+-  $_dvdnavconfig --version --minilibs >> $TMPLOG 2>&1 || _dvdnav=no
++  $_dvdnavconfig --version --libs >> $TMPLOG 2>&1 || _dvdnav=no
+ fi
+ if test "$_dvdnav" = auto ; then
+   cat > $TMPC <<EOF
+@@ -7508,7 +7508,7 @@
+   _dvdnav_version=`$_dvdnavconfig --version | sed "s/\.//g"`
+   _def_dvdnav_version="#define DVDNAVVERSION $_dvdnav_version"
+   _inc_extra="$_inc_extra `$_dvdnavconfig --cflags`"
+-  _ld_extra="$_ld_extra `$_dvdnavconfig --minilibs`"
++  _ld_extra="$_ld_extra `$_dvdnavconfig --libs`"
+   _inputmodules="dvdnav $_inputmodules"
+ else
+   _def_dvdnav='#undef USE_DVDNAV'
+diff -ur MPlayer-1.0rc2/libvo/aclib_template.c MPlayer-1.0rc2-p1/libvo/aclib_template.c
+--- MPlayer-1.0rc2/libvo/aclib_template.c	2007-10-08 05:49:33.000000000 +1000
++++ MPlayer-1.0rc2-p1/libvo/aclib_template.c	2008-03-10 19:47:42.000000000 +1100
+@@ -109,7 +109,7 @@
+ #elif defined ( HAVE_3DNOW )
+ #define PREFETCH  "prefetch"
+ #else
+-#define PREFETCH "/nop"
++#define PREFETCH "nop"
  #endif
  
- /** 
+ /* On K6 femms is faster of emms. On K7 femms is directly mapped on emms. */
+diff -ur MPlayer-1.0rc2/libvo/osd_template.c MPlayer-1.0rc2-p1/libvo/osd_template.c
+--- MPlayer-1.0rc2/libvo/osd_template.c	2007-10-08 05:49:33.000000000 +1000
++++ MPlayer-1.0rc2-p1/libvo/osd_template.c	2008-03-10 19:47:42.000000000 +1100
+@@ -16,8 +16,8 @@
+ #define PREFETCHW "prefetcht0"
+ #define PAVGB	  "pavgb"
+ #else
+-#define PREFETCH "/nop"
+-#define PREFETCHW "/nop"
++#define PREFETCH "nop"
++#define PREFETCHW "nop"
+ #endif
+ 
+ #ifdef HAVE_3DNOW
