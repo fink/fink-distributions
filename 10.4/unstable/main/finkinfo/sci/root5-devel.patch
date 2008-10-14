@@ -1,1167 +1,8 @@
-Index: graf2d/qt/src/TGQt.cxx
-===================================================================
---- graf2d/qt/src/TGQt.cxx	(revision 25279)
-+++ graf2d/qt/src/TGQt.cxx	(working copy)
-@@ -47,6 +47,7 @@
- #  include <QImageWriter>
- #  include <QVector>
- #  include <QStack>
-+#  include <QFrame>
- #  include <QPicture>
- #  include <QDebug>
- #endif /* QT_VERSION */
-@@ -133,7 +134,106 @@
-    }
-    return  fileName;
- }
-+//______________________________________________________________________________
-+//
-+//  custom TQtPainter
-+//______________________________________________________________________________
-+class TQtPainter : public QPainter {
-+protected:
-+   bool isQWidget(QPaintDevice * dev) const {
-+      return dev ? dev->devType() ==  QInternal::Widget : false;
-+   }
-+public:
-+   TQtPainter() : QPainter () {}
-+   TQtPainter(QPaintDevice * device) : QPainter ( device )  {}
-+   ~TQtPainter () {}
- 
-+   void save ()    { if (!isQWidget(device()) && isActive()) QPainter::save(); }
-+   void restore () { if (!isQWidget(device()) && isActive()) QPainter::restore();}
-+   bool begin ( QPaintDevice * dev )  {return isQWidget(dev) ? false : QPainter::begin(dev);}
-+};
-+//______________________________________________________________________________
-+//
-+//   class TQtFeedBackWidget to back the TCanvas FeedBack mode
-+//______________________________________________________________________________
-+class TQtFeedBackWidget : public QFrame {
-+   QPixmap  *fPixBuffer;
-+protected:
-+   virtual void paintEvent(QPaintEvent *event) {
-+      if (fPixBuffer) {
-+         QRect rect = event->rect();
-+         QPainter p(this);
-+         p.setClipRect(rect);
-+         p.drawPixmap(0,0,*fPixBuffer);
-+         ClearBuffer();
-+      } else {
-+         QFrame::paintEvent(event);
-+      }
-+   }
-+public:
-+   TQtFeedBackWidget(QWidget *parent=0, Qt::WindowFlags f=0)  : QFrame(parent,f),fPixBuffer(0)
-+   {   
-+      setAttribute(Qt::WA_NoSystemBackground); 
-+      setBackgroundRole(QPalette::Window);
-+      setAutoFillBackground(false);
-+      QPalette  p = palette();
-+      p.setBrush(QPalette::Window, Qt::transparent);
-+      setPalette(p);
-+   }
-+   virtual ~TQtFeedBackWidget() {delete fPixBuffer; fPixBuffer = 0;}
-+   void hide() {
-+      delete fPixBuffer; fPixBuffer = 0;
-+      QFrame::hide();
-+   }
-+   QPixmap *PixBuffer() { 
-+      QWidget *canvasWidget = parentWidget();
-+      if (canvasWidget ) {
-+         // resize the feedback
-+         QSize canvasSize = canvasWidget->size();
-+         setGeometry(QRect(QPoint(0,0),canvasSize));
-+         if ( !fPixBuffer  || (fPixBuffer->size() != canvasSize) ) {
-+            delete fPixBuffer;
-+            fPixBuffer = new QPixmap(canvasSize);
-+            ClearBuffer();
-+         }
-+      }
-+      return  fPixBuffer;
-+   }
-+   void ClearBuffer() {fPixBuffer->fill(Qt::transparent);}
-+};
-+
-+//______________________________________________________________________________
-+//
-+//   class TQtFeedBackWidget to back the TCanvas FeedBack mode
-+//______________________________________________________________________________
-+
-+class TQtToggleFeedBack : public TQtPainter {
-+   TGQt *fGQt;
-+   TQtPainter  *fSavePainter;
-+public:
-+   TQtToggleFeedBack(TGQt *gqt) : TQtPainter (), fGQt(gqt), fSavePainter(0)
-+   {
-+      // activate temporary TQtFeedBackWidget widget buffer
-+      if (fGQt->fFeedBackMode) {
-+         // Save the current painter
-+         fSavePainter = fGQt->fQPainter;
-+         fGQt->fQPainter = this;
-+         begin(fGQt->fFeedBackWidget->PixBuffer());
-+         setPen(Qt::darkGray);
-+        // qDebug() << fGQt->fFeedBackWidget->PixBuffer()->size();
-+         fGQt->fFeedBackWidget->show();
-+      }
-+   }
-+   ~TQtToggleFeedBack()
-+   {
-+      // Restore the normal painter;
-+      if (fSavePainter) {
-+         end();
-+         fGQt->fQPainter = fSavePainter;
-+         fGQt->fFeedBackWidget->update();
-+      }
-+   }
-+};
- //----- Terminal Input file handler --------------------------------------------
- //______________________________________________________________________________
- class TQtEventInputHandler : public TTimer {
-@@ -502,7 +602,7 @@
-    UInt_t nExt = sizeof(defExtension)/sizeof(const char *);
-     UInt_t i = 0;
-    for (i=0; i < nExt; i++) {
--      if (selector.contains(defExtension[i],FALSE)) {
-+      if (selector.contains(defExtension[i], Qt::CaseSensitive)) {
-          saveType = defExtension[i];
-          break;
-       }
-@@ -594,6 +694,7 @@
- //______________________________________________________________________________
- TGQt::TGQt() : TVirtualX(),fDisplayOpened(kFALSE),fQPainter(0),fQClientFilterBuffer(0)
- ,fCodec(0),fSymbolFontFamily("Symbol"),fQtEventHasBeenProcessed(0)
-+,fFeedBackMode(kFALSE),fFeedBackWidget(0)
- {
-    //*-*-*-*-*-*-*-*-*-*-*-*Default Constructor *-*-*-*-*-*-*-*-*-*-*-*-*-*-*
-    //*-*                    ===================
-@@ -607,6 +708,7 @@
- TGQt::TGQt(const char *name, const char *title) : TVirtualX(name,title),fDisplayOpened(kFALSE)
- ,fQPainter(0),fCursors(kNumCursors),fQClientFilter(0),fQClientFilterBuffer(0),fPointerGrabber(0)
- ,fCodec(0),fSymbolFontFamily("Symbol"),fQtEventHasBeenProcessed(0)
-+,fFeedBackMode(kFALSE),fFeedBackWidget(0)
- {
-    //*-*-*-*-*-*-*-*-*-*-*-*-*-*Normal Constructor*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*
-    //*-*                        ==================                              *-*
-@@ -840,13 +942,20 @@
-    // Add $QTDIR include  path to the  list of includes for ACliC
-    // make sure Qt SDK does exist.
-    if (gSystem->Getenv("QTDIR")) {
--      TString qtdir = "$(QTDIR)/include";
-+      TString qtdir = "$(QTDIR)/include/";
-+      // Expand the QTDIR first to avoid the cross-platform issue
-       gSystem->ExpandPathName(qtdir);
--      TString testQtHeader = qtdir + "/qglobal.h";
-+      TString testQtHeader = qtdir + "Qt/qglobal.h";
-       if (!gSystem->AccessPathName((const char *)testQtHeader) ) {
--         // Expand the QTDIR first to avoid the cross-platform issue
--         TString incpath= "-I"; incpath+=qtdir;
--         gSystem->AddIncludePath((const char*)incpath);
-+         void *qtdirHandle = gSystem->OpenDirectory(qtdir);
-+         if (qtdirHandle) {
-+            TString incpath = " -I"; incpath+=qtdir;
-+            while(const char *nextQtInclude = gSystem->GetDirEntry(qtdirHandle)) {
-+                  incpath += " -I"; incpath+=qtdir; incpath+=nextQtInclude;
-+            }
-+            gSystem->FreeDirectory(qtdirHandle);
-+            gSystem->AddIncludePath((const char*)incpath);
-+         }
- #ifdef R__WIN32
-          QString libPath = gSystem->GetLinkedLibs();
-          // detect the exact name of the Qt library
-@@ -861,9 +970,20 @@
-          gSystem->ExpandPathName(qtlibdir);
-          QDir qtdir((const char*)qtlibdir);
-          if (qtdir.isReadable ()) {
--            QStringList qtLibFile =  qtdir.entryList("qt-mt*.lib");
--            if (qtLibFile.count() ) {
--               libPath += " -LIBPATH:\"";libPath += qtlibdir;  libPath += "\" "; libPath += qtLibFile.first();
-+            QStringList qtLibFile =  qtdir.entryList("Q*4.lib",QDir::Files);
-+            QStringListIterator libFiles(qtLibFile);
-+            if (libFiles.hasNext()) {
-+               libPath += " -LIBPATH:\"";libPath += qtlibdir;  libPath += "\" ";
-+#if 0
-+               while (libFiles.hasNext()) {
-+                  QString nf = libFiles.next();
-+                  if (nf.contains("d4")) continue; // skip the debug version of the libraries
-+                  libPath += nf.toLocal8Bit().constData();
-+                  libPath += " ";
-+               }
-+#else
-+                  libPath += "QtCore4.lib QtGui4.lib QtOpenGL4.lib Qt3Support4.lib";
-+#endif
-                gSystem->SetLinkedLibs((const char*)libPath);
-             }
-          } else {
-@@ -941,7 +1061,7 @@
-    wid->setCursor(*fCursors[kCross]);
-    if (parent && gDebug==3)
-    {
--      fprintf(stderr," ---- >  New Canvas window %p with the parent %s parent id=%p\n",wid, (const char *)parent->name(), (void*)rootwid(parent));
-+      fprintf(stderr," ---- >  New Canvas window %p with the parent %s parent id=%p\n",wid, (const char *)parent->name(), (void*)parent);
-    }
-    Int_t id = fWidgetArray->GetFreeId(wid);
-    // The default mode is the double buffer mode
-@@ -1037,8 +1157,14 @@
-       } else if (IsPixmap(fSelectedWindow) ) {
-           End(); // stop the painter before erasing
- #if QT_VERSION >= 0x40000
--          assert(dynamic_cast<QPixmap *>(fSelectedWindow));
-+#  ifdef R__WIN32
-          ((QPixmap *)fSelectedWindow)->fill(fQBrush->color()); // Qt::transparent);
-+#  else
-+        { QPainter p(fSelectedWindow);
-+          p.fillRect(GetQRect(*fSelectedWindow),*fQBrush);
-+        }
-+#  endif
-+
- #else
-          ((QPixmap *)fSelectedWindow)->fill();
- #endif
-@@ -1097,31 +1223,15 @@
- QRect TGQt::GetQRect(QPaintDevice &dev)
- {
-    // Define the rectangle of the current ROOT selection
--  QRect res;
--  switch (dev.devType()) {
-+  QRect res(0,0,0,0);
-+
-+  switch (dev.devType() ) {
-   case QInternal::Widget:
-     res = ((TQtWidget*)&dev)->rect();
-     break;
- 
--  case QInternal::Pixmap: {
--     TQtWidgetBuffer *pxmBuffer = dynamic_cast<TQtWidgetBuffer *>(&dev);
--     if (pxmBuffer) res = pxmBuffer->Rect();
--     else           res = ((QPixmap *)&dev)->rect();
--     break;
--                          }
--  case QInternal::Picture:
--     res = ((QPicture *)&dev)->boundingRect();
--     break;
--
--  case QInternal::Printer:
--#if QT_VERSION < 0x40000
--  case QInternal::UndefinedDevice:
--#else /* QT_VERSION */
-- // case QInternal::UndefinedDevice:
--#endif /* QT_VERSION */
--     break;
-   default:
--     assert(0);
-+     res.setSize(QSize(dev.width(),dev.height()));
-      break;
-   };
-   return res;
-@@ -1147,8 +1257,9 @@
-          Error("TGQt::CopyPixmap","Wrong TGuiFactory implementation was provided. Please, check your plugin settings");
-          assert(dst != (QPaintDevice *)-1);
-       }
--
-       End();
-+      TQtWidget *theWidget =  (TQtWidget *)fSelectedWindow;
-+      dst = theWidget->GetOffScreenBuffer();
- #if QT_VERSION < 0x40000
-       QRect sr = src->rect();
-       bitBlt ( dst,QPoint(xpos,ypos),src,sr,Qt::CopyROP); // bool ignoreMask )
-@@ -1161,7 +1272,8 @@
-      //  ----  !!!!  bitBlt ( dst,QPoint(xpos,ypos),src,sr,QPainter::CompositionMode_Source); // bool ignoreMask )
- #endif /* QT_VERSION */
-       Emitter()->EmitPadPainted(src);
--      if (!QPainter::redirected(dst) && (fSelectedWindow->devType() == QInternal::Widget ) )
-+//      if (!QPainter::redirected(dst) && (fSelectedWindow->devType() == QInternal::Widget ) )
-+      if ( fSelectedWindow->devType() == QInternal::Widget  )
-       {
-         TQtWidget *w = (TQtWidget *)fSelectedWindow;
-         w->EmitCanvasPainted();
-@@ -1254,7 +1366,13 @@
-    static const int Q3=0;
- #endif
-    TQtLock lock;
--   if (fSelectedWindow)
-+   if ( (fSelectedWindow->devType() ==  QInternal::Widget) && fFeedBackMode && fFeedBackWidget) {
-+      fFeedBackWidget->setGeometry(x1,y2,x2-x1,y1-y2);
-+      fFeedBackWidget->show();
-+      return;
-+   }
-+
-+   if (fSelectedWindow )
-    {
-       fQPainter->save();
-       // fprintf(stderr, " Drawbox x1=%d, y1=%d, x2=%d, y2=%d, mode=%d\n",x1,y1,x2,y2,mode);
-@@ -1351,8 +1469,6 @@
-       fQPainter->save();
-       if (fQBrush->style() == Qt::SolidPattern)
-          fQPainter->setPen(Qt::NoPen);
--      else
--         fQPainter->setPen(fQBrush->GetColor());
- 
- #if QT_VERSION < 0x40000
-       QPointArray qtPoints(n);
-@@ -1384,7 +1500,10 @@
-    // x2,y2        : end of line
- 
-   TQtLock lock;
--  if (fSelectedWindow) fQPainter->drawLine(x1,y1,x2,y2);
-+  if (fSelectedWindow) {
-+     TQtToggleFeedBack  feedBack(this);
-+     fQPainter->drawLine(x1,y1,x2,y2);
-+  }
- }
- 
- //______________________________________________________________________________
-@@ -1396,6 +1515,7 @@
- 
-   TQtLock lock;
-   if (fSelectedWindow)  {
-+     TQtToggleFeedBack  feedBack(this);
- #if QT_VERSION < 0x40000
-     QPointArray qtPoints(n);
- #else /* QT_VERSION */
-@@ -1584,7 +1704,7 @@
-    QPaintDevice *buffer = 0;
-    if (dev) {
-        TQtWidget *widget = dynamic_cast<TQtWidget *>(dev);
--       buffer = widget && widget->IsDoubleBuffered() ? &widget->GetBuffer() : 0;
-+       buffer = widget && widget->IsDoubleBuffered() ? widget->GetBuffer().Buffer() : 0;
-     }
-     return buffer;
- }
-@@ -2030,6 +2150,25 @@
-    // mode : drawing mode
- 
-    // Map EDrawMode    { kCopy = 1, kXor, kInvert };
-+   Bool_t feedBack =  (mode==kInvert);
-+   if (feedBack != fFeedBackMode) {
-+      // End();
-+      fFeedBackMode = feedBack;
-+      if (fFeedBackMode) {
-+         // create
-+         if (!fFeedBackWidget) {
-+            fFeedBackWidget = new TQtFeedBackWidget;
-+            fFeedBackWidget->setFrameStyle(QFrame::Box);
-+         }
-+         fFeedBackWidget->setParent((TQtWidget *)fSelectedWindow);
-+         // reparent if needed
-+      } else if (fFeedBackWidget) {
-+         fFeedBackWidget->hide();
-+        // reparent
-+         fFeedBackWidget->setParent(0);
-+      }
-+   }
-+#if 0
- #if QT_VERSION < 0x40000
-    Qt::RasterOp newMode = Qt::CopyROP;
- #else /* QT_VERSION */
-@@ -2062,6 +2201,7 @@
- #endif /* QT_VERSION */
-      // sfprintf(stderr,"TGQt::SetDrawMode \n");
-    }
-+#endif
- }
- 
- //______________________________________________________________________________
-@@ -2674,6 +2814,14 @@
- #if QT_VERSION < 0x40000
-       ((TQtWidget *)fSelectedWindow)->repaint();
- #else
-+#if 1
-+      TQtWidget *w =  (TQtWidget *)fSelectedWindow;
-+      bool hasBufferOn = w->IsDoubleBuffered();
-+      if (hasBufferOn) w->SetDoubleBuffer(FALSE);
-+      Begin();End();
-+      ((TQtWidget *)fSelectedWindow)->repaint();
-+      if (hasBufferOn) w->SetDoubleBuffer(TRUE);
-+#else
- //      ((TQtWidget *)fSelectedWindow)->update();
-       End();
-       TQtWidget *w =  (TQtWidget *)fSelectedWindow;
-@@ -2683,6 +2831,7 @@
-       ((TQtWidget *)fSelectedWindow)->repaint();
-       if (hasBufferOn) w->SetDoubleBuffer(TRUE);
- #endif
-+#endif
-    }
- }
- 
-@@ -2732,7 +2881,7 @@
- //    bitBlt ( pix,QPoint(xpos,ypos),src,sr,Qt::CopyROP);
-         TQtWidget *thisWidget = (TQtWidget*)&dev;
-         if (thisWidget->IsDoubleBuffered() ) {
--           pix = &((TQtWidget*)&dev)->GetBuffer();
-+           pix = ((const TQtWidget*)&dev)->GetOffScreenBuffer();
-         } else {
-            // Grab the widget rectangle area directly from the screen
-            // The image may contain the "alien" pieces !
-@@ -2827,7 +2976,7 @@
- void TGQt::UpdateBrush()
- {
-    // Update the current QBrush within active QPainter
--  if (!fQPainter) fQPainter = new QPainter();
-+  if (!fQPainter) fQPainter = new TQtPainter();
-   if (fQBrush && fQPainter->isActive())
-    {
-       fQPainter->setBrush(*fQBrush);
-@@ -2857,7 +3006,7 @@
-    // Start the painting of the current slection (Pixmap or Widget)
- 
-    if (!fQPainter) { 
--      fQPainter = new QPainter();
-+      fQPainter = new TQtPainter();
-     //   fprintf(stderr,"TGQt::Begin():: fQPainter %p QInternal::Widget=%d\n",fQPainter, QInternal::Widget); 
-    }
-    if (!fQPainter->isActive() )
-@@ -2868,8 +3017,11 @@
-       // Adjust size
-       if ( fSelectedWindow->devType() ==  QInternal::Widget)
-       {
--         ((TQtWidget *)fSelectedWindow)->AdjustBufferSize();
-+         TQtWidget *theWidget =  (TQtWidget *)fSelectedWindow;
-+         theWidget->AdjustBufferSize();
- #if QT_VERSION >= 0x40000
-+        // if (theWidget->IsDoubleBuffered())
-+        src = theWidget->GetBuffer().Buffer();
- #ifdef SHWDOWBUFFER
-          if (src == fSelectedWindow) {
-             TQtWidget *ww = (TQtWidget *)fSelectedWindow;
-@@ -2880,7 +3032,7 @@
- #endif
-       }
-       if (!fQPainter->begin(src) ) {
--         fprintf(stderr,"---> TGQt::Begin() win=%p dev=%p\n",src,fQPainter->device());
-+        //  fprintf(stderr,"---> TGQt::Begin() win=%p dev=%p\n",src,fQPainter->device());
-       } else {
-          UpdatePen();
-          UpdateBrush();
-Index: graf2d/qt/src/GQtGUI.cxx
-===================================================================
-@@ -502,9 +502,9 @@
-     setPaletteBackgroundColor(QtColor(background));
-     setEraseColor(QtColor(background));
- #else    
--    QPalette pp;
--    pp.setColor(backgroundRole(), QtColor(background));
--    setPalette(pp);    
-+    QPalette pp=palette();
-+    pp.setColor(QPalette::Window, QtColor(background));
-+    setPalette(pp);
- #endif 
- }
- //______________________________________________________________________________
-@@ -517,9 +517,9 @@
- #if QT_VERSION < 0x40000   
-    setPaletteForegroundColor (QtColor(foreground));
- #else   
--   QPalette palette;
--   palette.setColor(foregroundRole(), QtColor(foreground));
--   setPalette(palette);
-+   QPalette pp = palette();
-+   pp.setColor(QPalette::WindowText, QtColor(foreground));
-+   setPalette(pp);
- #endif
-    fBrush.setColor(QtColor(foreground));
-    fPen.setColor(QtColor(foreground)); 
-@@ -545,7 +545,7 @@
- #else /* QT_VERSION */
- //           if (device()->devType() !=  QInternal::Widget ) 
-            if (pd->devType() ==  QInternal::Image ) 
--              setCompositionMode(rootContext.fROp);
-+               setCompositionMode(rootContext.fROp);
- #endif /* QT_VERSION */
-          }
-          if (rootContext.HasValid(QtGContext::kPen)) {
-@@ -899,8 +899,10 @@
-    // and removes event from queue. Not all of the event fields are valid
-    // for each event type, except fType and fWindow.
- 
--   // Map the accumulated Qt events to the ROOT one tp process:
--   if (qApp->hasPendingEvents ()) qApp->processEvents ();
-+   // Map the accumulated Qt events to the ROOT one to process:
-+   qApp->processEvents ();
-+   if (qApp->hasPendingEvents ())  QCoreApplication::sendPostedEvents();
-+   fQtEventHasBeenProcessed = 1;
- 
-    memset(&event,0,sizeof(Event_t));
-    event.fType   = kOtherEvent;
-@@ -1167,6 +1169,7 @@
- #if ROOT_VERSION_CODE >= ROOT_VERSION(9,15,9)
-    if (!force)
-    {
-+     assert(0);
-       TGWindow *www =(TGWindow *)w;
-       Window_t id = www->GetId();
-       if (id) wid(id)->update();
-@@ -1240,26 +1243,16 @@
- {
-    // Set the window background color.
-    if (id == kNone || id == kDefault ) return;
--#if QT_VERSION < 0x40000
--   wid(id)->setEraseColor(QtColor(color));
--#else   
--   QPalette palette;
--   palette.setColor(wid(id)->backgroundRole(), QtColor(color));
--   wid(id)->setPalette(palette);
--#endif   
-+   TQtClientWidget *wd =  dynamic_cast<TQtClientWidget*>(wid(id));
-+   wd->setEraseColor(QtColor(color));
- }
- //______________________________________________________________________________
- void         TGQt::SetWindowBackgroundPixmap(Window_t id, Pixmap_t pxm)
- {
-    // Set pixmap as window background.
-    if (pxm  != kNone && id != kNone && id != kDefault ) {
--#if QT_VERSION < 0x40000
--      wid(id)->setPaletteBackgroundPixmap(*fQPixmapGuard.Pixmap(pxm));
--#else   
--      QPalette palette;
--      palette.setBrush(wid(id)->backgroundRole(), QBrush(*fQPixmapGuard.Pixmap(pxm)));
--      wid(id)->setPalette(palette);
--#endif      
-+      TQtClientWidget *wd =  dynamic_cast<TQtClientWidget*>(wid(id));
-+      wd->setErasePixmap (*fQPixmapGuard.Pixmap(pxm));
-    }
-  }
- //______________________________________________________________________________
-@@ -1325,10 +1318,18 @@
-       if ((attr->fMask & kWABackPixmap))
-          if (attr->fBackgroundPixmap != kNone && attr->fBackgroundPixmap != kParentRelative )
-          {
--            //        win->setPaletteBackgroundPixmap(*(QPixmap *)attr->fBackgroundPixmap);
-+            QPalette palette= win->palette();
-+            palette.setBrush(QPalette::Window, QBrush(*(QPixmap *)attr->fBackgroundPixmap));
-+            win->setErasePixmap(*(QPixmap *)attr->fBackgroundPixmap);
-+            win->setPalette(palette);
-+            win->setBackgroundRole(QPalette::Window);
-          }
-       if ((attr->fMask & kWABackPixel)) {
--          win->setPaletteBackgroundColor(QtColor(attr->fBackgroundPixel));
-+            QPalette palette= win->palette();
-+            palette.setColor(QPalette::Window, QtColor(attr->fBackgroundPixel));
-+	    win->setEraseColor(QtColor(attr->fBackgroundPixel));
-+            win->setPalette(palette);
-+            win->setBackgroundRole(QPalette::Window);
-        }
-       if ( attr->fMask & kWAEventMask) {
-           // Long_t     fEventMask;            // set of events that should be saved
-@@ -1718,8 +1719,13 @@
- //______________________________________________________________________________
- Int_t  TGQt::EventsPending() {
- #ifndef R__QTGUITHREAD
-+    // to avoid the race condition
-     Int_t retCode = fQClientFilterBuffer ? fQClientFilterBuffer->count(): 0;
--    return  retCode ? retCode : qApp->hasPendingEvents ();
-+    if (fQtEventHasBeenProcessed) {
-+       fQtEventHasBeenProcessed++;
-+       if (fQtEventHasBeenProcessed > 2) fQtEventHasBeenProcessed = 0;
-+    } else retCode = qApp->hasPendingEvents();
-+    return  retCode;
- #endif
- 
-    if (fQClientFilterBuffer && fQClientFilterBuffer->isEmpty())
-@@ -1761,7 +1767,7 @@
-    assert(qtcontext(gc).HasValid(QtGContext::kROp));
-    // fprintf(stderr," TQt::CopyArea this=%p, fROp=%x\n", this, qtcontext(gc).fROp);
-    if ( dest && src) {
--      //QtGContext qgc = qtcontext(gc);
-+      // QtGContext qgc = qtcontext(gc);
-       QPixmap *pix = dynamic_cast<QPixmap*>(iwid(src));
-       QBitmap *mask = qtcontext(gc).fClipMask;
-       if (pix && mask && (qtcontext(gc).fMask & QtGContext::kClipMask)) {
-@@ -1772,24 +1778,30 @@
- #if QT_VERSION < 0x40000
-          bitBlt(iwid(dest), dest_x,dest_y,pix, src_x,src_y,width,height, qtcontext(gc).fROp);
- #else
--         QPainter copyArea(iwid(dest));
--         copyArea.setCompositionMode(qtcontext(gc).fROp);
-+         TQtPainter copyArea(iwid(dest),qtcontext(gc));
-          copyArea.drawPixmap(dest_x,dest_y, *pix, src_x,src_y,width,height);
- #endif
-       } else {
- #if QT_VERSION < 0x40000
-          bitBlt(iwid(dest), dest_x,dest_y,iwid(src), src_x,src_y,width,height, qtcontext(gc).fROp);
- #else
--         QPainter copyArea(iwid(dest));
--         copyArea.setCompositionMode(qtcontext(gc).fROp);
-          if (pix) {
-+           TQtPainter copyArea(iwid(dest),qtcontext(gc));
-            copyArea.drawPixmap(dest_x,dest_y,*pix, src_x,src_y,width,height);
-          } else {
-             QImage *im = dynamic_cast<QImage*>(iwid(src)); 
-             if (im) {
-+               TQtPainter copyArea(iwid(dest),qtcontext(gc));
-                copyArea.drawImage(dest_x,dest_y,*im, src_x,src_y,width,height);
-             } else {
--               qDebug() << " TGQt::CopyArea: illegal image source. Shoudl be either QPixmap or QImage";
-+               QWidget *qw = dynamic_cast<QWidget*>(iwid(src)); 
-+               if (qw) {
-+                  QPixmap pixw = QPixmap::grabWidget(qw, QRect(src_x,src_y,width,height));
-+                  TQtPainter copyArea(iwid(dest),qtcontext(gc));
-+                  copyArea.drawPixmap(dest_x,dest_y,pixw, src_x,src_y,width,height);
-+               } else { 
-+                    qDebug() << " TGQt::CopyArea: illegal image source. Should be either QPixmap or QImage";
-+               }
-             }
-          }
- #endif
-@@ -1812,27 +1824,14 @@
-           case kNone:
-           case kParentRelative:
-              break;
--          default: {
--#if QT_VERSION < 0x40000
--                f.setPaletteBackgroundPixmap (*(QPixmap *)attr->fBackgroundPixmap);
--#else                
--                QPalette palette;
--                palette.setBrush(f.backgroundRole(), QBrush(*(QPixmap *)attr->fBackgroundPixmap));
--                f.setPalette(palette);
--#endif                
--               }
--              break;
-+          default:
-+                f.setErasePixmap (*(QPixmap *)attr->fBackgroundPixmap);
-+                break;
-       };
-    }
-    if ( attr->fMask & kWABackPixel) {
-       // background pixel
--#if QT_VERSION < 0x40000
--      f.setPaletteBackgroundColor(QtColor(attr->fBackgroundPixel));
--#else
--      QPalette palette;
--      palette.setColor(f.backgroundRole(),QtColor(attr->fBackgroundPixel));
--      f.setPalette(palette);    
--#endif            
-+      f.setEraseColor(QtColor(attr->fBackgroundPixel));
-    }
-    if ( attr->fMask & kWABorderPixmap) {
-       // fBorderPixmap;         // border of the window
-@@ -1908,7 +1907,7 @@
-    TQtClientWidget *wd =  dynamic_cast<TQtClientWidget*>(wid(id));
-    const QColor  *c = 0;
-    const QPixmap *p = 0;
--#if QT_VERSION < 0x40000
-+#if QT_VERSION < 0x50000
-    c = wd ? wd->fEraseColor  : 0;
-    p = wd ? wd->fErasePixmap : 0;
-    const QColor  &cr = *c;
-@@ -1920,10 +1919,15 @@
- #endif      
-    if (p && c) 
-          paint.fillRect ( x, y, w, h, QBrush(cr,pr));
-+   else if (p)
-+         paint.fillRect ( x, y, w, h, QBrush(pr));
-    else if (c)
-          paint.fillRect ( x, y, w, h, cr);
--   else 
--       wid(id)->erase (x, y, w, h );
-+   else {
-+       const QBrush  &crw = wd->palette().brush(QPalette::Window);
-+       paint.fillRect ( x, y, w, h, crw);
-+   }
-+  //  qDebug() << " TGQt::ClearArea " << (void *)id << p << c;
- }
- //______________________________________________________________________________
- Bool_t       TGQt::CheckEvent(Window_t, EGEventType, Event_t &) 
-@@ -2276,16 +2280,16 @@
- //______________________________________________________________________________
-  FontStruct_t TGQt::GetFontStruct(FontH_t fh) { return (FontStruct_t)fh; }
- //______________________________________________________________________________
-- void         TGQt::ClearWindow(Window_t id)
-- {
--    // Clear window.
-+void         TGQt::ClearWindow(Window_t id)
-+{
-+   // Clear window.
-    if (id == kNone || id == kDefault ) return;
-    QPainter paint(iwid(id));   
-    paint.setBackgroundMode( Qt::OpaqueMode); // Qt::TransparentMode
-    TQtClientWidget *wd =  dynamic_cast<TQtClientWidget*>(wid(id));
-    const QColor  *c = 0;
-    const QPixmap *p = 0;
--#if QT_VERSION < 0x40000
-+#if QT_VERSION < 0x50000
-    c = wd ? wd->fEraseColor  : 0;
-    p = wd ? wd->fErasePixmap : 0;
-    const QColor  &cr = *c;
-@@ -2296,12 +2300,16 @@
-    const QPixmap &pr = *p;
- #endif      
-    if (p && c ) 
--         paint.fillRect ( wd->rect(),QBrush(cr,pr)); 
-+      paint.fillRect(wd->rect(),QBrush(cr,pr));
-+   else if (p)
-+      paint.fillRect(wd->rect(),QBrush(pr));
-    else if (c)
--         paint.fillRect ( wd->rect(), cr);
--   else 
--      wid(id)->erase();
-- }
-+      paint.fillRect(wd->rect(), cr);
-+   else {
-+      const QBrush  &brw = wd->palette().brush(QPalette::Window);
-+      paint.fillRect ( wd->rect(), brw);
-+   }
-+}
- 
- //---- Key symbol mapping
- struct KeyQSymbolMap_t {
-@@ -2712,16 +2720,13 @@
-    // Flush (mode = 0, default) or synchronize (mode = 1) X output buffer.
-    // Flush flushes output buffer. Sync flushes buffer and waits till all
-    // requests have been processed by X server.
--#ifndef R__QTX11
--   if (mode) {}
--   QApplication::flush ();
-+   if (mode)
-+#ifdef R__QTX11
-+      QApplication::syncX (); else
- #else
--   if (mode == 0)
-+      {}
-+#endif
-       QApplication::flush ();
--   if (mode == 1) {
--      QApplication::syncX ();
--   }
--#endif
- }
- //------------------------------------------------------------------------------
- //
-@@ -3191,7 +3196,7 @@
-    QPixmap *pix=0;
-    switch (dev.devType()) {
-    case QInternal::Widget:
--     pix = &((TQtWidget*)&dev)->GetBuffer();
-+     pix = ((TQtWidget*)&dev)->GetOffScreenBuffer();
-      break;
- 
-    case QInternal::Pixmap: {
-@@ -3260,8 +3265,7 @@
-    fprintf(stderr, " Qt layer is not ready for GetCurrentWindow \n");
-    assert(0);
- 
--   //return (Window_t)(fSelectedBuffer ? fSelectedBuffer : fSelectedWindow);
--   return 0;
-+   return (Window_t)(fSelectedWindow);
- }
- 
- //______________________________________________________________________________
-Index: graf2d/qt/src/TQtWidget.cxx
-===================================================================
---- graf2d/qt/src/TQtWidget.cxx	(revision 25279)
-+++ graf2d/qt/src/TQtWidget.cxx	(working copy)
-@@ -23,6 +23,7 @@
- #  include <QResizeEvent>
- #  include <QMouseEvent>
- #  include <QCustomEvent>
-+#  include <QImage>
- #  include <QDebug>
- #endif /* QT_VERSION */
- 
-@@ -62,11 +63,46 @@
-     }
-     ~TQtSynchPainting() 
-     {
--       // REstore the painting if needed
-+       // Restore the painting if needed
-        if (fWasPainting) gQt->Begin();                   
-     }
- };
- 
-+//___________________________________________________________________
-+TQtWidgetBuffer::TQtWidgetBuffer(const QWidget *w, bool clear)
-+: fWidget(w),fBuffer(0), fIsImage(clear)
-+{
-+   if (clear) {
-+      fBuffer = new  QImage(w?w->size():QSize(0,0),QImage::Format_ARGB32_Premultiplied);
-+      ((QImage*)fBuffer)->fill(0);
-+   } else {
-+      fBuffer = new  QPixmap(w?w->size():QSize(0,0));
-+   }
-+}
-+//___________________________________________________________________
-+void TQtWidgetBuffer::Clear()
-+{
-+   // Clear the buffer with the transparent color
-+   if (fBuffer ) {
-+#ifdef R__WIN32   
-+      if (fIsImage) { // do not paint it at all
-+         // ((QImage*)fBuffer)->fill(0);
-+         // ((QPixmap*)fBuffer)->fill(Qt::transparent);
-+      } else {
-+         ((QPixmap*)fBuffer)->fill(Qt::transparent);
-+      }
-+#else
-+      if (!fIsImage) { // do not paint it at all
-+         QPainter p(fBuffer);
-+         p.fillRect(QRect(0,0,fBuffer->width(), fBuffer->height())
-+            ,Qt::transparent);
-+      }
-+#endif
-+   }
-+}
-+
-+//___________________________________________________________________
-+
- ClassImp(TQtWidget)
- 
- ////////////////////////////////////////////////////////////////////////////////
-@@ -151,7 +187,7 @@
- #else
-       QWidget(parent,f)
- #endif
--          ,fBits(0),fNeedStretch(false),fCanvas(0),fPixmapID(0),fShadowWidget(0),fIsShadow(false),fPaint(TRUE),fSizeChanged(FALSE)
-+          ,fBits(0),fNeedStretch(false),fCanvas(0),fPixmapID(0),fPixmapScreen(0),fShadowWidget(0),fIsShadow(false),fPaint(TRUE),fSizeChanged(FALSE)
-           ,fDoubleBufferOn(FALSE),fEmbedded(embedded),fWrapper(0),fSaveFormat("PNG")
- {
-    if (name && name[0]) setName(name);
-@@ -176,11 +212,18 @@
-   setWFlags(getWFlags () | Qt::WRepaintNoErase | Qt:: WResizeNoErase );
- #else /* QT_VERSION */
-   setFocusPolicy(Qt::WheelFocus);
-+  setAttribute(Qt::WA_NoSystemBackground);
-+  setAutoFillBackground(false);
-+  QPalette  p = palette();
-+  p.setBrush(QPalette::Window, Qt::transparent);
-+  setPalette(p);
- //  setAttribute(Qt::WA_OpaquePaintEvent);
--  setAttribute(Qt::WA_PaintOnScreen);
--  setAttribute(Qt::WA_PaintOutsidePaintEvent);// doesn' make sense for Windows
-+#  ifndef R__WIN32
-+     setAttribute(Qt::WA_PaintOnScreen); // for some reason X11 want this
-+                                         // see TGQt::UpdateWindow
-+//      setAttribute(Qt::WA_PaintOutsidePaintEvent);// doesn' make sense for Windows
-+#  endif
- #endif /* QT_VERSION */
--  setBackgroundMode(Qt::NoBackground);
-   if (fEmbedded) {
-     if (!gApplication) InitRint();
-     int minw = 10;
-@@ -246,7 +289,8 @@
-          ResetCanvas();
-       }
-    }
--   delete fPixmapID;  fPixmapID = 0;
-+   delete fPixmapID;     fPixmapID = 0;
-+   delete fPixmapScreen; fPixmapScreen = 0;
- }
- 
- //______________________________________________________________________________
-@@ -255,17 +299,9 @@
-    // Adjust the widget buffer size
-    TQtWidgetBuffer &buf = GetBuffer();
-    if ( buf.size() != size() )  {
--      if (IsDoubleBuffered() && QPainter::redirected(this)) 
--         QPainter::restoreRedirected(this);
--         QPaintDevice *redirected =  QPainter::redirected(this);
--         if (!redirected || (redirected == this) ) {
--#if QT_VERSION >= 0x40400
--           assert(!redirected || (redirected == this));
--#endif
--         }
--      delete  fPixmapID; fPixmapID = 0;
--      fPixmapID = new TQtWidgetBuffer(this); 
--      if (IsDoubleBuffered() ) QPainter::setRedirected(this,fPixmapID);
-+      delete  fPixmapID;     fPixmapID = 0;
-+      delete  fPixmapScreen; fPixmapScreen = 0;
-+      GetBuffer();
-    }
- }
- //_____________________________________________________________________________
-@@ -377,14 +413,16 @@
-   update();
- }
- //_____________________________________________________________________________
--void TQtWidget::Erase ()
-+void TQtWidget::Erase()
- {
-   // Erases the entire widget and its double buffer
-  
-   TQtSynchPainting a(*this);
--  TQtWidgetBuffer &buf = GetBuffer();
--  buf.fill(this,QPoint(0,0));
--  erase();
-+  GetBuffer();
-+//  buf.fill(this,QPoint(0,0));
-+  if (fPixmapScreen)  fPixmapScreen->Clear();
-+  if (fPixmapID)      fPixmapID->Clear();
-+  // erase();
- }
- 
- //_____________________________________________________________________________
-@@ -794,7 +832,7 @@
-          plus = fileName.find('+',dot+1);
-       }
-       QString fln = (plus) ? TGQt::GetNewFileName(fileName.left(plus)) : fileName;
--      Ok = GetBuffer() ? GetBuffer()->save(fln,saveType,quality): false;
-+      Ok = GetOffScreenBuffer() ? GetOffScreenBuffer()->save(fln,saveType,quality): false;
-    }
-    emit ((TQtWidget *)this)->Saved(Ok);
-    return Ok;
-@@ -806,20 +844,8 @@
-    if (fDoubleBufferOn != on ) {
-       fDoubleBufferOn = on;
- #if QT_VERSION >= 0x040000
--      if (fDoubleBufferOn) {
--          TQtSynchPainting a(*this);
--          if (!QPainter::redirected(this)) QPainter::setRedirected(this,&GetBuffer());
--      } else if ( QPainter::redirected(this) )  {
--          TQtSynchPainting a(*this);
--          QPainter::restoreRedirected (this);
--
--          QPaintDevice *redirected =  QPainter::redirected(this);
--          if (!redirected || (redirected == this) ) {
--#if QT_VERSION >= 0x40400
--            assert(!redirected || (redirected == this));
--#endif
--          }
--      }
-+      TQtSynchPainting a(*this);
-+      if (on) GetBuffer();
-  //     qDebug() << "TQtWidget::SetDoubleBuffer " << this << on << QPainter::redirected(this);
- #ifdef SHAWDOWBUFEFR
-       fprintf(stderr, "TQtWidget::SetDoubleBuffer buffer=%d \n", fDoubleBufferOn );
-@@ -869,10 +895,10 @@
-             printf("last error %d\n",GetLastError());
-          }
- #else
--       if (fDoubleBufferOn) QPainter::restoreRedirected (this);
--       QPainter pnt(this);
--       pnt.drawPixmap(rect(),GetBuffer());
--       if (fDoubleBufferOn) QPainter::setRedirected(this,&GetBuffer());
-+      if (fPixmapID) {
-+         QPainter pnt(this);
-+         pnt.drawPixmap(rect(),*GetOffScreenBuffer());
-+      }
- #endif
-    }
-    fNeedStretch = false;
-@@ -944,32 +970,16 @@
- #if QT_VERSION < 0x40000
-          bitBlt(this, rect.x(),rect.y(),&GetBuffer(),rect.x(), rect.y(), rect.width(), rect.height());
- #else
--        //  qDebug() << "1. TQtWidget::paintEvent this =" << (QPaintDevice *)this  << " buffer = " << fPixmapID << "redirected = " << QPainter::redirected(this)
--        //    <<" IsDoubleBuffered()=" << IsDoubleBuffered() ;
-+         //  qDebug() << "1. TQtWidget::paintEvent this =" << (QPaintDevice *)this  << " buffer = " << fPixmapID << "redirected = " << QPainter::redirected(this)
-+         //    <<" IsDoubleBuffered()=" << IsDoubleBuffered() ;
-          TQtSynchPainting a(*this);
--         if (IsDoubleBuffered() && QPainter::redirected(this)) {
--            QPainter::restoreRedirected(this);
--        //  qDebug() << "2. TQtWidget::paintEvent this =" << (QPaintDevice *)this  << " buffer = " << fPixmapID << "redirected = " << QPainter::redirected(this)
--         //    <<" IsDoubleBuffered()=" << IsDoubleBuffered() ;
--         }
-+         // qDebug() << "2. TQtWidget::paintEvent this =" << (QPaintDevice *)this  << " buffer = " << fPixmapID << " IsDoubleBuffered()=" << IsDoubleBuffered() ;
-          QPainter screen(this);
--         screen.drawPixmap(rect.x(),rect.y(),*fPixmapID,rect.x(), rect.y(), rect.width(), rect.height());
--         if ( IsShadow() ) {
--            QColor bc("yellow");
--            bc.setAlpha(128);
--            screen.fillRect(10,10,40,40,QBrush(bc));
--            fprintf(stderr,"Shadow painted visible %d\n", isVisible());
--         }
--
--         QPaintDevice *redirected =  QPainter::redirected(this);
--         if (!redirected || (redirected == this) ) {
--#if QT_VERSION >= 0x40400
--         assert(!redirected || (redirected == this));
-+         screen.setClipRect(rect);
-+         // paint the the TCanvas double buffer
-+         if (fPixmapID) screen.drawPixmap(0,0,*GetOffScreenBuffer());
- #endif
-       }
--         if (IsDoubleBuffered() ) QPainter::setRedirected(this,fPixmapID);
--#endif
--      }
-    }
- }
- //  Layout methods:
-@@ -1011,3 +1021,22 @@
-    else
-       ResetBit(f);
- }
-+//____________________________________________________________________________
-+TQtWidgetBuffer  &TQtWidget::GetBuffer() {
-+   // Create (if needed) and return the buffer
-+   TQtWidgetBuffer *buf = 0;
-+   if (IsDoubleBuffered() ) {
-+      if (!fPixmapID) fPixmapID = new TQtWidgetBuffer(this);
-+      buf = fPixmapID;
-+   } else {
-+      if (!fPixmapScreen) fPixmapScreen = new TQtWidgetBuffer(this,true);
-+     // qDebug() << "TQtWidget::GetBuffer() " << fPixmapScreen;
-+      buf = fPixmapScreen;
-+   }
-+   return  *buf;
-+}
-+//______________________________________________________________________________
-+QPixmap  *TQtWidget::GetOffScreenBuffer()  const { 
-+   //  return the current widget buffer;
-+   return fPixmapID ? (QPixmap  *)fPixmapID->Buffer():0;
-+}
-Index: graf2d/qt/inc/TQtWidget.h
-===================================================================
---- graf2d/qt/inc/TQtWidget.h	(revision 25279)
-+++ graf2d/qt/inc/TQtWidget.h	(working copy)
-@@ -23,7 +23,6 @@
- #ifndef __CINT__
- #  include <qwidget.h>
- #  if (QT_VERSION > 0x039999)
--//Added by qt3to4:
- #     include <QMouseEvent>
- #     include <QCustomEvent>
- #     include <QShowEvent>
-@@ -32,6 +31,7 @@
- #     include <QResizeEvent>
- #     include <QEvent>
- #     include <QPaintEvent>
-+#     include <QPaintDevice>
- #  endif
- #  include <qpixmap.h>
- #else
-@@ -44,6 +44,7 @@
-   class QKeyEvent;
-   class QShowEvent;
-   class QPaintEvent;
-+  class QPaintDevice;
-   class QResizeEvent;
-   class QSize;  
-   class QString;
-@@ -69,17 +70,21 @@
- };
- 
- //___________________________________________________________________
--class TQtWidgetBuffer : public QPixmap
-+class TQtWidgetBuffer
- {
--  private:
--    const QWidget *fWidget;
--
--  public:
--    TQtWidgetBuffer() :  QPixmap(), fWidget(0) { }
--    TQtWidgetBuffer(const QWidget *w) :  QPixmap(w?w->size():QSize(0,0)), fWidget(w)
--    { }
--    virtual ~TQtWidgetBuffer(){}
--    inline QRect Rect () const { return fWidget->rect();}
-+private:
-+   const QWidget *fWidget;
-+   QPaintDevice  *fBuffer;
-+   bool  fIsImage;
-+public:
-+   TQtWidgetBuffer(const QWidget *w, bool clear=false);
-+   const QPaintDevice  *Buffer() const  { return fBuffer; }
-+   QPaintDevice  *Buffer()  { return fBuffer; }
-+   ~TQtWidgetBuffer(){}
-+   void Clear();
-+   bool PaintingActive(){ return fBuffer ? fBuffer->paintingActive() : false; }
-+   inline QRect Rect () const { return fWidget->rect();}
-+   QSize size() const { return QSize(fBuffer->width(),fBuffer->height()); }
- };
- 
- //___________________________________________________________________
-@@ -115,16 +120,17 @@
-   virtual ~TQtWidget();
-   void SetCanvas(TCanvas *c);
- //  inline TCanvas  *GetCanvas() const         { return fCanvas;}
--  inline TCanvas  *GetCanvas() const         { return (!fIsShadow) ? fCanvas : ((TQtWidget *)parentWidget())->GetCanvas(); }
--  inline TQtWidgetBuffer  &GetBuffer()               { return (fPixmapID) ? *fPixmapID : *(fPixmapID = new TQtWidgetBuffer(this));}
--  inline const TQtWidgetBuffer  *GetBuffer()  const  { return fPixmapID;}
-+  TCanvas  *GetCanvas() const;
-+  TQtWidgetBuffer  &GetBuffer();
-+  const TQtWidgetBuffer  *GetBuffer()  const;
-+  QPixmap  *GetOffScreenBuffer()  const;
- 
-   // overloaded methods
-   virtual void adjustSize();
-   void Resize (int w, int h);
-   void Resize (const QSize &size);
-   virtual void Erase ();
--  bool    IsDoubleBuffered() { return fDoubleBufferOn; }
-+  bool    IsDoubleBuffered() const { return fDoubleBufferOn; }
-   void    SetDoubleBuffer(bool on=TRUE);
-   virtual void SetSaveFormat(const char *format);
- 
-@@ -132,6 +138,7 @@
-    friend class TGQt;
-    TCanvas           *fCanvas;
-    TQtWidgetBuffer   *fPixmapID;     // Double buffer of this widget
-+   TQtWidgetBuffer   *fPixmapScreen; // Double buffer for no-double buffer operation
-    TQtWidget  *fShadowWidget; // the "shadow" canvas for the Qt4 offscreen operation
-    bool        fIsShadow;
-    bool        fPaint;
-@@ -195,7 +202,7 @@
-    void     SetAllBits(UInt_t f);
-    
- public:
--   // Static method to inmitate ROOT as needed
-+   // Static method to immitate ROOT as needed
-    static TApplication *InitRint(Bool_t prompt=kFALSE, const char *appClassName="QtRint", int *argc=0, char **argv=0,
-           void *options = 0, int numOptions = 0, Bool_t noLogo = kTRUE);
-    //  Proxy methods to access the TCanvas selected TObject 
-@@ -244,8 +251,18 @@
- };
- 
- //______________________________________________________________________________
-+inline TCanvas  *TQtWidget::GetCanvas() const         { return (!fIsShadow) ? fCanvas : ((TQtWidget *)parentWidget())->GetCanvas(); }
-+
-+//______________________________________________________________________________
-+inline const TQtWidgetBuffer  *TQtWidget::GetBuffer()  const { 
-+   //  return the current widget buffer;
-+   return IsDoubleBuffered() ? fPixmapScreen : fPixmapID;
-+}
-+
-+//______________________________________________________________________________
- inline bool TQtWidget::PaintingActive () const {
--  return QWidget::paintingActive() || (fPixmapID && fPixmapID->paintingActive());
-+  return QWidget::paintingActive() || (fPixmapID && fPixmapID->PaintingActive())
-+     || (fPixmapScreen && fPixmapScreen->PaintingActive());
- }
- //______________________________________________________________________________
- inline void TQtWidget::SetRootID(QWidget *wrapper) { fWrapper = wrapper;}
-Index: graf2d/qt/inc/TGQt.h
-===================================================================
---- graf2d/qt/inc/TGQt.h	(revision 25279)
-+++ graf2d/qt/inc/TGQt.h	(working copy)
-@@ -79,6 +79,8 @@
- class TQtEventQueue;
- class TQtPadFont;
- class TQtPen;
-+class TQtPainter;
-+class TQtFeedBackWidget;
- 
- 
- //#define TRACE_TGQt() fprintf(stdout, "TGQt::%s() %d\n", __FUNCTION__, __LINE__)
-@@ -96,6 +98,7 @@
-    friend class TQtClientGuard;
-    friend class TQtClientFilter;
-    friend class TQtSynchPainting;
-+   friend class TQtToggleFeedBack;
- 
- protected:
-    enum DEFWINDOWID { kDefault=1 };
-@@ -103,7 +106,7 @@
- //   QPaintDevice *fSelectedBuffer;      // Pointer to the current "paintdevice buffer"
-    QPaintDevice *fPrevWindow;          // Pointer to the previous "Window"
-    Int_t         fDisplayOpened;
--   QPainter     *fQPainter;
-+   TQtPainter     *fQPainter;
-    TQtEmitter    fEmitter;             // object to emit Qt signals on behalf of TVirtualX
-    static TVirtualX     *fgTQt;        // The hiden poiner to fullish  ROOT TPluginManager
- 
-@@ -158,7 +161,8 @@
-     QString                fFontTextCode;     // The default code text code page (from the Gui.DefaultFont)
-     const char            *fSymbolFontFamily; // the name of the font to substiute the non-standard "Symbol"
-     Int_t                 fQtEventHasBeenProcessed; // Flag whether the events were processed
--
-+    Bool_t                fFeedBackMode;      // TCanvas feedback mode 
-+    TQtFeedBackWidget    *fFeedBackWidget;   // The dedicated widget for TCanvas feebback mode
- //
- //   Text management
- //
 Index: configure
 ===================================================================
---- configure	(revision 25279)
+--- configure	(revision 25663)
 +++ configure	(working copy)
-@@ -2870,21 +2870,21 @@
+@@ -2839,21 +2839,21 @@
      # for a system library, then see if we have various headers needed.
      if test "x$enable_builtin_afterimage" = "xyes" ; then
         check_header "jpeglib.h" "" $ASIMAGE $ASIMAGE/include \
@@ -1187,7 +28,7 @@ Index: configure
         asgifincdir=$found_dir
  
         asextralib=""
-@@ -2902,7 +2902,7 @@
+@@ -2871,7 +2871,7 @@
         fi
         for k in $aslibs ; do
             check_library $k "$enable_shared" "" \
@@ -1198,7 +39,7 @@ Index: configure
                 found_dirz=$found_dir
 Index: tutorials/pyroot/rootmarks.py
 ===================================================================
---- tutorials/pyroot/rootmarks.py	(revision 25279)
+--- tutorials/pyroot/rootmarks.py	(revision 25663)
 +++ tutorials/pyroot/rootmarks.py	(working copy)
 @@ -2,7 +2,7 @@
  #  The ROOTMARK number printed is by reference to a Pentium IV 2.4 Ghz
@@ -1211,7 +52,7 @@ Index: tutorials/pyroot/rootmarks.py
  import os
 Index: tutorials/pyroot/demo.py
 ===================================================================
---- tutorials/pyroot/demo.py	(revision 25279)
+--- tutorials/pyroot/demo.py	(revision 25663)
 +++ tutorials/pyroot/demo.py	(working copy)
 @@ -1,7 +1,7 @@
  import os, sys
@@ -1224,7 +65,7 @@ Index: tutorials/pyroot/demo.py
  workdir = os.path.dirname( sys.argv[0] )
 Index: core/base/src/TSystem.cxx
 ===================================================================
---- core/base/src/TSystem.cxx	(revision 25279)
+--- core/base/src/TSystem.cxx	(revision 25663)
 +++ core/base/src/TSystem.cxx	(working copy)
 @@ -29,6 +29,7 @@
  #include <stdlib.h>
@@ -1236,7 +77,7 @@ Index: core/base/src/TSystem.cxx
  #include "TApplication.h"
 Index: bindings/pyroot/Module.mk
 ===================================================================
---- bindings/pyroot/Module.mk	(revision 25279)
+--- bindings/pyroot/Module.mk	(revision 25663)
 +++ bindings/pyroot/Module.mk	(working copy)
 @@ -3,6 +3,11 @@
  #
@@ -1263,7 +104,7 @@ Index: bindings/pyroot/Module.mk
                  $(ROOTLIBSDEP)
 Index: cint/ROOT/cintdlls.mk
 ===================================================================
---- cint/ROOT/cintdlls.mk	(revision 25279)
+--- cint/ROOT/cintdlls.mk	(revision 25663)
 +++ cint/ROOT/cintdlls.mk	(working copy)
 @@ -158,6 +158,11 @@
    $(CINTDLLS): MAKELIB := $(subst -x,,$(MAKELIB))
@@ -1279,7 +120,7 @@ Index: cint/ROOT/cintdlls.mk
  $(CINTDLLDIRSTL)/%.dll: $(CINTDLLDIRDLLSTL)/G__cpp_%.o 
 Index: cint/reflex/python/genreflex/Makefile.am
 ===================================================================
---- cint/reflex/python/genreflex/Makefile.am	(revision 25279)
+--- cint/reflex/python/genreflex/Makefile.am	(revision 25663)
 +++ cint/reflex/python/genreflex/Makefile.am	(working copy)
 @@ -23,11 +23,11 @@
  
@@ -1297,7 +138,7 @@ Index: cint/reflex/python/genreflex/Makefile.am
  
 Index: cint/reflex/Module.mk
 ===================================================================
---- cint/reflex/Module.mk	(revision 25279)
+--- cint/reflex/Module.mk	(revision 25663)
 +++ cint/reflex/Module.mk	(working copy)
 @@ -119,7 +119,7 @@
  		cp $< $@
@@ -1310,7 +151,7 @@ Index: cint/reflex/Module.mk
  	$(CXX) $(OPT) $(CXXFLAGS) -Iinclude -I$(REFLEXDIRS)/genmap -c $< $(CXXOUT)$@
 Index: cint/cintex/Module.mk
 ===================================================================
---- cint/cintex/Module.mk	(revision 25279)
+--- cint/cintex/Module.mk	(revision 25663)
 +++ cint/cintex/Module.mk	(working copy)
 @@ -66,7 +66,7 @@
  endif
@@ -1334,7 +175,7 @@ Index: cint/cintex/Module.mk
                  $(ORDER_) $(subst $(CINTEXLIB),,$(MAINLIBS)) $(CINTEXLIBDEP)
 Index: Makefile
 ===================================================================
---- Makefile	(revision 25279)
+--- Makefile	(revision 25663)
 +++ Makefile	(working copy)
 @@ -174,7 +174,7 @@
  MODULES      += graf2d/qt gui/qtroot
@@ -1356,7 +197,7 @@ Index: Makefile
                  cint/cint7 roofit/roofitcore roofit/roofit roofit/roostats \
 Index: net/xrootd/src/xrootd/src/XrdPosix/GNUmakefile
 ===================================================================
---- net/xrootd/src/xrootd/src/XrdPosix/GNUmakefile	(revision 25279)
+--- net/xrootd/src/xrootd/src/XrdPosix/GNUmakefile	(revision 25663)
 +++ net/xrootd/src/xrootd/src/XrdPosix/GNUmakefile	(working copy)
 @@ -88,7 +88,7 @@
  $(LIBRARY): $(OBJECTP) $(OBJECTS) $(OBJECTT) $(LIBDEP)
@@ -1369,7 +210,7 @@ Index: net/xrootd/src/xrootd/src/XrdPosix/GNUmakefile
  	fi
 Index: net/xrootd/src/xrootd/src/XrdClient/GNUmakefile
 ===================================================================
---- net/xrootd/src/xrootd/src/XrdClient/GNUmakefile	(revision 25279)
+--- net/xrootd/src/xrootd/src/XrdClient/GNUmakefile	(revision 25663)
 +++ net/xrootd/src/xrootd/src/XrdClient/GNUmakefile	(working copy)
 @@ -155,7 +155,7 @@
  	@echo Creating shared library $(LIBSHARED) 
@@ -1382,7 +223,7 @@ Index: net/xrootd/src/xrootd/src/XrdClient/GNUmakefile
  	fi
 Index: net/xrootd/src/xrootd/config/GNUmake.rules.macos
 ===================================================================
---- net/xrootd/src/xrootd/config/GNUmake.rules.macos	(revision 25279)
+--- net/xrootd/src/xrootd/config/GNUmake.rules.macos	(revision 25663)
 +++ net/xrootd/src/xrootd/config/GNUmake.rules.macos	(working copy)
 @@ -20,11 +20,11 @@
  TYPELINK   = -undefined dynamic_lookup -multiply_defined suppress 
@@ -1401,7 +242,7 @@ Index: net/xrootd/src/xrootd/config/GNUmake.rules.macos
  TYPELDDY   = $(TYPELINK) -dynamiclib -single_module
 Index: net/xrootd/Module.mk
 ===================================================================
---- net/xrootd/Module.mk	(revision 25279)
+--- net/xrootd/Module.mk	(revision 25663)
 +++ net/xrootd/Module.mk	(working copy)
 @@ -29,7 +29,7 @@
  endif
@@ -1414,7 +255,7 @@ Index: net/xrootd/Module.mk
  endif
 Index: build/unix/makelib.sh
 ===================================================================
---- build/unix/makelib.sh	(revision 25279)
+--- build/unix/makelib.sh	(revision 25663)
 +++ build/unix/makelib.sh	(working copy)
 @@ -34,7 +34,7 @@
  if [ $PLATFORM = "macosx" ]; then
@@ -1436,7 +277,7 @@ Index: build/unix/makelib.sh
  	    LIBNOMINOR=`echo $LIB|sed 's,\.'$MINOR',,'`
 Index: config/genreflex-rootcint.in
 ===================================================================
---- config/genreflex-rootcint.in	(revision 25279)
+--- config/genreflex-rootcint.in	(revision 25663)
 +++ config/genreflex-rootcint.in	(working copy)
 @@ -1,2 +1,2 @@
  #!/bin/sh
@@ -1444,7 +285,7 @@ Index: config/genreflex-rootcint.in
 +python2.5 @libdir@/python/genreflex/genreflex-rootcint.py "$@"
 Index: config/rootrc.in
 ===================================================================
---- config/rootrc.in	(revision 25279)
+--- config/rootrc.in	(revision 25663)
 +++ config/rootrc.in	(working copy)
 @@ -512,3 +512,7 @@
  # This overrides the default specified above for a generic application.
@@ -1456,7 +297,7 @@ Index: config/rootrc.in
 ++Plugin.TGuiFactory: qt        TQtRootGuiFactory QtRoot    "TQtRootGuiFactory()"
 Index: config/Makefile.macosx64
 ===================================================================
---- config/Makefile.macosx64	(revision 25279)
+--- config/Makefile.macosx64	(revision 25663)
 +++ config/Makefile.macosx64	(working copy)
 @@ -74,7 +74,7 @@
  endif
@@ -1484,7 +325,7 @@ Index: config/Makefile.macosx64
  endif
 Index: config/genreflex.in
 ===================================================================
---- config/genreflex.in	(revision 25279)
+--- config/genreflex.in	(revision 25663)
 +++ config/genreflex.in	(working copy)
 @@ -1,2 +1,2 @@
  #!/bin/sh
@@ -1492,7 +333,7 @@ Index: config/genreflex.in
 +python2.5 @libdir@/python/genreflex/genreflex.py "$@"
 Index: config/Makefile.macosx
 ===================================================================
---- config/Makefile.macosx	(revision 25279)
+--- config/Makefile.macosx	(revision 25663)
 +++ config/Makefile.macosx	(working copy)
 @@ -89,7 +89,7 @@
  endif
@@ -1519,7 +360,7 @@ Index: config/Makefile.macosx
  
 Index: config/Makefile.depend
 ===================================================================
---- config/Makefile.depend	(revision 25279)
+--- config/Makefile.depend	(revision 25663)
 +++ config/Makefile.depend	(working copy)
 @@ -83,6 +83,7 @@
  KRB5AUTHLIBDEPM        = $(RAUTHLIB) $(NETLIB)
@@ -1529,7 +370,7 @@ Index: config/Makefile.depend
  FITPANELLIBDEPM        = $(GUILIB) $(GPADLIB) $(HISTLIB) $(GRAFLIB) $(TREELIB) \
  			 $(MATHCORELIB)
  RFIOLIBDEPM            = $(IOLIB)
-@@ -173,6 +174,7 @@
+@@ -174,6 +175,7 @@
  KRB5AUTHLIBDEP         = $(KRB5AUTHLIBDEPM)
  SRVAUTHLIBDEP          = $(SRVAUTHLIBDEPM)
  QTGSILIBDEP            = $(QTGSILIBDEPM)
@@ -1537,7 +378,7 @@ Index: config/Makefile.depend
  FITPANELLIBDEP         = $(FITPANELLIBDEPM)
  RFIOLIBDEP             = $(RFIOLIBDEPM)
  SQLLIBDEP              = $(SQLLIBDEPM)
-@@ -333,98 +335,111 @@
+@@ -337,98 +339,111 @@
  MATRIXLIBEXTRA          = -Llib -lMathCore
  HISTLIBEXTRA            = -Llib -lMatrix -lMathCore
  GRAFLIBEXTRA            = -Llib -lHist -lMatrix -lRIO -lMathCore
@@ -1640,7 +481,7 @@ Index: config/Makefile.depend
 -                          -lTreePlayer -lMLP -lMinuit -lMathCore
 +                          -lTreePlayer -lMLP -lMinuit -lMathCore -lNet -lThread -lGraf3d
  SPLOTLIBEXTRA           = -Llib -lMatrix -lHist -lTree -lTreePlayer -lGraf3d \
--                          -lGraf
+-                          -lGraf -lMathCore
 -QTROOTLIBEXTRA          = -Llib -lGui -lGQt
 -GQTLIBEXTRA             = -Llib -lGui -lGpad -lGraf -lRint
 -QUADPLIBEXTRA           = -Llib -lMatrix
@@ -1710,10 +551,10 @@ Index: config/Makefile.depend
 +                          -lNet -lThread -lMatrix
  MEMSTATLIBEXTRA         = -Llib -lTree
  MEMSTATGUILIBEXTRA      = -Llib -lMemStat -lTree -lGui
- 
+ RECLIBEXTRA             = -Llib -lGui -lRIO -lTree -lThread
 Index: tmva/test/TMVAnalysis.py
 ===================================================================
---- tmva/test/TMVAnalysis.py	(revision 25279)
+--- tmva/test/TMVAnalysis.py	(revision 25663)
 +++ tmva/test/TMVAnalysis.py	(working copy)
 @@ -15,13 +15,13 @@
  # The methods to be used can be switched on and off via the prompt command, for  #
@@ -1742,7 +583,7 @@ Index: tmva/test/TMVAnalysis.py
      print "  -o | --outputfile : name of output ROOT file containing results (default: '%s')" % DEFAULT_OUTFNAME
 Index: tmva/test/TMVApplication.py
 ===================================================================
---- tmva/test/TMVApplication.py	(revision 25279)
+--- tmva/test/TMVApplication.py	(revision 25663)
 +++ tmva/test/TMVApplication.py	(working copy)
 @@ -8,7 +8,7 @@
  # This macro provides a simple example on how to use the trained classifiers     #
@@ -1762,3 +603,236 @@ Index: tmva/test/TMVApplication.py
      print "  -m | --methods    : gives methods to be run (default: all methods)"
      print "  -i | --inputfile  : name of input ROOT file (default: '%s')" % DEFAULT_INFNAME
      print "  -o | --outputfile : name of output ROOT file containing results (default: '%s')" % DEFAULT_OUTFNAME
+--- graf2d/qt/src/TGQt.cxx	2008-10-02 13:06:15.000000000 +0200
++++ graf2d/qt/src/TGQt.cxx	2008-10-14 11:32:15.000000000 +0200
+@@ -157,37 +159,63 @@
+ //   class TQtFeedBackWidget to back the TCanvas FeedBack mode
+ //______________________________________________________________________________
+ class TQtFeedBackWidget : public QFrame {
++   // QPixmap is much faster then QImage but X11 doesn't accept QPixmap yet. VF
++#ifdef R__WIN32
+    QPixmap  *fPixBuffer;
++#else
++   QImage  *fPixBuffer;
++#endif
++   bool   fFirst;
++   QPixmap *fGrabBuffer;
+ protected:
+    virtual void paintEvent(QPaintEvent *event) {
+       if (fPixBuffer) {
+          QRect rect = event->rect();
+-	 {
++         {
+             QPainter p(this);
+             p.setClipRect(rect);
+-            p.drawPixmap(0,0,*fPixBuffer);
+-	 }
++#ifdef R__WIN32
++           p.drawPixmap(0,0,*fPixBuffer);
++#else
++           p.drawImage(0,0,*fPixBuffer);
++#endif
++         }
+          ClearBuffer();
+-      } else {
+-         QFrame::paintEvent(event);
++      } else if (fGrabBuffer) {
++         QRect rect = event->rect(); 
++         QPainter p(this);
++         p.setClipRect(rect);
++         p.drawPixmap(rect,*fGrabBuffer);
+       }
++      QFrame::paintEvent(event);
+    }
+ public:
+-   TQtFeedBackWidget(QWidget *parent=0, Qt::WindowFlags f=0)  : QFrame(parent,f),fPixBuffer(0)
+-   {   
++   TQtFeedBackWidget(QWidget *parent=0, Qt::WindowFlags f=0)  : QFrame(parent,f)
++      ,fPixBuffer(0),fFirst(true),fGrabBuffer(0)
++   {
++//   TQtFeedBackWidget(QWidget *parent=0, Qt::WindowFlags f=Qt::WStyle_StaysOnTop | Qt::WStyle_Customize | Qt::WStyle_NoBorder | Qt::WStyle_Tool | Qt::WX11BypassWM)  
++      // Create the feedback widget
+       setAttribute(Qt::WA_NoSystemBackground); 
++      setDisabled(true);
+       setBackgroundRole(QPalette::Window);
+       setAutoFillBackground(false);
+       QPalette  p = palette();
+       p.setBrush(QPalette::Window, Qt::transparent);
+       setPalette(p);
+    }
+-   virtual ~TQtFeedBackWidget() {delete fPixBuffer; fPixBuffer = 0;}
+-   void hide() {
++   virtual ~TQtFeedBackWidget() 
++   {
+       delete fPixBuffer; fPixBuffer = 0;
++      delete fGrabBuffer; fGrabBuffer = 0;
++   }
++   void hide() {
++      // hide the feedback widget and remove the buffer
++      delete fPixBuffer;  fPixBuffer  = 0;  
++      delete fGrabBuffer; fGrabBuffer = 0;
+       QFrame::hide();
+    }
+-   QPixmap *PixBuffer() { 
++   QPaintDevice *PixBuffer() { 
++      // Create the feedback buffer if needed
+       QWidget *canvasWidget = parentWidget();
+       if (canvasWidget ) {
+          // resize the feedback
+@@ -195,32 +223,63 @@
+          setGeometry(QRect(QPoint(0,0),canvasSize));
+          if ( !fPixBuffer  || (fPixBuffer->size() != canvasSize) ) {
+             delete fPixBuffer;
+-            fPixBuffer = new QPixmap(canvasSize);
++#ifdef R__WIN32
++           fPixBuffer = new QPixmap(canvasSize);
++#else
++           fPixBuffer = new QImage(canvasSize,QImage::Format_ARGB32_Premultiplied);
++#endif
+             ClearBuffer();
+          }
+       }
+       return  fPixBuffer;
+    }
+-   void ClearBuffer() { 
++    QPaintDevice *GrabBuffer(QSize &s) { 
++      // Create the feedback buffer to grab the parent TPad image
++      QWidget *canvasWidget = parentWidget();
++      if (canvasWidget ) {
++         // resize the feedback
++          if ( !fPixBuffer  || (fPixBuffer->size() != s) ) {
++            delete fPixBuffer;
++#ifdef R__WIN32
++           fPixBuffer = new QPixmap(s);
++#else
++           fPixBuffer = new QImage(s,QImage::Format_ARGB32_Premultiplied);
++#endif
++            ClearBuffer();
++         }
++      }
++      return  fPixBuffer;
++   }
++  void ClearBuffer() { 
++      // Fill the feedback buffer with the transparent background
+ #ifdef R__WIN32
+       fPixBuffer->fill(Qt::transparent);
+ #else
+       // X11 workaround. I did not find the good solution yet.
+-      QColor q(Qt::lightGray);
+-      QPainter p(fPixBuffer);
+-      p.fillRect(0,0,fPixBuffer->width()-1, fPixBuffer->height()-1,q);
++      fPixBuffer->fill(0);
++      fFirst = true;
+ #endif
+    }
+-   void SetGeometry(int x1,int y2,int w, int h)
++   void SetGeometry(int x,int y, int w, int h, TQtWidget *src=0)
+    {
+-       // Set the feedback widget postion and geometry
+-       if (isHidden() ) {
++       // Set the feedback widget position and geometry
++       if (isHidden() && src ) {
+           // grab the parent window and move the feedback 
+-	  // To be done yet !!!
++          delete fGrabBuffer; fGrabBuffer = 0;
++          QPixmap *canvas = src->GetOffScreenBuffer();
++          if (canvas && w > 4 &&  h > 4 ) {
++             fGrabBuffer = new QPixmap(canvas->copy(x,y,w,h));
++          }
+        }
+-       setGeometry(x1,y2,w, h);
++       setGeometry(x,y,w,h);
+    }
+-
++#ifndef R__WIN32
++   bool IsFirst() {
++      bool c = fFirst;
++      fFirst = false;
++      return c;
++   }
++#endif
+ };
+ 
+ //______________________________________________________________________________
+@@ -240,8 +299,12 @@
+          // Save the current painter
+          fSavePainter    = fGQt->fQPainter;
+          fGQt->fQPainter = &fFeedBackPainter;
+-         fFeedBackPainter.begin(fGQt->fFeedBackWidget->PixBuffer());
+-         fFeedBackPainter.setPen(Qt::darkGray);
++         fFeedBackPainter.begin(fGQt->fFeedBackWidget->PixBuffer()); 
++#ifndef R__WIN32
++        if (!fGQt->fFeedBackWidget->IsFirst() )
++            fFeedBackPainter.setCompositionMode(QPainter::CompositionMode_Xor);
++#endif
++         fFeedBackPainter.setPen(QColor(128,128,128,128));// Qt::white);// darkGray);
+          fGQt->fFeedBackWidget->show();
+       }
+    }
+@@ -252,6 +315,10 @@
+          fFeedBackPainter.end();
+          fGQt->fQPainter = fSavePainter;
+          fGQt->fFeedBackWidget->update();
++#ifndef R__WIN32
++      // X11 needs "repaint" operation to be forced by some reason
++//      QCoreApplication::processEvents(QEventLoop::ExcludeUserInput | QEventLoop::ExcludeSocketNotifiers, 200);
++#endif
+       }
+    }
+ };
+@@ -972,7 +992,10 @@
+          if (qtdirHandle) {
+             TString incpath = " -I"; incpath+=qtdir;
+             while(const char *nextQtInclude = gSystem->GetDirEntry(qtdirHandle)) {
+-                  incpath += " -I"; incpath+=qtdir; incpath+=nextQtInclude;
++               // Skip the hidden directories including the current "." and parent ".."
++               if (nextQtInclude[0] != '.')  {
++                     incpath += " -I"; incpath+=qtdir; incpath+=nextQtInclude;
++               }
+             }
+             gSystem->FreeDirectory(qtdirHandle);
+             gSystem->AddIncludePath((const char*)incpath);
+@@ -1214,7 +1224,6 @@
+   if (fSelectedWindow->devType() == QInternal::Widget) {
+      TQtWidget *canvasWidget = dynamic_cast<TQtWidget *>(fSelectedWindow);
+      if (canvasWidget) {
+-        canvasWidget->setDisabled(true);
+         canvasWidget->ResetCanvas();
+      }
+      QWidget *wrapper = 0;
+@@ -1360,7 +1369,7 @@
+ #endif
+    TQtLock lock;
+    if ( (fSelectedWindow->devType() ==  QInternal::Widget) && fFeedBackMode && fFeedBackWidget) {
+-      fFeedBackWidget->SetGeometry(x1,y2,x2-x1,y1-y2);
++      fFeedBackWidget->SetGeometry(x1,y2,x2-x1,y1-y2,(TQtWidget *)fSelectedWindow);
+       if (fFeedBackWidget->isHidden() ) fFeedBackWidget->show();
+       return;
+    }
+@@ -2756,23 +2750,10 @@
+ 
+    if (fSelectedWindow && mode != 2 ) {
+       ((TQtWidget *)fSelectedWindow)->paintFlag();
+-#if 1
+       ((TQtWidget *)fSelectedWindow)->repaint();
+-
+-      //bool hasBufferOn = w->IsDoubleBuffered();
+-      //if (hasBufferOn) w->SetDoubleBuffer(FALSE);
+-      //Begin();End();
+-      //((TQtWidget *)fSelectedWindow)->repaint();
+-      //if (hasBufferOn) w->SetDoubleBuffer(TRUE);
+-#else
+-//      ((TQtWidget *)fSelectedWindow)->update();
+-      End();
+-      TQtWidget *w =  (TQtWidget *)fSelectedWindow;
+-      bool hasBufferOn = w->IsDoubleBuffered();
+-      if (hasBufferOn) w->SetDoubleBuffer(FALSE);
+-      Begin();End();
+-      ((TQtWidget *)fSelectedWindow)->repaint();
+-      if (hasBufferOn) w->SetDoubleBuffer(TRUE);
++#ifndef R__WIN32
++      // X11 needs "repaint" operation to be forced by some reason
++      QCoreApplication::processEvents(QEventLoop::ExcludeUserInput | QEventLoop::ExcludeSocketNotifiers, 200);
+ #endif
+    }
+ }
