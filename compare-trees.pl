@@ -132,7 +132,7 @@ if (not defined $opt_t) {
 			for my $version (sort keys %{$PACKAGES{$package}->{version}}) {
 				$output .= sprintf('  %-20s ', $version);
 				$output .= join(", ", @{$PACKAGES{$package}->{version}->{$version}});
-				if (%{$PACKAGES{$package}->{md5s}->{$version}} > 1 and not defined $opt_d) {
+				if (keys %{$PACKAGES{$package}->{md5s}->{$version}} > 1 and not defined $opt_d) {
 					$output .= " (md5's don't match)\n";
 					for my $md5sum (sort keys %{$PACKAGES{$package}->{md5s}->{$version}}) {
 						$output .= " " x 27 . $md5sum . ": ";
@@ -165,7 +165,7 @@ if (not defined $opt_t) {
 				for my $version (sort keys %{$PACKAGES{$maint}->{$package}->{version}}) {
 					$output .= sprintf('    %-20s ', $version);
 					$output .= join(", ", @{$PACKAGES{$maint}->{$package}->{version}->{$version}});
-					if (%{$PACKAGES{$maint}->{$package}->{md5s}->{$version}} > 1 and not defined $opt_d) {
+					if (keys %{$PACKAGES{$maint}->{$package}->{md5s}->{$version}} > 1 and not defined $opt_d) {
 						$output .= " (md5's don't match)\n";
 						for my $md5sum (sort keys %{$PACKAGES{$maint}->{$package}->{md5s}->{$version}}) {
 							$output .= " " x 27 . $md5sum . ": ";
