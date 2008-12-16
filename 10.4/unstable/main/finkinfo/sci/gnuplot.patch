@@ -29,3 +29,578 @@
  SET_MAKE = @SET_MAKE@
  SHELL = @SHELL@
  STRIP = @STRIP@
+--- gnuplot-4.2.4.orig/gnuplot-4.2.4.orig/src/show.c	2008-06-01 02:13:45.000000000 -0400
++++ gnuplot-4.2.4/src/show.c	2008-12-15 14:25:49.000000000 -0500
+@@ -1048,7 +1048,7 @@
+ 
+     fprintf(fp, "%s\n\
+ %s\t%s\n\
+-%s\tVersion %s patchlevel %s\n\
++%s\tVersion %s patchlevel %s [Fink]\n\
+ %s\tlast modified %s\n\
+ %s\tSystem: %s %s\n\
+ %s\n\
+--- gnuplot-4.2.4.orig/gnuplot-4.2.4.orig/src/version.c	2008-09-22 23:58:15.000000000 -0400
++++ gnuplot-4.2.4/src/version.c	2008-12-15 14:15:38.000000000 -0500
+@@ -53,11 +53,11 @@
+ /* mustn't forget to activate this before the release ... */
+ #ifdef RELEASE_VERSION
+ # ifndef HELPMAIL
+-#  define HELPMAIL "gnuplot-info@lists.sourceforge.net";
++#  define HELPMAIL "akh@finkproject.org";
+ # endif
+ # ifndef CONTACT
+ /* #  define CONTACT "gnuplot-bugs@lists.sourceforge.net"; */
+-#  define CONTACT "http://sourceforge.net/projects/gnuplot";
++#  define CONTACT "http://www.finkproject.org";
+ # endif
+ 
+ const char bug_email[] = CONTACT;
+Index: configure.in
+===================================================================
+--- gnuplot-4.2.4/configure.in.orig	2008-09-23 03:58:15.000000000 +0000
++++ gnuplot-4.2.4/configure.in	2008-12-04 15:53:14.346865049 +0000
+@@ -274,10 +274,11 @@
+         AC_CHECK_HEADERS(ggi/xmi.h)])
+    fi])
+ 
+-dnl Use builtin readline or GNU readline
++dnl Use builtin readline or GNU readline or NetBSD editline
+ AC_ARG_WITH(readline,dnl
+ [  --with-readline=builtin  use the built-in minimal readline
+   --with-readline=gnu      use the GNU readline library (default; 4.2 or newer required)
++  --with-readline=bsd      use the NetBSD editline library
+   --with-readline=DIR      specify the location of GNU readline
+   --without-readline       do not use any readline function], ,
+   test -z "$with_readline" && with_readline=gnu)
+@@ -290,6 +291,29 @@
+ dnl GNU readline and the required terminal library
+ if test "$with_readline" != no; then
+   if test "$with_readline" != builtin; then
++
++    if test "$with_readline" = bsd; then
++
++      AC_CHECK_LIB(edit, readline,
++        [TERMLIBS="-ledit $TERMLIBS"],,)
++
++      AC_CHECK_LIB(curses, tputs,
++        [TERMLIBS="-lcurses $TERMLIBS"],,)
++
++      if test "$ac_cv_lib_edit_readline" = yes; then
++        AC_DEFINE(HAVE_LIBEDITLINE,1,
++                [ Define if you are using the BSD editline library. ])
++        AC_CHECK_HEADERS(editline/readline.h,,
++          AC_MSG_WARN([found BSD editline library but not readline.h please add path to readline.h to CPPFLAGS in Makefile]))
++
++        if test "$enable_history_file" = yes; then
++            AC_DEFINE(GNUPLOT_HISTORY,1,
++                      [ Define if you want to use a gnuplot history file. ])
++        fi
++      fi
++
++    else # !bsd
++
+     dnl check for terminal library
+     dnl this is a very cool solution from octave's configure.in
+     gp_tcap=""
+@@ -345,6 +369,8 @@
+ 
+     fi # ! ac_cv_lib_readline_readline = no
+ 
++   fi # ! with_readline = bsd
++
+   fi # ! with_readline != builtin 
+ 
+   if test "$with_readline" = builtin; then
+Index: src/command.c
+===================================================================
+--- gnuplot-4.2.4/src/command.c.orig	2008-07-23 19:25:25.000000000 +0000
++++ gnuplot-4.2.4/src/command.c	2008-12-04 15:53:14.361617870 +0000
+@@ -458,6 +458,11 @@
+ #if defined(HAVE_LIBREADLINE)
+ 	rl_forced_update_display();
+ #else
++#if defined(HAVE_LIBEDITLINE)
++	/* FIXME: editline does not support forced update,
++	          so this is probably not enough */
++	rl_redisplay();
++#endif
+ 	fputs(PROMPT, stderr);
+ 	fflush(stderr);
+ #endif
+@@ -829,7 +834,7 @@
+ void
+ history_command()
+ {
+-#if defined(READLINE) || defined(HAVE_LIBREADLINE)
++#if defined(READLINE) || defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)
+     c_token++;
+ 
+     if (!END_OF_COMMAND && equals(c_token,"?")) {
+@@ -909,7 +914,7 @@
+ #else
+     c_token++;
+     int_warn(NO_CARET, "You have to compile gnuplot with builtin readline or GNU readline to enable history support.");
+-#endif /* defined(READLINE) || defined(HAVE_LIBREADLINE) */
++#endif /* defined(READLINE) || defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE) */
+ }
+ 
+ #define REPLACE_ELSE(tok)             \
+@@ -2408,7 +2413,7 @@
+ # endif				/* AMIGA_AC_5 */
+ 
+ 
+-# if defined(READLINE) || defined(HAVE_LIBREADLINE)
++# if defined(READLINE) || defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)
+ /* keep some compilers happy */
+ static char *rlgets __PROTO((char *s, size_t n, const char *prompt));
+ 
+@@ -2430,7 +2435,7 @@
+ 	leftover = 0;
+ 	/* If it's not an EOF */
+ 	if (line && *line) {
+-#  ifdef HAVE_LIBREADLINE
++#if defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)
+ 	    int found;
+ 	    /* Initialize readline history functions */
+ 	    using_history();
+@@ -2443,12 +2448,14 @@
+ 	    /* this line is already in the history, remove the earlier entry */
+ 		HIST_ENTRY *removed = remove_history(where_history());
+ 		/* according to history docs we are supposed to free the stuff */
++#if defined(HAVE_LIBREADLINE)
+ 		if (removed->line) free(removed->line);
+ 		if (removed->data) free(removed->data);
+ 		free(removed);
++#endif /* !HAVE_LIBREADLINE */
+ 	    }
+ 	    add_history(line);
+-#  else /* !HAVE_LIBREADLINE */
++#  else /* !HAVE_LIBREADLINE && !HAVE_LIBEDITLINE */
+ 	    add_history(line);
+ #  endif
+ 	}
+@@ -2541,7 +2548,7 @@
+ 
+ /* read from stdin, everything except VMS */
+ 
+-# if !defined(READLINE) && !defined(HAVE_LIBREADLINE)
++# if !defined(READLINE) && !defined(HAVE_LIBREADLINE) && !defined(HAVE_LIBEDITLINE)
+ #  if (defined(MSDOS) || defined(DOS386)) && !defined(_Windows) && !defined(__EMX__) && !defined(DJGPP)
+ 
+ /* if interactive use console IO so CED will work */
+@@ -2681,14 +2688,14 @@
+ 
+     current_prompt = prompt;	/* HBB NEW 20040727 */
+ 
+-# if !defined(READLINE) && !defined(HAVE_LIBREADLINE)
++# if !defined(READLINE) && !defined(HAVE_LIBREADLINE) && !defined(HAVE_LIBEDITLINE)
+     if (interactive)
+ 	PUT_STRING(prompt);
+ # endif				/* no READLINE */
+ 
+     do {
+ 	/* grab some input */
+-# if defined(READLINE) || defined(HAVE_LIBREADLINE)
++# if defined(READLINE) || defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)
+ 	if (((interactive)
+ 	     ? rlgets(gp_input_line + start, gp_input_line_len - start,
+ 		     ((more) ? "> " : prompt))
+@@ -2736,7 +2743,7 @@
+ 	    } else
+ 		more = FALSE;
+ 	}
+-# if !defined(READLINE) && !defined(HAVE_LIBREADLINE)
++# if !defined(READLINE) && !defined(HAVE_LIBREADLINE) && !defined(HAVE_LIBEDITLINE)
+ 	if (more && interactive)
+ 	    PUT_STRING("> ");
+ # endif
+Index: src/gp_hist.h
+===================================================================
+--- gnuplot-4.2.4/src/gp_hist.h.orig	2005-08-12 08:31:56.000000000 +0000
++++ gnuplot-4.2.4/src/gp_hist.h	2008-12-04 15:53:14.371796810 +0000
+@@ -66,16 +66,23 @@
+ # include <readline/history.h>
+ #endif
+ 
+-#if defined(READLINE) && !defined(HAVE_LIBREADLINE)
++/* NetBSD editline
++ * (almost) compatible readline relacement
++ */
++#if defined(HAVE_LIBEDITLINE)
++# include <editline/readline.h>
++#endif
++
++#if defined(READLINE) && !defined(HAVE_LIBREADLINE) && !defined(HAVE_LIBEDITLINE)
+ void add_history __PROTO((char *line));
+ void write_history_n __PROTO((const int, const char *, const char *));
+ void write_history __PROTO((char *));
+ void read_history __PROTO((char *));
+-char *history_find __PROTO((char *));
++const char *history_find __PROTO((char *));
+ int history_find_all __PROTO((char *));
+-#elif defined(HAVE_LIBREADLINE)
++#elif defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)
+ void write_history_n __PROTO((const int, const char *, const char *));
+-char *history_find __PROTO((char *));
++const char *history_find __PROTO((char *));
+ int history_find_all __PROTO((char *));
+ #endif /* READLINE && !HAVE_LIBREADLINE */
+ 
+Index: src/history.c
+===================================================================
+--- gnuplot-4.2.4/src/history.c.orig	2007-06-07 16:26:32.000000000 +0000
++++ gnuplot-4.2.4/src/history.c	2008-12-04 15:53:14.379358421 +0000
+@@ -52,7 +52,7 @@
+ #endif
+ 
+ 
+-#if defined(READLINE) && !defined(HAVE_LIBREADLINE)
++#if defined(READLINE) && !defined(HAVE_LIBREADLINE) && !defined(HAVE_LIBEDITLINE)
+ 
+ struct hist *history = NULL;     /* no history yet */
+ struct hist *cur_entry = NULL;
+@@ -259,7 +259,7 @@
+  * (ignores leading spaces in <cmd>)
+  * Returns NULL if nothing found
+  */
+-char *
++const char *
+ history_find(char *cmd)
+ {
+     struct hist *entry = history;
+@@ -336,7 +336,7 @@
+     return res;
+ }
+ 
+-#elif defined(HAVE_LIBREADLINE)
++#elif defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)
+ 
+ /* Save history to file, or write to stdout or pipe.
+  * For pipes, only "|" works, pipes starting with ">" get a strange 
+@@ -351,7 +351,10 @@
+ const char *const filename;
+ const char *mode;
+ {
+-    HIST_ENTRY **the_list = history_list();
++#ifdef HAVE_LIBREADLINE
++    (const HIST_ENTRY *) *the_list = history_list();
++#endif
++    const HIST_ENTRY *list_entry;
+     FILE *out = stdout;
+     int is_pipe = 0;
+     int is_file = 0;
+@@ -386,17 +389,18 @@
+         if (istart < 0 || istart > history_length)
+             istart = 0;
+     } else istart = 0;
++#ifdef HAVE_LIBREADLINE
+     if (the_list)
+-        for (i = istart; the_list[i]; i++) {
++#endif
++        for (i = istart; list_entry = history_get(i); i++) {
+             /* don't add line numbers when writing to file to make file loadable */
+             if (is_file)
+-                fprintf(out, "%s\n", the_list[i]->line);
++                fprintf(out, "%s\n", list_entry->line);
+             else {
+                 if (!is_quiet) fprintf(out, "%5i", i + history_base);
+-                fprintf(out, "  %s\n", the_list[i]->line);
++                fprintf(out, "  %s\n", list_entry->line);
+             }
+         }
+-
+     /* close if something was opened */
+ #ifdef PIPES
+     if (is_pipe) pclose(out);
+@@ -419,7 +423,7 @@
+  *
+  * Peter Weilbacher, 28Jun2004
+  */
+-char *
++const char *
+ history_find(cmd)
+ char *cmd;
+ {
+@@ -480,4 +484,4 @@
+     return number;
+ }
+ 
+-#endif /* READLINE && !HAVE_LIBREADLINE */
++#endif /* READLINE && !HAVE_LIBREADLINE && !HAVE_LIBEDITLINE */
+Index: src/plot.c
+===================================================================
+--- gnuplot-4.2.4/src/plot.c.orig	2007-06-07 16:26:32.000000000 +0000
++++ gnuplot-4.2.4/src/plot.c	2008-12-04 15:53:14.387953444 +0000
+@@ -117,6 +117,12 @@
+ extern int rl_complete_with_tilde_expansion;
+ #endif 
+ 
++/* BSD editline
++*/
++#ifdef HAVE_LIBEDITLINE
++# include <editline/readline.h>
++#endif
++
+ /* enable gnuplot history with readline */
+ #ifdef GNUPLOT_HISTORY
+ # ifndef GNUPLOT_HISTORY_FILE
+@@ -348,14 +354,16 @@
+     unsigned int status[2] = { 1, 0 };
+ #endif
+ 
+-#ifdef HAVE_LIBREADLINE
++#if defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)
+     using_history();
+     /* T.Walter 1999-06-24: 'rl_readline_name' must be this fix name.
+      * It is used to parse a 'gnuplot' specific section in '~/.inputrc' */
+     rl_readline_name = "Gnuplot";
+-    rl_complete_with_tilde_expansion = 1;
+     rl_terminal_name = getenv("TERM");
+ #endif
++#if defined(HAVE_LIBREADLINE)
++    rl_complete_with_tilde_expansion = 1;
++#endif
+ 
+     for (i = 1; i < argc; i++) {
+ 	if (!argv[i])
+@@ -473,7 +481,9 @@
+     /* this is done through gp_atexit so that other terminal functions
+      * can be registered to be executed before the terminal is reset. */
+     GP_ATEXIT(term_reset);
+-
++#ifdef HAVE_LIBEDITLINE
++    GP_ATEXIT(rl_reset_terminal);
++#endif
+ #ifdef AMIGA_SC_6_1
+     if (IsInteractive(Input()) == DOSTRUE)
+ 	interactive = TRUE;
+@@ -570,7 +580,7 @@
+ 	if (interactive && term != 0) {		/* not unknown */
+ #ifdef GNUPLOT_HISTORY
+ 	    FPRINTF((stderr, "Before read_history\n"));
+-#ifdef HAVE_LIBREADLINE
++#if defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)
+ 	    expanded_history_filename = tilde_expand(GNUPLOT_HISTORY_FILE);
+ #else
+ 	    expanded_history_filename = gp_strdup(GNUPLOT_HISTORY_FILE);
+@@ -674,12 +684,15 @@
+ 	while (!com_line());
+     }
+ 
+-#if defined(HAVE_LIBREADLINE) && defined(GNUPLOT_HISTORY)
++#if (defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)) && defined(GNUPLOT_HISTORY)
+ #if !defined(HAVE_ATEXIT) && !defined(HAVE_ON_EXIT)
+     /* You should be here if you neither have 'atexit()' nor 'on_exit()' */
+     wrapper_for_write_history();
++#if defined(HAVE_LIBEDITLINE)
++    rl_reset_terminal();
++#endif
+ #endif /* !HAVE_ATEXIT && !HAVE_ON_EXIT */
+-#endif /* HAVE_LIBREADLINE && GNUPLOT_HISTORY */
++#endif /* (HAVE_LIBREADLINE || HAVE_LIBEDITLINE) && GNUPLOT_HISTORY */
+ 
+ #ifdef OS2
+     RexxDeregisterSubcom("GNUPLOT", NULL);
+@@ -964,7 +977,7 @@
+ #endif
+ 
+ #ifdef GNUPLOT_HISTORY
+-# ifdef HAVE_LIBREADLINE
++# if defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)
+ 
+ static void
+ wrapper_for_write_history()
+@@ -992,7 +1005,7 @@
+ #endif
+ }
+ 
+-# else /* HAVE_LIBREADLINE */
++# else /* HAVE_LIBREADLINE || HAVE_LIBEDITLINE */
+ 
+ /* version for gnuplot's own write_history */
+ static void
+@@ -1007,6 +1020,6 @@
+ 	write_history_n(gnuplot_history_size, expanded_history_filename, "w");
+ }
+ 
+-# endif /* HAVE_LIBREADLINE */
++# endif /* HAVE_LIBREADLINE || HAVE_LIBEDITLINE */
+ #endif /* GNUPLOT_HISTORY */
+ 
+Index: src/readline.c
+===================================================================
+--- gnuplot-4.2.4/src/readline.c.orig	2008-08-10 00:50:29.000000000 +0000
++++ gnuplot-4.2.4/src/readline.c	2008-12-04 15:53:14.396405158 +0000
+@@ -57,7 +57,7 @@
+ #include "util.h"
+ #include "term_api.h"
+ 
+-#if defined(HAVE_LIBREADLINE)
++#if defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)
+ /* #include <readline/readline.h> --- HBB 20000508: now included by readline.h*/
+ /* #include <readline/history.h> --- HBB 20000508: now included by gp_hist */
+ 
+@@ -66,7 +66,7 @@
+ static int line_complete;
+ 
+ /**
+- * called by libreadline if the input
++ * called by libreadline or editline if the input
+  * was typed (not from the ipc).
+  */
+ static void
+@@ -96,13 +96,13 @@
+     }
+ }
+ 
+-#endif /* HAVE_LIBREADLINE */
++#endif /* HAVE_LIBREADLINE || HAVE_LIBEDITLINE */
+ 
+-#if defined(HAVE_LIBREADLINE) || defined(READLINE)
++#if defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE) || defined(READLINE)
+ char*
+ readline_ipc(const char* prompt)
+ {
+-#if defined(PIPE_IPC) && defined(HAVE_LIBREADLINE)
++#if defined(PIPE_IPC) && (defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE))
+     /* use readline's alternate interface.
+      * this requires rl_library_version > 2.2
+      * TODO: make a check in configure.in */
+@@ -121,7 +121,7 @@
+ #endif  /* defined(HAVE_LIBREADLINE) || define(READLINE) */
+ 
+ 
+-#if defined(READLINE) && !defined(HAVE_LIBREADLINE)
++#if defined(READLINE) && !(defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE))
+ 
+ /* a small portable version of GNU's readline
+  * this is not the BASH or GNU EMACS version of READLINE due to Copyleft
+Index: src/readline.h
+===================================================================
+--- gnuplot-4.2.4/src/readline.h.orig	2004-04-13 17:23:59.000000000 +0000
++++ gnuplot-4.2.4/src/readline.h	2008-12-04 15:53:14.404615387 +0000
+@@ -46,12 +46,15 @@
+ 
+ /* Prototypes of functions exported by readline.c */
+ 
+-#ifdef HAVE_LIBREADLINE
++#if defined(HAVE_LIBREADLINE)
+ # include "stdfn.h"	/* <readline/readline.h> needs stdio.h... */
+ # include <readline/readline.h>
+ #endif
++#if defined(HAVE_LIBEDITLINE)
++# include <editline/readline.h>
++#endif
+ 
+-#if defined(READLINE) && !defined(HAVE_LIBREADLINE)
++#if defined(READLINE) && !defined(HAVE_LIBREADLINE) && !defined(HAVE_LIBEDITLINE)
+ char *readline __PROTO((const char *));
+ #endif
+ 
+Index: src/show.c
+===================================================================
+--- gnuplot-4.2.4/src/show.c.orig	2008-06-01 06:13:45.000000000 +0000
++++ gnuplot-4.2.4/src/show.c	2008-12-04 15:53:14.414833504 +0000
+@@ -548,7 +548,7 @@
+ #endif
+     case S_PLOT:
+ 	show_plot();
+-#if defined(READLINE) || defined(HAVE_LIBREADLINE)
++#if defined(READLINE) || defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)
+ 	if (!END_OF_COMMAND) {
+ 	    if (almost_equals(c_token, "a$dd2history")) {
+ 		c_token++;
+@@ -888,12 +888,16 @@
+ 		"READLINE  ";
+ 
+ 	    const char *gnu_rdline =
+-#ifdef HAVE_LIBREADLINE
++#if defined(HAVE_LIBREADLINE) || defined(HAVE_LIBEDITLINE)
+ 		"+"
+ #else
+ 		"-"
+ #endif
++#ifdef HAVE_LIBEDITLINE
+ 		"LIBREADLINE  "
++#else
++		"LIBEDITLINE  "
++#endif
+ #ifdef GNUPLOT_HISTORY
+ 		"+"
+ #else
+Index: src/graphics.c
+===================================================================
+--- gnuplot-4.2.4/src/graphics.c.orig	2008-08-10 00:36:12.000000000 +0000
++++ gnuplot-4.2.4/src/graphics.c	2008-12-04 15:53:14.427837396 +0000
+@@ -1577,12 +1577,12 @@
+ 	int_error(NO_CARET, "y_min should not equal y_max!");
+ 
+     /* EAM June 2003 - Although the comment below implies that font dimensions
+-     * are known after term_init(), this is not true at least for the X11
++     * are known after term_initialise(), this is not true at least for the X11
+      * driver.  X11 fonts are not set until an actual display window is
+      * opened, and that happens in term->graphics(), which is called from
+      * term_start_plot().
+      */
+-    term_init();		/* may set xmax/ymax */
++    term_initialise();		/* may set xmax/ymax */
+     term_start_plot();
+ 
+     /* compute boundary for plot (plot_bounds.xleft, plot_bounds.xright, plot_bounds.ytop, plot_bounds.ybot)
+Index: src/term.c
+===================================================================
+--- gnuplot-4.2.4/src/term.c.orig	2008-09-07 04:17:08.000000000 +0000
++++ gnuplot-4.2.4/src/term.c	2008-12-04 15:53:14.440619204 +0000
+@@ -50,7 +50,7 @@
+   *
+   * term_set_output() : called when  set output  invoked
+   *
+-  * term_init()  : optional. Prepare the terminal for first
++  * term_initialise()  : optional. Prepare the terminal for first
+   *                use. It protects itself against subsequent calls.
+   *
+   * term_start_plot() : called at start of graph output. Calls term_init
+@@ -472,9 +472,9 @@
+ }
+ 
+ void
+-term_init()
++term_initialise()
+ {
+-    FPRINTF((stderr, "term_init()\n"));
++    FPRINTF((stderr, "term_initialise()\n"));
+ 
+     if (!term)
+         int_error(NO_CARET, "No terminal defined");
+@@ -501,7 +501,7 @@
+          */
+         char *temp = gp_alloc(strlen(outstr) + 1, "temp file string");
+         if (temp) {
+-            FPRINTF((stderr, "term_init: reopening \"%s\" as %s\n",
++            FPRINTF((stderr, "term_initialise: reopening \"%s\" as %s\n",
+                      outstr, term->flags & TERM_BINARY ? "binary" : "text"));
+             strcpy(temp, outstr);
+             term_set_output(temp);      /* will free outstr */
+@@ -542,7 +542,7 @@
+     FPRINTF((stderr, "term_start_plot()\n"));
+ 
+     if (!term_initialised)
+-        term_init();
++        term_initialise();
+ 
+     if (!term_graphics) {
+         FPRINTF((stderr, "- calling term->graphics()\n"));
+Index: src/term_api.h
+===================================================================
+--- gnuplot-4.2.4/src/term_api.h.orig	2007-02-21 19:44:17.000000000 +0000
++++ gnuplot-4.2.4/src/term_api.h	2008-12-04 15:53:14.451654958 +0000
+@@ -361,7 +361,7 @@
+ /* Prototypes of functions exported by term.c */
+ 
+ void term_set_output __PROTO((char *));
+-void term_init __PROTO((void));
++void term_initialise __PROTO((void));
+ void term_start_plot __PROTO((void));
+ void term_end_plot __PROTO((void));
+ void term_start_multiplot __PROTO((void));
