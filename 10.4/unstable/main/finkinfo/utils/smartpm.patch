@@ -1,0 +1,507 @@
+=== modified file 'Makefile'
+--- Makefile	2006-12-03 16:42:10 +0000
++++ Makefile	2008-09-27 09:41:25 +0000
+@@ -5,7 +5,7 @@
+ DESTDIR=/
+ PYTHON=python
+ 
+-prefix=/usr
++prefix=@PREFIX@
+ bindir=$(prefix)/bin
+ 
+ all:
+
+=== modified file 'smart/backends/deb/base.py'
+--- smart/backends/deb/base.py	2008-09-04 22:32:15 +0000
++++ smart/backends/deb/base.py	2008-09-27 09:28:36 +0000
+@@ -27,11 +27,19 @@
+ import fnmatch
+ import string
+ import os, re
++import sys
+ 
+ __all__ = ["DebPackage", "DebProvides", "DebNameProvides", "DebPreRequires",
+            "DebRequires", "DebUpgrades", "DebConflicts", "DebBreaks",
+            "DebOrRequires", "DebOrPreRequires", "DEBARCH"]
+ 
++def getPlatformPrefix():
++    platform = sys.platform
++    if platform != "linux2":
++        return platform + "-"
++    else:
++        return "" # no prefix
++
+ def getArchitecture():
+     arch = sysconf.get("deb-arch")
+     if arch is not None:
+@@ -44,17 +52,16 @@
+               "shel": "sh",
+               "x86_64": "amd64"}.get(arch)
+     if result:
+-        return result
++        arch = result
+     elif len(arch) == 4 and arch[0] == "i" and arch.endswith("86"):
+-        return "i386"
++        arch = "i386"
+     elif arch.startswith("arm"):
+-        return "arm"
++        arch = "arm"
+     elif arch.startswith("hppa"):
+-        return "hppa"
++        arch = "hppa"
+     elif arch.startswith("alpha"):
+-        return "alpha"
+-    else:
+-        return arch
++        arch = "alpha"
++    return getPlatformPrefix() + arch
+ 
+ DEBARCH = getArchitecture()
+ 
+
+=== added file 'smart/backends/deb/fink_virtual_pkgs.py'
+--- smart/backends/deb/fink_virtual_pkgs.py	1970-01-01 00:00:00 +0000
++++ smart/backends/deb/fink_virtual_pkgs.py	2008-08-09 10:04:50 +0000
+@@ -0,0 +1,123 @@
++#
++# Copyright (c) 2008 afb datakonsult
++#
++# Written by Anders F Bjorklund <afb@users.sourceforge.net>
++#
++# This file is part of Smart Package Manager.
++#
++# Smart Package Manager is free software; you can redistribute it and/or
++# modify it under the terms of the GNU General Public License as published
++# by the Free Software Foundation; either version 2 of the License, or (at
++# your option) any later version.
++#
++# Smart Package Manager is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++# General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with Smart Package Manager; if not, write to the Free Software
++# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++#
++from smart.cache import Loader, PackageInfo
++from smart.backends.deb.base import *
++from smart import *
++import os
++import sys
++import string
++
++# Package: macosx
++# Status: install ok installed
++# Version: 10.4.11-1
++# homepage: http://www.finkproject.org/faq/usage-general.php#virtpackage
++# description: [virtual package representing the system]
++#
++
++class FinkVirtualPkgInfo(PackageInfo):
++
++    def __init__(self, package, info):
++        PackageInfo.__init__(self, package)
++        self._info = info
++
++    def getGroup(self):
++        return "virtual"
++
++    def getSummary(self):
++        return self._info.get("description", "")
++
++    def getDescription(self):
++        return ""
++
++    def getReferenceURLs(self):
++        return [self._info.get("homepage", "")]
++
++    def getURLs(self):
++        return [] # not real package
++
++    def getPathList(self):
++        return [] # no real file list
++
++class FinkVirtualPkgsLoader(Loader):
++
++    def _parseOutput(self, lines):
++        """
++        Split virtual package information out per pkg.
++        """
++    
++        pkgs = []
++        info = {}
++        for line in lines:
++            line = string.rstrip(line)
++            keyval = string.split(line, ':', 1)
++            if len(keyval) > 1:
++               val = string.lstrip(keyval[1])
++               info[keyval[0]] = val
++            else:
++                pkgs.append(info)
++                info = {}
++        return pkgs
++
++    def __init__(self, path):
++        Loader.__init__(self)
++        self._path = path
++        self._baseurl = None
++
++    def getInfoList(self):
++        return []
++
++    def load(self):
++
++        prog = iface.getProgress(self._cache)
++
++        output = os.popen(self._path).readlines()
++        pkgs = self._parseOutput(output)
++
++        for info in pkgs:
++
++            name = info["Package"]
++            version = info["Version"]
++
++            prvargs = reqargs = upgargs = cnfargs = []
++
++            prvargs = [(DebNameProvides, name, version)]
++            provides = string.split(info.get("provides",""), ', ')
++            for provide in provides:
++               prvargs.append((DebNameProvides, provide, None))
++
++            pkg = self.buildPackage((DebPackage, name, version),
++                                    prvargs, reqargs, upgargs, cnfargs)
++            pkg.loaders[self] = info
++
++            status = info.get("Status")
++            if status.find("installed") != -1:
++                pkg.installed = True
++            if status.find("not-installed") != -1:
++                pkg.installed = False
++
++            prog.add(1)
++            prog.show()
++
++    def getInfo(self, pkg):
++        return FinkVirtualPkgInfo(pkg, pkg.loaders[self])
++
++
+
+=== modified file 'smart/backends/deb/loader.py'
+--- smart/backends/deb/loader.py	2008-08-12 00:42:38 +0000
++++ smart/backends/deb/loader.py	2008-08-17 19:57:22 +0000
+@@ -86,6 +86,13 @@
+             return decode(description.split("\n", 1)[0])
+         return u""
+ 
++    def getReferenceURLs(self):
++        description = self._dict.get("description")
++        for line in description.splitlines():
++            if line.startswith("Web site:"):
++                return [line[9:].strip()]
++        return []
++
+     def getGroup(self):
+         return decode(self._loader.getSection(self._package))
+ 
+
+=== modified file 'smart/channels/deb_sys.py'
+--- smart/channels/deb_sys.py	2004-12-02 21:35:17 +0000
++++ smart/channels/deb_sys.py	2008-09-27 09:43:06 +0000
+@@ -32,7 +32,7 @@
+ 
+     def fetch(self, fetcher, progress):
+         path = os.path.join(sysconf.get("deb-root", "/"),
+-                            "var/lib/dpkg/status")
++                            "@PREFIX@/var/lib/dpkg/status")
+         digest = os.path.getmtime(path)
+         if digest == self._digest:
+             return True
+
+=== added file 'smart/channels/fink_virtual_pkgs.py'
+--- smart/channels/fink_virtual_pkgs.py	1970-01-01 00:00:00 +0000
++++ smart/channels/fink_virtual_pkgs.py	2008-06-30 15:36:24 +0000
+@@ -0,0 +1,56 @@
++#
++# Copyright (c) 2008 afb datakonsult
++#
++# Written by Anders F Bjorklund <afb@users.sourceforge.net>
++#
++# This file is part of Smart Package Manager.
++#
++# Smart Package Manager is free software; you can redistribute it and/or
++# modify it under the terms of the GNU General Public License as published
++# by the Free Software Foundation; either version 2 of the License, or (at
++# your option) any later version.
++#
++# Smart Package Manager is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++# General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with Smart Package Manager; if not, write to the Free Software
++# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++#
++from smart.backends.deb.fink_virtual_pkgs import FinkVirtualPkgsLoader, FinkVirtualPkgInfo
++from smart.channel import PackageChannel
++from smart import *
++import os
++import sys
++import string
++
++class FinkVirtualPkgsChannel(PackageChannel):
++
++    def __init__(self, path, *args):
++        super(FinkVirtualPkgsChannel, self).__init__(*args)
++        self._path = path
++
++    def fetch(self, fetcher, progress):
++        if not os.path.isfile(self._path):
++            raise Error, _("Channel '%s' has invalid command: %s") % \
++                         (self, self._path)
++        self.removeLoaders()
++        loader = FinkVirtualPkgsLoader(self._path)
++        loader.setChannel(self)
++        self._loaders.append(loader)
++        return True
++
++def create(alias, data):
++    if data["removable"]:
++        raise Error, _("%s channels cannot be removable") % data["type"]
++    return FinkVirtualPkgsChannel(data["path"],
++                         data["type"],
++                         alias,
++                         data["name"],
++                         data["manual"],
++                         data["removable"],
++                         data["priority"])
++
++
+
+=== added file 'smart/channels/fink_virtual_pkgs_info.py'
+--- smart/channels/fink_virtual_pkgs_info.py	1970-01-01 00:00:00 +0000
++++ smart/channels/fink_virtual_pkgs_info.py	2008-06-30 15:36:24 +0000
+@@ -0,0 +1,33 @@
++#
++# Copyright (c) 2008 afb datakonsult
++#
++# Written by Anders F Bjorklund <afb@users.sourceforge.net>
++#
++# This file is part of Smart Package Manager.
++#
++# Smart Package Manager is free software; you can redistribute it and/or
++# modify it under the terms of the GNU General Public License as published
++# by the Free Software Foundation; either version 2 of the License, or (at
++# your option) any later version.
++#
++# Smart Package Manager is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++# General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with Smart Package Manager; if not, write to the Free Software
++# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++#
++from smart import _
++
++kind = "package"
++
++name = _("Fink Virtual Packages")
++
++description = _("""
++Local installation of Virtual Packages for Fink
++""")
++
++fields = [("path", _("Command Path"), str, None,
++           _("Path to fink-virtual-pkgs command."))]
+
+=== modified file 'smart/const.py'
+--- smart/const.py	2008-09-08 20:27:13 +0000
++++ smart/const.py	2008-09-27 09:41:54 +0000
+@@ -64,9 +64,9 @@
+ 
+ BLOCKSIZE = 16384
+ 
+-DISTROFILE  = "/usr/lib/smart/distro.py"
+-PLUGINSDIR  = "/usr/lib/smart/plugins/"
+-DATADIR     = "/var/lib/smart/"
++DISTROFILE  = "@PREFIX@/lib/smart/distro.py"
++PLUGINSDIR  = "@PREFIX@/lib/smart/plugins/"
++DATADIR     = "@PREFIX@/var/lib/smart/"
+ USERDATADIR = "~/.smart/"
+ CONFFILE    = "config"
+ 
+
+=== modified file 'smart/plugins/aptchannelsync.py'
+--- smart/plugins/aptchannelsync.py	2008-09-04 21:24:31 +0000
++++ smart/plugins/aptchannelsync.py	2008-09-27 09:43:55 +0000
+@@ -32,13 +32,13 @@
+ from smart import *
+ 
+ 
+-APT_SOURCES_DIR = "/etc/apt/sources.list.d/"
+-APT_SOURCES = "/etc/apt/sources.list"
++APT_SOURCES_DIR = "@PREFIX@/etc/apt/sources.list.d/"
++APT_SOURCES = "@PREFIX@/etc/apt/sources.list"
+ 
+ 
+ def _loadSourcesList(filename):
+ 
+-    keyring_path = sysconf.get("sync-apt-keyring", "/etc/apt/trusted.gpg")
++    keyring_path = sysconf.get("sync-apt-keyring", "@PREFIX@/etc/apt/trusted.gpg")
+     if not os.path.isfile(keyring_path):
+         keyring_path = None
+ 
+
+=== modified file 'smart/plugins/channelsync.py'
+--- smart/plugins/channelsync.py	2007-10-08 01:54:50 +0000
++++ smart/plugins/channelsync.py	2008-09-27 09:41:11 +0000
+@@ -23,7 +23,7 @@
+ from smart import *
+ import os
+ 
+-CHANNELSDIR = "/etc/smart/channels/"
++CHANNELSDIR = "@PREFIX@/etc/smart/channels/"
+ 
+ def syncChannels(channelsdir, force=None):
+ 
+
+=== modified file 'smart/plugins/detectsys.py'
+--- smart/plugins/detectsys.py	2008-04-23 20:57:35 +0000
++++ smart/plugins/detectsys.py	2008-09-27 09:42:43 +0000
+@@ -22,9 +22,17 @@
+ from smart import *
+ import os
+ 
++try:
++    import rpm
++except ImportError:
++    rpm = None
++
+ def detectRPMSystem():
+-    dir = os.path.join(sysconf.get("rpm-root", "/"), "var/lib/rpm")
++    dir = os.path.join(sysconf.get("rpm-root", "/"), "@PREFIX@/var/lib/rpm")
+     if os.path.isdir(dir):
++        if not rpm:
++            iface.debug("detectRPMSystem: rpm-python not available")
++            return
+         for alias in sysconf.keys("channels"):
+             if sysconf.get(("channels", alias, "type")) == "rpm-sys":
+                 break
+@@ -35,7 +43,7 @@
+                         })
+ 
+ def detectDEBSystem():
+-    dir = os.path.join(sysconf.get("deb-root", "/"), "var/lib/dpkg")
++    dir = os.path.join(sysconf.get("deb-root", "/"), "@PREFIX@/var/lib/dpkg")
+     if os.path.isdir(dir):
+         for alias in sysconf.keys("channels"):
+             if sysconf.get(("channels", alias, "type")) == "deb-sys":
+
+=== added file 'smart/plugins/finkvirtualpkgs.py'
+--- smart/plugins/finkvirtualpkgs.py	1970-01-01 00:00:00 +0000
++++ smart/plugins/finkvirtualpkgs.py	2008-06-30 15:36:24 +0000
+@@ -0,0 +1,49 @@
++#
++# Copyright (c) 2008 afb datakonsult
++#
++# Written by Anders F Bjorklund <afb@users.sourceforge.net>
++#
++# This file is part of Smart Package Manager.
++#
++# Smart Package Manager is free software; you can redistribute it and/or
++# modify it under the terms of the GNU General Public License as published
++# by the Free Software Foundation; either version 2 of the License, or (at
++# your option) any later version.
++#
++# Smart Package Manager is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++# General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with Smart Package Manager; if not, write to the Free Software
++# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
++#
++from smart import *
++import os
++
++FINK_VIRTUAL_PKGS = "@PREFIX@/bin/fink-virtual-pkgs"
++
++if os.path.exists(FINK_VIRTUAL_PKGS):
++
++    from smart.channels.fink_virtual_pkgs import FinkVirtualPkgsChannel
++
++    def createFinkVirtualPkgsChannel():
++        channel = FinkVirtualPkgsChannel(sysconf.get("fink-virtual-pkgs", FINK_VIRTUAL_PKGS),
++                                "fink-virtual-pkgs",
++                                "fink-virtual-pkgs-option",
++                                _("Fink Virtual Packages"),
++                                True, False, 0) 
++        return [channel]
++    
++    hooks.register("rebuild-dynamic-channels", createFinkVirtualPkgsChannel)
++
++    for alias in sysconf.keys("channels"):
++        if sysconf.get(("channels", alias, "type")) == "fink-virtual-pkgs":
++            break
++    else:
++        sysconf.set("channels.fink-virtual-pkgs", {
++                        "type": "fink-virtual-pkgs",
++                        "path": FINK_VIRTUAL_PKGS,
++                        "name": "Fink Virtual Packages"
++                    })
+
+=== added file 'tests/data/aptdeb/fink-virtual-pkgs'
+--- tests/data/aptdeb/fink-virtual-pkgs	1970-01-01 00:00:00 +0000
++++ tests/data/aptdeb/fink-virtual-pkgs	2008-08-09 11:31:14 +0000
+@@ -0,0 +1,10 @@
++#!/bin/sh
++
++cat <<__EOF__
++Package: macosx
++Status: install ok installed
++Version: 10.4.11-1
++homepage: http://www.finkproject.org/faq/usage-general.php#virtpackage
++description: [virtual package representing the system]
++
++__EOF__
+
+=== added file 'tests/fink.txt'
+--- tests/fink.txt	1970-01-01 00:00:00 +0000
++++ tests/fink.txt	2008-08-09 10:09:20 +0000
+@@ -0,0 +1,31 @@
++
++Set up the loader.
++
++  >>> from smart.backends.deb.fink_virtual_pkgs import FinkVirtualPkgsLoader
++  >>> localpath = "%s/deb/fink-virtual-pkgs" % TESTDATADIR
++  >>> loader = FinkVirtualPkgsLoader(localpath)
++  
++Let's create a cache to put the loader in, so that we can test it.
++
++  >>> from smart.cache import Cache
++  >>> cache = Cache()
++  >>> cache.addLoader(loader)
++
++The setup is ready. Now we can load the data into the cache.
++
++  >>> cache.load()
++  Updating cache...               ######################################## [100%]
++  <BLANKLINE>
++
++This should give us one test pkg with data we already know.
++
++  >>> cache.getPackages()
++  [macosx...]
++  >>> pkg = cache.getPackages()[0]
++  >>> info = loader.getInfo(pkg)
++
++  >>> pkg.installed
++  True
++  >>> info.getSummary()
++  '[virtual package representing the system]'
++
+
