@@ -1,0 +1,403 @@
+Package: ccp4
+Version: 6.1.1
+Revision: 3
+GCC: 1
+Source: ftp://ftp.%n.ac.uk/%n/%v/%n-%v-core-src.tar.gz
+Source-MD5: 1d865d97c34de6e6f368ba03c3001a9b
+SourceDirectory: %n-%v
+#
+Source2: http://chemistry.ucsc.edu/~wgscott/xtal/xtalfink/XCCPJiffy-custom.gz
+Source2-MD5: 21568dd2475505929573a3fd452c538f
+#  
+Source3: ftp://ftp.%n.ac.uk/%n/%v/phaser-2.1.4-cctbx-src.tar.gz 
+Source3-MD5: eb6371d4a7339fe81e71a9170fea614d
+#
+DescPort: <<
+    CCP4 is designed to compile with gfortran on OS X >= 10.4 by default. 
+    Jack Howarth has provided multiple improvements in the patch file to
+    address several bugs and to permit optimization with gfortran at -O3.
+    
+    Users typically install all of the ccp4 files into /xtal/ccp4-%v or
+    into /usr/local/xtal/ccp4-%v.  In the present case, these files are
+    installed into %p/share/xtal/ccp4-%v.  The library files are installed 
+    into the directory %p/lib/ccp4-%v and this directory is symbolically 
+    linked to %p/share/xtal/ccp4-%v/lib which is the canonical location.
+    Dynamic libraries are provided in the ccp4-shlibs splitoff package, and
+    static libraries are provided in the ccp4-dev splitoff package. The 
+    configure files are patched so that the full path to the dynamic 
+    libraries is hard-coded, per fink policy.  This obviates the need to
+    set the DYLD_LIBRARY_PATH environment variable, which should remain
+    unset. The appropriate shell startup files are automatically sourced
+    when %p/bin/init.(c)sh is invoked upon shell startup; there is no 
+    need to do so manually. The actual files are located in $CCP4/include.
+    
+    If needed, please install the phaser, pointless and cctbx fink packages.
+    
+    The ccp4i mail utility by default will only work on machines that run
+    a mail server.  As a workaround, a public domain perl script called
+    osx_ccp4_mail is installed that glues the ccp4i mail button to the
+    Apple OS X Mail.app.
+    
+    Further adaptations are commented in place in the patch, configure and
+    install scripts below. Relevant patches specific to this version that
+    are issued by CCP4 are now downloaded and applied individually, helping
+    to keep the ccp4.patch file from growing metastatically and also to
+    permit the user to verify that the latest patches have been applied.
+    These start with Source2 (above) and are applied individually at the
+    end of the PatchScript field.
+
+    Clipper libraries are not behaving properly when linked to fink fftw
+    so we return to the option of having ccp4 build its own private fftw.
+    Yes, I hate it too, but now all the examples pass the run-all test.
+<<
+Depends:  x11, tcltk, blt, gcc43-shlibs, %N-shlibs (= %v-%r), itcl, itk, iwidgets, tdom, tkimg, tktreectrl  
+BuildDepends: gcc43, f2c, fort77, tcltk-dev,  fink (>= 0.24.12)
+BuildConflicts: gpp4-dev, gpp4, ssm, ssm-dev, mmdb, mmdb-dev, clipper, clipper-bin, clipper-dev, ccp4-onlylibs-dev
+Replaces: phaser (<= 2.1.4-1), pointless (<= 1.2.18-1), mosflm (<= 7.0.3-3), mosflm-small (<= 7.0.3-3), refmac (<= 5.5.0070-1), bundle-ccp4-intel, clipper-bin, ccp4-gfortran, ccp4-gfortran-dev, bundle-ccp4-powerpc
+Conflicts: <<
+	mosflm (<= 7.0.3-3), 
+	mosflm-small (<= 7.0.3-3), 
+	refmac (<= 5.5.0070-1),
+    bundle-ccp4-intel, 
+    bundle-ccp4-powerpc, 
+    ccp4-gfortran, 
+    ccp4-gfortran-dev,
+	phaser (<= 2.1.4-1),
+	pointless (<= 1.2.18-1)
+<<
+NoSetCPPFLAGS: true
+NoSetLDFLAGS: true
+#
+################################################################################
+PatchFile: %n.patch
+PatchFile-MD5: 37d362f77009c1bb3a829dc99adcb929
+PatchScript: <<
+    #!/bin/zsh -efv
+    #
+      umask 0022
+
+    # Now apply the primary patch
+      sed 's|@PREFIX@|%p|g' <%{PatchFile} | patch -p1
+
+   # Make sure it worked
+     if [[ $(grep "setenv CCP4_MASTER" include/ccp4.setup-dist | awk '{print $3}') != "/xtal" ]];then
+         print "Patch failed!!!!!!!!!"
+         return 42
+     fi
+
+    # setup script for tcsh, zsh and bash users
+      export TEMPXTAL=$PWD:h
+    #
+      perl -pi.bak -e 's|/xtal|\$TEMPXTAL|g' include/ccp4.setup*         # build prefix (changed in install)
+      perl -pi.bak -e 's|/prefix|%p|g' include/ccp4.setup*               # location of tcktk, blt
+      perl -pi.bak -e 's|/usr/local/bin|%p/bin|g' include/ccp4.setup*    # same
+      perl -pi.bak -e 's|limit stacksize 65536|limit stacksize unlimited|g' include/ccp4.setup* # same
+      perl -pi.bak -e 's|ccp4_first_in_path=1|ccp4_first_in_path=0|g'  include/ccp4.setup*
+      perl -pi.bak -e 's|ccp4_first_in_path\ =\ 1|ccp4_first_in_path\ =\ 0|g'  include/ccp4.setup*
+      perl -pi.bak -e 's|setenv GFORTRAN_UNBUFFERED_ALL Y|# setenv GFORTRAN_UNBUFFERED_ALL Y|g'   include/ccp4.setup*
+      perl -pi.bak -e 's|export GFORTRAN_UNBUFFERED_ALL|# export GFORTRAN_UNBUFFERED_ALL|g'   include/ccp4.setup*
+
+    #
+      cp include/ccp4.setup-dist include/ccp4.setup
+      rm -f include/ccp4.setup-sh   include/ccp4.setup*.bak
+    #
+    # Set up XCCPJiffy wrapper scripts in $CCP4/etc
+    # These are small wrapper scripts for xplot84driver and xloggraph generated by the patch
+      chmod a+x etc/x*
+    # Fix the dylib install path in configure
+      perl -pi.bak -e 's|\$rpath|%p/lib/ccp4-%v|g' **/configure
+    #
+<<
+################################################################################
+CompileScript: <<
+    #!/bin/zsh -efv
+      umask 0022
+    
+    # The build will fail if Norton Auto-Protect is running.
+    # Check to see if it is, and abort the installation with a
+    # warning to the user.
+    if  [[ $(ps axww | grep NortonAutoProtect | wc -l) -gt 1 ]];then
+            print "\e[1m******************************************************************************************************"
+            print "******************************************************************************************************"
+            print "******************************************************************************************************"
+            print ""
+            print "Norton AutoProtect must be suspended during CCP4 installation. Please do so now and then try again."
+            print ""
+            print "******************************************************************************************************"
+            print "******************************************************************************************************"
+            print "******************************************************************************************************\e[0m"
+            sleep 15
+            return 1000
+    fi
+        
+    
+    # These are required for the build environment
+      export TEMPXTAL=$PWD:h
+      export CCP4_VERSION=""
+      export CCP4_MASTER=""
+      export BLTWISHPREFIX=""
+      export CCP4=""
+     
+      source $PWD/include/ccp4.setup-zsh
+      [[ -d $CCP4 ]] || exit 1
+      export DYLD_LIBRARY_PATH=$CLIB
+      export GFORTRAN_UNBUFFERED_ALL="Y"
+      export rpath=%p/lib/ccp4-%v
+      export RPATH=%p/lib/ccp4-%v
+
+# === CONFIGURE ===> 
+# FC="%p/lib/gcc4.3/bin/gfortran" F_LIBS="-L%p/lib/gcc4.3/lib" ./configure  --with-shared-libs  --with-x --with-fftw=%p  Darwin
+FC="%p/lib/gcc4.3/bin/gfortran" F_LIBS="-L%p/lib/gcc4.3/lib" ./configure  --with-shared-libs  --with-x   Darwin 
+#
+    #  fix some post-configure bugs by getting rid of -lg2c
+      perl -pi.bak -e 's|-lg2c||g' x-windows/**/*akefile*
+      ( cd x-windows/XCCPJIFFY; perl -pi.bak -e 's|-lgfortran|-lgfortran -L%p/lib/gcc4.3/lib |g' *akefile* ) || exit 1
+if [[ $(sw_vers -productVersion) < 10.5 ]]; then
+      perl -pi.bak -e 's| -flat_namespace -undefined suppress| -twolevel_namespace -undefined dynamic_lookup|g' lib/src/Makefile
+else
+      perl -pi.bak -e 's|-lcrt1.10.5.o||g' **/*akefile
+      perl -pi.bak -e 's|-lcrt1.o||g' **/*akefile
+fi
+    
+    #################
+      make
+      make install
+    #################
+
+    # xloggraph will fail, but we will link it with fort77 below
+    #
+    # Make wrappers for xplot84driver and xloggraph, so rename the executables
+      cd  x-windows/XCCPJIFFY
+      
+      make msg_box.o ZDr2d.o EditString.o hardcopy_ctrl.o xloggraph.o log_file.o tom_fortran_interface.o bits_and_pieces.o graphics.o
+      gcc -o xplot84driver xplot84driver.o plot84_file.o msg_box.o ZDr2d.o EditString.o hardcopy_ctrl.o -Os -I/usr/include/X11R6 -L/usr/X11R6/lib -lXaw -lXmu -lXt -lSM -lICE -lXpm -lXp -lXext -lX11 -lm -L/%p/lib/gcc4.3/lib -lgfortran  
+      cp xplot84driver  $CBIN/xplot84driver.exe
+      if [[ -x $CBIN/xplot84driver ]];then
+          rm -f $CBIN/xplot84driver
+      fi
+      make xccpjiffy2idraw
+      cp  xccpjiffy2idraw $CBIN/.
+      cd ..
+      make xdlmapman xdldataman
+      cp  xdlmapman   $CBIN/.
+      cp  xdldataman  $CBIN/.
+    #
+    # Manually link xloggraph with fort77 (fails in make)
+      echo ""
+      echo "**********************************************************************"
+      echo "Re-linking xloggraph with fort77.  Ignore previous error messages."
+      echo "**********************************************************************"
+      echo ""
+    #
+      cd  XCCPJIFFY
+      fort77 -o xloggraph msg_box.o ZDr2d.o EditString.o hardcopy_ctrl.o xloggraph.o log_file.o tom_fortran_interface.o bits_and_pieces.o graphics.o -g -Os -I/usr/include/X11R6 -L/usr/X11R6/lib -lXaw -lXmu -lXt -lSM -lICE -lXpm -lXext -lX11 -lm -lgfortran -L%p/lib/gcc4.3/lib
+
+    #
+      sleep 10
+    #
+      cp xloggraph $CBIN/xloggraph.exe
+      if [[ -x $CBIN/xloggraph ]];then
+          rm -f $CBIN/xloggraph
+      fi
+      cd ../..
+    #
+   # Cleanup:
+
+   # Get rid of the corrupting influence of ccp4's own xml2-config:
+     if [[ -x $CBIN/xml2-config ]];then
+        /bin/rm -f $CBIN/xml2-config
+     fi
+   #
+
+   # make realclean
+     /bin/rm -f **/*.o
+     /bin/rm -f **/*.bak
+     /bin/rm -Rf src 
+     /bin/rm -Rf x-windows/libjwc/libjwc_c
+     /bin/rm -Rf x-windows/libjwc/libjwc_f
+     /bin/rm -Rf x-windows/xdl_view/src
+    # remove redundant library junk
+     /bin/rm -Rf lib/cctbx
+     /bin/rm -Rf lib/**/.libs
+     /bin/rm -f lib/ccif/libccif.dylib
+     /bin/rm -f lib/src/libccp4c.dylib
+     /bin/rm -f lib/src/libmmdb.dylib
+   #/bin/rm -R unsupported
+     /bin/rm -R testcomp* 
+     /bin/rm -R BINARY*
+     cd $CLIB
+     /bin/rm -f **/*.c 
+     /bin/rm -f **/*.f 
+     /bin/rm -f **/*.cpp
+<<
+################################################################################
+InstallScript: <<
+    #!/bin/zsh -efv
+
+      umask 0022
+      export TEMPXTAL=$PWD:h
+      source $PWD/include/ccp4.setup-zsh
+      export DYLD_LIBRARY_PATH=$CLIB
+      ORIGDIR=$(dirname $PWD)
+    # Change environment scripts to match final installation
+      perl -pi -e 's|\$TEMPXTAL|%p/share/xtal|g' include/ccp4.setup*      # install prefix
+    #
+    # Bugzilla number : #3593
+      perl -pi -e "s|$PWD|%p/share/xtal/%n-%v|g"  share/pisa/pisa.cfg
+    #
+    #
+      cp ../XCCPJiffy-custom.gz  XCCPJiffy.gz ; gunzip XCCPJiffy.gz; chmod a+x XCCPJiffy
+      perl -pi -e 's|5.0.1|%v|g' XCCPJiffy
+      mv -f  XCCPJiffy lib/X11/app-defaults/XCCPJiffy
+    #  
+      perl -pi.bak -e 's|/src/fink.build/ccp4-%v-%r|/share/xtal|g' bin/clipper-config
+      rm -f bin/clipper-config.bak
+      perl -pi.bak -e 's|lclipper |lclipper-core |g' bin/clipper-config
+      rm -f bin/clipper-config.bak                                
+      perl -pi.bak -e 's|lib/lib -lrfftw -lfftw |lib/ccp4-%v -lsrfftw -lsfftw |g' bin/clipper-config
+      rm -f bin/clipper-config.bak                                
+    #
+    # Fix path in libfoo.la libtool files:
+    #  
+      perl -pi.bak -e 's|/src/fink.build/ccp4-%v-%r/ccp4-%v/lib|/lib/ccp4-%v|g' lib/**/*.la
+      perl -pi.bak -e 's|/src/fink.build/ccp4-%v-%r/ccp4-%v/src|/share/xtal/ccp4-%v/src|g' lib/python2.5/site-packages/libxml2mod.la
+      rm -f lib/**/*.la.bak
+    #
+    # Now install:
+    #
+      mkdir -p %i/lib
+      cp -R lib %i/lib/ccp4-%v
+      mkdir -p %i/bin
+    #
+      mkdir -p %i/share/xtal/ccp4-%v/help
+      mkdir -p %i/share/man/man1
+    # set up man pages in a fink-compliant manner
+      cd $PWD/doc
+      mv rasmol.doc eightbit_rasmol.doc
+      foreach docfilepage ( *.doc )
+          cp ${docfilepage}  %i/share/man/man1/${docfilepage:r}.1
+          cp ${docfilepage}  %i/share/xtal/ccp4-%v/help/${docfilepage:r}
+      end
+    # back to build directory
+      cd ..
+    #                                
+      /bin/rm -rf lib 
+      cp -R * %i/share/xtal/ccp4-%v/.
+      ln -s   %p/lib/ccp4-%v      %i/share/xtal/ccp4-%v/lib
+    #
+    # making scripts for %p/etc/profile.d  
+      mkdir -p %i/etc/profile.d
+    #
+      echo "source %p/share/xtal/ccp4-%v/include/ccp4.setup"                 > %i/etc/profile.d/ccp4.csh
+      echo "setenv CLIB %p/lib/ccp4-%v "                                    >> %i/etc/profile.d/ccp4.csh
+    #
+
+      echo "if [ -z \$ZSH_NAME ];then                           "             > %i/etc/profile.d/ccp4.sh 
+      echo "    source %p/share/xtal/ccp4-%v/include/ccp4.setup-bash "       >> %i/etc/profile.d/ccp4.sh    
+      echo "else                                               "             >> %i/etc/profile.d/ccp4.sh
+      echo "    source %p/share/xtal/ccp4-%v/include/ccp4.setup-zsh"         >> %i/etc/profile.d/ccp4.sh
+      echo "fi                                                 "             >> %i/etc/profile.d/ccp4.sh
+      echo "export CLIB=%p/lib/ccp4-%v "                                     >> %i/etc/profile.d/ccp4.sh
+    #
+      chmod a+x %i/etc/profile.d/ccp4.*
+    #
+      chmod a+x  %i/share/xtal/ccp4-%v/ccp4i/etc/osx_ccp4_mail
+    #
+    # chmod a+x %i/share/xtal/ccp4-%v/etc/ccp4help 
+    #
+      ranlib %i/lib/ccp4-%v/*.a
+      ranlib %i/lib/ccp4-%v/**/*.a
+    #
+      perl -pi -e 's|%p/share/%p/share|%p/share|g' %i/share/xtal/ccp4-%v/include/ccp4.setup*     # fix
+<<
+################################################################################
+PostInstScript: <<
+    # Make the user read the license conditions
+    more %p/share/xtal/ccp4-%v/conditions.txt
+<<
+################################################################################
+################################################################################
+SplitOff: <<
+    Package: %N-shlibs
+    Description: CCP4 dynamic libraries
+    Files:<<
+        lib/ccp4-%v/*.*.dylib  
+        lib/ccp4-%v/libccif.dylib       
+        lib/ccp4-%v/libccp4c.dylib
+        lib/ccp4-%v/libmmdb.dylib
+    <<
+    Shlibs: <<
+        %p/lib/ccp4-%v/libDiffractionImage.0.dylib                   1.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/lib_DiffractionImage.0.dylib                  1.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libccif.dylib                                 0.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libccp4c.dylib                                0.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libclipper-ccp4.2.dylib                       3.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libclipper-cif.2.dylib                        3.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libclipper-cns.0.dylib                        1.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libclipper-contrib.2.dylib                    3.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libclipper-core.2.dylib                       3.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libclipper-minimol.2.dylib                    3.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libclipper-mmdb.2.dylib                       3.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libclipper-phs.2.dylib                        3.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libjwc_c.0.dylib                              2.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libmmdb.dylib                                 0.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libssm.0.dylib                                1.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libxdl_view.2.dylib                           3.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libxdl_viewextra.0.dylib                      1.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/libfftw.2.dylib                               3.0.0  %n   (>= 6.1.1-1)
+        %p/lib/ccp4-%v/librfftw.2.dylib                              3.0.0  %n   (>= 6.1.1-1)
+    << 
+    DocFiles:  CHANGES COPYING INSTALL INSTALL.html INSTALL.ps README PROBLEMS academic_software_licence.pdf
+<<
+################################################################################
+################################################################################
+SplitOff2: <<
+    Package: %N-dev
+    BuildDependsOnly: true
+    Conflicts: gpp4-dev, ssm-dev, mmdb-dev, clipper-dev, ccp4-onlylibs-dev
+    Replaces:  gpp4-dev, ssm-dev, mmdb-dev, clipper-dev, ccp4-onlylibs-dev
+    Description: CCP4 static libraries and libtool files
+    Files:<<
+        lib/ccp4-%v/*.a  
+        lib/ccp4-%v/*.la
+    <<
+    DocFiles:  CHANGES COPYING INSTALL INSTALL.html INSTALL.ps README PROBLEMS academic_software_licence.pdf
+<<
+################################################################################
+Description:  Macromolecular crystallography package
+DescDetail: <<
+    The CCP4 macromolecular crystallography suite has approximately
+    200 programs and utilities. This version includes the Clipper
+    libraries. Current phaser and cctbx programs are available as 
+    separate fink packages.
+
+    Type "ccp4help" for a summary listing of all ccp4 programs.
+    Type "ccp4help foo" for a detailed description of program "foo."
+
+    Invoke optional ccp4i gui for the first run using "sudo ccp4i"
+    on 10.4, or "sudo /bin/zsh" followed by "source /sw/bin/init.sh ; ccp4i" 
+    on 10.5 to permit global configuration. Thereafter, you can invoke 
+    ccp4i without sudo.
+
+    This version compiles with the Apple Lapack/Blas framework.
+    License agreement is part of configure file -- print out form and mail in,
+    additional comments at http://sage.ucsc.edu/xtal/ccp4.html
+    
+    CCP4 files will be installed under /sw/share/xtal/ccp4-6.0.99
+    This revision includes all available CCP4 patches as of June 28, 2007. 
+    and new bash and zsh command completions specific to ccp4. 
+    
+    The ccp4-associated molecular graphics display program coot is also
+    available as a fink package. It builds against the GPL gpp4 libraries
+    rather than those of this package.
+    
+    Thanks to Jack Howarth for many helpful improvements.
+<<
+DocFiles: <<
+    README CHANGES COPYING PROBLEMS INSTALL INSTALL.html INSTALL.ps 
+    ccp4i_installation.html academic_software_licence.pdf  
+    academic_software_licence.ps.gz  academic_software_licence.rtf
+<<
+Homepage: http://www.ccp4.ac.uk  
+License: Commercial
+Maintainer: W. G. Scott <wgscott@users.sourceforge.net>
