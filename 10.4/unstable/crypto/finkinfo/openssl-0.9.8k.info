@@ -1,0 +1,108 @@
+Package: openssl
+Version: 0.9.8k
+Revision: 1
+Depends: %N098-shlibs (= %v-%r), pkgconfig
+Conflicts: openssl097
+Replaces: openssl097
+Source: mirror:custom:source/openssl-%v.tar.gz
+CustomMirror: <<
+  Primary:   http://www.openssl.org/
+  Secondary: http://www.planetmirror.com/pub/openssl/
+<<
+Source-MD5: e555c6d58d276aec7fdc53363e338ab3
+
+PatchScript: <<
+  perl util/perlpath.pl /usr/bin
+  perl -pi -e 's,LIBDEPS,SHARED_LDFLAGS=-bundle $&,' engines/Makefile
+<<
+NoSetMAKEFLAGS: true
+SetMAKEFLAGS: -j1
+CompileScript: <<
+ PERL=/usr/bin/perl ./config shared --prefix=%p --openssldir=%p/etc/ssl zlib-dynamic --with-krb5-dir=/usr
+ make
+<<
+InfoTest: <<
+TestScript: make test || exit 2
+<<
+InstallScript: <<
+#!/bin/sh -e
+ make install INSTALL_PREFIX=%d MANDIR=%p/share/man
+ ### special care for case-insensitive systems _ to get same deb everywhere
+ p=`readlink -f %i/share/man/man3`
+ for f in `find $p -type l`; do \
+	g=`readlink -f $f`
+	fl=`tr '[:upper:]' '[:lower:]'<<<"$f"`
+	gl=`tr '[:upper:]' '[:lower:]'<<<"$g"`
+	if [ "$fl" = "$gl" ] ; then /bin/rm $f ; fi
+ done
+ ## There remain symlinks BN_print.3 -> BN_bn2bin.3 and bn_print.3 -> bn_internal.3, we rename the latter.
+ rm -f %i/share/man/man3/BN_print.3 %i/share/man/man3/bn_print.3 || true
+ ln -fs BN_bn2bin.3 %i/share/man/man3/BN_print.3
+ ln -fs bn_internal.3 %i/share/man/man3/_bn_print.3
+ ### for comptibility with libmd (don't know how to set up update-alternatives with original capitalisation)
+ mv %i/share/man/man3/md5.3 %i/share/man/man3/MD5.3
+ for i in 2 4 5; do
+	mv %i/share/man/man3/MD$i.3 %i/share/man/man3/md$i.3.%N098
+ done
+<<
+SplitOff: <<
+  Package: %N098-shlibs
+  Files: lib/libcrypto.0.9.8.dylib lib/libssl.0.9.8.dylib lib/engines
+  Shlibs: <<
+    %p/lib/libcrypto.0.9.8.dylib 0.9.8 %n (>= 0.9.8-1)
+    %p/lib/libssl.0.9.8.dylib 0.9.8 %n (>= 0.9.8-1)
+  <<
+  DocFiles: README LICENSE CHANGES FAQ NEWS
+<<
+SplitOff2: <<
+  Package: %N098-dev
+  Depends: %N098-shlibs (= %v-%r)
+  DescPackaging: <<
+    Uses pkgconfig, but there are no pkgconfig-related dependencies.
+  <<
+  Conflicts: libmd (<= 0.3-2), openssl-dev, openssl097-dev
+  Replaces: openssl-dev, openssl097-dev, openssl, openssl097, openssl098
+  BuildDependsOnly: True
+  Files: include lib share/man/man3 share/man/man5 share/man/man7
+  DocFiles: README LICENSE CHANGES FAQ NEWS
+  PostInstScript: <<
+   for i in 2 4 5; do
+	update-alternatives --install %p/share/man/man3/md$i.3 md$i.3 %p/share/man/man3/md$i.3.%N098 60
+   done
+  <<
+  PreRmScript: <<
+   if [ $1 != "upgrade" ]; then
+   for i in 2 4 5; do
+	update-alternatives --remove md$i.3 %p/share/man/man3/md$i.3.%N098
+   done
+   fi
+  <<
+<<
+DocFiles: README LICENSE CHANGES FAQ NEWS
+ConfFiles: %p/etc/ssl/openssl.cnf
+#
+Description: Secure Sockets Layer and Crypto Library
+DescDetail: <<
+OpenSSL is a free implementation of the Secure Sockets Layer (SSL)
+and Transport Layer Security (TLS) protocols. It includes command line
+utilities to manager certificates and a separate library implementing
+common cryptograhic algorithms.
+<<
+DescPort: <<
+Older versions of the openssl package used to use a compatibility version of 0.9.6.
+To stay compatbile with those, we build dylibs with that compatibility version.
+This works since the old version luckily also hardcoded 0.9.6 into the library
+install_name.
+
+For the new version of the libs, we use an install_name following the one used by
+Apple's version of openssl (and unlike the default openssl wants to build), that is,
+libssl.0.9.dylib.
+
+We have to apply a small trick to get it to link against its own static libs
+instead of the system's ssl dylibs.
+
+Patch Configure: i386 is little-endian
+<<
+License: OSI-Approved
+Homepage: http://www.openssl.org/
+Maintainer: None <fink-devel@lists.sourceforge.net>
