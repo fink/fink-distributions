@@ -1,6 +1,7 @@
 Package: openssl
 Version: 0.9.8k
-Revision: 2
+Revision: 3
+BuildDepends: fink (>= 0.24.12)
 Depends: %N098-shlibs (= %v-%r), pkgconfig
 Conflicts: openssl097
 Replaces: openssl097
@@ -11,10 +12,12 @@ CustomMirror: <<
 <<
 Source-MD5: e555c6d58d276aec7fdc53363e338ab3
 
+PatchFile: %n-%v.patch
+PatchFile-MD5: 6e35ef1b4e2607f183a9e6e958d51492
 PatchScript: <<
   perl util/perlpath.pl /usr/bin
   perl -pi -e 's,LIBDEPS,SHARED_LDFLAGS=-bundle $&,' engines/Makefile
-  sed -i'' -e '/rm -f/d' util/point.sh
+  sed 's,@BUILDDIR@,%b,g' %{PatchFile} | patch -p1
 <<
 NoSetMAKEFLAGS: true
 SetMAKEFLAGS: -j1
@@ -28,20 +31,37 @@ TestScript: make test || exit 2
 InstallScript: <<
 #!/bin/sh -ev
  make install INSTALL_PREFIX=%d MANDIR=%p/share/man
- ### special care for case-insensitive systems _ to get same deb everywhere
- p=`readlink -f %i/share/man/man3`
- for f in `find $p -type l`; do \
-	g=`readlink -f $f`
-	fl=`tr '[:upper:]' '[:lower:]'<<<"$f"`
-	gl=`tr '[:upper:]' '[:lower:]'<<<"$g"`
-	if [ "$fl" = "$gl" ] ; then /bin/rm $f ; fi
- done
- ## There remain symlinks BN_print.3 -> BN_bn2bin.3 and bn_print.3 -> bn_internal.3, we rename the latter.
- rm -f %i/share/man/man3/BN_print.3 %i/share/man/man3/bn_print.3 || true
- ln -fs BN_bn2bin.3 %i/share/man/man3/BN_print.3
- ln -fs bn_internal.3 %i/share/man/man3/_bn_print.3
- ### for comptibility with libmd (don't know how to set up update-alternatives with original capitalisation)
+
+ ## skipped-links contains symlink commands that fail because they
+ ## would involve filenames that differ only by case (rebuild on a
+ ## case-insensitive filesystem to make sure the list is complete).
+ ## as of 0.9.8k-3, the list is:
+ ##   ln -s "bn_internal.3" "bn_print.3" # created iff build on case-sens fs
+ ##   ln -s "hmac.3" "HMAC.3"            # not created anywhere
+ ##   ln -s "md5.3" "MD5.3"              # not created anywhere
+ ##   ln -s "mdc2.3" "MDC2.3"            # not created anywhere
+ ##   ln -s "pem.3" "PEM.3"              # not created anywhere
+ ##   ln -s "rc4.3" "RC4.3"              # not created anywhere
+ ##   ln -s "ssl.3" "SSL.3"              # not created anywhere
+ ## i.e., those symlink names already exist as something else.
+
+ ## Should patch build to avoid even trying to create these so get
+ ## same .deb on all build FS even without hacks. Mean time, hack to
+ ## avoid case-insens collision in .deb:
+ rm -f foo Foo
+ touch foo
+ if [ ! -e Foo ]; then
+   # case-sensitive FS...nuke case-sensitively-different link
+   rm %i/share/man/man3/bn_print.3
+ fi
+ rm foo
+
+ ### for comptibility with libmd (don't know how to set up
+ ## update-alternatives with original capitalisation) rename md5.3 to
+ ## MD5.3, but have to hack b/c can't reliably rename a file to itself
+ ## iff case-insensitive fs)
  mv %i/share/man/man3/md5.3 %i/share/man/man3/md5.3_tmp; mv %i/share/man/man3/md5.3_tmp %i/share/man/man3/MD5.3
+
  for i in 2 4 5; do
 	mv %i/share/man/man3/MD$i.3 %i/share/man/man3/md$i.3.%N098
  done
