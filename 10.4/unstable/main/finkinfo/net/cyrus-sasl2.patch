@@ -1,7 +1,135 @@
-diff -ru cyrus-sasl-2.1.21.orig/saslauthd/configure cyrus-sasl-2.1.21/saslauthd/configure
---- cyrus-sasl-2.1.21.orig/saslauthd/configure	2005-05-15 01:59:04.000000000 -0400
-+++ cyrus-sasl-2.1.21/saslauthd/configure	2005-06-26 16:10:28.000000000 -0400
-@@ -9380,8 +9380,8 @@
+diff -ru cyrus-sasl-2.1.23.orig/lib/client.c cyrus-sasl-2.1.23/lib/client.c
+--- cyrus-sasl-2.1.23.orig/lib/client.c	2009-04-28 11:09:15.000000000 -0400
++++ cyrus-sasl-2.1.23/lib/client.c	2009-06-07 09:15:56.000000000 -0400
+@@ -202,6 +202,9 @@
+       { NULL, NULL }
+   };
+ 
++  /* lock allocation type */
++  _sasl_allocation_locked++;
++  
+   if(_sasl_client_active) {
+       /* We're already active, just increase our refcount */
+       /* xxx do something with the callback structure? */
+diff -ru cyrus-sasl-2.1.23.orig/lib/common.c cyrus-sasl-2.1.23/lib/common.c
+--- cyrus-sasl-2.1.23.orig/lib/common.c	2009-04-28 11:09:15.000000000 -0400
++++ cyrus-sasl-2.1.23/lib/common.c	2009-06-07 09:16:54.000000000 -0400
+@@ -107,6 +107,7 @@
+   (sasl_realloc_t *) &realloc,
+   (sasl_free_t *) &free
+ };
++int _sasl_allocation_locked = 0;
+ 
+ #define SASL_ENCODEV_EXTRA  4096
+ 
+@@ -152,6 +153,12 @@
+ void sasl_set_mutex(sasl_mutex_alloc_t *n, sasl_mutex_lock_t *l,
+ 		    sasl_mutex_unlock_t *u, sasl_mutex_free_t *d)
+ {
++	/* Disallow mutex function changes once sasl_client_init
++	   and/or sasl_server_init is called */
++	if (_sasl_server_cleanup_hook || _sasl_client_cleanup_hook) {
++		return;
++	}
++
+   _sasl_mutex_utils.alloc=n;
+   _sasl_mutex_utils.lock=l;
+   _sasl_mutex_utils.unlock=u;
+@@ -637,6 +644,8 @@
+ 	       sasl_realloc_t *r,
+ 	       sasl_free_t *f)
+ {
++  if (_sasl_allocation_locked++)  return;
++
+   _sasl_allocation_utils.malloc=m;
+   _sasl_allocation_utils.calloc=c;
+   _sasl_allocation_utils.realloc=r;
+diff -ru cyrus-sasl-2.1.23.orig/lib/saslint.h cyrus-sasl-2.1.23/lib/saslint.h
+--- cyrus-sasl-2.1.23.orig/lib/saslint.h	2009-04-28 11:09:15.000000000 -0400
++++ cyrus-sasl-2.1.23/lib/saslint.h	2009-06-07 09:15:56.000000000 -0400
+@@ -300,6 +300,7 @@
+ 
+ extern sasl_allocation_utils_t _sasl_allocation_utils;
+ extern sasl_mutex_utils_t _sasl_mutex_utils;
++extern int _sasl_allocation_locked;
+ 
+ /*
+  * checkpw.c
+diff -ru cyrus-sasl-2.1.23.orig/lib/server.c cyrus-sasl-2.1.23/lib/server.c
+--- cyrus-sasl-2.1.23.orig/lib/server.c	2009-04-28 11:09:15.000000000 -0400
++++ cyrus-sasl-2.1.23/lib/server.c	2009-06-07 09:15:56.000000000 -0400
+@@ -698,6 +698,9 @@
+ 	{ NULL, NULL }
+     };
+ 
++    /* lock allocation type */
++    _sasl_allocation_locked++;
++
+     /* we require the appname (if present) to be short enough to be a path */
+     if (appname != NULL && strlen(appname) >= PATH_MAX)
+ 	return SASL_BADPARAM;
+diff -ru cyrus-sasl-2.1.23.orig/plugins/digestmd5.c cyrus-sasl-2.1.23/plugins/digestmd5.c
+--- cyrus-sasl-2.1.23.orig/plugins/digestmd5.c	2009-04-28 11:09:17.000000000 -0400
++++ cyrus-sasl-2.1.23/plugins/digestmd5.c	2009-06-07 09:17:07.000000000 -0400
+@@ -2715,7 +2715,7 @@
+ 	"DIGEST-MD5",			/* mech_name */
+ #ifdef WITH_RC4
+ 	128,				/* max_ssf */
+-#elif WITH_DES
++#elif defined(WITH_DES)
+ 	112,
+ #else 
+ 	1,
+@@ -4034,7 +4034,7 @@
+ 	"DIGEST-MD5",
+ #ifdef WITH_RC4				/* mech_name */
+ 	128,				/* max ssf */
+-#elif WITH_DES
++#elif defined(WITH_DES)
+ 	112,
+ #else
+ 	1,
+diff -ru cyrus-sasl-2.1.23.orig/saslauthd/auth_rimap.c cyrus-sasl-2.1.23/saslauthd/auth_rimap.c
+--- cyrus-sasl-2.1.23.orig/saslauthd/auth_rimap.c	2009-04-28 11:09:18.000000000 -0400
++++ cyrus-sasl-2.1.23/saslauthd/auth_rimap.c	2009-06-07 09:16:33.000000000 -0400
+@@ -162,6 +162,7 @@
+     num_quotes = 0;
+     p1 = s;
+     while ((p1 = strchr(p1, '"')) != NULL) {
++	p1++;
+ 	num_quotes++;
+     }
+     
+@@ -438,7 +439,7 @@
+ 	syslog(LOG_WARNING, "auth_rimap: writev: %m");
+ 	memset(qlogin, 0, strlen(qlogin));
+ 	free(qlogin);
+-	memset(qpass, 0, strlen(qlogin));
++	memset(qpass, 0, strlen(qpass));
+ 	free(qpass);
+ 	(void)close(s);
+ 	return strdup(RESP_IERROR);
+@@ -447,7 +448,7 @@
+     /* don't need these any longer */
+     memset(qlogin, 0, strlen(qlogin));
+     free(qlogin);
+-    memset(qpass, 0, strlen(qlogin));
++    memset(qpass, 0, strlen(qpass));
+     free(qpass);
+ 
+     /* read and parse the LOGIN response */
+diff -ru cyrus-sasl-2.1.23.orig/saslauthd/auth_shadow.c cyrus-sasl-2.1.23/saslauthd/auth_shadow.c
+--- cyrus-sasl-2.1.23.orig/saslauthd/auth_shadow.c	2009-04-28 11:09:18.000000000 -0400
++++ cyrus-sasl-2.1.23/saslauthd/auth_shadow.c	2009-06-07 09:16:08.000000000 -0400
+@@ -1,3 +1,4 @@
++#define _XOPEN_SOURCE
+ #define PWBUFSZ 256 /***SWB***/
+ 
+ /* MODULE: auth_shadow */
+diff -ru cyrus-sasl-2.1.23.orig/saslauthd/configure cyrus-sasl-2.1.23/saslauthd/configure
+--- cyrus-sasl-2.1.23.orig/saslauthd/configure	2009-05-07 10:25:24.000000000 -0400
++++ cyrus-sasl-2.1.23/saslauthd/configure	2009-06-07 09:15:34.000000000 -0400
+@@ -9538,8 +9538,8 @@
  if test $ac_cv_lib_pam_pam_start = yes; then
  
  	  if test "${ac_cv_header_security_pam_appl_h+set}" = set; then
@@ -12,7 +140,7 @@ diff -ru cyrus-sasl-2.1.21.orig/saslauthd/configure cyrus-sasl-2.1.21/saslauthd/
  if test "${ac_cv_header_security_pam_appl_h+set}" = set; then
    echo $ECHO_N "(cached) $ECHO_C" >&6
  fi
-@@ -9389,8 +9389,8 @@
+@@ -9547,8 +9547,8 @@
  echo "${ECHO_T}$ac_cv_header_security_pam_appl_h" >&6
  else
    # Is the header compilable?
@@ -23,7 +151,7 @@ diff -ru cyrus-sasl-2.1.21.orig/saslauthd/configure cyrus-sasl-2.1.21/saslauthd/
  cat >conftest.$ac_ext <<_ACEOF
  #line $LINENO "configure"
  /* confdefs.h.  */
-@@ -9399,7 +9399,7 @@
+@@ -9557,7 +9557,7 @@
  cat >>conftest.$ac_ext <<_ACEOF
  /* end confdefs.h.  */
  $ac_includes_default
@@ -32,7 +160,7 @@ diff -ru cyrus-sasl-2.1.21.orig/saslauthd/configure cyrus-sasl-2.1.21/saslauthd/
  _ACEOF
  rm -f conftest.$ac_objext
  if { (eval echo "$as_me:$LINENO: \"$ac_compile\"") >&5
-@@ -9425,8 +9425,8 @@
+@@ -9583,8 +9583,8 @@
  echo "${ECHO_T}$ac_header_compiler" >&6
  
  # Is the header present?
@@ -43,7 +171,7 @@ diff -ru cyrus-sasl-2.1.21.orig/saslauthd/configure cyrus-sasl-2.1.21/saslauthd/
  cat >conftest.$ac_ext <<_ACEOF
  #line $LINENO "configure"
  /* confdefs.h.  */
-@@ -9434,7 +9434,7 @@
+@@ -9592,7 +9592,7 @@
  cat confdefs.h >>conftest.$ac_ext
  cat >>conftest.$ac_ext <<_ACEOF
  /* end confdefs.h.  */
@@ -52,7 +180,7 @@ diff -ru cyrus-sasl-2.1.21.orig/saslauthd/configure cyrus-sasl-2.1.21/saslauthd/
  _ACEOF
  if { (eval echo "$as_me:$LINENO: \"$ac_cpp conftest.$ac_ext\"") >&5
    (eval $ac_cpp conftest.$ac_ext) 2>conftest.er1
-@@ -9467,10 +9467,10 @@
+@@ -9625,10 +9625,10 @@
  # So?  What about this header?
  case $ac_header_compiler:$ac_header_preproc in
    yes:no )
@@ -67,7 +195,7 @@ diff -ru cyrus-sasl-2.1.21.orig/saslauthd/configure cyrus-sasl-2.1.21/saslauthd/
      (
        cat <<\_ASBOX
  ## ------------------------------------ ##
-@@ -9481,12 +9481,12 @@
+@@ -9639,12 +9639,12 @@
        sed "s/^/$as_me: WARNING:     /" >&2
      ;;
    no:yes )
@@ -86,7 +214,7 @@ diff -ru cyrus-sasl-2.1.21.orig/saslauthd/configure cyrus-sasl-2.1.21/saslauthd/
      (
        cat <<\_ASBOX
  ## ------------------------------------ ##
-@@ -9497,8 +9497,8 @@
+@@ -9655,8 +9655,8 @@
        sed "s/^/$as_me: WARNING:     /" >&2
      ;;
  esac
@@ -97,3 +225,35 @@ diff -ru cyrus-sasl-2.1.21.orig/saslauthd/configure cyrus-sasl-2.1.21/saslauthd/
  if test "${ac_cv_header_security_pam_appl_h+set}" = set; then
    echo $ECHO_N "(cached) $ECHO_C" >&6
  else
+diff -ru cyrus-sasl-2.1.23.orig/saslauthd/lak.c cyrus-sasl-2.1.23/saslauthd/lak.c
+--- cyrus-sasl-2.1.23.orig/saslauthd/lak.c	2009-04-28 11:09:18.000000000 -0400
++++ cyrus-sasl-2.1.23/saslauthd/lak.c	2009-06-07 09:16:45.000000000 -0400
+@@ -55,6 +55,7 @@
+ #include <openssl/des.h>
+ #endif
+ 
++#define LDAP_DEPRECATED 1
+ #include <ldap.h>
+ #include <lber.h>
+ #include <sasl.h>
+diff -ru cyrus-sasl-2.1.23.orig/saslauthd/saslauthd-main.c cyrus-sasl-2.1.23/saslauthd/saslauthd-main.c
+--- cyrus-sasl-2.1.23.orig/saslauthd/saslauthd-main.c	2009-04-28 11:09:18.000000000 -0400
++++ cyrus-sasl-2.1.23/saslauthd/saslauthd-main.c	2009-06-07 09:16:18.000000000 -0400
+@@ -276,7 +276,7 @@
+ 		exit(1);
+ 	}
+ 
+-	umask(077);
++	umask(0077);
+ 
+ 	pid_file_size = strlen(run_path) + sizeof(PID_FILE_LOCK) + 1;
+ 	if ((pid_file_lock = malloc(pid_file_size)) == NULL) {
+@@ -287,7 +287,7 @@
+ 	strlcpy(pid_file_lock, run_path, pid_file_size);
+ 	strlcat(pid_file_lock, PID_FILE_LOCK, pid_file_size);
+ 
+-	if ((pid_file_lock_fd = open(pid_file_lock, O_CREAT|O_TRUNC|O_RDWR, 644)) < 0) {
++	if ((pid_file_lock_fd = open(pid_file_lock, O_CREAT|O_TRUNC|O_RDWR, 0644)) < 0) {
+ 		rc = errno;
+ 		logger(L_ERR, L_FUNC, "could not open pid lock file: %s", pid_file_lock);
+ 		logger(L_ERR, L_FUNC, "open: %s", strerror(rc));
