@@ -1,0 +1,95 @@
+#!/usr/bin/perl
+# -*- mode: Perl; tab-width: 4; -*-
+
+# A dirty hack by Daniel Macks
+
+use warnings;
+use strict;
+
+use File::Find;
+
+
+if (!@ARGV or $ARGV[0] eq '-h') {
+	die "Usage: $0 <list of locations>\n\nLocations can be .Plo files or dirs to scan (recursively) for .Plo files.\nThese files are usually generated when autotool/libtooled packages are\n./configured with --enable-dependency-tracking\n";
+}
+
+print "Scanning .Plo dependency files...\n";
+
+my %deps;						# key=included file
+								# value=first .Plo where it's listed
+
+my $plo_count = 0;
+find sub {
+	return unless /\.Plo$/;		# libtool uses .deps/TARGET.Plo; don't
+								# bother dir check (ext is unique?)
+	print "\t$File::Find::name\n";
+	$plo_count++;
+	open my $plo, '<', $_ or die "Could not read $_: $!\n";
+	while ( defined ( $_ = <$plo> ) ) {
+		next if /^\s*$/;		# usually lots of blank lines
+		s/^[^:]*://;				# only care deps; filename is key dependant
+		foreach (split) {
+			next if /\\/;		# continuation marker
+			$deps{$_} = $File::Find::name if ! exists $deps{$_};
+		}
+	}
+	close $plo;
+}, @ARGV;
+
+if (! $plo_count) {
+	die "No .Plo files found.\n";
+}
+
+print "Looking for incorrect headers in ", $plo_count, " dependency files...\n";
+
+# regexes for OSX or X11 files for which fink has replacements
+my $repl_regex = '^' . join '|', map "\Q$_\E", (
+	'/usr/include/iconv.h',
+	'/usr/libxml2/.*',
+	'/usr/libxslt/.*',
+	'/usr/.*/ft2build.h',
+	'/usr/.*/freetype2',
+	'/usr/.*/fontconfig',
+	'/usr/.*/expat.h',
+	'/usr/.*/Xft',
+);
+$repl_regex = qr/$repl_regex/; # pre-compile (will use many times)
+my $fink_prefix = '/sw';
+my $fink_prefix_regex = qr/^\Q$fink_prefix\E/;
+
+my @fink_headers;
+
+my $bad_system = 0;
+foreach (sort keys %deps) {
+	if (/$repl_regex/) {
+		print "\t $deps{$_} uses $_\n";
+		$bad_system = 1;
+	} elsif (/$fink_prefix_regex/) {
+		push @fink_headers, $_;
+	}
+}
+if ($bad_system) {
+	die "Please fix build process to get consistent use of fink's headers.\n";
+}
+
+
+my %fink_pkgs;
+my $dpkg_s = "$fink_prefix/bin/dpkg -S";
+my $progress = 1;
+print "Determining fink providers of ", scalar(@fink_headers), " headers...\n";
+while (@fink_headers) {
+	# so in blocks using heuristic to avoid shell cmd-line limit
+	my @chunk = splice @fink_headers, 0, 100;
+	print "\t$progress - ", ($progress+=@chunk)-1, "\n";
+
+	open my $dpkg_s, "$dpkg_s @chunk |" or die "Could not fork $dpkg_s: $!\n";
+	while (<$dpkg_s>) {
+		if (/^([^:]+):/) {
+			$fink_pkgs{$1} = 1;
+		}
+	}
+	close $dpkg_s or die "Error reading $dpkg_s: $! $?\n";
+}
+
+print "Found use of headers from ", scalar(keys %fink_pkgs), " fink packages:\n";
+map { print "\t$_\n" } sort keys %fink_pkgs;
