@@ -1,0 +1,133 @@
+diff -Nurd postgresql-8.4.0/pgsql.sh postgresql-8.4.0-patched/pgsql.sh
+--- postgresql-8.4.0/pgsql.sh	1969-12-31 19:00:00.000000000 -0500
++++ postgresql-8.4.0-patched/pgsql.sh	2009-07-17 14:14:41.000000000 -0400
+@@ -0,0 +1,83 @@
++#!/bin/sh
++
++die () {
++	echo "failed"
++	echo ""
++	echo "*** bailing because an error ocurred:"
++	echo ""
++	echo "$*"
++	exit 1
++}
++
++PREFIX="@INSTPREFIX@/opt/postgresql-8.4"
++DATADIR="@INSTPREFIX@/var/postgresql-8.4/data"
++LOGFILE="@INSTPREFIX@/var/postgresql-8.4/pgsql.log"
++
++export LANG=C
++unset LC_ALL
++
++export PATH="$PREFIX/bin:@INSTPREFIX@/bin:$PATH"
++
++SHMMAX=`sysctl kern.sysv.shmmax | cut -d' ' -f2-`
++SHMMNI=`sysctl kern.sysv.shmmni | cut -d' ' -f2-`
++SHMALL=`sysctl kern.sysv.shmall | cut -d' ' -f2-`
++
++if [ "$SHMMAX" -lt "8388608" ] || [ "$SHMMNI" -lt "64" ] || [ "$SHMALL" -lt "32768" ]; then
++	echo "WARNING: You probably need to set your shared memory resources higher for"
++	echo "         PostgreSQL to function.  For more information on raising your shared"
++	echo "         memory settings, see:"
++	echo "         http://wiki.finkproject.org/index.php/Shared_Memory_Regions_on_Darwin"
++	echo ""
++	echo "         I am also creating a default configuration in /etc/sysctl.conf.pg"
++	echo "         that contains values that will work with the default PostgreSQL "
++	echo "         memory settings.  To use it, rename it to /etc/sysctl.conf (if you"
++	echo "         don't have one already) and reboot."
++	echo ""
++	echo "         For now, I'll try setting your sysctl to something higher and then"
++	echo "         running things anyways.  Good luck!  =)"
++	echo ""
++	sysctl -w kern.sysv.shmmax=8388608
++	sysctl -w kern.sysv.shmmin=1
++	sysctl -w kern.sysv.shmmni=64
++	sysctl -w kern.sysv.shmseg=8
++	sysctl -w kern.sysv.shmall=32768
++	echo ""
++	cat <<END >/etc/sysctl.conf.pg
++kern.sysv.shmmax=8388608
++kern.sysv.shmmin=1
++kern.sysv.shmmni=64
++kern.sysv.shmseg=8
++kern.sysv.shmall=32768
++END
++fi
++
++if [ ! -d "$DATADIR" ]; then
++	printf -- "- making postgresql directories: "
++	sudo mkdir -p "$DATADIR"
++	sudo chown -R postgres "$DATADIR/.."
++	echo "ok"
++
++	printf -- "- initializing database in $DATADIR: "
++	sudo -u postgres ${PREFIX}/bin/initdb -E UNICODE -D "$DATADIR" >/tmp/pgsql-init-8.4.log 2>&1 || die "couldn't initialize database"
++	echo "ok"
++fi
++
++PG_COMMAND="sudo -u postgres env"
++if [ -n "$PGPORT" ]; then
++	PG_COMMAND="$PG_COMMAND PGPORT=$PGPORT"
++fi
++PG_COMMAND="$PG_COMMAND ${PREFIX}/bin/pg_ctl"
++
++case "$1" in
++	init)
++		;;
++	start)
++		$PG_COMMAND -D "$DATADIR" -l "$LOGFILE" start
++		;;
++	restart)
++		$PG_COMMAND -D "$DATADIR" -m fast restart
++		;;
++	stop)
++		$PG_COMMAND -D "$DATADIR" -m fast stop
++		;;
++esac
+diff -Nurd postgresql-8.4.0/src/backend/utils/misc/postgresql.conf.sample postgresql-8.4.0-patched/src/backend/utils/misc/postgresql.conf.sample
+--- postgresql-8.4.0/src/backend/utils/misc/postgresql.conf.sample	2009-04-22 20:23:45.000000000 -0400
++++ postgresql-8.4.0-patched/src/backend/utils/misc/postgresql.conf.sample	2009-07-17 08:25:21.000000000 -0400
+@@ -75,7 +75,7 @@
+ # - Security and Authentication -
+ 
+ #authentication_timeout = 1min		# 1s-600s
+-#ssl = off				# (change requires restart)
++ssl = off				# (change requires restart)
+ #ssl_ciphers = 'ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH'	# allowed SSL ciphers
+ 					# (change requires restart)
+ #password_encryption = on
+diff -Nurd postgresql-8.4.0/src/bin/initdb/initdb.c postgresql-8.4.0-patched/src/bin/initdb/initdb.c
+--- postgresql-8.4.0/src/bin/initdb/initdb.c	2009-06-11 10:49:07.000000000 -0400
++++ postgresql-8.4.0-patched/src/bin/initdb/initdb.c	2009-07-17 08:25:55.000000000 -0400
+@@ -114,7 +114,7 @@
+ 
+ /* defaults */
+ static int	n_connections = 10;
+-static int	n_buffers = 50;
++static int	n_buffers = 20;
+ 
+ /*
+  * Warning messages for authentication methods
+diff -Nurd postgresql-8.4.0/src/makefiles/Makefile.darwin postgresql-8.4.0-patched/src/makefiles/Makefile.darwin
+--- postgresql-8.4.0/src/makefiles/Makefile.darwin	2008-11-14 05:22:47.000000000 -0500
++++ postgresql-8.4.0-patched/src/makefiles/Makefile.darwin	2009-07-17 08:26:25.000000000 -0400
+@@ -13,4 +13,4 @@
+ # Rule for building shared libs (currently used only for regression test
+ # shlib ... should go away, since this is not really enough knowledge)
+ %.so: %.o
+-	$(CC) $(CFLAGS) -bundle -o $@ $< $(BE_DLLLIBS)
++	$(CXX) $(CFLAGS) -bundle -undefined dynamic_lookup -o $@ $< $(BE_DLLLIBS)
+diff -Nurd postgresql-8.4.0/src/template/darwin postgresql-8.4.0-patched/src/template/darwin
+--- postgresql-8.4.0/src/template/darwin	2007-09-25 20:32:46.000000000 -0400
++++ postgresql-8.4.0-patched/src/template/darwin	2009-07-17 08:26:37.000000000 -0400
+@@ -1,9 +1,5 @@
+ # $PostgreSQL: pgsql/src/template/darwin,v 1.11 2007/09/26 00:32:46 tgl Exp $
+ 
+-# Apple's cpp-precomp seems a tad broken, so don't use it
+-# (Note: on OS X before 10.2, you might need -traditional-cpp instead)
+-CC="$CC -no-cpp-precomp"
+-
+ # Select appropriate semaphore support.  Darwin 6.0 (Mac OS X 10.2) and up
+ # support System V semaphores; before that we have to use POSIX semaphores,
+ # which are less good for our purposes because they eat a file descriptor
