@@ -833,7 +833,7 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbna
 +#define THUMBNAIL_TYPE_ICON     "icon"
 diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbnail.c gnome-control-center-2.26.0/capplets/common/theme-thumbnail.c
 --- gnome-control-center-2.26.0.orig/capplets/common/theme-thumbnail.c	2008-11-04 11:09:47.000000000 -0500
-+++ gnome-control-center-2.26.0/capplets/common/theme-thumbnail.c	2009-08-06 13:35:27.000000000 -0400
++++ gnome-control-center-2.26.0/capplets/common/theme-thumbnail.c	2009-08-07 03:02:00.000000000 -0400
 @@ -1,17 +1,10 @@
  #include <config.h>
  #include <unistd.h>
@@ -1584,40 +1584,37 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbna
  static void
  generate_next_in_queue (void)
  {
-@@ -1184,50 +471,39 @@
+@@ -1184,58 +471,32 @@
  void
  theme_thumbnail_factory_init (int argc, char *argv[])
  {
 -#ifndef __APPLE__
 -  gint child_pid;
 -#endif
-+  gint child_pid, i;
-+  char **subargv;
-+  char *child_name = THEME_THUMBNAIL_ENGINE;
- 
-   pipe (pipe_to_factory_fd);
-   pipe (pipe_from_factory_fd);
- 
+-
+-  pipe (pipe_to_factory_fd);
+-  pipe (pipe_from_factory_fd);
+-
 -/* Apple's CoreFoundation classes must not be used from forked
 - * processes. Since freetype (and thus GTK) uses them, we simply
 - * disable the thumbnailer on MacOS for now. That means no thumbs
 - * until the thumbnailing process is rewritten, but at least we won't
 - * make apps crash. */
 -#ifndef __APPLE__
-   child_pid = fork ();
-   if (child_pid == 0)
-   {
+-  child_pid = fork ();
+-  if (child_pid == 0)
+-  {
 -    ThemeThumbnailData data;
 -    GIOChannel *channel;
 -
-     /* Child */
+-    /* Child */
 -    gtk_init (&argc, &argv);
- 
-     close (pipe_to_factory_fd[1]);
-     pipe_to_factory_fd[1] = 0;
-     close (pipe_from_factory_fd[0]);
-     pipe_from_factory_fd[0] = 0;
- 
+-
+-    close (pipe_to_factory_fd[1]);
+-    pipe_to_factory_fd[1] = 0;
+-    close (pipe_from_factory_fd[0]);
+-    pipe_from_factory_fd[0] = 0;
+-
 -    data.status = READY_FOR_THEME;
 -    data.type = g_byte_array_new ();
 -    data.control_theme_name = g_byte_array_new ();
@@ -1625,38 +1622,47 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbna
 -    data.wm_theme_name = g_byte_array_new ();
 -    data.icon_theme_name = g_byte_array_new ();
 -    data.application_font = g_byte_array_new ();
-+    /* create a new NULL-terminated argv pointer array for subprocess */
-+    subargv = malloc ( (argc+1) * sizeof(char *) );
-+    for (i = 0; i < argc; i++) {
-+      subargv[i] = argv[i];
-+    }
-+    subargv[0] = child_name;
-+    subargv[argc] = NULL;
- 
+-
 -    channel = g_io_channel_unix_new (pipe_to_factory_fd[0]);
 -    g_io_channel_set_flags (channel, g_io_channel_get_flags (channel) |
 -          G_IO_FLAG_NONBLOCK, NULL);
 -    g_io_channel_set_encoding (channel, NULL, NULL);
 -    g_io_add_watch (channel, G_IO_IN | G_IO_HUP, message_from_capplet, &data);
 -    g_io_channel_unref (channel);
-+    dup2(pipe_to_factory_fd[0], 0);
-+    close(pipe_to_factory_fd[0]);
-+    dup2(pipe_from_factory_fd[1], 1);
-+    close(pipe_from_factory_fd[1]);
++  gint i;
++  gchar **subargv;
++  gchar *factory_program = THEME_THUMBNAIL_ENGINE;
++  GError *err = NULL;
  
 -    gtk_main ();
 -    _exit (0);
-+    execv (child_name, subargv);
-+    free (subargv);
-+    g_error("execl(%s) failed in fork!\n", child_name);
++  /* create a new NULL-terminated argv pointer array for subprocess */
++  subargv = g_new (gchar *, argc+1);
++  subargv[0] = factory_program;
++  for (i = 1; i < argc; i++) {
++    subargv[i] = argv[i];
    }
++  subargv[argc] = NULL;
  
-   g_assert (child_pid > 0);
-@@ -1235,7 +511,6 @@
-   /* Parent */
-   close (pipe_to_factory_fd[0]);
-   close (pipe_from_factory_fd[1]);
+-  g_assert (child_pid > 0);
+-
+-  /* Parent */
+-  close (pipe_to_factory_fd[0]);
+-  close (pipe_from_factory_fd[1]);
 -#endif /* __APPLE__ */
++  g_spawn_async_with_pipes(
++	NULL,
++	subargv,
++	NULL,
++	0,
++	NULL, NULL,
++	NULL,
++	&pipe_to_factory_fd[1],	&pipe_from_factory_fd[0], NULL,
++	&err
++			   );
++  g_free (subargv);
++  if (err)
++    g_error (err->message);
  
    async_data.set = FALSE;
    async_data.theme_name = NULL;
