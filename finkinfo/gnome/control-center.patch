@@ -24,12 +24,12 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/appearance/Makefile.
  	-DGNOMECC_GLADE_DIR="\"$(gladedir)\"" \
 diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/Makefile.am gnome-control-center-2.26.0/capplets/common/Makefile.am
 --- gnome-control-center-2.26.0.orig/capplets/common/Makefile.am	2008-11-04 11:09:47.000000000 -0500
-+++ gnome-control-center-2.26.0/capplets/common/Makefile.am	2009-08-06 01:36:02.000000000 -0400
++++ gnome-control-center-2.26.0/capplets/common/Makefile.am	2009-08-10 01:30:47.000000000 -0400
 @@ -9,6 +9,7 @@
  	-I$(top_srcdir)							\
  	-I$(top_srcdir)/libwindow-settings				\
  	-DPIXMAP_DIR=\""$(datadir)/gnome-control-center/pixmaps"\"	\
-+	-DTHEME_THUMBNAIL_ENGINE=\""$(enginedir)/theme-thumbnail-engine"\"	\
++	-DTHEME_THUMBNAIL_ENGINE=\""$(enginedir)/theme-thumbnail-engine$(EXEEXT)"\"	\
  	$(CAPPLET_CFLAGS)						\
  	$(DBUS_CFLAGS)							\
  	$(GNOME_DESKTOP_CFLAGS)						\
@@ -62,8 +62,8 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/Makefile.am g
  
 diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbnail-engine.c gnome-control-center-2.26.0/capplets/common/theme-thumbnail-engine.c
 --- gnome-control-center-2.26.0.orig/capplets/common/theme-thumbnail-engine.c	1969-12-31 19:00:00.000000000 -0500
-+++ gnome-control-center-2.26.0/capplets/common/theme-thumbnail-engine.c	2009-08-06 00:55:17.000000000 -0400
-@@ -0,0 +1,750 @@
++++ gnome-control-center-2.26.0/capplets/common/theme-thumbnail-engine.c	2009-08-10 01:22:20.000000000 -0400
+@@ -0,0 +1,741 @@
 +#include <config.h>
 +#include <unistd.h>
 +#include <string.h>
@@ -113,9 +113,6 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbna
 +#define METACITY_THUMBNAIL_WIDTH  120
 +#define METACITY_THUMBNAIL_HEIGHT  60
 +#define ICON_THUMBNAIL_SIZE        48
-+
-+static int pipe_to_factory_fd[2];
-+static int pipe_from_factory_fd[2];
 +
 +static void
 +fake_expose_widget (GtkWidget *widget,
@@ -747,12 +744,12 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbna
 +        }
 +
 +        /* Write the pixbuf's size */
-+        write (pipe_from_factory_fd[1], &width, sizeof (width));
-+        write (pipe_from_factory_fd[1], &height, sizeof (height));
++        write (STDOUT_FILENO, &width, sizeof (width));
++        write (STDOUT_FILENO, &height, sizeof (height));
 +
 +        for (i = 0; i < height; i++)
 +        {
-+          write (pipe_from_factory_fd[1], pixels + rowstride * i, width * gdk_pixbuf_get_n_channels (pixbuf));
++          write (STDOUT_FILENO, pixels + rowstride * i, width * gdk_pixbuf_get_n_channels (pixbuf));
 +        }
 +
 +        if (pixbuf)
@@ -787,13 +784,6 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbna
 +    ThemeThumbnailData data;
 +    GIOChannel *channel;
 +
-+    /* connect pipes to our STDOUT/STDIN */
-+    /* easier to do this here and just cut'n'paste the code-blocks
-+       from theme-thumbnail.c than to edit all of them to use stdio
-+       filehandles directly. FIXME? */
-+    pipe_to_factory_fd[0] = 0;
-+    pipe_from_factory_fd[1] = 1;
-+
 +    gtk_init (&argc, &argv);
 +
 +    data.status = READY_FOR_THEME;
@@ -804,7 +794,8 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbna
 +    data.icon_theme_name = g_byte_array_new ();
 +    data.application_font = g_byte_array_new ();
 +
-+    channel = g_io_channel_unix_new (pipe_to_factory_fd[0]);
++    /* handle data coming in on STDIN (will send results to STDOUT) */
++    channel = g_io_channel_unix_new (STDIN_FILENO);
 +    g_io_channel_set_flags (channel, g_io_channel_get_flags (channel) |
 +          G_IO_FLAG_NONBLOCK, NULL);
 +    g_io_channel_set_encoding (channel, NULL, NULL);
@@ -833,7 +824,7 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbna
 +#define THUMBNAIL_TYPE_ICON     "icon"
 diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbnail.c gnome-control-center-2.26.0/capplets/common/theme-thumbnail.c
 --- gnome-control-center-2.26.0.orig/capplets/common/theme-thumbnail.c	2008-11-04 11:09:47.000000000 -0500
-+++ gnome-control-center-2.26.0/capplets/common/theme-thumbnail.c	2009-08-07 03:02:00.000000000 -0400
++++ gnome-control-center-2.26.0/capplets/common/theme-thumbnail.c	2009-08-10 01:25:30.000000000 -0400
 @@ -1,17 +1,10 @@
  #include <config.h>
  #include <unistd.h>
@@ -901,10 +892,13 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbna
  typedef struct
  {
    gchar *thumbnail_type;
-@@ -82,682 +45,6 @@
- static int pipe_to_factory_fd[2];
- static int pipe_from_factory_fd[2];
+@@ -79,684 +42,8 @@
  
+ static GList *theme_queue = NULL;
+ 
+-static int pipe_to_factory_fd[2];
+-static int pipe_from_factory_fd[2];
+-
 -#define THUMBNAIL_TYPE_META     "meta"
 -#define THUMBNAIL_TYPE_GTK      "gtk"
 -#define THUMBNAIL_TYPE_METACITY "metacity"
@@ -1580,11 +1574,116 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbna
 -
 -  return TRUE;
 -}
--
++static int pipe_to_factory_fd;
++static int pipe_from_factory_fd;
+ 
  static void
  generate_next_in_queue (void)
+@@ -892,32 +179,32 @@
+                         gchar *icon_theme_name,
+                         gchar *application_font)
  {
-@@ -1184,58 +471,32 @@
+-  write (pipe_to_factory_fd[1], thumbnail_type, strlen (thumbnail_type) + 1);
++  write (pipe_to_factory_fd, thumbnail_type, strlen (thumbnail_type) + 1);
+ 
+   if (gtk_theme_name)
+-    write (pipe_to_factory_fd[1], gtk_theme_name, strlen (gtk_theme_name) + 1);
++    write (pipe_to_factory_fd, gtk_theme_name, strlen (gtk_theme_name) + 1);
+   else
+-    write (pipe_to_factory_fd[1], "", 1);
++    write (pipe_to_factory_fd, "", 1);
+ 
+   if (gtk_color_scheme)
+-    write (pipe_to_factory_fd[1], gtk_color_scheme, strlen (gtk_color_scheme) + 1);
++    write (pipe_to_factory_fd, gtk_color_scheme, strlen (gtk_color_scheme) + 1);
+   else
+-    write (pipe_to_factory_fd[1], "", 1);
++    write (pipe_to_factory_fd, "", 1);
+ 
+   if (metacity_theme_name)
+-    write (pipe_to_factory_fd[1], metacity_theme_name, strlen (metacity_theme_name) + 1);
++    write (pipe_to_factory_fd, metacity_theme_name, strlen (metacity_theme_name) + 1);
+   else
+-    write (pipe_to_factory_fd[1], "", 1);
++    write (pipe_to_factory_fd, "", 1);
+ 
+   if (icon_theme_name)
+-    write (pipe_to_factory_fd[1], icon_theme_name, strlen (icon_theme_name) + 1);
++    write (pipe_to_factory_fd, icon_theme_name, strlen (icon_theme_name) + 1);
+   else
+-    write (pipe_to_factory_fd[1], "", 1);
++    write (pipe_to_factory_fd, "", 1);
+ 
+   if (application_font)
+-    write (pipe_to_factory_fd[1], application_font, strlen (application_font) + 1);
++    write (pipe_to_factory_fd, application_font, strlen (application_font) + 1);
+   else
+-     write (pipe_to_factory_fd[1], "Sans 10", strlen ("Sans 10") + 1);
++     write (pipe_to_factory_fd, "Sans 10", strlen ("Sans 10") + 1);
+ 
+ }
+ 
+@@ -932,7 +219,7 @@
+ 
+   do
+   {
+-    bytes_read = read (pipe_from_factory_fd[0], ((guint8*) size) + j, 2 * sizeof (gint));
++    bytes_read = read (pipe_from_factory_fd, ((guint8*) size) + j, 2 * sizeof (gint));
+     if (bytes_read == 0)
+       goto eof;
+     j += bytes_read;
+@@ -952,7 +239,7 @@
+ 
+     do
+     {
+-      bytes_read = read (pipe_from_factory_fd[0], pixels + rowstride * i + j, size[0] * gdk_pixbuf_get_n_channels (pixbuf) - j);
++      bytes_read = read (pipe_from_factory_fd, pixels + rowstride * i + j, size[0] * gdk_pixbuf_get_n_channels (pixbuf) - j);
+ 
+       if (bytes_read > 0)
+         j += bytes_read;
+@@ -969,10 +256,10 @@
+ 
+ eof:
+   g_warning ("Received EOF while reading thumbnail");
+-  close (pipe_to_factory_fd[1]);
+-  pipe_to_factory_fd[1] = 0;
+-  close (pipe_from_factory_fd[0]);
+-  pipe_from_factory_fd[0] = 0;
++  close (pipe_to_factory_fd);
++  pipe_to_factory_fd = 0;
++  close (pipe_from_factory_fd);
++  pipe_from_factory_fd = 0;
+   return NULL;
+ }
+ 
+@@ -984,7 +271,7 @@
+                           gchar *icon_theme_name,
+                           gchar *application_font)
+ {
+-  if (async_data.set || !pipe_to_factory_fd[1] || !pipe_from_factory_fd[0])
++  if (async_data.set || !pipe_to_factory_fd || !pipe_from_factory_fd)
+     return NULL;
+ 
+   send_thumbnail_request (thumbnail_type,
+@@ -1074,7 +361,7 @@
+     return;
+   }
+ 
+-  if (!pipe_to_factory_fd[1] || !pipe_from_factory_fd[0])
++  if (!pipe_to_factory_fd || !pipe_from_factory_fd)
+   {
+     (* func) (NULL, theme_name, user_data);
+ 
+@@ -1086,7 +373,7 @@
+ 
+   if (async_data.channel == NULL)
+   {
+-    async_data.channel = g_io_channel_unix_new (pipe_from_factory_fd[0]);
++    async_data.channel = g_io_channel_unix_new (pipe_from_factory_fd);
+     g_io_channel_set_flags (async_data.channel, g_io_channel_get_flags (async_data.channel) | G_IO_FLAG_NONBLOCK, NULL);
+     g_io_channel_set_encoding (async_data.channel, NULL, NULL);
+     async_data.watch_id = g_io_add_watch (async_data.channel, G_IO_IN | G_IO_HUP, message_from_child, NULL);
+@@ -1184,58 +471,37 @@
  void
  theme_thumbnail_factory_init (int argc, char *argv[])
  {
@@ -1657,12 +1756,17 @@ diff -Nurd -x'*~' gnome-control-center-2.26.0.orig/capplets/common/theme-thumbna
 +	0,
 +	NULL, NULL,
 +	NULL,
-+	&pipe_to_factory_fd[1],	&pipe_from_factory_fd[0], NULL,
++	&pipe_to_factory_fd, &pipe_from_factory_fd, NULL,
 +	&err
 +			   );
 +  g_free (subargv);
-+  if (err)
-+    g_error (err->message);
++  if (err) {
++    g_warning (err->message);
++    g_error_free (err);
++    /* g_spawn failed, so make sure pipes are invalid: other parts of
++       code seem to handle this sentinel properly */
++    pipe_to_factory_fd = pipe_from_factory_fd = 0;
++  }    
  
    async_data.set = FALSE;
    async_data.theme_name = NULL;
