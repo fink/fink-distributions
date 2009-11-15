@@ -1,0 +1,98 @@
+diff -Nurd flag-sort-0.3.orig/flag-sort flag-sort-0.3/flag-sort
+--- flag-sort-0.3.orig/flag-sort	1969-12-31 19:00:00.000000000 -0500
++++ flag-sort-0.3/flag-sort	2009-07-09 01:10:53.000000000 -0400
+@@ -0,0 +1,94 @@
++#!/usr/bin/perl
++# -*- mode: Perl; tab-width: 4; -*-
++
++# A dirty hack by Daniel Macks
++
++use warnings;
++use strict;
++
++# all flags for a listed prefix are grouped together before the next prefix
++my @prefix_order = (
++	'@PREFIX@/opt',
++	'@PREFIX@/lib',
++	'@PREFIX@/include',
++	'/usr/X11/lib',
++	'/usr/X11/include',
++	'/usr/X11R6/lib',
++	'/usr/X11R6/include',
++	'/usr/lib',
++	'/usr/include',
++	'/usr/local/lib',
++	'/usr/local/include'
++);
++
++# track the following flags (in this order)
++my @flag_order = (
++	'-I',
++	'-L',
++);
++my %flag_queues = ();	 # $flag => \@paths_for_flag
++my @other_queue = ();	 # things not fitting into any of %flag_queues
++
++my $verbose = 0;
++if (@ARGV && $ARGV[0] eq '-v') {
++	$verbose = 1;
++	shift;
++}
++
++if (!@ARGV) {
++	warn "Usage: $0 [-v] cmd [flags for cmd]\n";
++	warn "  resort [flags for cmd] and call cmd with them\n";
++	warn "  -v causes display of some diagnostics on STDOUT\n";
++	exit 1;
++}
++
++# what we will launch after organizing the flags
++my @subcmd = ();
++
++# separate the args according to flag
++while (@ARGV) {
++	my $arg = shift;
++	my($flag) = grep { $arg =~ s/^$_// } @flag_order;
++	if (defined $flag) {
++		# parsed off a known flag
++		push @{$flag_queues{$flag}}, $arg;
++	} else {
++		# unknown flag
++		push @other_queue, $arg;
++	}
++}
++
++#assume totally unknown flags and args are most important
++push @subcmd, @other_queue;
++
++# sort all paths for each flag
++foreach my $flag (@flag_order) {
++	next unless defined $flag_queues{$flag};
++	my @path_list = @{$flag_queues{$flag}};
++	#warn "$0: $flag: @path_list\n";
++
++	# first separate the paths according to prefix
++	my %sorted_paths;			# $prefix => \@sorted_dirs_for_prefix
++	my @other_paths;			# paths not under any of %sorted_paths
++	foreach my $path (@{$flag_queues{$flag}}) {
++		my($prefix) = grep { $path =~ /^$_(\/|\z)/ } @prefix_order;
++		if (defined $prefix) {
++			# $path is $prefix or a subdir of it
++			push @{$sorted_paths{$prefix}}, $path;
++		} else {
++			# unknown prefix
++			push @other_paths, $path;
++		}
++	}
++
++	# now reconstruct list of paths according to prefix priority
++	@path_list = @other_paths;  # assume unknowns are "very important"
++	foreach my $prefix (@prefix_order) {
++		push @path_list, @{$sorted_paths{$prefix}} if exists $sorted_paths{$prefix};
++	}
++	#warn "$0: now $flag: @path_list\n";
++	push @subcmd, map "$flag$_", @path_list;
++}
++
++print "$0: @subcmd\n" if $verbose;
++exec {$subcmd[0]} @subcmd or die "Could not exec $subcmd[0]: $!\n";
