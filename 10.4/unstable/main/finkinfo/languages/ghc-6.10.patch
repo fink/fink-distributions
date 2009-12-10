@@ -1,3 +1,4 @@
+ghc/ghc-bin.cabal.in: We need to use page zero.
 compiler/main/DynFlags.hs: Don't redefine __PIC__
 libraries/Makefile: Tell Cabal to use @FINKPREFIX@/include and @FINKPREFIX@/lib.
 rts/Linker.c: Use mmap, and add missing relocation types
@@ -5,10 +6,30 @@ cmm/CLabel.hs: Add missing label types
 configure: Replace hardcoded /sw with @FINKPREFIX@
 ghc.1, hp2ps.1: man pages borrowed from the Debian package
 
+diff -Naur a/ghc/ghc-bin.cabal.in b/ghc/ghc-bin.cabal.in 
+--- a/ghc/ghc-bin.cabal.in
++++ b/ghc/ghc-bin.cabal.in
+@@ -59,4 +59,4 @@
+                     FlexibleInstances
+ 
+     Extensions: CPP, PatternGuards, MagicHash
+-
++    ld-options: -pagezero_size 0x1000
 diff -Naur a/compiler/main/DynFlags.hs b/compiler/main/DynFlags.hs 
 --- a/compiler/main/DynFlags.hs
 +++ b/compiler/main/DynFlags.hs
-@@ -2172,7 +2172,7 @@
+@@ -577,9 +577,7 @@
+         hpcDir                  = ".hpc",
+ 
+         opt_L                   = [],
+-        opt_P                   = (if opt_PIC
+-                                   then ["-D__PIC__"]
+-                                   else []),
++        opt_P                   = [],
+         opt_F                   = [],
+         opt_c                   = [],
+         opt_a                   = [],
+@@ -2172,7 +2170,7 @@
        --     in dynamic libraries.
  
      | opt_PIC
@@ -64,69 +85,7 @@ diff -Naur a/rts/Linker.c b/rts/Linker.c
  #define USE_MMAP
  #include <fcntl.h>
  #include <sys/mman.h>
-@@ -1303,16 +1303,9 @@
-    pagesize = getpagesize();
-    size = ROUND_UP(bytes, pagesize);
- 
--#if defined(x86_64_HOST_ARCH)
--mmap_again:
--
--   if (mmap_32bit_base != 0) {
--       map_addr = mmap_32bit_base;
--   }
--#endif
- 
-    result = mmap(map_addr, size, PROT_EXEC|PROT_READ|PROT_WRITE,
--		    MAP_PRIVATE|TRY_MAP_32BIT|fixed|flags, fd, 0);
-+		    MAP_PRIVATE|fixed|flags, fd, 0);
- 
-    if (result == MAP_FAILED) {
-        sysErrorBelch("mmap %lu bytes at %p",(lnat)size,map_addr);
-@@ -1320,43 +1313,6 @@
-        stg_exit(EXIT_FAILURE);
-    }
-    
--#if defined(x86_64_HOST_ARCH)
--   if (mmap_32bit_base != 0) {
--       if (result == map_addr) {
--           mmap_32bit_base = map_addr + size;
--       } else {
--           if ((W_)result > 0x80000000) {
--               // oops, we were given memory over 2Gb
--#if defined(freebsd_HOST_OS)
--               // Some platforms require MAP_FIXED.  This is normally
--               // a bad idea, because MAP_FIXED will overwrite
--               // existing mappings.
--               munmap(result,size);
--               fixed = MAP_FIXED;
--               goto mmap_again;
--#else
--               barf("loadObj: failed to mmap() memory below 2Gb; asked for %lu bytes at %p.  Try specifying an address with +RTS -xm<addr> -RTS", size, map_addr, result);
--#endif
--           } else {
--               // hmm, we were given memory somewhere else, but it's
--               // still under 2Gb so we can use it.  Next time, ask
--               // for memory right after the place we just got some
--               mmap_32bit_base = (void*)result + size;
--           }
--       }
--   } else {
--       if ((W_)result > 0x80000000) {
--           // oops, we were given memory over 2Gb
--           // ... try allocating memory somewhere else?;
--           debugTrace(DEBUG_linker,"MAP_32BIT didn't work; gave us %lu bytes at 0x%p", bytes, result);
--           munmap(result, size);
--           
--           // Set a base address and try again... (guess: 1Gb)
--           mmap_32bit_base = (void*)0x40000000;
--           goto mmap_again;
--       }
--   }
--#endif
- 
-    return result;
- }
-@@ -4159,6 +4115,9 @@
+@@ -4159,6 +4159,9 @@
                  thing += value;
                  break;
              case X86_64_RELOC_SIGNED:
@@ -136,6 +95,26 @@ diff -Naur a/rts/Linker.c b/rts/Linker.c
                  ASSERT(reloc->r_pcrel);
                  thing += value - baseValue;
                  break;
+@@ -4224,7 +4227,8 @@
+ 		        || scat->r_type == PPC_RELOC_HI16_SECTDIFF
+ 		        || scat->r_type == PPC_RELOC_HA16_SECTDIFF)
+ #else
+-                    else if(scat->r_type == GENERIC_RELOC_SECTDIFF)
++                    else if(scat->r_type == GENERIC_RELOC_SECTDIFF
++                        || scat->r_type == GENERIC_RELOC_LOCAL_SECTDIFF)
+ #endif
+ 		    {
+ 		        struct scattered_relocation_info *pair =
+@@ -4287,7 +4291,8 @@
+                         || scat->r_type == PPC_RELOC_SECTDIFF)
+ #else
+                     if(scat->r_type == GENERIC_RELOC_VANILLA
+-                        || scat->r_type == GENERIC_RELOC_SECTDIFF)
++                        || scat->r_type == GENERIC_RELOC_SECTDIFF
++                        || scat->r_type == GENERIC_RELOC_LOCAL_SECTDIFF)
+ #endif
+                     {
+                         *wordPtr = word;
 diff -Naur a/compiler/cmm/CLabel.hs b/compiler/cmm/CLabel.hs 
 --- a/compiler/cmm/CLabel.hs
 +++ b/compiler/cmm/CLabel.hs
