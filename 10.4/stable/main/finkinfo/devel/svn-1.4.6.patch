@@ -1,0 +1,241 @@
+diff -Naur subversion-1.4.0_orig/Makefile.in subversion-1.4.0/Makefile.in
+--- subversion-1.4.0_orig/Makefile.in	2006-08-08 09:56:13.000000000 -0500
++++ subversion-1.4.0/Makefile.in	2006-08-08 09:57:42.000000000 -0500
+@@ -603,8 +603,7 @@
+ $(SWIG_PL_DIR)/native/Makefile: $(SWIG_PL_DIR)/native/Makefile.PL
+ 	cd $(SWIG_PL_DIR)/native; $(PERL) Makefile.PL
+ 
+-swig-pl_DEPS = autogen-swig-pl libsvn_client libsvn_delta libsvn_diff \
+-  libsvn_fs libsvn_ra libsvn_repos libsvn_subr libsvn_wc libsvn_swig_perl \
++swig-pl_DEPS = libsvn_swig_perl \
+   $(SWIG_PL_DIR)/native/Makefile
+ swig-pl: $(swig-pl_DEPS)
+ 	if test "$(SWIG_PL_DIR)" != "$(SWIG_PL_SRC_DIR)"; then \
+diff -Naur subversion-1.4.0_orig/build/generator/gen_make.py subversion-1.4.0/build/generator/gen_make.py
+--- subversion-1.4.0_orig/build/generator/gen_make.py	2006-08-08 09:56:10.000000000 -0500
++++ subversion-1.4.0/build/generator/gen_make.py	2006-08-08 10:03:52.000000000 -0500
+@@ -5,6 +5,7 @@
+ import os
+ import sys
+ import string
++import ConfigParser
+ 
+ import gen_base
+ import generator.swig.header_wrappers
+@@ -53,6 +54,13 @@
+     install_deps = self.graph.get_deps(gen_base.DT_INSTALL)
+     install_sources = self.graph.get_all_sources(gen_base.DT_INSTALL)
+ 
++    cp = ConfigParser.ConfigParser()
++    cp.read('gen-make.opts')
++    if cp.has_option('options', '--installed-libs'):
++      self.installed_libs = cp.get('options', '--installed-libs').split(',')
++    else:
++      self.installed_libs = []
++
+     # ensure consistency between runs
+     install_deps.sort()
+     install_sources.sort(lambda s1, s2: cmp(s1.name, s2.name))
+@@ -68,11 +76,17 @@
+ 
+         # construct a list of the other .la libs to link against
+         retreat = build_path_retreat(target.path)
+-        deps = [ target.filename ]
+-        link = [ build_path_join(retreat, target.filename) ]
++        if target.name in self.installed_libs:
++          deps = []
++          link = [ '-l%s-%s' % (target.name[3:], self.version) ]
++        else:
++           deps = [ target.filename ]
++           link = [ build_path_join(retreat, target.filename) ]
+         for source in self.graph.get_sources(gen_base.DT_LINK, target.name):
+           if not isinstance(source, gen_base.TargetLib) or source.external_lib:
+             continue
++          elif source.name in self.installed_libs:
++            continue
+           deps.append(source.filename)
+           link.append(build_path_join(retreat, source.filename))
+ 
+@@ -211,6 +225,8 @@
+         elif isinstance(link_dep, gen_base.TargetLinked):
+           if link_dep.external_lib:
+             libs.append(link_dep.external_lib)
++          elif link_dep.name in self.installed_libs:
++            libs.append('-l%s-%s' % (link_dep.name[3:], self.version))
+           elif link_dep.external_project:
+             # FIXME: This is a temporary workaround to fix build breakage
+             # expeditiously.  It is of questionable validity for a build
+diff -Naur subversion-1.4.0_orig/build/ltmain.sh subversion-1.4.0/build/ltmain.sh
+--- subversion-1.4.0_orig/build/ltmain.sh	2006-08-08 09:56:11.000000000 -0500
++++ subversion-1.4.0/build/ltmain.sh	2006-08-08 09:59:02.000000000 -0500
+@@ -5257,7 +5257,7 @@
+ # if CDPATH is set.
+ (unset CDPATH) >/dev/null 2>&1 && unset CDPATH
+ 
+-relink_command=\"$relink_command\"
++relink_command=\"\"
+ 
+ # This environment variable determines our operation mode.
+ if test \"\$libtool_install_magic\" = \"$magic\"; then
+@@ -5698,7 +5698,7 @@
+ libdir='$install_libdir'"
+ 	  if test "$installed" = no && test "$need_relink" = yes; then
+ 	    $echo >> $output "\
+-relink_command=\"$relink_command\""
++relink_command=\"\""
+ 	  fi
+ 	done
+       fi
+diff -Naur subversion-1.4.0_orig/gen-make.py subversion-1.4.0/gen-make.py
+--- subversion-1.4.0_orig/gen-make.py	2006-08-08 09:56:13.000000000 -0500
++++ subversion-1.4.0/gen-make.py	2006-08-08 10:06:40.000000000 -0500
+@@ -81,6 +81,13 @@
+   print
+   print "            The default generator type is 'make'"
+   print
++  print "  UNIX-specific options:"
++  print
++  print "  --installed-libs"
++  print "           Comma-separated list of Subversion libraries to find"
++  print "           pre-installed instead of building (probably only"
++  print "           useful for packagers)"
++  print
+   print "  Makefile-specific options:"
+   print
+   print "  --assume-shared-libs"
+@@ -196,6 +203,7 @@
+                                 'enable-nls',
+                                 'enable-bdb-in-apr-util',
+                                 'vsnet-version=',
++                                'installed-libs=',
+                                 ])
+     if len(args) > 1:
+       _usage_exit()
+diff -Naur subversion-1.4.0_orig/subversion/bindings/swig/perl/native/Makefile.PL.in subversion-1.4.0/subversion/bindings/swig/perl/native/Makefile.PL.in
+--- subversion-1.4.0_orig/subversion/bindings/swig/perl/native/Makefile.PL.in	2006-08-08 09:56:12.000000000 -0500
++++ subversion-1.4.0/subversion/bindings/swig/perl/native/Makefile.PL.in	2006-08-08 10:09:00.000000000 -0500
+@@ -3,7 +3,7 @@
+ use Config;
+ use Cwd 'abs_path';
+ 
+-my $perl_path = $Config{perlpath};
++my $perl_path = $^X;
+ if ($^O ne 'VMS') {
+   $perl_path .= $Config{_exe} unless $perl_path =~ m/$Config{_exe}$/i;
+ }
+diff -ruN subversion-1.4.0_orig/fink/dav_svn subversion-1.4.0/fink/dav_svn.load
+--- subversion-1.4.0_orig/fink/dav_svn.load	1969-12-31 17:00:00.000000000 -0700
++++ subversion-1.4.0/fink/dav_svn.load	2006-06-15 12:28:59.000000000 -0600
+@@ -0,0 +1 @@
++LoadModule dav_svn_module @FINKPREFIX@/lib/apache2/modules/mod_dav_svn.so 
+diff -ruN subversion-1.4.0_orig/fink/authz_svn.load subversion-1.4.0/fink/authz_svn.load
+--- subversion-1.4.0_orig/fink/authz_svn.load	1969-12-31 17:00:00.000000000 -0700
++++ subversion-1.4.0/fink/authz_svn.load	2006-06-15 12:28:59.000000000 -0600
+@@ -0,0 +1 @@
++LoadModule authz_svn_module @FINKPREFIX@/lib/apache2/modules/mod_authz_svn.so
+diff -ruN subversion-1.4.0_orig/fink/dav_svn.conf subversion-1.4.0/fink/dav_svn.conf
+--- subversion-1.4.0_orig/fink/dav_svn.conf	1969-12-31 17:00:00.000000000 -0700
++++ subversion-1.4.0/fink/dav_svn.conf	2006-06-15 12:28:59.000000000 -0600
+@@ -0,0 +1,44 @@
++# dav_svn.conf - Example Subversion/Apache configuration
++#
++# For details and further options see the Apache user manual and
++# the Subversion book.
++
++# <Location URL> ... </Location>
++# URL controls how the repository appears to the outside world.
++# In this example clients access the repository as http://hostname/svn/
++<Location /svn>
++
++  # Uncomment this to enable the repository,
++  # DAV svn
++
++  # Set this to the path to your repository
++  # SVNPath @FINKPREFIX@/var/svn
++
++  # The following allows for basic http authentication.  Basic authentication
++  # should not be considered secure for any particularly rigorous definition of
++  # secure.
++
++  # to create a passwd file
++  # # rm -f @FINKPREFIX@/etc/apache2/dav_svn.passwd 
++  # # htpasswd2 -c @FINKPREFIX@/etc/apache2/dav_svn.passwd dwhedon
++  # New password: 
++  # Re-type new password: 
++  # Adding password for user dwhedon
++  # #
++
++  # Uncomment the following 3 lines to enable Basic Authentication
++  # AuthType Basic
++  # AuthName "Subversion Repository"
++  # AuthUserFile @FINKPREFIX@/etc/apache2/dav_svn.passwd
++
++  # Uncomment the following line to enable Authz Authentication
++  # AuthzSVNAccessFile @FINKPREFIX@/etc/apache2/dav_svn.authz
++
++  # The following three lines allow anonymous read, but make
++  # committers authenticate themselves.
++
++  # <LimitExcept GET PROPFIND OPTIONS REPORT>
++  #   Require valid-user
++  # </LimitExcept> 
++
++</Location>
+diff -ruN subversion-1.4.0_orig/fink/dav_svn.conf subversion-1.4.0/fink/dav_svn.conf
+--- subversion-1.4.0_orig/fink/dav_svn.conf	1969-12-31 17:00:00.000000000 -0700
++++ subversion-1.4.0/fink/dav_svn.conf	2006-06-15 12:28:59.000000000 -0600
+diff -ruN subversion-1.4.0_orig/fink/httpd.conf subversion-1.4.0_orig/fink/httpd.conf
+--- subversion-1.4.0_orig/fink/httpd.conf        1969-12-31 19:00:00.000000000 -0500
++++ subversion-1.4.0/fink/httpd.conf     2006-10-13 17:30:32.000000000 -0400
+@@ -0,0 +1,35 @@
++ServerRoot "@FINKBUILD@/fink/apache2"
++LockFile @FINKBUILD@/fink/apache2/accept.lock
++PidFile @FINKBUILD@/fink/apache2/apache2.pid
++AcceptMutex flock
++ErrorLog @FINKBUILD@/fink/apache2/error.log
++Listen 127.0.0.1:52080
++ServerName localhost:52080
++TypesConfig @FINKPREFIX@/etc/apache2/mime.types
++AddDefaultCharset UTF-8
++Timeout 300
++KeepAlive On
++MaxKeepAliveRequests 100
++KeepAliveTimeout 15
++LoadModule dav_module @FINKPREFIX@/lib/apache2/modules/mod_dav.so
++LoadModule dav_svn_module @FINKPREFIX@/lib/apache2/modules/mod_dav_svn.so
++LoadModule authz_svn_module @FINKPREFIX@/lib/apache2/modules/mod_authz_svn.so
++<Location /svn-test-work/repositories>
++  DAV svn
++  SVNParentPath @FINKBUILD@/subversion/tests/cmdline/svn-test-work/repositories
++  AuthzSVNAccessFile @FINKBUILD@/subversion/tests/cmdline/svn-test-work/authz
++  AuthType Basic
++  AuthName "Subversion Repository"
++  AuthUserFile @FINKBUILD@/tools/test-scripts/svntest/dav_svn.passwd
++  Require valid-user
++</Location>
++
++<Location /svn-test-work/local_tmp/repos>
++  DAV svn
++  SVNPath @FINKBUILD@/subversion/tests/cmdline/svn-test-work/local_tmp/repos
++  AuthzSVNAccessFile @FINKBUILD@/subversion/tests/cmdline/svn-test-work/authz
++  AuthType Basic
++  AuthName "Subversion Repository"
++  AuthUserFile @FINKBUILD@/tools/test-scripts/svntest/dav_svn.passwd
++  Require valid-user
++</Location>
+--- subversion-1.4.3_orig/subversion/tests/cmdline/switch_tests.py	2007/01/17 19:54:18	22378
++++ subversion-1.4.3/subversion/tests/cmdline/switch_tests.py	2007/01/17 20:48:37	22379
+@@ -984,6 +984,13 @@
+ # Issue 2306.
+ def refresh_read_only_attribute(sbox):
+   "refresh the WC file system read-only attribute "
++
++  # This test will fail when run as root. Since that's normal behavior, just skip 
++  # the test.
++  if os.name == 'posix':
++    if os.geteuid() == 0:
++      raise svntest.Skip
++
+   sbox.build()
+   wc_dir = sbox.wc_dir
+ 
