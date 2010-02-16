@@ -1,22 +1,16 @@
 Info4: <<
 Package: qt4-x11
-Version: 4.5.2
+Version: 4.6.1
 Revision: 1
 GCC: 4.0
-CustomMirror: <<
-	Primary: http://ranger.users.finkproject.org/distfiles
-	eur-NL: http://ranger.users.finkproject.org/distfiles
-	nam-US: http://ranger.befunk.com/fink
-	nam-US: http://astrange.ithinksw.net/~astrange/ranger-fink
-	nam-CA: http://www.southofheaven.net/befunk
-<<
-Source: mirror:custom:qt/kde-qt-%v-patched-mac.tar.bz2
-Source-MD5: c55b70322916e0c62f438aa1c45d7c5a
-SourceDirectory: kde-qt
-PatchFile: %n.patch
-PatchFile-MD5: 8ddcec0dfe15b8568a9f1874cc797516
+Source: http://qt.gitorious.org/qt/kde-qt-mac/archive-tarball/%v-mac
+Source-MD5: ea414dd3e1a5f06a8b7a39b8e880b936
+SourceRename: qt-%v-mac-b74051b5da7d242246aeeea67b532dc3ce19b0e0.tar.gz
+SourceDirectory: qt-kde-qt-mac
+#PatchFile: %n.patch
+#PatchFile-MD5: 0999a71cb375df0feab46aea2a6dd8e3
 PatchScript: <<
-	patch -p1 --fuzz=4 < %{PatchFile}
+#	patch -p1 --fuzz=4 < %{PatchFile}
 	perl -pi -e 's,const char,char,g' config.tests/unix/*iconv/*.cpp
 	perl -pi -e 's,CFG_MAC_XARCH=auto,CFG_MAC_XARCH=no,g' configure
 <<
@@ -41,7 +35,7 @@ BuildDepends: <<
 	gstreamer-0.10-dev,
 	gst-plugins-base-0.10-dev,
 	kde4-buildenv (>= 4.2.4-2),
-	libgettext3-dev,
+	libgettext8-dev,
 	libiconv-dev (>= 1.12-3),
 	libjpeg,
 	libmng2,
@@ -50,11 +44,13 @@ BuildDepends: <<
 	macosx (>= 10.4.3-1),
 	pkgconfig (>= 0.22-1),
 	sqlite3-dev,
-	x11-dev
+	system-sdk-10.4-universal,
+	x11-dev,
 <<
 BuildDependsOnly: true
 BuildConflicts: kdelibs3-dev, kdelibs3-ssl-dev, kdelibs3-unified-dev, libevent1, pcre, clucene-core
 NoSetLDFLAGS: true
+SetLDFLAGS: -lglib-2.0
 CompileScript: <<
 #!/bin/sh -ev
 
@@ -71,9 +67,14 @@ CompileScript: <<
 			export CCACHE_DIR="/tmp/ccache-qt4"
 		fi
 	fi
+	EXTRA_ARGS="-confirm-license -no-pch -verbose"
+	if [ "%m" = "x86_64" ]; then
+		EXTRA_ARGS="$EXTRA_ARGS -arch x86_64"
+	fi
 	find . -name ._\* -exec rm -rf {} \;
-	sh ./configure-for-fink.sh "%p" "%N" -confirm-license -no-pch -verbose -make "libs tools docs"
+	sh ./configure-for-fink.sh "%p" "%N" $EXTRA_ARGS -make "libs tools docs"
 	find . -name Makefile\* -print0 | xargs -0 perl -pi -e 's,-I%p/include,-isystem %p/include,g'
+	touch src/3rdparty/phonon/gstreamer/phonon-config-gstreamer.h
 	make LINK="$CXX"
 <<
 InstallScript: <<
@@ -98,6 +99,15 @@ InstallScript: <<
 END
 	cat %i/lib/%N/include/QtCore/qglobal.h >>%i/lib/%N/include/QtCore/qglobal.h.new
 	/bin/mv %i/lib/%N/include/QtCore/qglobal.h.new %i/lib/%N/include/QtCore/qglobal.h
+
+	# for some reason, phonon install misses some headers
+	for header in \
+		audiodataoutput.h \
+		audiodataoutputinterface.h \
+		globalconfig.h \
+	; do
+		install -m 644 -c src/3rdparty/phonon/phonon/$header %i/lib/%N/include/phonon/
+	done
 
 	#### FIX LA, PRL and PC FILES ####
 
@@ -148,24 +158,44 @@ EOF
 	perl -pi -e 's/-framework ApplicationServices/-Wl,-framework,ApplicationServices/g' %i/lib/%N/lib/pkgconfig/*.pc
 
 	%p/sbin/normalize-filenames.sh "%i/lib/%N/include"
-	if [ -d "%i/lib/%N/include/Phonon" ]; then
+	if [ -d "%i/lib/%N/include/Phonon" -a ! -d "%i/lib/%N/include/phonon" ]; then
+		/bin/rm -f "%i/lib/%N/include/phonon"
 		/bin/mv "%i/lib/%N/include/Phonon" "%i/lib/%N/include/phonon"
+	fi
+
+	if [ -f "%i/lib/%N/include/phonon/phonon" ] && [ -d "%i/lib/%N/include/phonon/Phonon" ]; then
+		# Building on case sensitive FS means there's both a phonon file and
+		# a Phonon dir - rename the file, or the package can't be used on
+		# case insensitive file systems
+		# also rename the directory so this package matches with the old one;
+		# the PostInst script will create symlinks if needed so it works anyway
+		/bin/mv "%i/lib/%N/include/phonon/phonon" "%i/lib/%N/include/phonon/phonon.h"
+		/bin/mv "%i/lib/%N/include/phonon/Phonon" "%i/lib/%N/include/phonon/phonon"
 	fi
 
 	install -d -m 755 %i/share/doc/installed-packages
 	touch %i/share/doc/installed-packages/%N
 <<
 PostInstScript: <<
-	if [ "$1" = "configure" ] && [ ! -f "%p/lib/%N/include/Phonon/phononnamespace.h" ]; then
+	if [ "$1" = "configure" ] && [ ! -f "%p/lib/%N/include/phonon/Phonon/MediaNode" ]; then
 		# case-sensitive filesystem, make various build-system stuff happy
-		ln -sf phonon "%p/lib/%N/include/Phonon"
+		/bin/ln -sf phonon "%p/lib/%N/include/phonon/Phonon"
+	fi
+<<
+PreRmScript: <<
+	# remove the symlinks we created earlier
+	if [ -h "%p/lib/%N/include/Phonon" ]; then
+		/bin/rm "%p/lib/%N/include/Phonon"
+	fi
+	if [ -h "%p/lib/%N/include/phonon/Phonon" ]; then
+		/bin/rm "%p/lib/%N/include/phonon/Phonon"
 	fi
 <<
 SplitOff: <<
 	Package: %N-gui-shlibs
 	DocFiles: LGPL* LICENSE*
 	Suggests: %N-designer, %N-linguist, %N-doc
-	Replaces: %N-core-shlibs (<< 4.5.0-5)
+	Replaces: %N-core-shlibs (<< 4.6.0-5)
 	Depends: <<
 		%N-core-shlibs (= %v-%r),
 		gst-plugins-base-0.10-shlibs,
@@ -178,6 +208,7 @@ SplitOff: <<
 		lib/%N/lib/libQtAssistantClient.4*.dylib
 		lib/%N/lib/libQtGui.4*.dylib
 		lib/%N/lib/libQtHelp.4*.dylib
+		lib/%N/lib/libQtMultimedia.4*.dylib
 		lib/%N/lib/libQtOpenGL.4*.dylib
 		lib/%N/lib/libQtScriptTools.4*.dylib
 		lib/%N/lib/libQtSvg.4*.dylib
@@ -191,15 +222,16 @@ SplitOff: <<
 		lib/%N/plugins/script
 	<<
 	Shlibs: <<
-		%p/lib/%N/lib/libQt3Support.4.dylib        4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtAssistantClient.4.dylib 4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtGui.4.dylib             4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtHelp.4.dylib            4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtOpenGL.4.dylib          4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtScriptTools.4.dylib     4.5.0 %n (>= 4.5.0-5)
-		%p/lib/%N/lib/libQtSvg.4.dylib             4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtWebKit.4.dylib          4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libphonon.4.dylib            4.3.0 %n (>= 4.5.0-1)
+		%p/lib/%N/lib/libQt3Support.4.dylib        4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtAssistantClient.4.dylib 4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtGui.4.dylib             4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtHelp.4.dylib            4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtMultimedia.4.dylib      4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtOpenGL.4.dylib          4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtScriptTools.4.dylib     4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtSvg.4.dylib             4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtWebKit.4.dylib          4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libphonon.4.dylib            4.3.0 %n (>= 4.6.0-1)
 	<<
 	PostInstScript: <<
 		(/%p/lib/fontconfig2/bin/fc-cache -f || :) >/tmp/fc-cache.log 2>&1 || :
@@ -234,15 +266,15 @@ SplitOff2: <<
 		lib/%N/plugins/sqldrivers
 	<<
 	Shlibs: <<
-		%p/lib/%N/lib/libQtCore.4.dylib        4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtCLucene.4.dylib     4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtDBus.4.dylib        4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtNetwork.4.dylib     4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtScript.4.dylib      4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtSql.4.dylib         4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtTest.4.dylib        4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtXml.4.dylib         4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtXmlPatterns.4.dylib 4.5.0 %n (>= 4.5.0-1)
+		%p/lib/%N/lib/libQtCore.4.dylib        4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtCLucene.4.dylib     4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtDBus.4.dylib        4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtNetwork.4.dylib     4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtScript.4.dylib      4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtSql.4.dylib         4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtTest.4.dylib        4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtXml.4.dylib         4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtXmlPatterns.4.dylib 4.6.0 %n (>= 4.6.0-1)
 	<<
 <<
 
@@ -254,7 +286,6 @@ SplitOff3: <<
 		bin/designer*
 		share/applnk/Development/designer4.desktop
 		lib/%N/bin/designer
-		lib/%N/translations/designer_*
 	<<
 <<
 SplitOff4: <<
@@ -267,8 +298,8 @@ SplitOff4: <<
 		lib/%N/plugins/designer
 	<<
 	Shlibs: <<
-		%p/lib/%N/lib/libQtDesigner.4.dylib           4.5.0 %n (>= 4.5.0-1)
-		%p/lib/%N/lib/libQtDesignerComponents.4.dylib 4.5.0 %n (>= 4.5.0-1)
+		%p/lib/%N/lib/libQtDesigner.4.dylib           4.6.0 %n (>= 4.6.0-1)
+		%p/lib/%N/lib/libQtDesignerComponents.4.dylib 4.6.0 %n (>= 4.6.0-1)
 	<<
 <<
 SplitOff5: <<
@@ -280,7 +311,6 @@ SplitOff5: <<
 		share/applnk/Development/linguist4.desktop
 		lib/%N/bin/l*
 		lib/%N/phrasebooks
-		lib/%N/translations/linguist_*
 	<<
 <<
 SplitOff6: <<
@@ -311,7 +341,7 @@ DescUsage: <<
 		%p/lib/%N/bin/qmake %p/share/doc/%N/examples/examples.pro
 		make
 <<
-DocFiles: FAQ* LGPL* LICENSE* README*
+DocFiles: LGPL* LICENSE* README*
 License: LGPL
 Maintainer: Benjamin Reed <qt4-x11@fink.racoonfink.com>
 Homepage: http://www.trolltech.com/
