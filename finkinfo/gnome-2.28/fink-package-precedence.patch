@@ -1,7 +1,7 @@
-diff -Nurd -x'*~' fink-package-precedence-0.2.orig/fink-package-precedence fink-package-precedence-0.2/fink-package-precedence
---- fink-package-precedence-0.2.orig/fink-package-precedence	1969-12-31 19:00:00.000000000 -0500
-+++ fink-package-precedence-0.2/fink-package-precedence	2010-02-11 04:01:41.000000000 -0500
-@@ -0,0 +1,234 @@
+diff -Nurd -x'*~' fink-package-precedence-0.5.orig/fink-package-precedence fink-package-precedence-0.5/fink-package-precedence
+--- fink-package-precedence-0.5.orig/fink-package-precedence	1969-12-31 19:00:00.000000000 -0500
++++ fink-package-precedence-0.5/fink-package-precedence	2010-02-21 15:44:47.000000000 -0500
+@@ -0,0 +1,247 @@
 +#!/usr/bin/perl
 +# -*- mode: Perl; tab-width: 4; -*-
 +
@@ -156,25 +156,36 @@ diff -Nurd -x'*~' fink-package-precedence-0.2.orig/fink-package-precedence fink-
 +
 +
 +my %fink_pkgs;
-+my $dpkg_s = "$fink_prefix/bin/dpkg -S";
++my @not_found;
++my $dpkg_S = "$fink_prefix/bin/dpkg -S";
 +my $progress = 1;
 +print "Determining fink providers of ", scalar(@fink_headers), " headers...\n";
 +while (@fink_headers) {
-+	# so in blocks using heuristic to avoid shell cmd-line limit
++	# do in blocks of files using heuristic to avoid shell cmd-line limit
++	# ('dpkg -S' is expensive!)
 +	my @chunk = splice @fink_headers, 0, 100;
 +	print "\t$progress - ", ($progress+=@chunk)-1, "\n";
 +
-+	open my $dpkg_s, "$dpkg_s @chunk |" or die "Could not fork $dpkg_s: $!\n";
-+	while (<$dpkg_s>) {
-+		if (/^([^:]+):/) {
++	open my $dpkg_S_fh, "$dpkg_S @chunk 2>&1 |" or die "Could not fork $dpkg_S: $!\n";
++	while (<$dpkg_S_fh>) {
++		if (/^dpkg: (.*\.)$/) {
++			# 'dpkg: $filename not found.' but "not found" may be localized
++			push @not_found, $1;
++		} elsif (/^([^:]+):/) {
 +			$fink_pkgs{$1} = 1;
 +		}
 +	}
-+	close $dpkg_s or die "Error reading $dpkg_s: $! $?\n";
++	close $dpkg_S_fh;		 # or die "Error reading $dpkg_S: $! $?\n";
++	# must not trap close() error, since that is expected if a file is
++	# not found in dpkh -S database
 +}
 +
 +print "Found use of headers from ", scalar(keys %fink_pkgs), " fink packages:\n";
 +map { print "\t$_\n" } sort keys %fink_pkgs;
++if (@not_found) {
++	print "Could not determine fink package for ", scalar(@not_found), " headers:\n";
++	map { print "\t$_\n" } sort @not_found;
++}
 +
 +my @bad_bdep = grep { exists $fink_pkgs{$_} } @{$opts{'prohibit-bdep'}};
 +if (@bad_bdep) {
@@ -191,17 +202,19 @@ diff -Nurd -x'*~' fink-package-precedence-0.2.orig/fink-package-precedence fink-
 +		die "Cannot scan binary linking without $otool\n";
 +	}
 +
++print "Scanning binaries for incorrect dyld linking...\n";
++
 +my %deps;						# key=linked lib
 +								# value=first binary that links against it
 +
 +find sub {
 +	return unless -f;
-+	open my $otool_L, "$otool -L $_ |" or die "Could not fork $otool -L $_: $!\n";
-+	while ( defined ( $_ = <$otool_L> ) ) {
++	open my $otool_L_fh, '-|', $otool, '-L', $_ or die "Could not fork $otool -L $_: $!\n";
++	while ( defined ( $_ = <$otool_L_fh> ) ) {
 +		next unless /^\t(.+) \(/;	# only read dyld links
 +		$deps{$1} = $File::Find::name if ! exists $deps{$1};
 +	}
-+	close $otool_L;
++	close $otool_L_fh or die "Error reading $otool -L: $! $?\n";
 +}, @ARGV;
 +
 +# regexes for libraries to disallow.
