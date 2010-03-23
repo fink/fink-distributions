@@ -1,6 +1,7 @@
+Info4: <<
 Package: postgresql84
-Version: 8.4.0
-Revision: 2
+Version: 8.4.3
+Revision: 1
 Description: PostgreSQL open-source database
 License: BSD
 Maintainer: Benjamin Reed <postgresql84@fink.racoonfink.com>
@@ -21,16 +22,18 @@ BuildDepends: <<
 	libxslt,
 	passwd (>= 20030906-1),
 	readline5,
-	system-openssl-dev
+	system-openssl-dev,
+	system-perl,
+	tcltk,
+	tcltk-dev
 <<
-
 GCC: 4.0
 
 Source: mirror:postgresql:source/v%v/postgresql-%v.tar.bz2
-Source-MD5: 1f172d5f60326e972837f58fa5acd130
+Source-MD5: 7f70e7b140fb190f268837255582b07e
+PatchScript: sed -e 's|@BUILDDIR@|%b|g' -e 's|@INSTPREFIX@|%p|g' < %{PatchFile} | patch -p1
 PatchFile: %n.patch
 PatchFile-MD5: e42fbdad63059b801b016b33742f1512
-PatchScript: sed -e 's|@BUILDDIR@|%b|g' -e 's|@INSTPREFIX@|%p|g' < %{PatchFile} | patch -p1
 
 SetCPPFLAGS: -I%p/lib/system-openssl/include -DHAVE_OPTRESET -fno-common
 SetLDFLAGS: -L%p/lib/system-openssl/lib
@@ -43,6 +46,9 @@ CompileScript: <<
 		export CPP=cpp-4.2
 	fi
 
+	export PERL=/usr/bin/perl
+	export PYTHON=/usr/bin/python
+
 	./configure \
 		--prefix='%p/opt/postgresql-8.4' \
 		--docdir='%p/share/doc/%N' \
@@ -51,9 +57,11 @@ CompileScript: <<
 		--with-libraries=%p/lib \
 		--with-includes=%p/include \
 		\
-		--without-perl \
-		--without-python \
-		--without-tcl \
+		--with-perl \
+		--with-python \
+		--with-tcl \
+		--with-tclconfig=%p/lib \
+		--with-tkconfig=%p/lib \
 		\
 		--enable-thread-safety \
 		--with-openssl \
@@ -65,15 +73,18 @@ CompileScript: <<
 		--enable-odbc \
 		--with-libxml \
 		--with-libxslt
+
+	perl -pi -e 's,-arch x86_64,,g; s,-arch i386,,g; s,-arch ppc,,g' src/Makefile.global
 	make
+	make -C contrib
 <<
 
 InstallScript: <<
 #!/bin/sh -xe
 
 	# postgresql
-	make -j1 install DESTDIR="%d"
-	make -j1 -C contrib install DESTDIR="%d"
+	make -j1 install DESTDIR="%d" BE_DLLLIBS=%p/opt/postgresql-8.4/bin/postgres
+	make -j1 -C contrib install DESTDIR="%d" BE_DLLLIBS=%p/opt/postgresql-8.4/bin/postgres
 
 	ranlib %i/opt/postgresql-8.4/lib/*.a
 
@@ -166,7 +177,7 @@ for tuple in bin:binary.list share/man/man1:man1.list share/man/man7:man7.list; 
 
 	for file in \`cat %p/var/postgresql-8.4/\${TUPLE_FILE}\`; do
 		if [ -e "%p/opt/postgresql-8.4/\${TUPLE_PATH}/\${file}" ]; then
-			echo update-alternatives --install "%p/\${TUPLE_PATH}/\${file}" "\${file}" "%p/opt/postgresql-8.4/\${TUPLE_PATH}/\${file}" 84
+			#echo update-alternatives --install "%p/\${TUPLE_PATH}/\${file}" "\${file}" "%p/opt/postgresql-8.4/\${TUPLE_PATH}/\${file}" 84
 			update-alternatives --install "%p/\${TUPLE_PATH}/\${file}" "\${file}" "%p/opt/postgresql-8.4/\${TUPLE_PATH}/\${file}" 84
 		fi
 	done
@@ -178,17 +189,6 @@ END
 	perl -pi -e 's,^%d,,' %i/bin/pg_config*
 <<
 DocFiles: COPYRIGHT HISTORY INSTALL README
-
-PreInstScript: <<
-	PG_ID=`id -u postgres 2>/dev/null || true`
-	if [ -z "$PG_ID" ]; then
-		echo "Whoa there!  You must have a postgres user to install this package."
-		echo "Please do a 'fink reinstall passwd' and make sure you hit 'y' when it"
-		echo "asks if you want to update your users."
-		exit 1
-	fi
-<<
-
 SplitOff: <<
 	Package: %N-dev
 	Description: PostgreSQL development headers and libraries
@@ -205,17 +205,17 @@ SplitOff: <<
 		opt/postgresql-8.4/share/man/man1/pg_config*
 	<<
 	PreInstScript: <<
-		PG_ID=`id -u postgres 2>/dev/null || true`
-		if [ -z "$PG_ID" ]; then
-			echo "Whoa there!  You must have a postgres user to install this package."
-			echo "Please do a 'fink reinstall passwd' and make sure you hit 'y' when it"
-			echo "asks if you want to update your users."
-			exit 1
-		fi
+PG_ID=`id -u postgres 2>/dev/null || true`
+if [ -z "$PG_ID" ]; then
+	echo "Whoa there!  You must have a postgres user to install this package."
+	echo "Please do a 'fink reinstall passwd' and make sure you hit 'y' when it"
+	echo "asks if you want to update your users."
+	exit 1
+fi
 	<<
 	PostInstScript: [ -x %p/var/postgresql-8.4/update-alternatives.sh ] && %p/var/postgresql-8.4/update-alternatives.sh
-	PreRmScript:    [ -x %p/var/postgresql-8.4/remove-alternatives.sh ] && %p/var/postgresql-8.4/remove-alternatives.sh
-	PostRmScript:   [ -x %p/var/postgresql-8.4/update-alternatives.sh ] && %p/var/postgresql-8.4/update-alternatives.sh
+	PreRmScript: [ -x %p/var/postgresql-8.4/remove-alternatives.sh ] && %p/var/postgresql-8.4/remove-alternatives.sh
+	PostRmScript: [ -x %p/var/postgresql-8.4/update-alternatives.sh ] && %p/var/postgresql-8.4/update-alternatives.sh
 <<
 SplitOff2: <<
 	Package: %N-shlibs
@@ -232,9 +232,18 @@ SplitOff2: <<
 		%p/opt/postgresql-8.4/lib/libpq.5.dylib          5.0.0 postgresql84-shlibs (>= 8.4.0-1)
 	<<
 	PostInstScript: [ -x %p/var/postgresql-8.4/update-alternatives.sh ] && %p/var/postgresql-8.4/update-alternatives.sh
-	PreRmScript:    [ -x %p/var/postgresql-8.4/remove-alternatives.sh ] && %p/var/postgresql-8.4/remove-alternatives.sh
+	PreRmScript: [ -x %p/var/postgresql-8.4/remove-alternatives.sh ] && %p/var/postgresql-8.4/remove-alternatives.sh
 <<
 
+PreInstScript: <<
+PG_ID=`id -u postgres 2>/dev/null || true`
+if [ -z "$PG_ID" ]; then
+	echo "Whoa there!  You must have a postgres user to install this package."
+	echo "Please do a 'fink reinstall passwd' and make sure you hit 'y' when it"
+	echo "asks if you want to update your users."
+	exit 1
+fi
+<<
 PostInstScript: <<
 INSTALL_PHASE="$1"
 
@@ -310,16 +319,16 @@ fi
 <<
 PostRmScript: [ -x %p/var/postgresql-8.4/update-alternatives.sh ] && %p/var/postgresql-8.4/update-alternatives.sh
 DaemonicFile: <<
-	<service>
-	<description>PostgreSQL database server</description>
-	<message> PostgreSQL database server</message>
-	
-	<daemon name="%N">
-		<executable background="no">%p/bin/pgsql.sh-8.4</executable>
-		<parameters>start</parameters>
-	</daemon>
-	
-	</service>
+<service>
+<description>PostgreSQL database server</description>
+<message> PostgreSQL database server</message>
+
+<daemon name="%N">
+	<executable background="no">%p/bin/pgsql.sh-8.4</executable>
+	<parameters>start</parameters>
+</daemon>
+
+</service>
 <<
 
 Homepage: http://www.postgresql.org/
@@ -353,5 +362,6 @@ DescPort: <<
 Rearranged a lot of the PostgreSQL build to be more "correct" on
 Darwin, including making proper dylibs (instead of bundles, which
 ended up creating static binaries).
+<<
 <<
 
