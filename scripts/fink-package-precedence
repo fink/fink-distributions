@@ -11,6 +11,7 @@ use Getopt::Long;
 
 my %opts = (
 	'headers' => 1,				# scan .h in -M dependency files?
+	'depfile-ext' => [],		# extensions for header-dep scan
 	'prohibit-bdep' => [],		# whine if .h supplied by these packages
 	'libs' => 1,				# scan otool -L of compiled binaries?
 	'help' => 0,				# print usage msg?
@@ -19,6 +20,7 @@ my %opts = (
 GetOptions(
 	\%opts,
 	'headers!',
+	'depfile-ext=s@',
 	'prohibit-bdep=s@',
 	'libs!',
 	'help|?',
@@ -36,6 +38,17 @@ if (@{$opts{'prohibit-bdep'}}) {
 		$opts{'help'} = 1;
 	}
 }
+if (@{$opts{'depfile-ext'}}) {
+	# handle comma-separated list like multiply-passed flag
+	$opts{'depfile-ext'} = [ split /,/, join ',', @{$opts{'depfile-ext'}} ];
+
+	if (!$opts{'headers'}) {
+		# can't specify header depfile extensions if not scanning headers
+		$opts{'help'} = 1;
+	}
+} else {
+	$opts{'depfile-ext'} = ['\.Plo', '\.Po'];
+}
 if (!@ARGV) {
 	# must specify at least one location
 	$opts{'help'} = 1;
@@ -47,12 +60,17 @@ Usage: $0 [options] <list of locations>
 
 Options:
 
-  --headers/--no-headers  Scan .Plo and .Po files (*1) for:
+  --headers/--no-headers  Scan dependency files (*1) for:
                           * Use of system headers that should be
                             masked by fink ones (*2)
                             (bad -I ordering or missing BuildDepends)
                           * Fink packages that supply headers used
                             (packages to list in BuildDepends)
+
+  --depfile-ext=<pkg>     Which files to scan for --headers scan
+                          * Defaults to {\.Plo,\.Po} if not specified
+                          * Left-truncated regex for full pathname
+                            (beware of regex-quoting and shell-quoting)
 
   --prohibit-bdep=<pkg>   Test if --headers finds a .h that is supplied
                           by installed fink package <pkg> (*2)
@@ -71,7 +89,7 @@ Options:
 
   *2 error-code on exit if this condition occurs
 
-  <list of locations> can be .Plo and/or .Po filenames, compiled-
+  <list of locations> can be dependency filenames, compiled-
   binary filenames, or directories to scan for these files.
 
 EOMSG
@@ -81,16 +99,17 @@ EOMSG
 
 if ($opts{'headers'}) {
 
-print "Scanning .Plo and .Po dependency files...\n";
+print "Scanning /", join( ",", @{$opts{'depfile-ext'}} ), "\$/ dependency files...\n";
+
+my $dep_re = '(' . join( '|', @{$opts{'depfile-ext'}} ) . ')$';
+$dep_re = qr/$dep_re/;
 
 my %deps;						# key=included file
-								# value=first .Plo/.Tpo where it's listed
+								# value=first dependencies file where it's listed
 
 my $plo_count = 0;
 find sub {
-	return unless /\.(Plo|Po)$/;	#  .deps/TARGET.Plo or
-									#  .deps/TARGET.Po for libtool lib
-									#  objects vs simple objects
+	return unless $File::Find::name =~ /$dep_re/;	# skip files that aren't our dependency lists
 
 	print "\t$File::Find::name\n";
 	$plo_count++;
@@ -108,7 +127,7 @@ find sub {
 }, @ARGV;
 
 if (! $plo_count) {
-	die "No .Plo or .Tpo files found.\n";
+	die "No dependency files found.\n";
 }
 
 print "Looking for incorrect headers in ", $plo_count, " dependency files...\n";
