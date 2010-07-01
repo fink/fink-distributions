@@ -1,0 +1,154 @@
+Package: openh323-1
+Version: 1.19.0
+Revision: 6
+Distribution: 10.4, 10.5
+Maintainer: None <fink-devel@lists.sourceforge.net>
+GCC: 4.0
+BuildDependsOnly: true
+
+BuildDepends: <<
+	cyrus-sasl2-dev (>= 2.1.22-1006),
+	doxygen,
+	expat1,
+	gsm,
+	openldap24-dev (>= 2.4.15-1),
+	openssl098-dev,
+	pwlib1 (>= 1.10.10-6),
+	sdl (>= 1.2.13-1),
+	speex3,
+	sed,
+	fink (>= 0.27.2)
+<<
+#Also, at least some of ffmpeg-dev | libavcodec1-dev | libavformat1-dev
+Depends: %N-shlibs (= %v-%r)
+Conflicts: openh323
+Replaces: openh323
+Provides: openh323
+Source-MD5: e7ba3ae6b50d0d02c5cbe9ed3a3152c4
+Source: mirror:sourceforge:/openh323/openh323-v1_19_0_1-src-tar.gz
+SourceDirectory: openh323_v1_19_0_1
+
+PatchScript: <<
+#!/bin/sh -ev
+  sed -ri.bak -e '/ awk/s,>,- >,' src/Makefile
+  sed -ri.bak -e 's,@SHAREDLIBEXT@,dylib,' Makefile.in
+  sed -ri.bak -e '/^STDCCFLAGS/s,\(OH323_INCDIR\)$,(OPENH323DIR)/include,' openh323u.mak.in
+#  perl -pi.bak -e 's,malloc.h,sys/$&,' plugins/audio/GSM0610/gsm06_10_codec.c  # no longer needed in 1.17.3
+  perl -pi.bak -e 's,\-lgsm0610_audio_s,,' configure
+  perl -pi.bak -e 's/darwin\*\) */$&LDSO="-bundle -Wl,-x -dead_strip" /' plugins/configure
+  perl -pi.bak -e 's,(\$\(LDSO\))\$\(SONAME\),\1,' plugins/audio/*/Makefile.in
+  sed -ri -e '/^\$\(PLUGIN\):/,/^$/s,\(CC\),\(CXX\),' plugins/audio/Speex/Makefile.in
+# avoid implicit declaration of memcpy :
+  sed -ri.bak -e '/<stdlib\.h>/a #include <string.h>' plugins/audio/GSM0610/src/code.c
+### All following lines are the same as in opal2.info:
+## the configure script expects pwlib's version.h to be installed at the first level of PWLIBDIR (=%p),
+## (ie, in parallel with bin, lib, and share...), while pwlib's own install target doesn't even install it...
+  perl -pi -e 's,\{PWLIBDIR\}/version\.h,\{PWLIBDIR\}/include/ptlib.h,' configure
+## same treatment for PWLIBDIR=%p as when =/usr or /usr/local :
+  sed -ri -e '/test\ \"x\$PWLIBDIR\"\ =\ \"x\/usr\"/,/^fi$/c PWLIBDIR=`sed -e 's,/$,,' <<<"$PWLIBDIR"`' \
+	-e 's,(\"x\$PWLIBDIR\" = \"x)/usr/local,\1%p\" -o &,' \
+	-e 's,usr/",usr",' \
+	-e 's,/usr/local/share/pwlib/,\$PWLIBDIR/share/pwlib,' configure 
+<<
+NoSetLDFLAGS: true
+SetLIBRARY_PATH: %b/lib:%p/lib
+NoSetCPPFLAGS: true
+NoSetMAKEFLAGS: true
+SetMAKEFLAGS: -j1
+SetCFLAGS: -O3 -fstrict-aliasing
+#ConfigureParams: --enable-embeddedgsm
+#ConfigureParams: --enable-rfc2190avcodec=%p/include/ffmpeg
+#ConfigureParams: --enable-h263avcodec
+# dont use --enable-asntracing --enable-audio --enable-video : they have the opposite effect
+CompileScript: <<
+#!/bin/sh -ev
+  export PWLIBDIR=%p
+  export H323_AVCODEC=1
+  # export H323_RFC2190_AVCODEC=1
+  # export H323_VICH263=1
+  export CPATH=%p/include/ffmpeg:%p/include/speex:%p/include
+  export STDCCFLAGS=-I%b/include 
+ ./configure %c
+  if [ %m = i386 ] ; then abbr=x86 ; else abbr=ppc ; fi
+  mv=`sed -r -e 's,\.[^.]*$,,' <<<"%v"`
+  Mv=`sed -r -e 's,\.[^.]*$,,' <<<"$mv"`
+  make	LDSOOPTS="-dynamiclib -single_module -Wl,-x -dead_strip -compatibility_version $mv -current_version %v -install_name %p/lib/libh323_Darwin_${abbr}_n.${Mv}.dylib" \
+	NOTRACE=1	optshared optnoshared apps docs
+<<
+InstallScript: <<
+#!/bin/sh -ev
+#  make install DESTDIR=%d
+  if [ %m = i386 ] ; then abbr=x86 ; else abbr=ppc ; fi
+  mkdir -p %i/lib %i/include/openh323 %i/share/openh323
+  cp -pPR lib/lib* %i/lib
+  ln -s libh323_Darwin_${abbr}_n.dylib %i/lib/libopenh323.dylib
+## following line really needed ? libopenh323.dylib already installed with that target... Could adjust ekiga2..
+  ln -s libh323_Darwin_${abbr}_n.dylib %i/lib/libh323.dylib
+  ranlib %i/lib/*.a
+  for fn in include/*.h ; do install -m 444 $fn %i/include/openh323 ; done
+  install -m 444 openh323u.mak %i/share/openh323
+  make -C plugins install DESTDIR=%d
+
+# don't think we care if the .dylib and .so are +x
+  chmod 644 %i/lib/{l,pwlib/codecs/audio/}*
+  mkdir -p %i/bin
+  cp samples/simple/obj_Darwin_*/simph323 %i/bin
+  strip %i/bin/simph323
+  mkdir -p %i/share/doc/%n/html
+  install -m 644 OpenH323* openh323* %i/share/doc/%n
+  install -m 644 html/* %i/share/doc/%n/html
+  ln -s ../%N-shlibs/{mpl-1.0.htm,ReadMe.txt} %i/share/doc/%n
+<<
+SplitOff: <<
+  Package: %N-shlibs
+  Description: Shared libraries for openh323
+  Depends: <<
+		cyrus-sasl2-shlibs (>= 2.1.22-1006),
+		expat1-shlibs,
+		openldap24-shlibs (>= 2.4.15-1),
+		openssl098-shlibs,
+		pwlib1-shlibs (>= 1.10.10-6),
+		sdl-shlibs (>= 1.2.13-1),
+		speex3-shlibs
+  <<
+  Conflicts: openh323-shlibs
+  Replaces: openh323-shlibs
+  Provides: openh323-shlibs
+  ## adding lib/pwlib here to be able to put a BDO in %N _ ekiga does depend on those files
+  Files: lib/libh323_Darwin_*.*.dylib lib/pwlib
+  Shlibs: <<
+	( %m = powerpc	) %p/lib/libh323_Darwin_ppc_n.1.dylib 1.19.0 %n (>= 1.19.0-1)
+	( %m = i386	) %p/lib/libh323_Darwin_x86_n.1.dylib 1.19.0 %n (>= 1.19.0-1)
+  <<
+  DocFiles: mpl-1.0.htm ReadMe.txt
+<<
+SplitOff2: <<
+  Package: %N-bin
+  Depends: <<
+		%N-shlibs (= %v-%r),
+		cyrus-sasl2-shlibs (>= 2.1.22-1006),
+		expat1-shlibs,
+		openldap24-shlibs (>= 2.4.15-1),
+		openssl098-shlibs,
+		pwlib1-shlibs (>= 1.10.10-5),
+		sdl-shlibs
+  <<
+  Conflicts: openh323-bin
+  Replaces: openh323-bin
+  Description: Binary utilities for openh323 (simph323)
+  Files: bin/simph323
+  InstallScript: mkdir -p %i/share/doc; ln -s %N-shlibs %i/share/doc/%n
+<<
+Description: OpenH323 Libraries + simph323
+DescPort: <<
+Keep to latest version compatible _ according to http://openh323.sourceforge.net/ _
+with fink's current version of pwlib, or else go first back for pwlib to the format
+infofile_name = %N-%v.info, so older versions can stay in fink (versioning of those
+pkgs seems completely erratic). Cf also pwlib's DescPort.
+<<
+DescPackaging: <<
+Original version by Shawn Hsiao <shawn@users.sourceforge.net>; version 1.12.2-10 by James Gibbs <jimgibbs@mac.com>
+Installs now in policy-conformant dirs.
+<<
+Homepage: http://openh323.sourceforge.net/
+License: OSI-Approved

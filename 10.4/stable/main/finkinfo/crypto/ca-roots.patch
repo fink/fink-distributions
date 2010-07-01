@@ -1,0 +1,106 @@
+diff -Nru mozilla.orig/ca-roots/Makefile mozilla/ca-roots/Makefile
+--- mozilla.orig/ca-roots/Makefile	Thu Jan  1 09:00:00 1970
++++ mozilla/ca-roots/Makefile	Thu Mar 31 01:27:38 2005
+@@ -0,0 +1,12 @@
++CERTDATA = ../security/nss/lib/ckfw/builtins/certdata.txt
++
++all: firefox-builtin.pem
++
++firefox-builtin.pem: mozconv.awk oct2bin $(CERTDATA)
++	awk -f mozconv.awk $(CERTDATA) > $@
++
++oct2bin: oct2bin.c
++	gcc -Wall -o $@ $<
++
++clean:
++	rm -f *.tmp oct2bin firefox-builtin.pem
+diff -Nru mozilla.orig/ca-roots/README.fink.txt mozilla/ca-roots/README.fink.txt
+--- mozilla.orig/ca-roots/README.fink.txt	Thu Jan  1 09:00:00 1970
++++ mozilla/ca-roots/README.fink.txt	Thu Mar 31 01:28:14 2005
+@@ -0,0 +1,14 @@
++The "ca-roots" package contains a list of SSL Certificate Authority root
++certificates. Such a list performs a similar role for SSL Certificate
++verfication that the root cache does for DNS servers.
++
++Currently this package contains only the list came from the Mozilla Firefox
++distribution. Possibly I should have included other lists such as Brazillian
++Government Certificate. Debian's "ca-certificates" package contains extra
++lists in addition to Mozilla Suite's. However, their license is not clear.
++More precisely, it is not clear even whether they are softwares protected
++by copyright. In contrast, Fink Package Policy demands to make package's
++licence clear. That is why I included only Firefox's certificates,
++which explicitly claims MPL/GPL.
++
++AIDA Shinra <shinra@j10n.org>
+diff -Nru mozilla.orig/ca-roots/mozconv.awk mozilla/ca-roots/mozconv.awk
+--- mozilla.orig/ca-roots/mozconv.awk	Thu Jan  1 09:00:00 1970
++++ mozilla/ca-roots/mozconv.awk	Thu Mar 31 01:31:35 2005
+@@ -0,0 +1,39 @@
++#! /usr/bin/awk -f
++BEGIN {
++    octtmp="oct.tmp"
++    bintmp="bin.tmp"
++    # 0: normal 1: reading certdata
++    mode=0
++    system("rm -f " octtmp " " bintmp)
++}
++
++/^ *#/ { print $0; next }
++
++/^ *$/ { print $0; next }
++
++/^CVS_ID / { gsub(/\$/,""); print "#" $0; next }
++
++/^CKA_VALUE MULTILINE_OCTAL$/ { mode=1; next }
++
++/^END$/ {
++    if (mode == 1) {
++	close(octtmp)
++	print "-----BEGIN CERTIFICATE-----"
++	if (system("./oct2bin < " octtmp " > " bintmp))
++	    exit(1)
++	if (system("uuencode -m " bintmp " foo | sed '1d;$d'"))
++	    exit(1)
++	if (system("rm " octtmp " " bintmp))
++	    exit(1)
++	print "-----END CERTIFICATE-----"
++    }
++    mode=0
++    next
++}
++
++mode == 1 {
++    # Don't add last newline
++    printf $0 >> octtmp
++    next
++}
++
+diff -Nru mozilla.orig/ca-roots/oct2bin.c mozilla/ca-roots/oct2bin.c
+--- mozilla.orig/ca-roots/oct2bin.c	Thu Jan  1 09:00:00 1970
++++ mozilla/ca-roots/oct2bin.c	Thu Mar 31 01:27:38 2005
+@@ -0,0 +1,25 @@
++#include <stdio.h>
++
++int main(void) {
++    char buf[4];
++    while (fread(buf, 1, 4, stdin) == 4) {
++	int val = 0;
++	if (buf[0] != '\\')
++	    goto fail;
++	if (buf[1] < '0' || buf[1] > '3')
++	    goto fail;
++	val |= ((int)buf[1] - '0') << 6;
++	if (buf[2] < '0' || buf[2] > '7')
++	    goto fail;
++	val |= ((int)buf[2] - '0') << 3;
++	if (buf[3] < '0' || buf[3] > '7')
++	    goto fail;
++	val |= ((int)buf[3] - '0');
++	putchar(val);
++    }
++    if (feof(stdin))
++	return 0;
++fail:
++    fputs("oct2bin: bad input\n", stderr);
++    return 1;
++}

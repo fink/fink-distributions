@@ -1,0 +1,252 @@
+Package: proftpd
+Version: 1.2.10
+Revision: 1015
+###
+Depends: proftpd-pam | proftpd-tls | proftpd-ldap | proftpd-mysql | proftpd-pgsql, anacron, daemonic, ftpfiles
+BuildDepends: openldap-ssl-dev, openssl097-dev, postgresql80-unified-dev (>= 8.0.6-1026), mysql14-dev (>= 4.1.10-1002), libncurses5 (>= 5.4-20041023-1006), fink (>= 0.24.12)
+Replaces: proftpd-pam (<< 1.2.9-10), proftpd-tls (<< 1.2.9-10), proftpd-ldap (<< 1.2.9-10), proftpd-mysql (<< 1.2.9-10), proftpd-pgsql (<< 1.2.9-10)
+###
+Source: ftp://ftp.proftpd.org/distrib/source/proftpd-%v.tar.bz2
+Source-MD5: 5feb4a7348e12faefc25e34fd92efdd6
+###
+PatchFile: %n.patch
+PatchFile-MD5: bea367e285516b7ae6bfa41d3aaa91be
+PatchScript: <<
+  ### New files and Fix PATHS
+  sed 's|@FINKPREFIX@|%p|g' < %{PatchFile} | patch -p1
+  ### Enable SSL with LDAP
+  perl -pi -e 's,\/\* #define HAVE_OPENSSL \*\/,#define HAVE_OPENSSL,g' contrib/mod_ldap.c
+  perl -pi -e 's,-lldap -llber,-lldap -llber -lcrypto,g' contrib/mod_ldap.c
+  ### liblnsl fix
+  perl -pi -e 's,-lwrap -lnsl,-lwrap,g' contrib/mod_wrap.c
+  ### Fix relinking Makefile
+  perl -pi -e 's,install: all install-all,install: install-all,g' Makefile.in
+<<
+###
+NoSetMAKEFLAGS: true
+SetMAKEFLAGS: -j1
+NoSetCFLAGS: true
+NoSetCPPFLAGS: true
+NoSetLDFLAGS: true
+SetCFLAGS: -fno-common
+###
+DocFiles: COPYING CREDITS ChangeLog INSTALL NEWS README* contrib/*.html contrib/README* contrib/INSTALL*
+###
+ConfFiles: <<
+  %p/etc/proftpd.conf
+<<
+###
+ConfigureParams: <<
+  --without-getopt --with-includes=%p/include:%p/include/mysql:%p/include/postgresql --with-libraries=%p/lib:%p/lib/mysql --enable-ctrls --enable-ipv6 --enable-auth-pam --with-pic --enable-shared --enable-static --mandir=%p/share/man --infodir=%p/share/info --libexecdir=%p/lib
+<<
+###
+CompileScript: <<
+  #!/bin/sh -ev
+  MODULES="mod_wrap:mod_ifsession:mod_rewrite:mod_ratio:mod_readme"
+
+  BUILDS="pam mysql pgsql ldap tls"
+
+  for build in $BUILDS; do \
+    if [ $build == 'pam' ]; then \
+      BUILDMODS=$MODULES; \
+    fi; \
+    if [ $build == 'mysql' ]; then \
+      BUILDMODS=mod_sql:mod_sql_mysql:$MODULES; \
+    fi; \
+    if [ $build == 'pgsql' ]; then \
+      BUILDMODS=mod_sql:mod_sql_postgres:$MODULES; \
+    fi; \
+    if [ $build == 'ldap' ]; then \
+      BUILDMODS=mod_ldap:$MODULES; \
+    fi; \
+    if [ $build == 'tls' ]; then \
+      BUILDMODS=mod_tls:$MODULES; \
+    fi; \
+    if [ -d build-$build ]; then \
+      rm -rf build-$build; \
+    fi; \
+    mkdir -p build-$build; \
+    cd build-$build; \
+    ln -s ../include include; \
+    ../configure %c --with-modules=$BUILDMODS; \
+    make; \
+    cd ..; \
+  done
+<<
+###
+InstallScript: <<
+  #!/bin/sh -ev
+  mkdir -p %i/etc
+  mkdir -p %i/etc/cron.monthly
+  mkdir -p %i/sbin
+  install -m 644 sample-configurations/basic.conf %i/etc/proftpd.conf
+  install -m 775 contrib/ftpasswd %i/sbin/ftpasswd
+  install -m 775 contrib/ftpstats %i/sbin/ftpstats
+  install -m 755 contrib/cron.monthly %i/etc/cron.monthly/proftpd
+<<
+###
+SplitOff: <<
+  Package: proftpd-pam
+  Replaces: proftpd-ldap, proftpd-mysql, proftpd-pgsql, proftpd-tls
+  Conflicts: proftpd-ldap, proftpd-mysql, proftpd-pgsql, proftpd-tls
+  Provides: ftpd, proftpd
+  DocFiles: COPYING CREDITS ChangeLog INSTALL NEWS README* contrib/*.html contrib/README* contrib/INSTALL*
+  InstallScript: <<
+    #!/bin/sh -ev
+    cd build-pam
+    make install DESTDIR=%d
+    rm -rf %i/etc
+    cd ..
+  <<
+  Description: Incredibly configurable and secure FTP daemon (Default)
+  DescDetail: <<
+    ProFTPD is a proven, high-performance, scalable FTP server written from
+    scratch, with a focus toward simplicity, security, and ease of configuration.
+    Naturally, ProFTPD powers some of the largest sites on the Internet. It
+    features a very Apache-like configuration syntax, modules, and a highly
+    customizable server infrastructure, including support for multiple 'virtual'
+    FTP servers, anonymous FTP, and permission-based directory visibility.
+  <<
+<<
+###
+SplitOff2: <<
+  Package: proftpd-mysql
+  Depends: mysql14-shlibs (>= 4.1.10-1002), libncurses5-shlibs (>= 5.4-20041023-1006)
+  Replaces: proftpd-ldap, proftpd-pam, proftpd-pgsql, proftpd-tls
+  Conflicts: proftpd-ldap, proftpd-pam, proftpd-pgsql, proftpd-tls
+  Provides: ftpd, proftpd
+  DocFiles: COPYING CREDITS ChangeLog INSTALL NEWS README* contrib/*.html contrib/README* contrib/INSTALL*
+  InstallScript: <<
+    #!/bin/sh -ev
+    cd build-mysql
+    make install DESTDIR=%d
+    rm -rf %i/etc
+    cd ..
+  <<
+  Description: Incredibly configurable and secure FTP daemon (MySQL)
+  DescDetail: <<
+    ProFTPD is a proven, high-performance, scalable FTP server written from
+    scratch, with a focus toward simplicity, security, and ease of configuration.
+    Naturally, ProFTPD powers some of the largest sites on the Internet. It
+    features a very Apache-like configuration syntax, modules, and a highly
+    customizable server infrastructure, including support for multiple 'virtual'
+    FTP servers, anonymous FTP, and permission-based directory visibility.
+  <<
+<<
+###
+SplitOff3: <<
+  Package: proftpd-pgsql
+  Depends: postgresql80-shlibs (>= 8.0.6-1026) | postgresql80-ssl-shlibs (>= 8.0.6-1026), libncurses5-shlibs (>= 5.4-20041023-1006)
+  Replaces: proftpd-ldap, proftpd-mysql, proftpd-pam, proftpd-tls
+  Conflicts: proftpd-ldap, proftpd-mysql, proftpd-pam, proftpd-tls
+  Provides: ftpd, proftpd
+  DocFiles: COPYING CREDITS ChangeLog INSTALL NEWS README* contrib/*.html contrib/README* contrib/INSTALL*
+  InstallScript: <<
+    #!/bin/sh -ev
+    cd build-pgsql
+    make install DESTDIR=%d
+    rm -rf %i/etc
+    cd ..
+  <<
+  Description: Incredibly configurable and secure FTP daemon (PostgreSQL)
+  DescDetail: <<
+    ProFTPD is a proven, high-performance, scalable FTP server written from
+    scratch, with a focus toward simplicity, security, and ease of configuration.
+    Naturally, ProFTPD powers some of the largest sites on the Internet. It
+    features a very Apache-like configuration syntax, modules, and a highly
+    customizable server infrastructure, including support for multiple 'virtual'
+    FTP servers, anonymous FTP, and permission-based directory visibility.
+  <<
+<<
+###
+SplitOff4: <<
+  Package: proftpd-ldap
+  Depends: openldap-ssl-shlibs, openssl097-shlibs, libncurses5-shlibs (>= 5.4-20041023-1006)
+  Replaces: proftpd-pam, proftpd-mysql, proftpd-pgsql, proftpd-tls
+  Conflicts: proftpd-pam, proftpd-mysql, proftpd-pgsql, proftpd-tls
+  Provides: ftpd, proftpd
+  DocFiles: COPYING CREDITS ChangeLog INSTALL NEWS README* contrib/*.html contrib/README* contrib/INSTALL*
+  InstallScript: <<
+    #!/bin/sh -ev
+    cd build-ldap
+    make install DESTDIR=%d
+    rm -rf %i/etc
+    cd ..
+  <<
+  Description: Incredibly configurable and secure FTP daemon (LDAP)
+  DescDetail: <<
+    ProFTPD is a proven, high-performance, scalable FTP server written from
+    scratch, with a focus toward simplicity, security, and ease of configuration.
+    Naturally, ProFTPD powers some of the largest sites on the Internet. It
+    features a very Apache-like configuration syntax, modules, and a highly
+    customizable server infrastructure, including support for multiple 'virtual'
+    FTP servers, anonymous FTP, and permission-based directory visibility.
+  <<
+<<
+###
+SplitOff5: <<
+  Package: proftpd-tls
+  Depends: openssl097-shlibs, libncurses5-shlibs (>= 5.4-20041023-1006)
+  Replaces: proftpd-ldap, proftpd-mysql, proftpd-pgsql, proftpd-pam
+  Conflicts: proftpd-ldap, proftpd-mysql, proftpd-pgsql, proftpd-pam
+  Provides: ftpd, proftpd
+  DocFiles: COPYING CREDITS ChangeLog INSTALL NEWS README* contrib/*.html contrib/README* contrib/INSTALL*
+  InstallScript: <<
+    #!/bin/sh -ev
+    cd build-tls
+    make install DESTDIR=%d
+    rm -rf %i/etc
+    cd ..
+  <<
+  Description: Incredibly configurable and secure FTP daemon (TLS)
+  DescDetail: <<
+    ProFTPD is a proven, high-performance, scalable FTP server written from
+    scratch, with a focus toward simplicity, security, and ease of configuration.
+    Naturally, ProFTPD powers some of the largest sites on the Internet. It
+    features a very Apache-like configuration syntax, modules, and a highly
+    customizable server infrastructure, including support for multiple 'virtual'
+    FTP servers, anonymous FTP, and permission-based directory visibility.
+  <<
+<<
+###
+PostInstScript: <<
+  # update init script if necessary
+  daemonic update proftpd
+<<
+PreRmScript: <<
+  # clean up
+  [ -f %p/var/run/proftpd.pid ] && kill `cat %p/var/run/proftpd.pid`
+  if [ $1 != "upgrade" ]; then
+    daemonic remove proftpd
+  fi
+<<
+###
+DaemonicName: proftpd
+DaemonicFile: <<
+  <service>
+    <description>ProFTPD FTP Daemon Server</description>
+    <message>ProFTPD FTP Daemon Server</message>
+
+    <daemon name="proftpd">
+      <executable background="yes">%p/sbin/proftpd</executable>
+      <!-- the daemon will background itself, but may take a while
+           to start up to the point where it does so -->
+      <pidfile>%p/var/run/proftpd.pid</pidfile>
+    </daemon>
+
+  </service>
+<<
+###
+Description: Incredibly configurable and secure FTP daemon
+DescDetail: <<
+  ProFTPD is a proven, high-performance, scalable FTP server written from
+  scratch, with a focus toward simplicity, security, and ease of configuration.
+  Naturally, ProFTPD powers some of the largest sites on the Internet. It
+  features a very Apache-like configuration syntax, modules, and a highly
+  customizable server infrastructure, including support for multiple 'virtual'
+  FTP servers, anonymous FTP, and permission-based directory visibility.
+<<
+###
+License: GPL
+Maintainer: Justin F. Hallett <thesin@users.sourceforge.net>
+Homepage: http://www.proftpd.org/

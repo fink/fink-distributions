@@ -1,0 +1,428 @@
+Package: mozilla
+
+Version: 1.7.13
+Revision: 1117
+
+Architecture: powerpc
+GCC: 4.0
+Source: mirror:custom:mozilla/releases/%n%v/source/%n-%v-source.tar.bz2
+Source-MD5: eb0683207f7668319c65e403d04bfc41
+CustomMirror: <<
+  Primary: http://ftp.mozilla.org/pub/mozilla.org/
+  nam-US: ftp://ftp.spnet.net/mozilla/
+  eur-BE: ftp://ftp.kulnet.kuleuven.ac.be/mirror/mozilla-releases/
+  asi-JP: http://core.ring.gr.jp/pub/net/www/mozilla/
+<<
+SourceDirectory: mozilla
+Depends: <<
+  %N-psm (= %v-%r),
+  %N-mailnews (= %v-%r),
+  %N-chatzilla (= %v-%r),
+  %N-js-debugger (= %v-%r),
+  %N-dom-inspector (= %v-%r),
+  %N-browser (= %v-%r),
+  %N-shlibs (= %v-%r)
+<<
+BuildDepends: <<
+  atk1 (>= 1.20.0-1),
+  cairo (>= 1.6-1),
+  expat1,
+  fontconfig2-dev (>= 2.4.1-1),
+  fink (>= 0.24.12-1),
+  freetype219 (>= 2.3.5-1),
+  gconf2-dev (>= 2.20.0-1),
+  glib2-dev (>= 2.14.0-1),
+  glitz,
+  gnome-vfs2-unified-dev (>= 1:2.20.0-1),
+  gtk+2-dev (>= 2.12.0-1),
+  libbonobo2-dev (>= 2.20.0-1),
+  libgettext3-dev,
+  libiconv-dev,
+  libidl2 (>= 0.8.9-1),
+  libjpeg,
+  libpng3 (>= 1.2.8-1),
+  orbit2-dev (>= 2.14.9-1),
+  pango1-xft2-ft219-dev (>= 1.18.4-4),
+  pixman (>= 0.10.0-1),
+  pkgconfig (>= 0.21-1),
+  x11-dev,
+  xft2-dev
+<<
+NoSetLDFLAGS: true
+SetLDFLAGS: -L%p/lib/freetype219/lib
+NoSetCPPFLAGS: true
+SetCC: gcc -I%p/lib/freetype219/include -I%p/lib/freetype219/include/freetype2 -I%p/lib/pango-ft219
+SetCXX: g++ -I%p/lib/freetype219/include -I%p/lib/freetype219/include/freetype2
+PatchFile: %n.patch
+PatchFile-MD5: 22986b81951d0d8785f20892d6a01b74
+PatchScript: <<
+/usr/bin/sed 's|@PREFIX@|%p|g' %{PatchFile} | patch -p1
+### Fix for automake1.9
+/usr/bin/perl -pi -e 's/(AC_DEFUN\()([^[,]+)(,)/\1\[\2]\3/' {{build,directory/c-sdk/config}/autoconf,nsprpub/config}/nspr.m4
+### banish -no-cpp-precomp
+perl -pi -e 's,-no-cpp-precomp,,' configure
+<<
+ConfigureParams: --disable-dependency-tracking
+CompileScript: <<
+#!/bin/sh -ev
+export PATH="%p/lib/freetype219/bin:${PATH}" PKG_CONFIG_PATH="%p/lib/pango-ft219/lib/pkgconfig:%p/lib/fontconfig2/lib/pkgconfig:%p/lib/freetype219/lib/pkgconfig:$PKG_CONFIG_PATH" FREETYPE_CONFIG=%p/lib/freetype219/bin/freetype-config
+./configure %c
+make -w
+
+# Divide installed-chrome.txt for each split-off.
+/usr/bin/sed -e '/pipnss/d' -e '/pippki/d' -e '/messenger/d' -e '/chatzilla/d' \
+  -e '/venkman/d' -e '/inspector/d' \
+  dist/bin/chrome/installed-chrome.txt >fink/chrome.d/00browser
+/usr/bin/grep 'pip[nss|pki]' dist/bin/chrome/installed-chrome.txt >fink/chrome.d/00psm
+/usr/bin/grep 'messenger' dist/bin/chrome/installed-chrome.txt >fink/chrome.d/00mailnews
+/usr/bin/grep 'chatzilla' dist/bin/chrome/installed-chrome.txt >fink/chrome.d/00chatzilla
+/usr/bin/grep 'venkman' dist/bin/chrome/installed-chrome.txt >fink/chrome.d/00js-debugger
+/usr/bin/grep 'inspector' dist/bin/chrome/installed-chrome.txt >fink/chrome.d/00dom-inspector
+<<
+InstallScript: <<
+#!/bin/sh -ev
+
+make -w install DESTDIR=%d
+
+# Install NSS headers.
+/bin/cp -R -L dist/public/nss %i/include/%n/nss
+
+# These files are reduntant.
+for f in %i/lib/%n/chrome/*.jar; do
+  /bin/rm -rf ${f/.jar/}
+done
+
+# These files are created dynamically.
+/bin/rm -rf %i/lib/%n/chrome/overlayinfo
+/bin/rm -f %i/lib/%n/chrome/*.rdf
+/bin/rm -f %i/lib/%n/component.reg
+/bin/rm -f %i/lib/%n/components/*.dat
+
+# Multi user setting.
+/usr/bin/touch %i/lib/%n/chrome/user-skins.rdf
+/usr/bin/touch %i/lib/%n/chrome/user-locales.rdf
+
+# Empty installed-chrome.txt.
+/bin/rm %i/lib/%n/chrome/installed-chrome.txt
+/usr/bin/touch %i/lib/%n/chrome/installed-chrome.txt
+
+# Install fink specific files.
+/usr/bin/install -d -m 755 %i/bin %i/sbin %i/var/lib/%n/chrome.d
+/usr/bin/install -c -m 755 fink/mozilla %i/bin/
+/usr/bin/install -c -m 755 fink/update-mozilla-chrome %i/sbin/
+/usr/bin/install -c -m 644 fink/chrome.d/* %i/var/lib/%n/chrome.d/
+
+# Move config file into %p/etc.
+/usr/bin/install -d -m 755 %i/etc/%n
+/usr/bin/install -c -m 644 fink/prefs.js %i/etc/%n/
+/bin/ln -sf %p/etc/%n/prefs.js %i/lib/%n/defaults/pref/fink.js
+
+# Install gnome .desktop files.
+/usr/bin/install -d -m 755 %i/share/applications
+/usr/bin/install -c -m 644 fink/applications/* %i/share/applications/
+
+/usr/bin/install -d -m 755 %i/share/pixmaps
+/usr/bin/install -c -m 644 dist/bin/chrome/icons/default/main-window.xpm %i/share/pixmaps/mozilla.xpm
+/usr/bin/install -c -m 644 dist/bin/chrome/icons/default/addressbookWindow.xpm %i/share/pixmaps/mozilla-addressbook.xpm
+/usr/bin/install -c -m 644 dist/bin/chrome/icons/default/chatzilla-window.xpm %i/share/pixmaps/mozilla-chatzilla.xpm
+/usr/bin/install -c -m 644 dist/bin/chrome/icons/default/editorWindow.xpm %i/share/pixmaps/mozilla-editor.xpm
+/usr/bin/install -c -m 644 dist/bin/chrome/icons/default/msgcomposeWindow.xpm %i/share/pixmaps/mozilla-mail-composer.xpm
+/usr/bin/install -c -m 644 dist/bin/chrome/icons/default/messengerWindow.xpm %i/share/pixmaps/mozilla-mailnews.xpm
+
+# rename nspr.m4 to avoid clashes with other gecko installs
+/bin/mv %i/share/aclocal/nspr.m4 %i/share/aclocal/nspr-%n.m4
+<<
+SplitOff: <<
+  Package: %N-psm
+  Depends: %N-browser (= %v-%r)
+  Replaces: %N (<< 1.1.0-4)
+  Description: Mozilla - personal security manager
+  DocFiles: LEGAL LICENSE
+  PostInstScript: <<
+    if [ configure = "$1" ]; then
+        update-mozilla-chrome || true
+    fi
+  <<
+  PostRmScript: <<
+    if [ upgrade != "$1" ]; then
+        update-mozilla-chrome || true
+    fi
+  <<
+  Files: <<
+    lib/%N/chrome/pipnss.jar
+    lib/%N/chrome/pippki.jar
+    lib/%N/components/libpipboot.dylib
+    lib/%N/components/libpipnss.dylib
+    lib/%N/components/libpippki.dylib
+    lib/%N/components/pipboot.xpt
+    lib/%N/components/pipnss.xpt
+    lib/%N/components/pippki.xpt
+    var/lib/%N/chrome.d/00psm
+  <<
+<<
+SplitOff2: <<
+  Package: %N-mailnews
+  Depends: %N-browser (= %v-%r)
+  Replaces: %N (<< 1.1.0-4), %N-chatzilla (<< 1.7.2-1)
+  Description: Mozilla - mail and news support
+  DocFiles: LEGAL LICENSE
+  PostInstScript: <<
+    if [ configure = "$1" ]; then
+        update-mozilla-chrome || true
+    fi
+  <<
+  PostRmScript: <<
+    if [ upgrade != "$1" ]; then
+        update-mozilla-chrome || true
+    fi
+  <<
+  Files: <<
+    lib/%N/chrome/messenger.jar
+    lib/%N/components/addrbook.xpt
+    lib/%N/components/impComm4xMail.xpt
+    lib/%N/components/import.xpt
+    lib/%N/components/libaddrbook.dylib
+    lib/%N/components/libimpComm4xMail.dylib
+    lib/%N/components/libimpText.dylib
+    lib/%N/components/libimport.dylib
+    lib/%N/components/liblocalmail.dylib
+    lib/%N/components/libmailnews.dylib
+    lib/%N/components/libmailview.dylib
+    lib/%N/components/libmime.dylib
+    lib/%N/components/libmimeemitter.dylib
+    lib/%N/components/libmozldap.dylib
+    lib/%N/components/libmsgcompose.dylib
+    lib/%N/components/libmsgdb.dylib
+    lib/%N/components/libmsgimap.dylib
+    lib/%N/components/libmsgmdn.dylib
+    lib/%N/components/libmsgnews.dylib
+    lib/%N/components/libmsgsmime.dylib
+    lib/%N/components/libvcard.dylib
+    lib/%N/components/mailnews.xpt
+    lib/%N/components/mailview.xpt
+    lib/%N/components/mdn-service.js
+    lib/%N/components/mime.xpt
+    lib/%N/components/msgbase.xpt
+    lib/%N/components/msgcompose.xpt
+    lib/%N/components/msgdb.xpt
+    lib/%N/components/msgimap.xpt
+    lib/%N/components/msglocal.xpt
+    lib/%N/components/msgnews.xpt
+    lib/%N/components/msgsearch.xpt
+    lib/%N/components/msgsmime.xpt
+    lib/%N/components/nsLDAPPrefsService.js
+    lib/%N/components/smime-service.js
+    lib/%N/libldap50.dylib
+    lib/%N/libprldap50.dylib
+    lib/%N/defaults/pref/mailnews.js
+    lib/%N/defaults/pref/mdn.js
+    lib/%N/defaults/pref/smime.js
+    share/applications/Mozilla-mail-composer.desktop
+    share/applications/Mozilla-mail.desktop
+    share/applications/Mozilla-news.desktop
+    share/pixmaps/mozilla-mail-composer.xpm
+    share/pixmaps/mozilla-mailnews.xpm
+    var/lib/%N/chrome.d/00mailnews
+  <<
+  Shlibs: <<
+    %p/lib/%N/libldap50.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libprldap50.dylib 1.0.0 %n (>= 1.1.0-4)
+  <<
+<<
+SplitOff3: <<
+  Package: %N-chatzilla
+  Depends: %N-browser (= %v-%r)
+  Replaces: %N (<< 1.1.0-4)
+  Description: Mozilla - irc client
+  DocFiles: LEGAL LICENSE
+  PostInstScript: <<
+    if [ configure = "$1" ]; then
+        update-mozilla-chrome || true
+    fi
+  <<
+  PostRmScript: <<
+    if [ upgrade != "$1" ]; then
+        update-mozilla-chrome || true
+    fi
+  <<
+  Files: <<
+    lib/%N/chrome/chatzilla.jar
+    lib/%N/chrome/icons/default/chatzilla*
+    lib/%N/components/chatzilla-service.js
+    share/applications/Mozilla-chatzilla.desktop
+    var/lib/%N/chrome.d/00chatzilla
+  <<
+<<
+SplitOff4: <<
+  Package: %N-js-debugger
+  Depends: %N-browser (= %v-%r)
+  Replaces: %N (<< 1.1.0-4)
+  Description: Mozilla - java script debugger
+  DocFiles: LEGAL LICENSE
+  PostInstScript: <<
+    if [ configure = "$1" ]; then
+        update-mozilla-chrome || true
+    fi
+  <<
+  PostRmScript: <<
+    if [ upgrade != "$1" ]; then
+        update-mozilla-chrome || true
+    fi
+  <<
+  Files: <<
+    lib/%N/chrome/venkman.jar
+    lib/%N/chrome/icons/default/venkman*
+    lib/%N/components/venkman-service.js
+    var/lib/%N/chrome.d/00js-debugger
+  <<
+<<
+SplitOff5: <<
+  Package: %N-dom-inspector
+  Depends: %N-browser (= %v-%r), %N-shlibs (= %v-%r)
+  Replaces: %N (<< 1.1.0-4)
+  Description: Mozilla - DOM inspector
+  DocFiles: LEGAL LICENSE
+  PostInstScript: <<
+    if [ configure = "$1" ]; then
+        update-mozilla-chrome || true
+    fi
+  <<
+  PostRmScript: <<
+    if [ upgrade != "$1" ]; then
+        update-mozilla-chrome || true
+    fi
+  <<
+  Files: <<
+    lib/%N/chrome/inspector.jar
+    lib/%N/components/inspector.xpt
+    lib/%N/components/libinspector.dylib
+    lib/%N/defaults/pref/inspector.js
+    lib/%N/res/inspector
+    var/lib/%N/chrome.d/00dom-inspector
+  <<
+<<
+SplitOff6: <<
+  Package: %N-shlibs
+  Replaces: %N (<< 1.1.0-4), %N-mailnews (<< 1.3-1)
+  Depends: <<
+    atk1-shlibs (>= 1.20.0-1),
+    freetype219-shlibs (>= 2.3.5-1),
+    glib2-shlibs (>= 2.14.0-1),
+    gtk+2-shlibs (>= 2.12.0-1),
+    libgettext3-shlibs,
+    libiconv,
+    pango1-xft2-ft219-shlibs (>= 1.18.4-4),
+    x11-shlibs
+  <<
+  DocFiles: LEGAL LICENSE
+  Description: Mozilla - shared libraries
+  Files: <<
+    lib/%N/lib*.dylib
+  <<
+  Shlibs: <<
+    %p/lib/%N/libgkgfx.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libgtkembedmoz.dylib 1.0.0 %n (>= 1.3-1)
+    %p/lib/%N/libgtkxtbin.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libjsj.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libmozjs.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libmsgbaseutil.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libnspr4.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libnss3.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libnssckbi.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libplc4.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libplds4.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libsmime3.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libsoftokn3.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libssl3.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libxlibrgb.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libxpcom.dylib 1.0.0 %n (>= 1.1.0-4)
+    %p/lib/%N/libxpcom_compat.dylib 1.0.0 %n (>= 1.5.1-4)
+    %p/lib/%N/libxpistub.dylib 1.0.0 %n (>= 1.1.0-4)
+  <<
+<<
+SplitOff7: <<
+  Package: %N-dev
+  Depends: <<
+    %N-shlibs (= %v-%r),
+    glib2-shlibs (>= 2.14.0-1),
+    libgettext3-shlibs,
+    libiconv,
+    libidl2-shlibs (>= 0.8.9-1)
+  <<
+## Removed Conflicts/Replaces because nspr.m4 is now nspr-%n.m4
+  BuildDependsOnly: True
+  Description: Mozilla - development headers and libraries
+  DocFiles: LEGAL LICENSE
+  Files: bin/mozilla-config include lib/pkgconfig lib/%N/xp* share/aclocal share/idl
+<<
+SplitOff8: <<
+  Package: %N-browser
+  Depends: <<
+    %N-shlibs (= %v-%r),
+    atk1-shlibs (>= 1.20.0-1),
+    freetype219-shlibs (>= 2.3.5-1),
+    gconf2-shlibs (>= 2.20.0-1),
+    glib2-shlibs (>= 2.14.0-1),
+    gnome-vfs2-unified-shlibs (>= 1:2.20.0-1),
+    gtk+2-shlibs (>= 2.12.0-1),
+    libbonobo2-shlibs (>= 2.20.0-1),
+    libgettext3-shlibs,
+    libiconv,
+    libjpeg-shlibs,
+    libpng3-shlibs (>= 1.2.8-1),
+    orbit2-shlibs (>= 2.14.9-1),
+    pango1-xft2-ft219-shlibs (>= 1.18.4-4),
+    x11-shlibs
+  <<
+  Replaces: %N (<< 1.1.0-4)
+  Conflicts: %N-browser-xft2
+  ConfFiles: %p/etc/%N/prefs.js
+  Description: Mozilla - web browser
+  DocFiles: LEGAL LICENSE
+  PostInstScript: <<
+    if [ configure = "$1" ]; then
+        update-mozilla-chrome || true
+    fi
+  <<
+  PreRmScript: <<
+    # clear out those leftovers that were created by registering
+    /bin/rm -rf %p/lib/%N/chrome/overlayinfo
+    /bin/rm -f %p/lib/%N/chrome/*.rdf
+    /bin/rm -f %p/lib/%N/components/*.dat
+#    /bin/rm -f %p/lib/%N/components.ini
+#    /bin/rm -rf %p/lib/%N/extensions
+  <<
+  Files: bin etc lib sbin share/applications share/man share/pixmaps var
+<<
+DocFiles: LEGAL LICENSE
+Description: Mozilla - full install
+DescDetail: <<
+Mozilla is an open-source web browser, designed for standards
+compliance, performance and portability.  Package includes the full
+software suite (browser, mailnews, IRC, DOMi, JS debugger, etc).
+<<
+DescPort: <<
+If you feel your configuration is not saved, check permission of ~/.mozilla
+directory. If it is owned by root, fix or removed it. In this version,
+this problem was fixed. (sudo -H in install script fixes it)
+
+Patch does following things:
+ - uses gtk+2 toolkit.
+ - pass exact install directory to the linker
+ - forces to see local ldap headers.
+
+Not functional on intel. See:
+https://sourceforge.net/tracker/index.php?func=detail&aid=1459616&group_id=17203&atid=117203
+<<
+License: OSI-Approved
+Maintainer: None <fink-devel@lists.sourceforge.net>
+DescPackaging: <<
+ Originally packaged by Masanori Sekino.
+ Using fink's freetype2 _ has to wait till version 1.8 to use freetype2 >> 2.1.7
+ Using SetCC and SetCXX rather than SetCPPFLAGS to build correctly in presence of freetype1
+
+ No dep needed on libmng2 since mng support was removed from the mozilla code a while back.
+
+ mozilla-1.7.13 is the last official released build.  The Mozilla suite was EOL'd after this version, and all attention was put on Firefox/Thunderbird.  If you want a newer version of the suite, install the package seamonkey.
+<<
+Homepage: http://www.mozilla.org
