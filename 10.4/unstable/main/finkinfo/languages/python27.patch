@@ -1,0 +1,373 @@
+diff -ru Python-2.7.orig/Lib/platform.py Python-2.7/Lib/platform.py
+--- Python-2.7.orig/Lib/platform.py	2010-05-05 22:54:44.000000000 -0400
++++ Python-2.7/Lib/platform.py	2010-07-06 11:58:12.000000000 -0400
+@@ -748,6 +748,13 @@
+         import gestalt
+         import MacOS
+     except ImportError:
++        import posix
++        major,minor,patch=string.split(posix.uname()[2],'.')
++        release = '%s.%s.%s' %('10',int(major)-4, minor)
++        if posix.uname()[4]=='Power Macintosh':
++            machine='PowerPC'
++        else:
++            machine='i386'
+         return release,versioninfo,machine
+     # Get the infos
+     sysv,sysa = _mac_ver_lookup(('sysv','sysa'))
+diff -ru Python-2.7.orig/Makefile.pre.in Python-2.7/Makefile.pre.in
+--- Python-2.7.orig/Makefile.pre.in	2010-04-11 20:10:46.000000000 -0400
++++ Python-2.7/Makefile.pre.in	2010-07-06 12:03:41.000000000 -0400
+@@ -429,8 +429,7 @@
+ 	fi
+ 
+ libpython$(VERSION).dylib: $(LIBRARY_OBJS)
+-	 $(CC) -dynamiclib -Wl,-single_module $(LDFLAGS) -undefined dynamic_lookup -Wl,-install_name,$(prefix)/lib/libpython$(VERSION).dylib -Wl,-compatibility_version,$(VERSION) -Wl,-current_version,$(VERSION) -o $@ $(LIBRARY_OBJS) $(SHLIBS) $(LIBC) $(LIBM) $(LDLAST); \
+-		 
++	 $(CC) -dynamiclib -Wl,-single_module @LIBTOOL_CRUFT@ -o $@ $(LIBRARY_OBJS) $(SHLIBS) $(LIBC) $(LDLAST)
+ 
+ libpython$(VERSION).sl: $(LIBRARY_OBJS)
+ 	$(LDSHARED) $(LDFLAGS) -o $@ $(LIBRARY_OBJS) $(MODLIBS) $(SHLIBS) $(LIBC) $(LIBM) $(LDLAST)
+@@ -787,7 +786,7 @@
+ 	then rm -f $(DESTDIR)$(BINDIR)/$(PYTHON); \
+ 	else true; \
+ 	fi
+-	(cd $(DESTDIR)$(BINDIR); $(LN) python$(VERSION)$(EXE) $(PYTHON))
++	(cd $(DESTDIR)$(BINDIR); $(LN) -s python$(VERSION)$(EXE) $(PYTHON))
+ 	-rm -f $(DESTDIR)$(BINDIR)/python-config
+ 	(cd $(DESTDIR)$(BINDIR); $(LN) -s python$(VERSION)-config python-config)
+ 	-test -d $(DESTDIR)$(LIBPC) || $(INSTALL) -d -m $(DIRMODE) $(DESTDIR)$(LIBPC)
+@@ -797,7 +796,7 @@
+ # Install the interpreter with $(VERSION) affixed
+ # This goes into $(exec_prefix)
+ altbininstall:	$(BUILDPYTHON)
+-	@for i in $(BINDIR) $(LIBDIR); \
++	@for i in $(BINDIR) $(LIBDIR) $(LIBPL); \
+ 	do \
+ 		if test ! -d $(DESTDIR)$$i; then \
+ 			echo "Creating directory $$i"; \
+@@ -810,9 +809,9 @@
+ 		if test -n "$(DLLLIBRARY)" ; then \
+ 			$(INSTALL_SHARED) $(DLLLIBRARY) $(DESTDIR)$(BINDIR); \
+ 		else \
+-			$(INSTALL_SHARED) $(LDLIBRARY) $(DESTDIR)$(LIBDIR)/$(INSTSONAME); \
++			$(INSTALL_SHARED) $(LDLIBRARY) $(DESTDIR)$(LIBPL)/$(INSTSONAME); \
+ 			if test $(LDLIBRARY) != $(INSTSONAME); then \
+-				(cd $(DESTDIR)$(LIBDIR); $(LN) -sf $(INSTSONAME) $(LDLIBRARY)) \
++				(cd $(DESTDIR)$(LIBPL); $(LN) -sf $(INSTSONAME) $(LDLIBRARY)) \
+ 			fi \
+ 		fi; \
+ 	else	true; \
+diff -ru Python-2.7.orig/Misc/python-config.in Python-2.7/Misc/python-config.in
+--- Python-2.7.orig/Misc/python-config.in	2010-03-18 20:08:44.000000000 -0400
++++ Python-2.7/Misc/python-config.in	2010-07-06 12:09:09.000000000 -0400
+@@ -46,11 +46,10 @@
+     elif opt in ('--libs', '--ldflags'):
+         libs = getvar('LIBS').split() + getvar('SYSLIBS').split()
+         libs.append('-lpython'+pyver)
+-        # add the prefix/lib/pythonX.Y/config dir, but only if there is no
+-        # shared library in prefix/lib/.
++        # add the prefix/lib/pythonX.Y/config dir (fink keeps shared
++        # library there too)
+         if opt == '--ldflags':
+-            if not getvar('Py_ENABLE_SHARED'):
+-                libs.insert(0, '-L' + getvar('LIBPL'))
++            libs.insert(0, '-L' + getvar('LIBPL'))
+             libs.extend(getvar('LINKFORSHARED').split())
+         print ' '.join(libs)
+ 
+diff -ru Python-2.7.orig/Misc/python.pc.in Python-2.7/Misc/python.pc.in
+--- Python-2.7.orig/Misc/python.pc.in	2009-05-24 16:23:57.000000000 -0400
++++ Python-2.7/Misc/python.pc.in	2010-07-06 13:49:02.000000000 -0400
+@@ -1,6 +1,6 @@
+ prefix=@prefix@
+ exec_prefix=@exec_prefix@
+-libdir=@libdir@
++libdir=@libdir@/python@VERSION@/config
+ includedir=@includedir@
+ 
+ Name: Python
+diff -ru Python-2.7.orig/Modules/posixmodule.c Python-2.7/Modules/posixmodule.c
+--- Python-2.7.orig/Modules/posixmodule.c	2010-06-17 12:38:34.000000000 -0400
++++ Python-2.7/Modules/posixmodule.c	2010-07-06 12:27:55.000000000 -0400
+@@ -455,7 +455,7 @@
+ #endif
+ 
+ /* Return a dictionary corresponding to the POSIX environment table */
+-#ifdef WITH_NEXT_FRAMEWORK
++#ifdef __APPLE__
+ /* On Darwin/MacOSX a shared library or framework has no access to
+ ** environ directly, we must obtain it with _NSGetEnviron().
+ */
+@@ -477,7 +477,7 @@
+     d = PyDict_New();
+     if (d == NULL)
+         return NULL;
+-#ifdef WITH_NEXT_FRAMEWORK
++#ifdef __APPLE__
+     if (environ == NULL)
+         environ = *_NSGetEnviron();
+ #endif
+diff -ru Python-2.7.orig/configure Python-2.7/configure
+--- Python-2.7.orig/configure	2010-05-28 11:28:47.000000000 -0400
++++ Python-2.7/configure	2010-07-06 13:31:48.000000000 -0400
+@@ -4947,7 +4947,7 @@
+ 	  ;;
+     Darwin*)
+     	LDLIBRARY='libpython$(VERSION).dylib'
+-	BLDLIBRARY='-L. -lpython$(VERSION)'
++	BLDLIBRARY="$LDLIBRARY"
+ 	RUNSHARED='DYLD_LIBRARY_PATH=`pwd`:${DYLD_LIBRARY_PATH}'
+ 	;;
+ 
+@@ -7436,8 +7436,8 @@
+ 	#ARCH_RUN_32BIT="true"
+     fi
+ 
+-    LIBTOOL_CRUFT=$LIBTOOL_CRUFT" -lSystem -lSystemStubs -arch_only ${MACOSX_DEFAULT_ARCH}"
+-    LIBTOOL_CRUFT=$LIBTOOL_CRUFT' -install_name $(PYTHONFRAMEWORKINSTALLDIR)/Versions/$(VERSION)/$(PYTHONFRAMEWORK)'
++    LIBTOOL_CRUFT=$LIBTOOL_CRUFT" -lSystem -lSystemStubs"
++    LIBTOOL_CRUFT=$LIBTOOL_CRUFT' -install_name $(BINLIBDEST)/config/$(INSTSONAME)'
+     LIBTOOL_CRUFT=$LIBTOOL_CRUFT' -compatibility_version $(VERSION) -current_version $(VERSION)';;
+ esac
+ 
+@@ -7584,18 +7584,6 @@
+ 			LDCXXSHARED="$LDCXXSHARED "'-bundle_loader $(BINDIR)/python$(VERSION)$(EXE)'
+ 		fi ;;
+ 	Darwin/*)
+-		# Use -undefined dynamic_lookup whenever possible (10.3 and later).
+-		# This allows an extension to be used in any Python
+-
+-		if test ${MACOSX_DEPLOYMENT_TARGET} '>' 10.2
+-		then
+-			if test "${enable_universalsdk}"; then
+-				LDFLAGS="${UNIVERSAL_ARCH_FLAGS} -isysroot ${UNIVERSALSDK} ${LDFLAGS}"
+-			fi
+-			LDSHARED='$(CC) $(LDFLAGS) -bundle -undefined dynamic_lookup'
+-			LDCXXSHARED='$(CXX) $(LDFLAGS) -bundle -undefined dynamic_lookup'
+-			BLDSHARED="$LDSHARED"
+-		else
+ 			LDSHARED='$(CC) $(LDFLAGS) -bundle'
+ 			LDCXXSHARED='$(CXX) $(LDFLAGS) -bundle'
+ 			if test "$enable_framework" ; then
+@@ -7605,11 +7593,10 @@
+ 				LDCXXSHARED="$LDCXXSHARED "'$(PYTHONFRAMEWORKPREFIX)/$(PYTHONFRAMEWORKDIR)/Versions/$(VERSION)/$(PYTHONFRAMEWORK)'
+ 			else
+ 				# No framework, use the Python app as bundle-loader
+-				BLDSHARED="$LDSHARED "'-bundle_loader $(BUILDPYTHON)'
+-				LDSHARED="$LDSHARED "'-bundle_loader $(BINDIR)/python$(VERSION)$(EXE)'
+-				LDCXXSHARED="$LDCXXSHARED "'-bundle_loader $(BINDIR)/python$(VERSION)$(EXE)'
++				BLDSHARED="$LDSHARED "'$(BLDLIBRARY)'
++				LDSHARED="$LDSHARED "'-L$(BINLIBDEST)/config -lpython$(VERSION)'
++				LDCXXSHARED="$LDCXXSHARED "'-L$(BINLIBDEST)/config -lpython$(VERSION)'
+ 			fi
+-		fi
+ 		;;
+ 	Linux*|GNU*|QNX*)
+ 		LDSHARED='$(CC) -shared'
+@@ -13578,7 +13565,7 @@
+ 
+ if test $ac_sys_system = Darwin
+ then
+-	LIBS="$LIBS -framework CoreFoundation"
++	LIBS="$LIBS -Wl,-framework,CoreFoundation"
+ fi
+ 
+ 
+diff -ru Python-2.7.orig/setup.py Python-2.7/setup.py
+--- Python-2.7.orig/setup.py	2010-06-27 08:36:16.000000000 -0400
++++ Python-2.7/setup.py	2010-07-06 13:30:58.000000000 -0400
+@@ -250,13 +250,17 @@
+                                               longest, g)
+ 
+         if missing:
++            num_missing=len(missing)
+             print
+             print ("Python build finished, but the necessary bits to build "
+                    "these modules were not found:")
+             print_three_column(missing)
+             print ("To find the necessary bits, look in setup.py in"
+                    " detect_modules() for the module's name.")
++            print ("(Fink package build should have 5 missing)")
+             print
++            if num_missing != 5:
++                sys.exit(1)
+ 
+         if self.failed:
+             failed = self.failed[:]
+@@ -264,6 +268,7 @@
+             print "Failed to build these modules:"
+             print_three_column(failed)
+             print
++            sys.exit(1)
+ 
+     def build_extension(self, ext):
+ 
+@@ -346,9 +351,8 @@
+         return sys.platform
+ 
+     def detect_modules(self):
+-        # Ensure that /usr/local is always used
+-        add_dir_to_list(self.compiler.library_dirs, '/usr/local/lib')
+-        add_dir_to_list(self.compiler.include_dirs, '/usr/local/include')
++        add_dir_to_list(self.compiler.library_dirs, '@PREFIX@/lib')
++        add_dir_to_list(self.compiler.include_dirs, '@PREFIX@/include')
+ 
+         # Add paths specified in the environment variables LDFLAGS and
+         # CPPFLAGS for header and library files.
+@@ -669,10 +673,9 @@
+                                depends = ['socketmodule.h']) )
+         # Detect SSL support for the socket module (via _ssl)
+         search_for_ssl_incs_in = [
+-                              '/usr/local/ssl/include',
+-                              '/usr/contrib/ssl/include/'
++                              '@PREFIX@/lib/system-openssl/include'
+                              ]
+-        ssl_incs = find_file('openssl/ssl.h', inc_dirs,
++        ssl_incs = find_file('openssl/ssl.h', [],
+                              search_for_ssl_incs_in
+                              )
+         if ssl_incs is not None:
+@@ -680,9 +683,8 @@
+                                ['/usr/kerberos/include'])
+             if krb5_h:
+                 ssl_incs += krb5_h
+-        ssl_libs = find_library_file(self.compiler, 'ssl',lib_dirs,
+-                                     ['/usr/local/ssl/lib',
+-                                      '/usr/contrib/ssl/lib/'
++        ssl_libs = find_library_file(self.compiler, 'ssl',[],
++                                     ['@PREFIX@/lib/system-openssl/lib'
+                                      ] )
+ 
+         if (ssl_incs is not None and
+@@ -702,7 +704,7 @@
+ 
+         # look for the openssl version header on the compiler search path.
+         opensslv_h = find_file('openssl/opensslv.h', [],
+-                inc_dirs + search_for_ssl_incs_in)
++                search_for_ssl_incs_in)
+         if opensslv_h:
+             name = os.path.join(opensslv_h[0], 'openssl/opensslv.h')
+             if sys.platform == 'darwin' and is_macosx_sdk_path(name):
+@@ -801,50 +803,8 @@
+         # construct a list of paths to look for the header file in on
+         # top of the normal inc_dirs.
+         db_inc_paths = [
+-            '/usr/include/db4',
+-            '/usr/local/include/db4',
+-            '/opt/sfw/include/db4',
+-            '/usr/include/db3',
+-            '/usr/local/include/db3',
+-            '/opt/sfw/include/db3',
+-            # Fink defaults (http://fink.sourceforge.net/)
+-            '/sw/include/db4',
+-            '/sw/include/db3',
++            '@PREFIX@/include/db4'
+         ]
+-        # 4.x minor number specific paths
+-        for x in gen_db_minor_ver_nums(4):
+-            db_inc_paths.append('/usr/include/db4%d' % x)
+-            db_inc_paths.append('/usr/include/db4.%d' % x)
+-            db_inc_paths.append('/usr/local/BerkeleyDB.4.%d/include' % x)
+-            db_inc_paths.append('/usr/local/include/db4%d' % x)
+-            db_inc_paths.append('/pkg/db-4.%d/include' % x)
+-            db_inc_paths.append('/opt/db-4.%d/include' % x)
+-            # MacPorts default (http://www.macports.org/)
+-            db_inc_paths.append('/opt/local/include/db4%d' % x)
+-        # 3.x minor number specific paths
+-        for x in gen_db_minor_ver_nums(3):
+-            db_inc_paths.append('/usr/include/db3%d' % x)
+-            db_inc_paths.append('/usr/local/BerkeleyDB.3.%d/include' % x)
+-            db_inc_paths.append('/usr/local/include/db3%d' % x)
+-            db_inc_paths.append('/pkg/db-3.%d/include' % x)
+-            db_inc_paths.append('/opt/db-3.%d/include' % x)
+-
+-        # Add some common subdirectories for Sleepycat DB to the list,
+-        # based on the standard include directories. This way DB3/4 gets
+-        # picked up when it is installed in a non-standard prefix and
+-        # the user has added that prefix into inc_dirs.
+-        std_variants = []
+-        for dn in inc_dirs:
+-            std_variants.append(os.path.join(dn, 'db3'))
+-            std_variants.append(os.path.join(dn, 'db4'))
+-            for x in gen_db_minor_ver_nums(4):
+-                std_variants.append(os.path.join(dn, "db4%d"%x))
+-                std_variants.append(os.path.join(dn, "db4.%d"%x))
+-            for x in gen_db_minor_ver_nums(3):
+-                std_variants.append(os.path.join(dn, "db3%d"%x))
+-                std_variants.append(os.path.join(dn, "db3.%d"%x))
+-
+-        db_inc_paths = std_variants + db_inc_paths
+         db_inc_paths = [p for p in db_inc_paths if os.path.exists(p)]
+ 
+         db_ver_inc_map = {}
+@@ -970,12 +930,7 @@
+         # We hunt for #define SQLITE_VERSION "n.n.n"
+         # We need to find >= sqlite version 3.0.8
+         sqlite_incdir = sqlite_libdir = None
+-        sqlite_inc_paths = [ '/usr/include',
+-                             '/usr/include/sqlite',
+-                             '/usr/include/sqlite3',
+-                             '/usr/local/include',
+-                             '/usr/local/include/sqlite',
+-                             '/usr/local/include/sqlite3',
++        sqlite_inc_paths = [ '@PREFIX@/include'
+                            ]
+         MIN_SQLITE_VERSION_NUMBER = (3, 0, 8)
+         MIN_SQLITE_VERSION = ".".join([str(x)
+@@ -987,7 +942,7 @@
+         if sys.platform == 'darwin':
+             sysroot = macosx_sdk_root()
+ 
+-        for d in inc_dirs + sqlite_inc_paths:
++        for d in sqlite_inc_paths:
+             f = os.path.join(d, "sqlite3.h")
+ 
+             if sys.platform == 'darwin' and is_macosx_sdk_path(d):
+@@ -1019,11 +974,9 @@
+             sqlite_dirs_to_check = [
+                 os.path.join(sqlite_incdir, '..', 'lib64'),
+                 os.path.join(sqlite_incdir, '..', 'lib'),
+-                os.path.join(sqlite_incdir, '..', '..', 'lib64'),
+-                os.path.join(sqlite_incdir, '..', '..', 'lib'),
+             ]
+             sqlite_libfile = self.compiler.find_library_file(
+-                                sqlite_dirs_to_check + lib_dirs, 'sqlite3')
++                                sqlite_dirs_to_check, 'sqlite3')
+             if sqlite_libfile:
+                 sqlite_libdir = [os.path.abspath(os.path.dirname(sqlite_libfile))]
+ 
+@@ -1218,6 +1171,7 @@
+                 panel_library = 'panelw'
+             curses_libs = [curses_library]
+             exts.append( Extension('_curses', ['_cursesmodule.c'],
++                                   include_dirs=["@PREFIX@/include/ncursesw"],
+                                    libraries = curses_libs) )
+         elif curses_library == 'curses' and platform != 'darwin':
+                 # OSX has an old Berkeley curses, not good enough for
+@@ -1238,6 +1192,7 @@
+         if (module_enabled(exts, '_curses') and
+             self.compiler.find_library_file(lib_dirs, panel_library)):
+             exts.append( Extension('_curses_panel', ['_curses_panel.c'],
++                                   include_dirs=["@PREFIX@/include/ncursesw"],
+                                    libraries = [panel_library] + curses_libs) )
+         else:
+             missing.append('_curses_panel')
+@@ -1668,16 +1623,12 @@
+         # AquaTk is a separate method. Only one Tkinter will be built on
+         # Darwin - either AquaTk, if it is found, or X11 based Tk.
+         platform = self.get_platform()
+-        if (platform == 'darwin' and
+-            self.detect_tkinter_darwin(inc_dirs, lib_dirs)):
+-            return
+ 
+         # Assume we haven't found any of the libraries or include files
+         # The versions with dots are used on Unix, and the versions without
+         # dots on Windows, for detection by cygwin.
+         tcllib = tklib = tcl_includes = tk_includes = None
+-        for version in ['8.6', '86', '8.5', '85', '8.4', '84', '8.3', '83',
+-                        '8.2', '82', '8.1', '81', '8.0', '80']:
++        for version in ['8.4']:
+             tklib = self.compiler.find_library_file(lib_dirs,
+                                                         'tk' + version)
+             tcllib = self.compiler.find_library_file(lib_dirs,
