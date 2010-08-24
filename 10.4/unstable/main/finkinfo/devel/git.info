@@ -1,23 +1,23 @@
 Info2:<<
 Package: git
 Version: 1.7.2.2
-Revision: 1002
+Revision: 1003
 Distribution: 10.6
-Type: perl (5.10.0)
+Type: pm 5.10.0
 
 Depends: <<
-	email-valid-pm%type_pkg[perl],
+	email-valid-pm%type_pkg[pm],
 	error-pm,
 	expat1-shlibs,
-	file-temp-pm%type_pkg[perl],
-	getopt-long-pm%type_pkg[perl],
+	file-temp-pm%type_pkg[pm],
+	getopt-long-pm%type_pkg[pm],
 	libcurl4-shlibs (>= 7.18.2-1),
 	libiconv,
-	libnet-pm%type_pkg[perl],
-	mailtools-pm%type_pkg[perl],
-	net-smtp-ssl-pm%type_pkg[perl],
+	libnet-pm%type_pkg[pm],
+	mailtools-pm%type_pkg[pm],
+	net-smtp-ssl-pm%type_pkg[pm],
 	term-ansicolor-pm,
-	term-readline-pm%type_pkg[perl]
+	term-readline-pm%type_pkg[pm]
 <<
 BuildDepends: <<
 	expat1,
@@ -37,81 +37,109 @@ Source3: mirror:custom:/software/scm/%n/%n-manpages-%v.tar.bz2
 Source3-MD5: 2278da6b57891bd9b789d313dc8eb772
 
 PatchFile: %n.patch
-PatchFile-MD5: 4460afc123bf81eadee25ccfc932938b
+PatchFile-MD5: 9c7c4ad0cdb96c4679bcb75364e57355
 PatchScript: <<
-  %{default_script}
-  perl -pi -e 's|%%p|%p|g' Makefile perl/Makefile
-  perl -pi -e 's,/usr/(share|bin)/git,%p/\1/git,g; s,/usr/libexec/git\\-core,%p/lib/git,g' ../man1/* ../doc/*
+	#!/bin/bash -ev
+	%{default_script}
+	# Fix up paths in documentation to point to %p.
+	perl -pi -e 's,/usr/(share|bin)/git,%p/\1/git,g; s,/usr/libexec,%p/lib,g' ../man1/* ../doc/*
+	# Setting these variables in 'config.mak' lets Makefile import them
+	# automatically instead of always manually passing them to make.
+	cat >> config.mak << EOF
+NO_FINK=1
+NO_DARWIN_PORTS=1
+NO_MSGFMT=1
+GITWEB_CONFIG_SYSTEM=%p/gitweb.conf
+EOF
 <<
 
 UseMaxBuildJobs: true
-CompileScript: <<
-	NO_FINK=1 NO_DARWIN_PORTS=1 NO_MSGFMT=1 NO_PYTHON=1 PERL_PATH='/usr/bin/arch -%m perl%type_raw[perl]' make TCLTK_PATH=/usr/bin/wish prefix=%p
-<<
 
+# Let configure do the work of setting up the environment instead of
+# patching and passing things manually to make.
+SetCPPFLAGS: -I%p/lib/system-openssl/include
+SetLDFLAGS: -L%p/lib/system-openssl/lib
+ConfigureParams: <<
+	--libexecdir='${exec_prefix}/lib' \
+	--without-python \
+	--with-perl='/usr/bin/arch -%m perl%type_raw[pm]' \
+	--with-tcltk='/usr/bin/wish' \
+	--with-openssl='%p/lib/system-openssl'
+<<
+# See? No more CompileScript!
+
+# Tests are much cleaner looking too.
 InfoTest: <<
-  TestScript: <<
-    #!/bin/bash -ev
-    if [ $UID = 0 ]; then
-      #Some tests fail when run as root.
-      NO_FINK=1 NO_DARWIN_PORTS=1 NO_MSGFMT=1 NO_PYTHON=1 GIT_SKIP_TESTS='t0001.25 t0004.2 t0004.3 t0004.4 t0004.5 t1004.13 t3700.21 t3700.22 t3700.23 t3700.24 t3700.25 t4201.2 t7300.26' PERL_PATH='/usr/bin/arch -%m perl%type_raw[perl]' make -k test TCLTK_PATH=/usr/bin/wish prefix=%p || exit 2
-    else
-      NO_FINK=1 NO_DARWIN_PORTS=1 NO_MSGFMT=1 NO_PYTHON=1 GIT_SKIP_TESTS="t4201.2" PERL_PATH='/usr/bin/arch -%m perl%type_raw[perl]' make -k test TCLTK_PATH=/usr/bin/wish prefix=%p || exit 2
-    fi
-  <<
-  TestSuiteSize: large
+	TestScript: <<
+		#!/bin/bash -ev
+		
+		# This hackery is needed to get svn tests working with multi-arch perl.
+		cat > myperl << EOF
+#!/bin/sh
+exec /usr/bin/arch -%m perl%type_raw[pm] "\$@"
+EOF
+		chmod +x myperl; PERL_PATH=`pwd`/myperl
+
+		if [ $UID = 0 ]; then
+			# Some tests fail when run as root.
+			GIT_SKIP_TESTS='t0001.25 t0004.2 t0004.3 t0004.4 t0004.5 t1004.13 t3700.21 t3700.22 t3700.23 t3700.24 t3700.25 t4201.2 t7300.26' make -k test PERL_PATH="$PERL_PATH" || exit 2
+		else
+			GIT_SKIP_TESTS="t4201.2" make -k test PERL_PATH="$PERL_PATH" || exit 2
+		fi
+	<<
+	TestSuiteSize: large
 <<
 
 InstallScript: <<
-  NO_FINK=1 NO_DARWIN_PORTS=1 NO_MSGFMT=1 NO_PYTHON=1 PERL_PATH='/usr/bin/arch -%m perl%type_raw[perl]' make DESTDIR=%d prefix=%p TCLTK_PATH=/usr/bin/wish install
-  
-  mkdir -p %i/share/man %i/share/doc
-  cp -R ../man* %i/share/man
-  cp -R ../doc %i/share/doc/%n
-  mkdir -p %i/share/emacs/site-lisp
-  cp contrib/emacs/*.el %i/share/emacs/site-lisp
-  mkdir -p %i/etc/bash_completion.d
-  cp contrib/completion/git-completion.bash %i/etc/bash_completion.d/
+	make install DESTDIR=%d
+	
+	mkdir -p %i/share/man %i/share/doc
+	cp -R ../man* %i/share/man
+	cp -R ../doc %i/share/doc/%n
+	mkdir -p %i/share/emacs/site-lisp
+	cp contrib/emacs/*.el %i/share/emacs/site-lisp
+	mkdir -p %i/etc/bash_completion.d
+	cp contrib/completion/git-completion.bash %i/etc/bash_completion.d/
 <<
 
 UpdatePOD: true
 DocFiles: COPYING README
 
 SplitOff: <<
-  Package: git-cvsimport
-  Description: Tool to import a CVS repository into git
-  Depends: %N (=%v-%r), cvsps
-  Files: <<
-    lib/git/%n
-    share/doc/%N/%n.html
-    share/man/man1/%n.1
-  <<
-  DocFiles: COPYING
+	Package: git-cvsimport
+	Description: Tool to import a CVS repository into git
+	Depends: %N (=%v-%r), cvsps
+	Files: <<
+		lib/git-core/%n
+		share/doc/%N/%n.html
+		share/man/man1/%n.1
+	<<
+	DocFiles: COPYING
 <<
 
 SplitOff2: <<
-  Package: git-archimport
-  Description: Tool to import an arch repository into git
-  # Should probably depend on arch when that gets packaged
-  Depends: %N (=%v-%r), string-shellquote-pm
-  Files: <<
-    lib/git/%n
-    share/doc/%N/%n.html
-    share/man/man1/%n.1
-  <<
-  DocFiles: COPYING
+	Package: git-archimport
+	Description: Tool to import an arch repository into git
+	Depends: %N (=%v-%r), string-shellquote-pm
+	Recommends: arch-tla
+	Files: <<
+		lib/git-core/%n
+		share/doc/%N/%n.html
+		share/man/man1/%n.1
+	<<
+	DocFiles: COPYING
 <<
 
 SplitOff3: <<
-  Package: git-svn
-  Description: Tool to let git use subversion repositories
-  Depends: %N (=%v-%r), svn-swig-pm%type_pkg[perl], libwww-pm%type_pkg[perl], term-readkey-pm%type_pkg[perl]
-  Files: <<
-    lib/git/%n
-    share/doc/%N/%n.html
-    share/man/man1/%n.1
-  <<
-  DocFiles: COPYING
+	Package: git-svn
+	Description: Tool to let git use subversion repositories
+	Depends: %N (=%v-%r), svn-swig-pm%type_pkg[pm], libwww-pm%type_pkg[pm], term-readkey-pm%type_pkg[pm]
+	Files: <<
+		lib/git-core/%n
+		share/doc/%N/%n.html
+		share/man/man1/%n.1
+	<<
+	DocFiles: COPYING
 <<
 
 Description: Distributed version control system
@@ -123,6 +151,9 @@ efficiency.
 Every Git clone is a full-fledged repository with complete history and
 full revision tracking capabilities, not dependent on network access or
 a central server. Branching and merging are fast and easy to do.
+
+To use git-archimport you must install arch-tla. I didn't make it a
+dependency since it doesn't affect building and it's probably not common.
 <<
 DescPackaging: Previously maintained by Brendan Cully <brendan@finkproject.org>
 License: GPL
