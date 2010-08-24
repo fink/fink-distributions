@@ -1,82 +1,40 @@
 Info2: <<
-Package: saclib%type_pkg[-gcc4.4]
-Version: 2.2.1
+Package: saclib%type_pkg[-gcc4.5]
+Version: 2.2.5
 Revision: 1
+Architecture: i386, x86_64
+## Would be relativel to revive ppc too, if there was any genuine demand for it..
+# But apparently currently abandoned upstream
 Source: http://www.usna.edu/Users/cs/qepcad/INSTALL/%{Ni}%v.tar.gz
-Source-MD5: f016ea3597438f853f84573bc1542207
-Type: -gcc4.4 (boolean)
-BuildDepends: fink (>= 0.24.12), (%type_pkg[-gcc4.4]) gcc44
-Conflicts: %{Ni}, %{Ni}-gcc44
-Replaces: %{Ni}, %{Ni}-gcc44
+Source-MD5: 84bc4f972b1362d635edce8c1ba6bb30
+Type: -gcc4.5 (boolean)
+BuildDepends: fink (>= 0.24.12), (%type_pkg[-gcc4.5]) gcc45-compiler
+Conflicts: %{Ni}, %{Ni}-gcc44, %{Ni}-gcc45
+Replaces: %{Ni}, %{Ni}-gcc44, %{Ni}-gcc45
 
 PatchScript: <<
   #!/bin/sh -ev
   rm -fR RCS
   chmod -R a+rX .	# else gdb can't find files when not working as root
-  ### adapting the linuxX86 build to apply also an darwin :
-  ## __foo_ENDIAN__ is predefined both by Apple's gcc and by GNU's (at least 4.3.2) [cf: `touch bar.h; cpp -dM bar.h`]
-  mv sysdep/linuxX86/sysdep.h sysdep/linuxX86/sysdep.h.bak
-  echo "#ifdef __LITTLE_ENDIAN__
-#ifndef _LITTLE_ENDIAN_
-#define _LITTLE_ENDIAN_
-#endif
-#undef _BIG_ENDIAN_
-#endif
-#ifdef __BIG_ENDIAN__
-#ifndef _BIG_ENDIAN_
-#define _BIG_ENDIAN_
-#endif
-#undef _LITTLE_ENDIAN_
-#endif" > sysdep/linuxX86/sysdep.h
-  sed -i.bak -e '/Get architecture type/,/else/s,else,elsif ($uname =~ /Power|powerpc/)\n{\n\t$ptype = "ppc";\n}\n&,' \
-	   -e '/Get OS type/,/else/s,else,elsif ($uname =~ /Darwin/)\n{\n\t$ostype = "darwin";\n}\n&,' \
-	   -e '/^ *elsif .*x86.*linux/{
-		s,[(],((,
-		s,[)]$,) || $ostype eq "darwin"),
-		}' bin/mksysdep.pl
-  ###  PPC has 32 registers (at least G5. G4 ? G3 ? _ but fix is anyway safe even if only 16 regs)
-  sed -i.bak -e '/register int/a\
-#ifdef __POWERPC__\
-	r(r1); r(r2); r(r3); r(r4); r(r5); r(r6); r(r7); r(r8);\
-	r(r9); r(r10); r(r11); r(r12); r(r13); r(r14); r(r15); r(r16);\
-	r(r17); r(r18); r(r19); r(r20); r(r21); r(r22); r(r23); r(r24);\
-	r(r25); r(r26); r(r27); r(r28); r(r29); r(r30); r(r31); r(r32);\
-	r1 = gc_dummy(r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r13,r14,r15,r16,r17,r18,r19,r20,r21,r22,r23,r24,r25,r26,r27,r28,r29,r30,r31,r32);\
-#else' \
-	-e '/gc_dummy.*r16);$/a\
-#endif' sysdep/linuxX86/GC.c
-###  
-## malloc.h and ieee754.h don't exist in darwin :
-  ## for __APPLE__ , same remark as for  __foo_ENDIAN__  above.
-  sed -i.bak -e '/<malloc\.h>/c\
-#ifndef __APPLE__\
-#include <malloc.h>\
-#endif' src/IQR.c
-  sed -i.bak -e '/_X86_LINUX_/c\
-#if defined (_X86_LINUX_) || defined (__APPLE__)' \
-	   -e '/ieee754\.h/c\
-#ifdef _X86_LINUX_\
-#include <ieee754.h>\
-#endif' include/hfloats.h
-  ## __STDC__ is not an exhaustive test whether the compiler supports prototypes :
+  if grep -q 64 %p/var/lib/fink/path-prefix-10.6/compiler_wrapper ; then pt=x86_64; else pt=x86; fi
+  sed -i.bak -e '/macosKernelTest/d' -e "/32-bit or 64-bit/s,$,\n\t\$ptype = $pt," bin/mksysdep.pl
+  ## powerpc seems excluded in this new version..  To fix if there is any demand...
+  ## __STDC__ is not an exhaustive test whether the compiler supports prototypes;
+  ## is defined under FSF gcc, but Apple's defines only __STDC_HOSTED__:
   sed -i.bak -e 's,ifdef __STDC__,if defined (__STDC__) || defined (__APPLE__),' include/sacsys.h src/FAIL.c
 
   ### Getting control over CFLAGS ...
-  if [ "%type_raw[-gcc4.4]" == "-gcc4.4" ] ; then nopic=''; else nopic="-mdynamic-no-pic"; fi
+  if [ "%type_raw[-gcc4.5]" == "-gcc4.5" ] ; then nopic=''; else nopic="-mdynamic-no-pic"; fi
   nopic="$nopic -Wall -Wextra -Wstrict-prototypes -Wstrict-aliasing=2"
-  ## first line next is to avoid "...will break strict-aliasing rules" warnings:
-  sed -i.bak \
+  ## first line next is to avoid optimizing away the flushing of regs in GC.
+ sed -i.bak \
 	-e "/Compiling/,\${
 \X%{Ni}/lib/objo\$Xa\
-  make  CC=\$CC \"SACFLAG=$nopic -O3 -fno-strict-aliasing\" EXTENSION=o MMAPFS.o MMPDDF.o MMPFBL.o\\
   make  CC=\$CC \"SACFLAG=$nopic\" EXTENSION=o GC.o
 	}" \
-	-e 's,\(SACFLAG=\)",\1-O3 -fstrict-aliasing",' -e 's,=-g ,=-ggdb3 -gfull ,' \
+	-e 's,\(SACFLAG=\)",\1-O3 -fstrict-aliasing",' \
+	-e 's,=-g ,=-ggdb3 -gfull ,' \
  	-e "s,SACFLAG=,&$nopic ," bin/mklib
-  # and circumvent a gcc44 error :
-  if [ "%type_raw[-gcc4.4]" == "-gcc4.4" ]; then sed -i'' '/GC.o/a \
-make  CC=$CC "SACFLAG= -Wall -Wextra -Wstrict-prototypes -Wstrict-aliasing=2 -Os -fstrict-aliasing" EXTENSION=o MMAPGCD.o' \
-	bin/mklib; fi 
 
   ### Some "implicit declaration of function 'GCASET'" warnings (GCASET is also an apparenly equivalent  macro in sacmacros.h ...)
   # Why the strange "#ifdef NO_SACLIB_MACROS" under "Macros that are always defined"  in sacmacros.h ?
@@ -86,18 +44,21 @@ make  CC=$CC "SACFLAG= -Wall -Wextra -Wstrict-prototypes -Wstrict-aliasing=2 -Os
 
 CompileScript: <<
   #!/bin/sh -ev
-  export CC=gcc CXX=g++
-  if [ "%type_raw[-gcc4.4]" == "-gcc4.4" ]; then export PATH=%p/lib/gcc4.4/bin:$PATH; fi
+  if [ "%type_raw[-gcc4.5]" == "-gcc4.5" ]
+	then export PATH=%p/lib/gcc4.5/bin:$PATH CC=gcc-4 CXX=g++-4
+	elif test -f /usr/bin/gcc-4.2
+		then export CC=gcc-4.2 CXX=g++-4.2
+	else export CC=gcc CXX=g++
+  fi
   export %{Ni}=%b
   bin/sconf
   bin/mkproto
   ## mkproto missed the following (leading a.o. to "implicit declaration" warnings) :
-  echo "extern void FPCATCH	P__((void));
+echo "extern void FPCATCH	P__((void));
 extern void GCASET	P__((Word A, Word i, Word a));
 extern void NORMFCT	P__((Word N, Word n, Word p, Word Q, Word Qp, Word q, Word B, Word L, Word T, Word G, Word C, Word e, Word d, Word k, Word N1, Word *F_, Word *Nb_, Word *Bb_, Word *Lb_, Word *Tb_, Word *Gb_, Word *Cb_, Word *Nb1_));
 extern void NORMLHS	P__((Word q, Word Q, Word Qpp, Word Ab, Word Bb, Word Sb, Word Tb, Word Ap, Word Bp, Word Yp, Word Zp, Word U, Word D, Word A, Word B, Word *Qs_, Word *Y_, Word *Z_, Word *Us_, Word *As_, Word *Bs_));" \
 	>> include/sacproto.h
-  ## but fix not perfect: now we get such warnings in the debug version (which uses -DNO_SACLIB_MACROS)
   bin/mkmake
   bin/mklib all
 <<
