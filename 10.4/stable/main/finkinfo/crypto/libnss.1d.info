@@ -1,0 +1,156 @@
+Package: libnss.1d
+Version: 3.12.6
+Revision: 5
+BuildDepends: <<
+	fink (>= 0.28),
+	nspr.0d (>= 4.8.4-4),
+	sqlite3-dev (>= 3.6.13-3)
+<<
+Depends: %N-shlibs (= %v-%r)
+Conflicts: nss.1d
+Replaces: nss.1d
+BuildDependsOnly: true
+BuildConflicts: nspr
+Source: ftp://ftp.mozilla.org/pub/mozilla.org/security/nss/releases/NSS_3_12_6_RTM/src/nss-%v.tar.gz
+Source-MD5: da42596665f226de5eb3ecfc1ec57cd1
+SourceDirectory: nss-%v/mozilla/security
+PatchFile: %n.patch
+PatchFile-MD5: e1705d31d55a51b32a9b0377398956b1
+PatchScript: <<
+#!/bin/sh -ev
+	patch -p3 < %{PatchFile}
+	cp %p/include/sqlite3.h nss/lib/sqlite
+
+	echo "NSS is available under the Mozilla Public License, the GNU General Public License, and the GNU Lesser General Public License." > LICENSE
+<<
+NoSetCPPFLAGS: true
+NoSetLDFLAGS: true
+NoSetMAKEFLAGS: true
+SetMAKEFLAGS: MOZILLA_CLIENT=1 NSPR_INCLUDE_DIR=%p/include/nspr NSPR_LIB_DIR=%p/lib/nspr SQLITE_LIB_DIR=%p/lib libdir=%p/lib/nss.1d
+CompileScript: <<
+#!/bin/sh -ev
+	if grep -q 64 %p/var/lib/fink/path-prefix-10.6/compiler_wrapper ; then export USE_64=1 ; fi
+	make -C nss build_coreconf
+	make -C dbm all
+	make -C nss/lib/sqlite all
+	make -C nss all
+
+	sed 's,@VERSION@,%v,; s,@prefix@,%p,' nss.pc.in > nss.pc
+	sed 's,@MOD_MAJOR_VERSION@,3,; s,@MOD_MINOR_VERSION@,12,; s,@MOD_PATCH_VERSION@,6,; s,@prefix@,%p,' nss-config.in > nss-config
+
+<<
+InstallScript: <<
+#!/bin/sh -ev
+	includedir=%p/include/nss.1d
+	libdir=%p/lib/nss.1d
+
+	mkdir -p %d$libdir
+	for file in \
+		libfreebl3.dylib \
+		libnss3.dylib \
+		libnssckbi.so \
+		libnssutil3.dylib \
+		libsmime3.dylib \
+		libsoftokn3.dylib \
+		libssl3.dylib \
+	; do
+		install -m 644 ../dist/*.OBJ/lib/$file %d$libdir
+	done
+
+	mkdir -p %i/lib/pkgconfig
+	install -m 644 nss.pc %i/lib/pkgconfig
+
+	mkdir -p %i/bin
+	install -m 755 nss-config %i/bin
+
+	mkdir -p %d$includedir
+	install -m 644 ../dist/public/nss/*.h %d$includedir
+<<
+DocFiles: LICENSE
+SplitOff: <<
+	Package: %N-shlibs
+	Depends: <<
+		nspr.0d-shlibs (>= 4.8.4-4),
+		sqlite3-shlibs (>= 3.6.13-3)
+	<<
+	Files: <<
+		lib/nss.1d
+	<<
+	Shlibs: <<
+		%p/lib/nss.1d/libnss3.dylib 1.0.1 %n (>= 3.12.6-5)
+		%p/lib/nss.1d/libnssutil3.dylib 1.0.1 %n (>= 3.12.6-5)
+		%p/lib/nss.1d/libsmime3.dylib 1.0.1 %n (>= 3.12.6-5)
+		%p/lib/nss.1d/libssl3.dylib 1.0.1 %n (>= 3.12.6-5)
+		!%p/lib/nss.1d/libfreebl3.dylib
+		!%p/lib/nss.1d/libsoftokn3.dylib
+	<<
+	DocFiles: LICENSE
+<<
+SplitOff2: <<
+	Package: nss-bin
+	Replaces: nss.1d-bin
+	Depends: <<
+		%N-shlibs (>= %v-%r),
+		nspr.0d-shlibs,
+		sqlite3-shlibs (>= 3.6.13-3)
+	<<
+	InstallScript: <<
+		mkdir -p %i/bin
+		install -m 755 ../dist/*.OBJ/bin/* %i/bin
+	<<
+	DocFiles: LICENSE
+<<
+Description: Network Security Service
+DescDetail: <<
+This is a set of libraries designed to support cross-platform
+development of security-enabled client and server applications. It can
+support SSLv2 and v4, TLS, PKCS #5, #7, #11, #12, S/MIME, X.509 v3
+certificates and other security standards.
+<<
+DescPackaging: <<
+	Contains export-restricted crypto and upstream makes a big
+	deal about following export restrictions even for source
+	mirrors. Setting License:Restrictive until we know better.
+	"LICENSE" is cut'n'pasted from upstream homepage.
+
+	Sort-of follow debian soname packaging convention and makefile
+	magic (moz projects don't seem too good about updating
+	install_name or compatibility_version when changing
+	interface). Rename libdir instead of trying to fighting
+	makefile zoo to set install_name (changing after-the-fact hard
+	because they dlopen each other...encoded in source not just
+	dyld links). Leaving some as .dylib even though might be
+	better as .so (or at least private in Shlibs?)
+
+	3.12.3->3.12.6 added symbols to public headers, so bump
+	compatibility_version manually.
+
+	Bury library files so don't accidentally find them (avoid
+	masking other pkgs' buried libs with a top-level one).
+
+	do not use SDKs...don't need portability or fat.
+
+	Not autotooled, just simple makefile, so pass flags as needed
+	to get paths for dep libs, etc. Thanks to debian's source
+	package for some hints about the variables and that need to
+	install by manual copying (and borrowed their nss.pc.in and
+	nss-config.in templates also).
+
+	Lots of missing internal dependencies...make sure to build
+	libs before other libs need to link against them. Yeesh:/
+
+	Hard to get local-then-global -I ordering, but fortunately,
+	nspr has buried headers and libs in its own private location.
+	Hack -L for sqlite3 where it's needed, and copy external
+	sqlite3.h into internal path (and don't actually build any
+	internal lib at all) rather than playing with global -I paths.
+
+	Reported unbuildable on x86_64:
+		drbg.c: In function 'RNG_RandomUpdate':
+		drbg:509: error: size of array 'arg' is negative
+	does lots of word-size determinations, apparently doesn't
+	do it correctly/self-consistently on this darwin arch
+<<
+License: Restrictive
+Maintainer: Daniel Macks <dmacks@netspace.org>
+Homepage: http://www.mozilla.org/projects/security/pki/nss/
