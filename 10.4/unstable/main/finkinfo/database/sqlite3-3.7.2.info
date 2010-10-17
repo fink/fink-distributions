@@ -1,0 +1,129 @@
+Package: sqlite3
+Version: 3.7.2
+Revision: 2
+
+Description: Embedded SQL database, version 3
+DescDetail: <<
+SQLite is a C library that implements an embeddable SQL database engine.
+Programs that link with the SQLite library can have SQL database access
+without running a separate RDBMS process. The distribution comes with a
+standalone command-line access program ( sqlite ) that can be used to
+administer an SQLite database and which serves as an example of how to
+use the SQLite library.
+<<
+DescPort: <<
+  TCLLIBPATH is unset during the build to avoid it using other TK 
+  program's directories as the install location.
+
+  Initial port by Pepe Barbe <pepe.barbe@gmail.com>
+<<
+
+License: Public Domain 
+Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
+Homepage: http://www.sqlite.org/
+
+DocFiles: README VERSION LICENSE
+
+Source: http://sqlite.org/sqlite-%v.tar.gz
+Source-MD5: 5f1853c4c1eba3330b6104f274918673
+
+# Patch so that 'make test' works
+PatchScript: <<
+	sed -i.bak -e 's,DTCLSH=2,DTCLSH=1,' Makefile.in
+	head -n 10 src/sqlite.h.in > LICENSE
+<<
+ConfigureParams: --with-tcl=%p/lib TCLLIBDIR=%p/lib/tcl/%n --enable-threadsafe --enable-load-extension
+NoSetCPPFLAGS: true
+SetCPPFLAGS: -I%p/include/readline
+SetCFLAGS: -Os -DSQLITE_ENABLE_COLUMN_METADATA=1 -DSQLITE_SECURE_DELETE=1 -DSQLITE_ENABLE_FTS3=1 -DSQLITE_ENABLE_UNLOCK_NOTIFY
+# Compiling with the -D flags is needed for libgda (first) and seamonkey-2.1alpha (3 others)
+
+Depends: %N-shlibs (= %v-%r), readline5-shlibs (>= 5.0-1004)
+BuildDepends: readline5 (>= 5.0-1004), libncurses5 (>= 5.4-20041023-1006), tcltk, tcltk-dev, fink (>= 0.28)
+# Does NOT conflict with package sqlite
+BuildConflicts: lclint
+# lclint installs %p/lib/Makefile, which leads configure to believe
+# it has to use tcltk from its builddir, hence failure
+
+CompileScript: <<
+    #!/bin/sh -ev
+	# On 10.4, libSystem does not contain _gethostuuid  :
+    if [ `sw_vers -productVersion|cut -f2 -d.` -lt 5 ] ; then export CFLAGS="-DSQLITE_ENABLE_LOCKING_STYLE=0 $CFLAGS" ; fi
+    unset TCLLIBPATH
+    config_TARGET_READLINE_LIBS='-L%p/lib -lreadline -lncurses' \
+        ./configure %c
+    make
+    make sqlite3_analyzer
+<<
+
+InfoTest: <<
+    TestScript: make test || exit 2
+    # Some NaN self-test failures on PPC. See:
+    # http://www.sqlite.org/cvstrac/tktview?tn=3404,35
+    # Also : "Tests do not work when run as root"
+<<
+
+InstallScript: <<
+    #!/bin/sh -ev
+    make install DESTDIR=%d
+    cp -r sqlite3_analyzer %i/bin
+##  %p/lib/tcl is a symlink belonging to tcltk, do not overwrite it with a dir
+## (Else everything goes wrong e.g. when tcltk is reinstalled after sqlite3).
+##  And target differs according to arch/sw_vers, thus need readlink 
+    link=`readlink %p/lib/tcl`
+    mkdir -p %i/lib/$link
+    mv %i/lib/tcl/sqlite3 %i/lib/$link
+    rmdir %i/lib/tcl
+    cd  %i/lib/${link}/sqlite3
+    ln -s libtclsqlite3.dylib libtclsqlite3.0.dylib
+<<
+
+SplitOff: << 
+    Package: %N-shlibs
+    Description: Embedded SQL database (shared libraries)
+    DocFiles: VERSION LICENSE
+    Shlibs: %p/lib/libsqlite3.0.dylib 9.0.0 %n (>= 3.0.8-1)
+    Files: lib/libsqlite3.0.dylib
+<<
+
+SplitOff2: << 
+    Package: %N-dev
+    Description: Embedded SQL database (include files and linkable libraries)
+    Depends: %N-shlibs (= %v-%r)
+    # Does NOT conflict with sqlite-dev, strangely enough
+
+    # lib/libsqlite3.dylib accidentally placed in %N for a time
+    Replaces: %N (<< 3.6.9-1003)
+
+    DocFiles: VERSION LICENSE
+    BuildDependsOnly: True
+    Files: <<
+        include
+        lib/libsqlite3.la
+        lib/libsqlite3.a
+        lib/libsqlite3.dylib
+        lib/pkgconfig
+    <<
+<<
+
+SplitOff3: <<
+    Package: %N-tcl
+    Description: Embedded SQL database (Tcl/Tk bindings)
+    Depends: %N-shlibs (= %v-%r), tcltk
+    Conflicts: %N-tcltk
+    Replaces: %N-tcltk
+    DocFiles: VERSION LICENSE
+    Shlibs: <<
+        !%p/lib/tcl/sqlite3/libtclsqlite3.dylib
+        !%p/lib/tcl/sqlite3/libtclsqlite3.0.dylib
+    <<
+    Files: lib/tcl*
+<<
+
+SplitOff5: <<
+    Package: %N-analyzer
+    Description: SQLite3 analyzer program
+    Depends: %N-tcl
+    DocFiles: VERSION LICENSE
+    Files: %p/bin/sqlite3_analyzer
+<<
