@@ -1,0 +1,206 @@
+Package: dbus1.3-shlibs
+Version: 1.2.24
+Revision: 1
+Description: Message bus system for applications
+License: OSI-Approved
+Maintainer: Benjamin Reed <dbus@fink.racoonfink.com>
+
+Depends: <<
+	expat1-shlibs,
+	passwd (>= 20060201-1)
+<<
+BuildDepends: <<
+	autoconf2.6,
+	automake1.11,
+	expat1,
+	fink (>= 0.29.7-1),
+	libtool2,
+	pkgconfig (>= 0.23-1)
+<<
+Replaces: dbus-shlibs
+
+Source: http://dbus.freedesktop.org/releases/dbus/dbus-%v.tar.gz
+Source-MD5: 565346cecd9cfecf1463540c6086cc2c
+PatchScript: <<
+	/usr/bin/sed -e 's,org.freedesktop.dbus-session,org.finkproject.dbus-session,g' -e 's,@FINKPREFIX@,%p,g' %{PatchFile} | /usr/bin/patch -p1
+	perl -pi -e 's,DBUS_LAUNCHD_SESSION_BUS_SOCKET,DBUS_FINK_SESSION_BUS_SOCKET,g; s,org.freedesktop.dbus-session,org.finkproject.dbus-session,g' README* *.in bus/*.in bus/*.am dbus/*.c dbus/*.h
+	autoreconf -fvi
+<<
+PatchFile: %n.patch
+PatchFile-MD5: fff43ac64d121a05ba254ce45c9c7251
+
+SetCFLAGS: -Os -g
+UseMaxBuildJobs: true
+ConfigureParams: <<
+	--mandir=%p/share/man \
+	--libexecdir=%p/sbin \
+	--disable-static \
+	--with-dbus-user=messagebus \
+	--with-dbus-daemondir=%p/bin \
+	--enable-console-owner-file \
+	--disable-asserts \
+	--disable-tests \
+	--enable-checks \
+	--enable-kqueue \
+	--enable-launchd \
+	--with-launchd-agent-dir=%p/share/dbus/launchd \
+	--disable-userdb-cache \
+	--disable-ansi \
+	--with-xml=expat \
+	--disable-xml-docs \
+	--disable-doxygen-docs \
+	--disable-dependency-tracking \
+	--without-x \
+	ac_cv_func_poll=no
+<<
+CompileScript: <<
+	#!/bin/sh -ev
+	
+	if [ -x /usr/bin/gcc-4.2 ]; then
+	export CC=gcc-4.2
+	export CXX=g++-4.2
+	export CPP=cpp-4.2
+	fi
+	
+	MBID=`id -u messagebus 2>/dev/null || echo 0`
+	if [ $MBID -eq 0 ]; then
+	echo "You must install the 'passwd' package for D-Bus to build properly."
+	echo "Try running 'fink reinstall passwd', and then answer 'yes' when it asks to create users."
+	exit 1
+	fi
+	
+	./configure %c
+	make
+<<
+
+InstallScript: <<
+#!/bin/sh -ev
+	make -j1 install DESTDIR="%d"
+
+	install -d -m 755 "%i/var/lib/dbus" "%i/var/run/dbus" "%i/share/dbus-1" "%i/etc/dbus-1"
+
+	install -c -m 755 start-*-bus.sh %i/bin/
+
+	install -d -m 755 %i/etc/profile.d
+	echo "export DBUS_SESSION_BUS_ADDRESS='launchd:env=DBUS_FINK_SESSION_BUS_SOCKET'" > %i/etc/profile.d/dbus.sh
+	echo "setenv DBUS_SESSION_BUS_ADDRESS 'launchd:env=DBUS_FINK_SESSION_BUS_SOCKET'" > %i/etc/profile.d/dbus.csh
+	echo "%p/bin/start-session-bus.sh" >> %i/etc/profile.d/dbus.sh
+	echo "%p/bin/start-session-bus.sh" >> %i/etc/profile.d/dbus.csh
+	chmod 755 %i/etc/profile.d/*
+
+	install -d -m 755 %i/etc/xinitrc.d
+	install -c -m 755 dbus-xinitrc.sh %i/etc/xinitrc.d/00dbus.sh
+
+	install -d -m 755 %i/share/dbus
+	mv %i/bin/dbus-uuidgen %i/share/dbus
+<<
+DocFiles: AUTHORS COPYING ChangeLog HACKING NEWS README*
+SplitOff: <<
+	Package: dbus1.3-dev
+	Depends: <<
+		dbus (>= %v-%r),
+		dbus1.3-shlibs (= %v-%r)
+	<<
+	Replaces: <<
+		dbus (<< %v-%r),
+		dbus-dev
+	<<
+	BuildDependsOnly: false
+	DocFiles: AUTHORS COPYING ChangeLog HACKING NEWS README*
+	Files: <<
+		include
+		lib/dbus-1.0
+		lib/libdbus-1.{dylib,la}
+		lib/pkgconfig
+	<<
+<<
+SplitOff2: <<
+	Package: dbus
+	Depends: <<
+		dbus1.3-shlibs (>= %v-%r),
+		daemonic,
+		expat1-shlibs,
+		passwd (>= 20060201-1),
+		xinitrc
+	<<
+	DocFiles: AUTHORS COPYING ChangeLog HACKING NEWS README*
+	Files: <<
+		bin
+		etc
+		sbin
+		share/dbus/launchd
+		share/dbus-1
+		share/man
+		var
+	<<
+	PreInstScript: <<
+echo "*** WARNING ***"
+echo ""
+echo "D-Bus starts a system and session bus on your system by default,"
+echo "or a lot of stuff would break.  If you don't want it to do that,"
+echo "touch the file '%p/etc/dbus-1/disable-dbus'.  Be warned that many"
+echo "Gnome (and other) packages will fail without D-Bus."
+echo ""
+echo "If you want to disable the system bus, you can run:"
+echo "  %p/bin/daemonic disable dbuss"
+echo ""
+read -t 10 FOO || :
+exit 0
+	<<
+	PostInstScript: <<
+if [ "$1" = "configure" ]; then
+	if [ -x "%p/bin/daemonic" ]; then
+		%p/bin/daemonic install dbus >/dev/null 2>&1 || :
+		%p/bin/daemonic enable  dbus >/dev/null 2>&1 || :
+	fi
+fi
+chown -R messagebus:messagebus "%p/var/lib/dbus" "%p/var/run/dbus" "%p/share/dbus" "%p/share/dbus-1" "%p/etc/dbus-1"
+
+chown root:wheel      %p/share/dbus/launchd/org.finkproject.dbus-session.plist
+chmod 644             %p/share/dbus/launchd/org.finkproject.dbus-session.plist
+
+chown root:messagebus %p/sbin/dbus-daemon-launch-helper
+chmod 4750            %p/sbin/dbus-daemon-launch-helper
+
+%p/bin/start-system-bus.sh >/tmp/dbus-postinst.log 2>&1 || :
+	<<
+	PostRmScript: <<
+if [ "$1" = "remove" ]; then
+	if [ ! -x "%p/bin/daemonic" ]; then
+		%p/bin/daemonic disable dbus >/dev/null 2>&1 || :
+		%p/bin/daemonic remove  dbus >/dev/null 2>&1 || :
+	fi
+fi
+	<<
+	DaemonicFile: <<
+<service>
+	<description>D-Bus System Bus</description>
+	<message>D-Bus System Bus</message>
+	<daemon name="dbus">
+		<executable background="no">%p/bin/start-system-bus.sh</executable>
+	</daemon>
+</service>
+	<<
+	DescDetail: <<
+By default, D-Bus will enable the session bus whenever you create a
+fink-enabled shell (ie, use %p/bin/init.sh).  You can disable this
+by touching the file %p/etc/dbus-1/disable-dbus -- the D-Bus
+startup scripts will then do nothing.
+	<<
+<<
+Shlibs: %p/lib/libdbus-1.3.dylib 8.0.0 %n (>= 1.2.16-101)
+
+PostInstScript: <<
+echo ""
+echo "=== NOTE ==="
+echo "If you have installed a previous version of D-Bus, it is recommended that you log out and back in,"
+echo "or you may get strange behavior from D-Bus based applications."
+echo ""
+
+if [ "$1" = "configure" ]; then
+	%p/share/dbus/dbus-uuidgen --ensure >>/tmp/dbus-postinst.log 2>&1 || :
+fi
+<<
+
+Homepage: http://dbus.freedesktop.org/
+

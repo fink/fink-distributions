@@ -1,30 +1,32 @@
 Package: qt3
 Version: 3.3.8
-Revision: 1028
-# NB: 3.3.8-1027 did exist for a while
+Revision: 2000
 Description: Cross-Platform GUI application framework
 License: GPL
-Maintainer: Benjamin Reed <qt3@fink.racoonfink.com>
+Maintainer: Benjamin Reed <qt3@fink.raccoonfink.com>
 
 Depends: <<
 	%N-shlibs (= %v-%r),
 	%N-designer (= %v-%r),
 	%N-linguist (= %v-%r),
 	%N-doc (= %v-%r),
-	pkgconfig,
+	pkgconfig (>= 0.23-1),
 	macosx (>= 10.4.3-1)
 <<
 BuildDepends: <<
 	cctools (>= 446-0) | cctools-single-module,
 	cups-dev,
-	fink (>= 0.26.0-1),
-	freetype219,
+	fink (>= 0.29.7-1),
+	fink-package-precedence (>= 0.7-1),
+	fontconfig2-dev (>= 2.4.1-1),
+	freetype219 (>= 2.3.12-1),
 	libgl-dev,
-	libpng3 (>= 1.2.8-1),
-	libjpeg,
+	libpng14,
+	libjpeg8,
 	macosx (>= 10.4.3-1),
-	pkgconfig,
-	x11-dev
+	pkgconfig (>= 0.23-1),
+	x11-dev,
+	xft2-dev (>= 2.1.14-3)
 <<
 BuildConflicts: autogen-dev
 Provides: %N-bin
@@ -42,8 +44,6 @@ Replaces: <<
 	%N-designer
 <<
 Suggests: <<
-	libpng3,
-	libjpeg,
 	%N-mysql (>= %v-1),
 	%N-postgresql (>= %v-1)
 <<
@@ -67,14 +67,9 @@ Source2: http://ranger.befunk.com/fink/qt-upstream-patches-0004.tar.bz2
 Source2-MD5: 1f27d5222813a0a29fe53fd8669e2239
 Source2ExtractDir: qt-x11-free-%v
 SourceDirectory: qt-x11-free-%v
-PatchFile: %n.patch
-PatchFile-MD5: 126fd2a461a94a820110419cee277c9b
 PatchScript: <<
 	#!/bin/sh -ex
-	sed -e 's|@PREFIX@|%p|g' <%{PatchFile} | patch -p1
-if [ "%m" = "x86_64" ] ; then
- perl -pi -e "s,\(int\)owner\, \(int\),\(long\)owner\, \(long\),g" src/tools/qmutex_unix.cpp
-fi
+	sed -e 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
 	perl -pi -e 's|cp \-P|/bin/cp \-RL|' qmake/Makefile.unix
 	
 	for patch in \
@@ -121,8 +116,11 @@ fi
 	patch -p0 --fuzz=4 < $patch
 	done
 <<
+PatchFile: %n.patch
+PatchFile-MD5: e718fa9a9b61fe3d5f47ff3c2f0bab89
 
 NoSetLDFLAGS: true
+UseMaxBuildJobs: true
 CompileScript: <<
 #!/bin/sh -ex
 
@@ -161,7 +159,7 @@ CompileScript: <<
 	unset QMAKESPEC
 	export QTDIR=`pwd`
 	export DYLD_LIBRARY_PATH="$QTDIR/lib:$QTDIR/plugins/designer:$QTDIR/plugins/imageformats"
-	export PATH="$QTDIR/bin:%p/lib/freetype219/bin:$PATH"
+	export PATH="$QTDIR/bin:%p/lib/freetype219/bin:%p/lib/fontconfig2/bin:$PATH"
 	export INSTALL_ROOT=""
 	if [ -f /usr/lib/libresolv.dylib ]; then
 		LIBRESOLV="-lresolv"
@@ -169,23 +167,33 @@ CompileScript: <<
 	else
 		LIBRESOLV=""
 	fi
+
+	if [ -x /usr/bin/gcc-4.2 ]; then
+		export CC="gcc-4.2 -MD" CXX="g++-4.2 -MD"
+		perl -pi -e 's,= cc,= gcc-4.2,g; s,= c\+\+,= g++-4.2,g' mkspecs/darwin-g++/qmake.conf
+	else
+		export CC="gcc -MD" CXX="g++ -MD"
+	fi
+
 	# we have to force header/lib ordering or things get really wiggy
 	# looks ugly, but it's better than patching the source
 
 	# TODO: also, can't change the -buildkey until the next major OS release, unless
 	# I want to break binary-compat.  Wish I'd noticed it before it made it into
-	# the wild.   Lookin' forward to 10.5!  :)
+	# the wild.
 
 	echo "yes" | ./configure $DEFINES \
-		'-I$(QTDIR)/include' '-L$(QTDIR)/lib' \
+		"-I`pwd`/include" "-L`pwd`/lib" \
 		'-I%p/lib/freetype219/include' '-I%p/lib/freetype219/include/freetype2' '-L%p/lib/freetype219/lib' \
+		'-I%p/lib/fontconfig2/include' '-L%p/lib/fontconfig2/lib' \
+		'-I%p/lib/xft2/include' '-L%p/lib/xft2/lib' \
 		'-I%p/include' '-L%p/lib' \
 		'-I/usr/X11R6/include' '-L/usr/X11R6/lib' \
 		$LIBRESOLV -buildkey qt3-jaguar \
 		-platform darwin-g++ -xplatform darwin-g++ \
 		-prefix '%p/lib/qt3' -docdir '%p/share/doc/%n' \
 		-headerdir '%p/include/qt' -libdir '%p/lib' \
-		-release -shared -no-exceptions -thread -cups -stl \
+		-no-pch -release -shared -no-exceptions -thread -cups -stl \
 		-qt-gif -plugin-imgfmt-png -plugin-imgfmt-jpeg -plugin-imgfmt-mng \
 		-system-libpng -system-libjpeg -system-zlib -largefile \
 		-sm -xinerama -xrender -xft -xkb \
@@ -199,7 +207,8 @@ CompileScript: <<
 	pushd %p; FixifiedSW=`/bin/pwd -P`; popd
 	/usr/bin/find . -name Makefile -print0 | xargs -0 perl -pi -e "s,\\$\\(INSTALL_ROOT\\)$FixifiedSW,\\$\\(INSTALL_ROOT\\)%p,g"
 
-	make
+	make CC="$CC" CXX="$CXX"
+	fink-package-precedence --prohibit-bdep %N --depfile-ext=.d .
 <<
 
 InstallScript: <<
@@ -237,7 +246,7 @@ InstallScript: <<
 	done
 
 	# clean up some bad data in the .la and .pc files
-	perl -pi -e "s,^libdir=.*,libdir='%p/lib/%N/lib',; s,-L..QTDIR./lib ,,; s,^includedir=.*,includedir='%p/lib/%N/include'," %i/lib/%N/lib/*.la %i/lib/pkgconfig/*.pc
+	perl -pi -e "s,%b,%p/lib/%N,g; s,^libdir=.*,libdir='%p/lib/%N/lib',; s,-L..QTDIR./lib ,,; s,^includedir=.*,includedir='%p/lib/%N/include'," %i/lib/%N/lib/*.la %i/lib/pkgconfig/*.pc
 
 	# %p/lib/%N/doc
 	ln -sf ../../share/doc/%N %i/lib/%N/doc
@@ -314,12 +323,14 @@ DocFiles: FAQ INSTALL LICENSE* MANIFEST PLATFORMS README* bin/findtr bin/qt20fix
 SplitOff: <<
 	Package: %N-shlibs
 	Depends: <<
-		fink (>= 0.26.0-1),
-		freetype219-shlibs,
+		fink (>= 0.29.7-1),
+		fontconfig2-shlibs (>= 2.4.1-1),
+		freetype219-shlibs (>= 2.3.12-1),
 		libgl-shlibs,
-		libpng3-shlibs (>= 1.2.8-1),
-		libjpeg-shlibs,
-		x11-shlibs
+		libpng14-shlibs,
+		libjpeg8-shlibs,
+		x11-shlibs,
+		xft2-shlibs (>= 2.1.14-3)
 	<<
 	Conflicts: <<
 		qt-shlibs,
@@ -352,7 +363,7 @@ SplitOff: <<
 		%p/lib/libqui.1.dylib 1.0.0 %n (>= 3.3.6-2)
 	<<
 	PostInstScript: <<
-(/usr/X11R6/bin/fc-cache -f || :) >/tmp/fc-cache.log 2>&1 || :
+(%p/lib/fontconfig2/bin/fc-cache -f || :) >/tmp/fc-cache.log 2>&1 || :
 if [ -d %p/lib/%N-plugins ] && [ ! -L %p/lib/%N-plugins ]; then
 	if rsync -arL %p/lib/%N-plugins/ %p/lib/%N/plugins/; then
 		rm -rf %p/lib/%N-plugins
@@ -388,10 +399,7 @@ SplitOff2: <<
 <<
 SplitOff3: <<
 	Package: %N-designer-shlibs
-	Depends: <<
-		%N-shlibs (= %v-%r),
-		x11-shlibs
-	<<
+	Depends: %N-shlibs (= %v-%r)
 	Conflicts: qt2
 	Replaces: <<
 		%N-designer,
@@ -406,12 +414,7 @@ SplitOff3: <<
 <<
 SplitOff4: <<
 	Package: %N-linguist
-	Depends: <<
-		%N-shlibs (= %v-%r),
-		libjpeg-shlibs,
-		libpng3-shlibs (>= 1.2.8-1),
-		x11
-	<<
+	Depends: %N-shlibs (= %v-%r)
 	Conflicts: qt2
 	Replaces: <<
 		%N-bin,
@@ -456,7 +459,5 @@ DescPackaging: <<
 	so the change should be transparent to existing software.
 
 	Also, "make install" actually works again.  Yay!
-
-	Thanks to Martin Costabel for the x86_64 fix.
 <<
 
