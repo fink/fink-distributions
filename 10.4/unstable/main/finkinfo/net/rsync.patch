@@ -1,25 +1,3 @@
---- old/patches/crtimes.diff	2009-12-31 22:20:28.000000000 +0100
-+++ new/patches/crtimes.diff	2010-08-25 17:59:00.000000000 +0200
-@@ -469,14 +469,17 @@
- diff --git a/syscall.c b/syscall.c
- --- a/syscall.c
- +++ b/syscall.c
--@@ -37,6 +37,11 @@ extern int force_change;
-+@@ -37,6 +37,14 @@ extern int force_change;
-  extern int preserve_perms;
-  extern int preserve_executability;
-  
-++#pragma pack(push)
-++#pragma pack(4)
- +struct create_time {
--+	unsigned long length;
-++	uint32 length;
- +	struct timespec crtime;
- +};
-++#pragma pack(pop)
- +
-  #define RETURN_ERROR_IF(x,e) \
-  	do { \
 --- old/acls.c	2009-04-10 19:09:39.000000000 -0400
 +++ new/acls.c	2010-09-01 12:34:33.000000000 -0400
 @@ -270,7 +270,7 @@
@@ -31,3 +9,1823 @@
  		}
  		/* continue == done with entry; break == store in temporary ida list */
  		switch (tag_type) {
+diff -Naur rsync-3.0.7.old/syscall.c rsync-3.0.7.new/syscall.c
+--- rsync-3.0.7.old/syscall.c	2010-02-05 22:37:11.000000000 -0500
++++ rsync-3.0.7.new/syscall.c	2010-02-05 22:40:02.000000000 -0500
+@@ -37,11 +37,6 @@
+ extern int preserve_perms;
+ extern int preserve_executability;
+ 
+-struct create_time {
+-	unsigned long length;
+-	struct timespec crtime;
+-};
+-
+ #define RETURN_ERROR_IF(x,e) \
+ 	do { \
+ 		if (x) { \
+@@ -402,7 +397,8 @@
+ 
+ time_t get_create_time(const char *path)
+ {
+-	static struct create_time attrBuf;
++	static char attrBuf[sizeof(u_int32_t) + sizeof(struct timespec)];
++	static struct timespec  *crtime = (struct timespec*)&attrBuf[sizeof(u_int32_t)];
+ 	struct attrlist attrList;
+ 
+ 	memset(&attrList, 0, sizeof attrList);
+@@ -410,7 +406,7 @@
+ 	attrList.commonattr = ATTR_CMN_CRTIME;
+ 	if (getattrlist(path, &attrList, &attrBuf, sizeof attrBuf, FSOPT_NOFOLLOW) < 0)
+ 		return 0;
+-	return attrBuf.crtime.tv_sec;
++	return crtime->tv_sec;
+ }
+ 
+ int set_create_time(const char *path, time_t crtime)
+This patch prevents rsync from changing the creation date on the root of a volume. On HFS+, the root inode is always 2, as defined in hfs/hfs_format.h:
+
+kHFSRootFolderID		= 2,	/* Folder ID of the root folder */
+
+So before calling set_create_time(), we verify from the existing stat struct that the inode of the current file is not 2.
+
+diff -Naur rsync-3.0.7_orig/rsync.c rsync-3.0.7/rsync.c
+--- rsync-3.0.7_orig/rsync.c	2010-09-16 10:49:54.000000000 -0500
++++ rsync-3.0.7/rsync.c	2010-09-16 10:50:43.000000000 -0500
+@@ -480,6 +480,7 @@
+ 		if (sxp->crtime == 0)
+ 			sxp->crtime = get_create_time(fname);
+ 		if (cmp_time(sxp->crtime, file_crtime) != 0
++		 && sxp->st.st_ino != 2 // Don't set the creation date on the root folder of an HFS+ volume
+ 		 && set_create_time(fname, file_crtime) == 0)
+ 			updated = 1;
+ 	}
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/compat.c rsync-3.0.7/compat.c
+--- rsync-3.0.7_base/compat.c	2010-07-01 16:39:55.000000000 -0500
++++ rsync-3.0.7/compat.c	2010-07-01 17:03:45.000000000 -0500
+@@ -21,6 +21,21 @@
+ 
+ #include "rsync.h"
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++// For getattrlist()
++#include <sys/attr.h>
++// For statfs():
++#include <sys/param.h>
++#include <sys/mount.h>
++// For dirname()
++#include <libgen.h>
++#endif
++
++#ifdef SUPPORT_FORCE_CHANGE
++#include <sys/types.h>
++#include <sys/sysctl.h>
++#endif
++
+ int remote_protocol = 0;
+ int file_extra_cnt = 0; /* count of file-list extras that everyone gets */
+ int inc_recurse = 0;
+@@ -50,6 +65,8 @@
+ extern int preserve_fileflags;
+ extern int preserve_acls;
+ extern int preserve_xattrs;
++extern int preserve_hfs_compression;
++int fs_supports_hfs_compression = 0;
+ extern int need_messages_from_generator;
+ extern int delete_mode, delete_before, delete_during, delete_after;
+ extern char *shell_cmd;
+@@ -78,6 +95,7 @@
+ #define CF_SYMLINK_TIMES (1<<1)
+ #define CF_SYMLINK_ICONV (1<<2)
+ #define CF_SAFE_FLIST	 (1<<3)
++#define CF_HFS_COMPRESSION (1<<4)
+ 
+ static const char *client_info;
+ 
+@@ -266,6 +284,10 @@
+ #endif
+ 			if (local_server || strchr(client_info, 'f') != NULL)
+ 				compat_flags |= CF_SAFE_FLIST;
++#ifdef SUPPORT_HFS_COMPRESSION
++			if (preserve_hfs_compression)
++				compat_flags |= CF_HFS_COMPRESSION;
++#endif
+ 			write_byte(f_out, compat_flags);
+ 		} else
+ 			compat_flags = read_byte(f_in);
+@@ -275,6 +297,12 @@
+ 			receiver_symlink_times = am_server
+ 			    ? strchr(client_info, 'L') != NULL
+ 			    : !!(compat_flags & CF_SYMLINK_TIMES);
++#ifdef SUPPORT_HFS_COMPRESSION
++			// CF_HFS_COMPRESSION will be set on the remote side as long as preserve_hfs_compression > 1
++			if (preserve_hfs_compression && !(compat_flags & CF_HFS_COMPRESSION))
++				preserve_hfs_compression = 0;
++
++#endif
+ 		}
+ #if defined HAVE_LUTIMES && defined HAVE_UTIMES
+ 		else
+@@ -328,3 +356,81 @@
+ 		checksum_seed = read_int(f_in);
+ 	}
+ }
++
++void do_filesystem_compatibility_checks(const char *path)
++{
++#ifdef SUPPORT_HFS_COMPRESSION
++	fs_supports_hfs_compression = filesystem_supports_hfs_compression(path);
++	if (preserve_hfs_compression > 0) {
++		// If the filesystem doesn't support compression and 
++		// decmpfs protection wasn't requested, disable support for compression
++		if (!fs_supports_hfs_compression && preserve_hfs_compression < 2) {
++			preserve_hfs_compression = 0;
++			rprintf(FINFO, "Disabling HFS compression support, %s doesn't support it (use --protect-decmpfs to force protection of the com.apple.decmpfs extended attribute).\n", path);
++		}
++	}
++#endif
++
++#ifdef SUPPORT_FORCE_CHANGE
++	if (force_change & SYS_IMMUTABLE) {
++		// determine whether we'll be able to unlock a system immutable item
++		int mib[2];
++		int securityLevel = 0;
++		size_t len = sizeof(securityLevel);
++
++		mib[0] = CTL_KERN;
++		mib[1] = KERN_SECURELVL;
++		if (sysctl(mib, 2, &securityLevel, &len, NULL, 0) == 0 && securityLevel > 0) {
++			//rprintf(FINFO, "System security level is too high to force mutability on system immutable files and directories.\n");
++			force_change = force_change & USR_IMMUTABLE ? USR_IMMUTABLE : 0;
++		}
++	}
++#endif
++
++// TODO: ACLs and xattrs
++}
++
++#ifdef SUPPORT_HFS_COMPRESSION
++int filesystem_supports_hfs_compression(const char *path)
++{
++	struct statfs fsb;
++	char *parent;
++	int statfs_ret, saved_err;
++	
++	statfs_ret = statfs(path, &fsb);
++	if (statfs_ret != 0) {
++		saved_err = errno;
++		if ((parent = (char *)dirname((char *)path)) != NULL)
++			statfs_ret = statfs(parent, &fsb);
++		errno = saved_err;
++	}
++	
++	if (statfs_ret == 0) {
++		struct attrlist attrs;
++		struct {
++			int32_t len;
++			vol_capabilities_set_t caps;
++		} attrData;
++		
++		bzero(&attrs, sizeof(attrs));
++		attrs.bitmapcount = ATTR_BIT_MAP_COUNT;
++		attrs.volattr = ATTR_VOL_CAPABILITIES;
++		
++		bzero(&attrData, sizeof(attrData));
++		attrData.len = sizeof(attrData);
++		
++		int ret = getattrlist(fsb.f_mntonname, &attrs, &attrData, sizeof(attrData), 0);
++		if (ret == 0) {
++			if (attrData.caps[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_DECMPFS_COMPRESSION) {
++				// Compression is supported
++				return 1;
++			}
++		} else {
++			rprintf(FERROR, "Failure in getattrlist while determining HFS compression support on %s (%s): %s\n", path, who_am_i(), strerror(errno));
++		}
++	} else {
++		rprintf(FERROR, "Failure in statfs while determining HFS compression support on %s (%s): %s\n", path, who_am_i(), strerror(errno));
++	}
++	return 0;
++}
++#endif
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/config.h rsync-3.0.7/config.h
+--- rsync-3.0.7_base/config.h	1969-12-31 18:00:00.000000000 -0600
++++ rsync-3.0.7/config.h	2010-07-01 17:03:45.000000000 -0500
+@@ -0,0 +1,694 @@
++/* config.h.  Generated from config.h.in by configure.  */
++/* config.h.in.  Generated from configure.in by autoheader.  */
++
++/* Define if building universal (internal helper macro) */
++/* #undef AC_APPLE_UNIVERSAL_BUILD */
++
++/* Define to 1 if link() can hard-link special files. */
++#define CAN_HARDLINK_SPECIAL 1
++
++/* Define to 1 if link() can hard-link symlinks. */
++/* #undef CAN_HARDLINK_SYMLINK */
++
++/* Define to 1 if chown modifies symlinks. */
++/* #undef CHOWN_MODIFIES_SYMLINK */
++
++/* Undefine if you don't want locale features. By default this is defined. */
++#define CONFIG_LOCALE 1
++
++/* Define to one of `_getb67', `GETB67', `getb67' for Cray-2 and Cray-YMP
++   systems. This function is required for `alloca.c' support on those systems.
++   */
++/* #undef CRAY_STACKSEG_END */
++
++/* Define to 1 if using `alloca.c'. */
++/* #undef C_ALLOCA */
++
++/* Used to make "checker" understand that FD_ZERO() clears memory. */
++/* #undef FORCE_FD_ZERO_MEMSET */
++
++/* Define to the type of elements in the array set by `getgroups'. Usually
++   this is either `int' or `gid_t'. */
++#define GETGROUPS_T gid_t
++
++/* Define to 1 if the `getpgrp' function requires zero arguments. */
++#define GETPGRP_VOID 1
++
++/* Define to 1 if you have the `aclsort' function. */
++/* #undef HAVE_ACLSORT */
++
++/* true if you have acl_get_perm_np */
++/* #undef HAVE_ACL_GET_PERM_NP */
++
++/* Define to 1 if you have the <acl/libacl.h> header file. */
++/* #undef HAVE_ACL_LIBACL_H */
++
++/* true if you have AIX ACLs */
++/* #undef HAVE_AIX_ACLS */
++
++/* Define to 1 if you have `alloca', as a function or macro. */
++#define HAVE_ALLOCA 1
++
++/* Define to 1 if you have <alloca.h> and it should be used (not on Ultrix).
++   */
++#define HAVE_ALLOCA_H 1
++
++/* Define to 1 if you have the <arpa/inet.h> header file. */
++#define HAVE_ARPA_INET_H 1
++
++/* Define to 1 if you have the <arpa/nameser.h> header file. */
++#define HAVE_ARPA_NAMESER_H 1
++
++/* Define to 1 if you have the `asprintf' function. */
++#define HAVE_ASPRINTF 1
++
++/* Define to 1 if you have the <attr/xattr.h> header file. */
++/* #undef HAVE_ATTR_XATTR_H */
++
++/* Define to 1 if readdir() is broken */
++/* #undef HAVE_BROKEN_READDIR */
++
++/* Define to 1 if vsprintf has a C99-compatible return value */
++#define HAVE_C99_VSNPRINTF 1
++
++/* Define to 1 if you have the `chflags' function. */
++#define HAVE_CHFLAGS 1
++
++/* Define to 1 if you have the `chmod' function. */
++#define HAVE_CHMOD 1
++
++/* Define to 1 if you have the `chown' function. */
++#define HAVE_CHOWN 1
++
++/* Define to 1 if you have the <compat.h> header file. */
++/* #undef HAVE_COMPAT_H */
++
++/* Define to 1 if you have the "connect" function */
++#define HAVE_CONNECT 1
++
++/* Define to 1 if you have the <ctype.h> header file. */
++#define HAVE_CTYPE_H 1
++
++/* Define to 1 if you have the <dirent.h> header file, and it defines `DIR'.
++   */
++#define HAVE_DIRENT_H 1
++
++/* Define to 1 if errno is declared in errno.h */
++#define HAVE_ERRNO_DECL 1
++
++/* Define to 1 if you have the `extattr_get_link' function. */
++/* #undef HAVE_EXTATTR_GET_LINK */
++
++/* Define to 1 if you have the `fchmod' function. */
++#define HAVE_FCHMOD 1
++
++/* Define to 1 if you have the <fcntl.h> header file. */
++#define HAVE_FCNTL_H 1
++
++/* Define to 1 if you have the <float.h> header file. */
++#define HAVE_FLOAT_H 1
++
++/* True if you have FreeBSD xattrs */
++/* #undef HAVE_FREEBSD_XATTRS */
++
++/* Define to 1 if you have the `fstat' function. */
++#define HAVE_FSTAT 1
++
++/* Define to 1 if you have the `ftruncate' function. */
++#define HAVE_FTRUNCATE 1
++
++/* Define to 1 if you have the "getaddrinfo" function and required types. */
++#define HAVE_GETADDRINFO 1
++
++/* Define to 1 if you have the `getcwd' function. */
++#define HAVE_GETCWD 1
++
++/* Define to 1 if you have the `getegid' function. */
++#define HAVE_GETEGID 1
++
++/* Define to 1 if you have the `geteuid' function. */
++#define HAVE_GETEUID 1
++
++/* Define to 1 if you have the `getgroups' function. */
++#define HAVE_GETGROUPS 1
++
++/* Define to 1 if you have the `getpgrp' function. */
++#define HAVE_GETPGRP 1
++
++/* Define to 1 if gettimeofday() takes a time-zone arg */
++#define HAVE_GETTIMEOFDAY_TZ 1
++
++/* Define to 1 if you have the `getxattr' function. */
++#define HAVE_GETXATTR 1
++
++/* Define to 1 if you have the <grp.h> header file. */
++#define HAVE_GRP_H 1
++
++/* true if you have HPUX ACLs */
++/* #undef HAVE_HPUX_ACLS */
++
++/* Define to 1 if you have the <iconv.h> header file. */
++#define HAVE_ICONV_H 1
++
++/* Define to 1 if you have the `iconv_open' function. */
++/* #undef HAVE_ICONV_OPEN */
++
++/* Define to 1 if the system has the type `id_t'. */
++#define HAVE_ID_T 1
++
++/* Define to 1 if you have the `inet_ntop' function. */
++#define HAVE_INET_NTOP 1
++
++/* Define to 1 if you have the `inet_pton' function. */
++#define HAVE_INET_PTON 1
++
++/* Define to 1 if you have the <inttypes.h> header file. */
++#define HAVE_INTTYPES_H 1
++
++/* true if you have IRIX ACLs */
++/* #undef HAVE_IRIX_ACLS */
++
++/* Define to 1 if you have the <langinfo.h> header file. */
++#define HAVE_LANGINFO_H 1
++
++/* Define to 1 if you have the `lchmod' function. */
++#define HAVE_LCHMOD 1
++
++/* Define to 1 if you have the `lchown' function. */
++#define HAVE_LCHOWN 1
++
++/* Define to 1 if you have the `acl' library (-lacl). */
++/* #undef HAVE_LIBACL */
++
++/* Define to 1 if you have the <libcharset.h> header file. */
++#define HAVE_LIBCHARSET_H 1
++
++/* Define to 1 if you have the `inet' library (-linet). */
++/* #undef HAVE_LIBINET */
++
++/* Define to 1 if you have the `nsl' library (-lnsl). */
++/* #undef HAVE_LIBNSL */
++
++/* Define to 1 if you have the `nsl_s' library (-lnsl_s). */
++/* #undef HAVE_LIBNSL_S */
++
++/* Define to 1 if you have the `popt' library (-lpopt). */
++/* #undef HAVE_LIBPOPT */
++
++/* Define to 1 if you have the `resolv' library (-lresolv). */
++/* #undef HAVE_LIBRESOLV */
++
++/* Define to 1 if you have the `sec' library (-lsec). */
++/* #undef HAVE_LIBSEC */
++
++/* Define to 1 if you have the `socket' library (-lsocket). */
++/* #undef HAVE_LIBSOCKET */
++
++/* Define to 1 if you have the <limits.h> header file. */
++#define HAVE_LIMITS_H 1
++
++/* Define to 1 if you have the `link' function. */
++#define HAVE_LINK 1
++
++/* True if you have Linux xattrs */
++/* #undef HAVE_LINUX_XATTRS */
++
++/* Define to 1 if you have the `locale_charset' function. */
++/* #undef HAVE_LOCALE_CHARSET */
++
++/* Define to 1 if you have the <locale.h> header file. */
++#define HAVE_LOCALE_H 1
++
++/* Define to 1 if the type `long double' works and has more range or precision
++   than `double'. */
++#define HAVE_LONG_DOUBLE 1
++
++/* Define to 1 if the type `long double' works and has more range or precision
++   than `double'. */
++#define HAVE_LONG_DOUBLE_WIDER 1
++
++/* Define to 1 if you have the `lseek64' function. */
++/* #undef HAVE_LSEEK64 */
++
++/* Define to 1 if you have the `lutimes' function. */
++#define HAVE_LUTIMES 1
++
++/* Define to 1 if you have the `mallinfo' function. */
++/* #undef HAVE_MALLINFO */
++
++/* Define to 1 if you have the <malloc.h> header file. */
++/* #undef HAVE_MALLOC_H */
++
++/* Define to 1 if you have the <mcheck.h> header file. */
++/* #undef HAVE_MCHECK_H */
++
++/* Define to 1 if you have the `memmove' function. */
++#define HAVE_MEMMOVE 1
++
++/* Define to 1 if you have the <memory.h> header file. */
++#define HAVE_MEMORY_H 1
++
++/* Define to 1 if you have the `mkfifo' function. */
++#define HAVE_MKFIFO 1
++
++/* Define to 1 if you have the `mknod' function. */
++#define HAVE_MKNOD 1
++
++/* Define to 1 if you have the `mkstemp64' function. */
++/* #undef HAVE_MKSTEMP64 */
++
++/* Define to 1 if the system has the type `mode_t'. */
++#define HAVE_MODE_T 1
++
++/* Define to 1 if you have the `mtrace' function. */
++/* #undef HAVE_MTRACE */
++
++/* Define to 1 if you have the <ndir.h> header file, and it defines `DIR'. */
++/* #undef HAVE_NDIR_H */
++
++/* Define to 1 if you have the <netdb.h> header file. */
++#define HAVE_NETDB_H 1
++
++/* Define to 1 if you have the `nl_langinfo' function. */
++#define HAVE_NL_LANGINFO 1
++
++/* Define to 1 if the system has the type `off_t'. */
++#define HAVE_OFF_T 1
++
++/* Define to 1 if you have the `open64' function. */
++/* #undef HAVE_OPEN64 */
++
++/* true if you have Mac OS X ACLs */
++#define HAVE_OSX_ACLS 1
++
++/* True if you have Mac OS X xattrs */
++#define HAVE_OSX_XATTRS 1
++
++/* Define to 1 if the system has the type `pid_t'. */
++#define HAVE_PID_T 1
++
++/* Define to 1 if you have the <popt.h> header file. */
++/* #undef HAVE_POPT_H */
++
++/* Define to 1 if you have the <popt/popt.h> header file. */
++/* #undef HAVE_POPT_POPT_H */
++
++/* true if you have posix ACLs */
++/* #undef HAVE_POSIX_ACLS */
++
++/* Define to 1 if you have the `putenv' function. */
++#define HAVE_PUTENV 1
++
++/* Define to 1 if you have the `readlink' function. */
++#define HAVE_READLINK 1
++
++/* Define to 1 if remote shell is remsh, not rsh */
++/* #undef HAVE_REMSH */
++
++/* Define to 1 if mkstemp() is available and works right */
++#define HAVE_SECURE_MKSTEMP 1
++
++/* Define to 1 if you have the `setattrlist' function. */
++#define HAVE_SETATTRLIST 1
++
++/* Define to 1 if you have the `seteuid' function. */
++#define HAVE_SETEUID 1
++
++/* Define to 1 if you have the `setgroups' function. */
++#define HAVE_SETGROUPS 1
++
++/* Define to 1 if you have the `setlocale' function. */
++#define HAVE_SETLOCALE 1
++
++/* Define to 1 if you have the `setmode' function. */
++#define HAVE_SETMODE 1
++
++/* Define to 1 if you have the `setsid' function. */
++#define HAVE_SETSID 1
++
++/* Define to 1 if you have the `sigaction' function. */
++#define HAVE_SIGACTION 1
++
++/* Define to 1 if you have the `sigprocmask' function. */
++#define HAVE_SIGPROCMASK 1
++
++/* Define to 1 if the system has the type `size_t'. */
++#define HAVE_SIZE_T 1
++
++/* Define to 1 if you have the `snprintf' function. */
++#define HAVE_SNPRINTF 1
++
++/* Do we have sockaddr_in6.sin6_scope_id? */
++#define HAVE_SOCKADDR_IN6_SCOPE_ID 1
++
++/* Do we have sockaddr_in.sin_len? */
++#define HAVE_SOCKADDR_IN_LEN 1
++
++/* Do we have sockaddr.sa_len? */
++#define HAVE_SOCKADDR_LEN 1
++
++/* Do we have sockaddr_un.sun_len? */
++/* #undef HAVE_SOCKADDR_UN_LEN */
++
++/* Define to 1 if you have the "socketpair" function */
++#define HAVE_SOCKETPAIR 1
++
++/* true if you have solaris ACLs */
++/* #undef HAVE_SOLARIS_ACLS */
++
++/* Define to 1 if you have the <stdint.h> header file. */
++#define HAVE_STDINT_H 1
++
++/* Define to 1 if you have the <stdlib.h> header file. */
++#define HAVE_STDLIB_H 1
++
++/* Define to 1 if you have the `strcasecmp' function. */
++#define HAVE_STRCASECMP 1
++
++/* Define to 1 if you have the `strchr' function. */
++#define HAVE_STRCHR 1
++
++/* Define to 1 if you have the `strdup' function. */
++#define HAVE_STRDUP 1
++
++/* Define to 1 if you have the `strerror' function. */
++#define HAVE_STRERROR 1
++
++/* Define to 1 if you have the `strftime' function. */
++#define HAVE_STRFTIME 1
++
++/* Define to 1 if you have the <strings.h> header file. */
++#define HAVE_STRINGS_H 1
++
++/* Define to 1 if you have the <string.h> header file. */
++#define HAVE_STRING_H 1
++
++/* Define to 1 if you have the `strlcat' function. */
++#define HAVE_STRLCAT 1
++
++/* Define to 1 if you have the `strlcpy' function. */
++#define HAVE_STRLCPY 1
++
++/* Define to 1 if you have the `strpbrk' function. */
++#define HAVE_STRPBRK 1
++
++/* Define to 1 if you have the `strtol' function. */
++#define HAVE_STRTOL 1
++
++/* Define to 1 if the system has the type `struct addrinfo'. */
++#define HAVE_STRUCT_ADDRINFO 1
++
++/* Define to 1 if the system has the type `struct sockaddr_storage'. */
++#define HAVE_STRUCT_SOCKADDR_STORAGE 1
++
++/* Define to 1 if the system has the type `struct stat64'. */
++#define HAVE_STRUCT_STAT64 1
++
++/* Define to 1 if `struct stat' is a member of `st_rdev'. */
++#define HAVE_STRUCT_STAT_ST_RDEV 1
++
++/* Define to 1 if you have the "struct utimbuf" type */
++#define HAVE_STRUCT_UTIMBUF 1
++
++/* Define to 1 if you have the <sys/acl.h> header file. */
++#define HAVE_SYS_ACL_H 1
++
++/* Define to 1 if you have the <sys/attr.h> header file. */
++#define HAVE_SYS_ATTR_H 1
++
++/* Define to 1 if you have the <sys/dir.h> header file, and it defines `DIR'.
++   */
++/* #undef HAVE_SYS_DIR_H */
++
++/* Define to 1 if you have the <sys/extattr.h> header file. */
++/* #undef HAVE_SYS_EXTATTR_H */
++
++/* Define to 1 if you have the <sys/fcntl.h> header file. */
++#define HAVE_SYS_FCNTL_H 1
++
++/* Define to 1 if you have the <sys/filio.h> header file. */
++#define HAVE_SYS_FILIO_H 1
++
++/* Define to 1 if you have the <sys/ioctl.h> header file. */
++#define HAVE_SYS_IOCTL_H 1
++
++/* Define to 1 if you have the <sys/mode.h> header file. */
++/* #undef HAVE_SYS_MODE_H */
++
++/* Define to 1 if you have the <sys/ndir.h> header file, and it defines `DIR'.
++   */
++/* #undef HAVE_SYS_NDIR_H */
++
++/* Define to 1 if you have the <sys/param.h> header file. */
++#define HAVE_SYS_PARAM_H 1
++
++/* Define to 1 if you have the <sys/select.h> header file. */
++#define HAVE_SYS_SELECT_H 1
++
++/* Define to 1 if you have the <sys/socket.h> header file. */
++#define HAVE_SYS_SOCKET_H 1
++
++/* Define to 1 if you have the <sys/stat.h> header file. */
++#define HAVE_SYS_STAT_H 1
++
++/* Define to 1 if you have the <sys/time.h> header file. */
++#define HAVE_SYS_TIME_H 1
++
++/* Define to 1 if you have the <sys/types.h> header file. */
++#define HAVE_SYS_TYPES_H 1
++
++/* Define to 1 if you have the <sys/unistd.h> header file. */
++#define HAVE_SYS_UNISTD_H 1
++
++/* Define to 1 if you have the <sys/un.h> header file. */
++#define HAVE_SYS_UN_H 1
++
++/* Define to 1 if you have the <sys/wait.h> header file. */
++#define HAVE_SYS_WAIT_H 1
++
++/* Define to 1 if you have the <sys/xattr.h> header file. */
++#define HAVE_SYS_XATTR_H 1
++
++/* Define to 1 if you have the `tcgetpgrp' function. */
++#define HAVE_TCGETPGRP 1
++
++/* true if you have Tru64 ACLs */
++/* #undef HAVE_TRU64_ACLS */
++
++/* Define to 1 if you have the <unistd.h> header file. */
++#define HAVE_UNISTD_H 1
++
++/* true if you have UnixWare ACLs */
++/* #undef HAVE_UNIXWARE_ACLS */
++
++/* Define to 1 if you have the `utime' function. */
++#define HAVE_UTIME 1
++
++/* Define to 1 if you have the `utimes' function. */
++#define HAVE_UTIMES 1
++
++/* Define to 1 if you have the <utime.h> header file. */
++#define HAVE_UTIME_H 1
++
++/* Define to 1 if `utime(file, NULL)' sets file's timestamp to the present. */
++#define HAVE_UTIME_NULL 1
++
++/* Define to 1 if you have the `vasprintf' function. */
++#define HAVE_VASPRINTF 1
++
++/* Define to 1 if you have the `va_copy' function. */
++/* #undef HAVE_VA_COPY */
++
++/* Define to 1 if you have the `vsnprintf' function. */
++#define HAVE_VSNPRINTF 1
++
++/* Define to 1 if you have the `wait4' function. */
++#define HAVE_WAIT4 1
++
++/* Define to 1 if you have the `waitpid' function. */
++#define HAVE_WAITPID 1
++
++/* Define to 1 if you have the `_acl' function. */
++/* #undef HAVE__ACL */
++
++/* Define to 1 if you have the `_facl' function. */
++/* #undef HAVE__FACL */
++
++/* Define to 1 if you have the `__acl' function. */
++/* #undef HAVE___ACL */
++
++/* Define to 1 if you have the `__facl' function. */
++/* #undef HAVE___FACL */
++
++/* Define to 1 if you have the `__va_copy' function. */
++/* #undef HAVE___VA_COPY */
++
++/* Define as const if the declaration of iconv() needs const. */
++#define ICONV_CONST 
++
++/* Define if you want the --iconv option. Specifing a value will set the
++   default iconv setting (a NULL means no --iconv processing by default). */
++/* #undef ICONV_OPTION */
++
++/* true if you have IPv6 */
++#define INET6 1
++
++/* Define to 1 if `major', `minor', and `makedev' are declared in <mkdev.h>.
++   */
++/* #undef MAJOR_IN_MKDEV */
++
++/* Define to 1 if `major', `minor', and `makedev' are declared in
++   <sysmacros.h>. */
++/* #undef MAJOR_IN_SYSMACROS */
++
++/* Define to 1 if makedev() takes 3 args */
++/* #undef MAKEDEV_TAKES_3_ARGS */
++
++/* Define to 1 if mknod() can create FIFOs. */
++#define MKNOD_CREATES_FIFOS 1
++
++/* Define to 1 if mknod() can create sockets. */
++/* #undef MKNOD_CREATES_SOCKETS */
++
++/* unprivileged group for unprivileged user */
++#define NOBODY_GROUP "nobody"
++
++/* unprivileged user--e.g. nobody */
++#define NOBODY_USER "nobody"
++
++/* Define to the address where bug reports for this package should be sent. */
++#define PACKAGE_BUGREPORT ""
++
++/* Define to the full name of this package. */
++#define PACKAGE_NAME ""
++
++/* Define to the full name and version of this package. */
++#define PACKAGE_STRING ""
++
++/* Define to the one symbol short name of this package. */
++#define PACKAGE_TARNAME ""
++
++/* Define to the home page for this package. */
++#define PACKAGE_URL ""
++
++/* Define to the version of this package. */
++#define PACKAGE_VERSION ""
++
++/* Define as the return type of signal handlers (`int' or `void'). */
++#define RETSIGTYPE void
++
++/* location of configuration file for rsync server */
++#define RSYNCD_SYSCONF "/etc/rsyncd.conf"
++
++/* location of rsync on remote machine */
++#define RSYNC_PATH "rsync"
++
++/* default -e command */
++#define RSYNC_RSH "ssh"
++
++/* rsync release version */
++#define RSYNC_VERSION "3.0.7"
++
++/* Define to 1 if sockets need to be shutdown */
++/* #undef SHUTDOWN_ALL_SOCKETS */
++
++/* Define to 1 if "signed char" is a valid type */
++#define SIGNED_CHAR_OK 1
++
++/* The size of `int', as computed by sizeof. */
++#define SIZEOF_INT 4
++
++/* The size of `int16_t', as computed by sizeof. */
++#define SIZEOF_INT16_T 2
++
++/* The size of `int32_t', as computed by sizeof. */
++#define SIZEOF_INT32_T 4
++
++/* The size of `int64_t', as computed by sizeof. */
++#define SIZEOF_INT64_T 8
++
++/* The size of `long', as computed by sizeof. */
++#define SIZEOF_LONG 8
++
++/* The size of `long long', as computed by sizeof. */
++#define SIZEOF_LONG_LONG 8
++
++/* The size of `off64_t', as computed by sizeof. */
++#define SIZEOF_OFF64_T 0
++
++/* The size of `off_t', as computed by sizeof. */
++#define SIZEOF_OFF_T 8
++
++/* The size of `short', as computed by sizeof. */
++#define SIZEOF_SHORT 2
++
++/* The size of `time_t', as computed by sizeof. */
++#define SIZEOF_TIME_T 8
++
++/* The size of `uint16_t', as computed by sizeof. */
++#define SIZEOF_UINT16_T 2
++
++/* The size of `uint32_t', as computed by sizeof. */
++#define SIZEOF_UINT32_T 4
++
++/* If using the C implementation of alloca, define if you know the
++   direction of stack growth for your system; otherwise it will be
++   automatically deduced at runtime.
++	STACK_DIRECTION > 0 => grows toward higher addresses
++	STACK_DIRECTION < 0 => grows toward lower addresses
++	STACK_DIRECTION = 0 => direction of growth unknown */
++/* #undef STACK_DIRECTION */
++
++/* Define to 1 if you have the ANSI C header files. */
++#define STDC_HEADERS 1
++
++/* Define to 1 to add support for ACLs */
++#define SUPPORT_ACLS 1
++
++/* Define to 1 to add support for extended attributes */
++#define SUPPORT_XATTRS 1
++
++/* Define to 1 if you can safely include both <sys/time.h> and <time.h>. */
++#define TIME_WITH_SYS_TIME 1
++
++/* Define to 1 if you want rsync to make use of iconv_open() */
++/* #undef USE_ICONV_OPEN */
++
++/* String to pass to iconv() for the UTF-8 charset. */
++/* #undef UTF8_CHARSET */
++
++/* Define WORDS_BIGENDIAN to 1 if your processor stores words with the most
++   significant byte first (like Motorola and SPARC, unlike Intel). */
++#if defined AC_APPLE_UNIVERSAL_BUILD
++# if defined __BIG_ENDIAN__
++#  define WORDS_BIGENDIAN 1
++# endif
++#else
++# ifndef WORDS_BIGENDIAN
++/* #  undef WORDS_BIGENDIAN */
++# endif
++#endif
++
++/* Number of bits in a file offset, on hosts where this is settable. */
++/* #undef _FILE_OFFSET_BITS */
++
++/* Define _GNU_SOURCE so that we get all necessary prototypes */
++#define _GNU_SOURCE 1
++
++/* Define for large files, on AIX-style hosts. */
++/* #undef _LARGE_FILES */
++
++/* Define to `int' if <sys/types.h> doesn't define. */
++/* #undef gid_t */
++
++/* Define to `__inline__' or `__inline' if that's what the C compiler
++   calls it, or to nothing if 'inline' is not supported under any name.  */
++#ifndef __cplusplus
++/* #undef inline */
++#endif
++
++/* type to use in place of socklen_t if not defined */
++/* #undef socklen_t */
++
++/* Define to `int' if <sys/types.h> doesn't define. */
++/* #undef uid_t */
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/flist.c rsync-3.0.7/flist.c
+--- rsync-3.0.7_base/flist.c	2010-07-01 16:39:55.000000000 -0500
++++ rsync-3.0.7/flist.c	2010-07-01 17:03:45.000000000 -0500
+@@ -47,6 +47,8 @@
+ extern int preserve_gid;
+ extern int preserve_acls;
+ extern int preserve_xattrs;
++extern int preserve_hfs_compression;
++extern int fs_supports_hfs_compression;
+ extern int preserve_links;
+ extern int preserve_hard_links;
+ extern int preserve_devices;
+@@ -556,8 +558,15 @@
+ 
+ 	if (first_hlink_ndx >= 0) {
+ 		write_varint(f, first_hlink_ndx);
+-		if (first_hlink_ndx >= first_ndx)
+-			goto the_end;
++		if (first_hlink_ndx >= first_ndx) {
++			if (!(xflags & XMIT_SAME_FLAGS)) {
++				// We need to reset this to 0 because the flags won't actually get sent, 
++				// causing the receiver (static fileflags) to be out of sync with the
++				// sender (static fileflags)
++				fileflags = 0;
++			}
++ 			goto the_end;
++		}
+ 	}
+ 
+ 	write_varlong30(f, F_LENGTH(file), 3);
+@@ -760,6 +769,7 @@
+ 			struct file_struct *first = flist->files[first_hlink_ndx - flist->ndx_start];
+ 			file_length = F_LENGTH(first);
+ 			modtime = first->modtime;
++			if (crtimes_ndx) crtime=f_crtime(first);
+ 			mode = first->mode;
+ 			if (preserve_uid)
+ 				uid = F_OWNER(first);
+@@ -776,6 +786,8 @@
+ 				linkname_len = strlen(F_SYMLINK(first)) + 1;
+ 			else
+ 				linkname_len = 0;
++			if (preserve_fileflags)
++				fileflags = F_FFLAGS(first);
+ 			goto create_object;
+ 		}
+ 	}
+@@ -1109,12 +1121,12 @@
+ #endif
+ #ifdef SUPPORT_XATTRS
+ 	if (preserve_xattrs)
+-		receive_xattr(file, f );
++		receive_xattr(file, f);
+ #endif
+ 
+ 	if (S_ISREG(mode) || S_ISLNK(mode))
+ 		stats.total_size += file_length;
+-
++	
+ 	return file;
+ }
+ 
+@@ -1131,7 +1143,7 @@
+ struct file_struct *make_file(const char *fname, struct file_list *flist,
+ 			      STRUCT_STAT *stp, int flags, int filter_level)
+ {
+-	static char *lastdir;
++	static char *lastdir = NULL;
+ 	static int lastdir_len = -1;
+ 	struct file_struct *file;
+ 	char thisname[MAXPATHLEN];
+@@ -1196,6 +1208,18 @@
+ 		return NULL;
+ 	}
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++	if (st.st_flags & UF_COMPRESSED) {
++		if (preserve_hfs_compression > 0) {
++			st.st_size = 0;
++		} else if (fs_supports_hfs_compression) {
++			// If the sender's filesystem supports compression, then we'll be able to send the decompressed data fork
++			// and the decmpfs xattr will be hidden (not sent). As such, we need to strip the compression flag.
++			st.st_flags &= ~UF_COMPRESSED;
++		}
++	}
++#endif
++
+ 	if (filter_level == NO_FILTERS)
+ 		goto skip_filters;
+ 
+@@ -1488,6 +1512,7 @@
+ #ifdef SUPPORT_XATTRS
+ 		if (preserve_xattrs) {
+ 			sx.st.st_mode = file->mode;
++			sx.st.st_flags = F_FFLAGS(file);
+ 			sx.xattr = NULL;
+ 			if (get_xattr(fname, &sx) < 0) {
+ 				io_error |= IOERR_GENERAL;
+@@ -1913,6 +1938,18 @@
+ 				interpret_stat_error(fbuf, True);
+ 				continue;
+ 			}
++
++#ifdef SUPPORT_HFS_COMPRESSION
++		if (st.st_flags & UF_COMPRESSED) {
++			if (preserve_hfs_compression > 0) {
++				st.st_size = 0;
++			} else if (fs_supports_hfs_compression)
++				// If the sender's filesystem supports compression, then we'll be able to send the decompressed data fork
++				// and the decmpfs xattr will be hidden (not sent). As such, we need to strip the compression flag.
++				st.st_flags &= ~UF_COMPRESSED;
++		}
++#endif
++
+ 			send_file_name(f, flist, fbuf, &st, FLAG_TOP_DIR | flags, ALL_FILTERS);
+ 		} else
+ 			send_file_name(f, flist, fbuf, NULL, FLAG_TOP_DIR | flags, ALL_FILTERS);
+@@ -2219,6 +2256,17 @@
+ 			continue;
+ 		}
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++		if (st.st_flags & UF_COMPRESSED) {
++			if (preserve_hfs_compression > 0) {
++				st.st_size = 0;
++			} else if (fs_supports_hfs_compression)
++				// If the sender's filesystem supports compression, then we'll be able to send the decompressed data fork
++				// and the decmpfs xattr will be hidden (not sent). As such, we need to strip the compression flag.
++				st.st_flags &= ~UF_COMPRESSED;
++		}
++#endif
++
+ 		/* A dot-dir should not be excluded! */
+ 		if (name_type != DOTDIR_NAME
+ 		 && is_excluded(fbuf, S_ISDIR(st.st_mode) != 0, ALL_FILTERS))
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/generator.c rsync-3.0.7/generator.c
+--- rsync-3.0.7_base/generator.c	2010-07-01 16:39:55.000000000 -0500
++++ rsync-3.0.7/generator.c	2010-07-01 17:03:45.000000000 -0500
+@@ -38,6 +38,8 @@
+ extern int keep_dirlinks;
+ extern int preserve_acls;
+ extern int preserve_xattrs;
++extern int preserve_hfs_compression;
++extern int fs_supports_hfs_compression;
+ extern int preserve_links;
+ extern int preserve_devices;
+ extern int preserve_specials;
+@@ -118,7 +120,7 @@
+ static int need_retouch_dir_times;
+ static int need_retouch_dir_perms;
+ static const char *solo_file = NULL;
+-
++  
+ /* For calling delete_item() and delete_dir_contents(). */
+ #define DEL_NO_UID_WRITE 	(1<<0) /* file/dir has our uid w/o write perm */
+ #define DEL_RECURSE		(1<<1) /* if dir, delete all contents */
+@@ -1020,6 +1022,14 @@
+ 		pathjoin(cmpbuf, MAXPATHLEN, basis_dir[j], fname);
+ 		if (link_stat(cmpbuf, &sxp->st, 0) < 0 || !S_ISREG(sxp->st.st_mode))
+ 			continue;
++#ifdef SUPPORT_HFS_COMPRESSION
++		if (sxp->st.st_flags & UF_COMPRESSED) {
++			if (preserve_hfs_compression > 0) {
++				sxp->st.st_size = 0;
++			} else if (fs_supports_hfs_compression)
++				sxp->st.st_flags &= ~UF_COMPRESSED;
++		}
++#endif
+ 		switch (match_level) {
+ 		case 0:
+ 			best_match = j;
+@@ -1413,6 +1423,15 @@
+ 		stat_errno = errno;
+ 	}
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++	if (sx.st.st_flags & UF_COMPRESSED) {
++		if (preserve_hfs_compression > 0) {
++			sx.st.st_size = 0;
++		} else if (fs_supports_hfs_compression)
++			sx.st.st_flags &= ~UF_COMPRESSED;
++	}
++#endif
++	
+ 	if (ignore_non_existing > 0 && statret == -1 && stat_errno == ENOENT) {
+ 		if (is_dir) {
+ 			if (is_dir < 0)
+@@ -1519,13 +1538,6 @@
+ 				goto cleanup;
+ 			}
+ 		}
+-#ifdef SUPPORT_XATTRS
+-		if (preserve_xattrs && statret == 1)
+-			copy_xattrs(fnamecmpbuf, fname);
+-#endif
+-		if (set_file_attrs(fname, file, real_ret ? NULL : &real_sx, NULL, 0)
+-		    && verbose && code != FNONE && f_out != -1)
+-			rprintf(code, "%s/\n", fname);
+ 
+ 		/* We need to ensure that the dirs in the transfer have writable
+ 		 * permissions during the time we are putting files within them.
+@@ -1535,6 +1547,16 @@
+ 		 && make_mutable(fname, file->mode, F_FFLAGS(file), force_change))
+ 			need_retouch_dir_perms = 1;
+ #endif
++
++#ifdef SUPPORT_XATTRS
++		// Copy directory xattrs for a directory that already existed
++		if (preserve_xattrs && statret == 1)
++			copy_xattrs(fnamecmpbuf, fname);
++#endif
++		if (set_file_attrs(fname, file, real_ret ? NULL : &real_sx, NULL, 0)
++		    && verbose && code != FNONE && f_out != -1)
++			rprintf(code, "%s/\n", fname);
++
+ #ifdef HAVE_CHMOD
+ 		if (!am_root && !(file->mode & S_IWUSR) && dir_tweaking) {
+ 			mode_t mode = file->mode | S_IWUSR;
+@@ -1832,6 +1854,14 @@
+ 				rprintf(FINFO, "fuzzy basis selected for %s: %s\n",
+ 					fname, fnamecmpbuf);
+ 			}
++#ifdef SUPPORT_HFS_COMPRESSION
++		if (sx.st.st_flags & UF_COMPRESSED) {
++			if (preserve_hfs_compression > 0) {
++				sx.st.st_size = 0;
++			} else if (fs_supports_hfs_compression)
++				sx.st.st_flags &= ~UF_COMPRESSED;
++		} else
++#endif
+ 			sx.st.st_size = F_LENGTH(fuzzy_file);
+ 			statret = 0;
+ 			fnamecmp = fnamecmpbuf;
+@@ -1891,6 +1921,14 @@
+ 		fnamecmp = partialptr;
+ 		fnamecmp_type = FNAMECMP_PARTIAL_DIR;
+ 		statret = 0;
++#ifdef SUPPORT_HFS_COMPRESSION
++		if (sx.st.st_flags & UF_COMPRESSED) {
++			if (preserve_hfs_compression > 0) {
++				sx.st.st_size = 0;
++			} else if (fs_supports_hfs_compression)
++				sx.st.st_flags &= ~UF_COMPRESSED;
++		}
++#endif
+ 	}
+ 
+ 	if (!do_xfers)
+@@ -2017,6 +2055,18 @@
+ 	if (read_batch)
+ 		goto cleanup;
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++	if (F_FFLAGS(file) & UF_COMPRESSED) {
++		// At this point the attrs have already been copied, we don't need to transfer a data fork
++		// If my filesystem doesn't support HFS compression, the existing file's content 
++		// will not be automatically truncated, so we'll do that manually here
++		if (!fs_supports_hfs_compression && sx.st.st_size > 0) {
++			if (ftruncate(fd, 0) == 0)
++				sx.st.st_size = 0;
++		}
++	}
++#endif
++	
+ 	if (statret != 0 || whole_file)
+ 		write_sum_head(f_out, NULL);
+ 	else if (sx.st.st_size <= 0) {
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/hlink.c rsync-3.0.7/hlink.c
+--- rsync-3.0.7_base/hlink.c	2010-07-01 16:39:55.000000000 -0500
++++ rsync-3.0.7/hlink.c	2010-07-01 17:03:45.000000000 -0500
+@@ -31,6 +31,8 @@
+ extern int link_dest;
+ extern int preserve_acls;
+ extern int preserve_xattrs;
++extern int preserve_hfs_compression;
++extern int fs_supports_hfs_compression;
+ extern int make_backups;
+ extern int protocol_version;
+ extern int remove_source_files;
+@@ -233,6 +235,16 @@
+ 	}
+ 
+ 	if (hard_link_one(file, fname, oldname, 0)) {
++		// If the hard link was successful, restat the destination file
++		statret = link_stat(fname, &sxp->st, 0);
++#ifdef SUPPORT_HFS_COMPRESSION
++		if (sxp->st.st_flags & UF_COMPRESSED) {
++			if (preserve_hfs_compression > 0) {
++				sxp->st.st_size = 0;
++			} else if (fs_supports_hfs_compression)
++				sxp->st.st_flags &= ~UF_COMPRESSED;
++		}
++#endif
+ 		if (itemizing) {
+ 			itemize(fname, file, ndx, statret, sxp,
+ 				ITEM_LOCAL_CHANGE | ITEM_XNAME_FOLLOWS, 0,
+@@ -365,6 +377,15 @@
+ 		memset(&prev_st, 0, sizeof prev_st);
+ 	}
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++	if (prev_st.st_flags & UF_COMPRESSED) {
++		if (preserve_hfs_compression > 0) {
++			prev_st.st_size = 0;
++		} else if (fs_supports_hfs_compression)
++			prev_st.st_flags &= ~UF_COMPRESSED;
++	}
++#endif
++	
+ 	if (statret < 0 && basis_dir[0] != NULL) {
+ 		/* If we match an alt-dest item, we don't output this as a change. */
+ 		char cmpbuf[MAXPATHLEN];
+@@ -381,6 +402,15 @@
+ 			pathjoin(cmpbuf, MAXPATHLEN, basis_dir[j], fname);
+ 			if (link_stat(cmpbuf, &alt_sx.st, 0) < 0)
+ 				continue;
++#ifdef SUPPORT_HFS_COMPRESSION
++			if (alt_sx.st.st_flags & UF_COMPRESSED) {
++				if (preserve_hfs_compression > 0) {
++					alt_sx.st.st_size = 0;
++				} else if (fs_supports_hfs_compression)
++					alt_sx.st.st_flags &= ~UF_COMPRESSED;
++			}
++#endif
++	
+ 			if (link_dest) {
+ 				if (prev_st.st_dev != alt_sx.st.st_dev
+ 				 || prev_st.st_ino != alt_sx.st.st_ino)
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/lib/sysxattrs.c rsync-3.0.7/lib/sysxattrs.c
+--- rsync-3.0.7_base/lib/sysxattrs.c	2008-03-01 14:01:41.000000000 -0600
++++ rsync-3.0.7/lib/sysxattrs.c	2010-07-01 17:03:45.000000000 -0500
+@@ -22,6 +22,11 @@
+ #include "rsync.h"
+ #include "sysxattrs.h"
+ 
++#ifdef HAVE_OSX_XATTRS
++int xattr_options = XATTR_NOFOLLOW;
++#endif
++extern int preserve_hfs_compression;
++
+ #ifdef SUPPORT_XATTRS
+ 
+ #if defined HAVE_LINUX_XATTRS
+@@ -55,7 +60,27 @@
+ 
+ ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t size)
+ {
+-	return getxattr(path, name, value, size, 0, XATTR_NOFOLLOW);
++	ssize_t len;
++
++	if (preserve_hfs_compression > 0)
++		xattr_options |= XATTR_SHOWCOMPRESSION;
++
++	len = getxattr(path, name, value, size, 0, xattr_options);
++
++	// If we're retrieving data, handle resource forks > 64MB specially
++	if (value != NULL && strcmp(name, XATTR_RESOURCEFORK_NAME) == 0 && len == GETXATTR_FETCH_LIMIT) {
++		// getxattr will only return 64MB of data at a time, need to call again with a new offset
++		u_int32_t offset = GETXATTR_FETCH_LIMIT;
++		ssize_t data_retrieved = len;
++		while (data_retrieved < size) {
++			len = getxattr(path, name, value + offset, size - data_retrieved, offset, xattr_options);
++			data_retrieved += len;
++			offset += (u_int32_t)len;
++		}
++		len = data_retrieved;
++	}		
++
++	return len;
+ }
+ 
+ ssize_t sys_fgetxattr(int filedes, const char *name, void *value, size_t size)
+@@ -70,12 +95,16 @@
+ 
+ int sys_lremovexattr(const char *path, const char *name)
+ {
+-	return removexattr(path, name, XATTR_NOFOLLOW);
++	if (preserve_hfs_compression > 0)
++		xattr_options |= XATTR_SHOWCOMPRESSION;
++	return removexattr(path, name, xattr_options);
+ }
+ 
+ ssize_t sys_llistxattr(const char *path, char *list, size_t size)
+ {
+-	return listxattr(path, list, size, XATTR_NOFOLLOW);
++	if (preserve_hfs_compression > 0)
++		xattr_options |= XATTR_SHOWCOMPRESSION;
++	return listxattr(path, list, size, xattr_options);
+ }
+ 
+ #elif HAVE_FREEBSD_XATTRS
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/main.c rsync-3.0.7/main.c
+--- rsync-3.0.7_base/main.c	2009-12-19 15:39:49.000000000 -0600
++++ rsync-3.0.7/main.c	2010-07-01 17:03:45.000000000 -0500
+@@ -958,6 +958,8 @@
+ 	set_nonblocking(f_out);
+ 
+ 	io_set_sock_fds(f_in, f_out);
++	if (!local_server)
++		do_filesystem_compatibility_checks(argv[argc - 1]);
+ 	setup_protocol(f_out, f_in);
+ 
+ 	if (protocol_version >= 23)
+@@ -1149,7 +1151,9 @@
+ 			am_sender = 0;
+ 			if (rsync_port)
+ 				daemon_over_rsh = shell_cmd ? 1 : -1;
++			do_filesystem_compatibility_checks(*argv);
+ 		} else { /* source is local, check dest arg */
++			do_filesystem_compatibility_checks(argv[0]);
+ 			am_sender = 1;
+ 
+ 			if (argc > 1) {
+@@ -1177,6 +1181,7 @@
+ 					exit_cleanup(RERR_SYNTAX);
+ 				}
+ 				shell_machine = NULL;
++				do_filesystem_compatibility_checks(p);
+ 			} else { /* hostspec was found, so dest is remote */
+ 				argv[argc] = path;
+ 				if (rsync_port)
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/options.c rsync-3.0.7/options.c
+--- rsync-3.0.7_base/options.c	2010-07-01 16:39:55.000000000 -0500
++++ rsync-3.0.7/options.c	2010-07-01 17:03:45.000000000 -0500
+@@ -52,6 +52,7 @@
+ int preserve_hard_links = 0;
+ int preserve_acls = 0;
+ int preserve_xattrs = 0;
++int preserve_hfs_compression = 0;
+ int preserve_perms = 0;
+ int preserve_fileflags = 0;
+ int preserve_executability = 0;
+@@ -356,6 +357,10 @@
+ #ifdef SUPPORT_XATTRS
+   rprintf(F," -X, --xattrs                preserve extended attributes\n");
+ #endif
++#ifdef SUPPORT_HFS_COMPRESSION
++  rprintf(F,"     --hfs-compression       preserve HFS compression (if source & destination support it)\n");
++  rprintf(F,"     --protect-decmpfs       preserve HFS compression (regardless of volume support)\n");
++#endif
+   rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
+   rprintf(F," -g, --group                 preserve group\n");
+   rprintf(F,"     --devices               preserve device files (super-user only)\n");
+@@ -589,6 +594,12 @@
+   {"force-uchange",    0,  POPT_ARG_VAL,    &force_change, USR_IMMUTABLE, 0, 0 },
+   {"force-schange",    0,  POPT_ARG_VAL,    &force_change, SYS_IMMUTABLE, 0, 0 },
+ #endif
++#ifdef SUPPORT_HFS_COMPRESSION
++  {"hfs-compression",  0,  POPT_ARG_VAL,    &preserve_hfs_compression, 1, 0, 0 },
++  {"protect-decmpfs",  0,  POPT_ARG_VAL,    &preserve_hfs_compression, 2, 0, 0 },
++  {"no-hfs-compression",0, POPT_ARG_VAL,    &preserve_hfs_compression, 0, 0, 0 },
++  {"no-protect-decmpfs",0, POPT_ARG_VAL,    &preserve_hfs_compression, 0, 0, 0 },
++#endif
+   {"ignore-errors",    0,  POPT_ARG_VAL,    &ignore_errors, 1, 0, 0 },
+   {"no-ignore-errors", 0,  POPT_ARG_VAL,    &ignore_errors, 0, 0, 0 },
+   {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
+@@ -1363,6 +1374,20 @@
+ 	}
+ #endif
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++	if (preserve_hfs_compression > 0) {
++		if (preserve_xattrs == 0)
++			preserve_xattrs++;
++		if (preserve_fileflags == 0)
++			preserve_fileflags++;
++	}
++#else
++	snprintf(err_buf,sizeof(err_buf),
++		 "HFS compression is not supported on this %s\n",
++		 am_server ? "server" : "client");
++	preserve_hfs_compression = 0;
++#endif
++
+ 	if (write_batch && read_batch) {
+ 		snprintf(err_buf, sizeof err_buf,
+ 			"--write-batch and --read-batch can not be used together\n");
+@@ -1910,6 +1935,13 @@
+ 	if (preserve_fileflags)
+ 		args[ac++] = "--fileflags";
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++	if (preserve_hfs_compression == 1)
++		args[ac++] = "--hfs-compression";
++	else if (preserve_hfs_compression == 2)
++		args[ac++] = "--protect-decmpfs";
++#endif
++
+ 	if (do_compression && def_compress_level != Z_DEFAULT_COMPRESSION) {
+ 		if (asprintf(&arg, "--compress-level=%d", def_compress_level) < 0)
+ 			goto oom;
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/proto.h rsync-3.0.7/proto.h
+--- rsync-3.0.7_base/proto.h	2010-07-01 16:39:55.000000000 -0500
++++ rsync-3.0.7/proto.h	2010-07-01 17:03:45.000000000 -0500
+@@ -58,6 +58,8 @@
+ int daemon_main(void);
+ void set_allow_inc_recurse(void);
+ void setup_protocol(int f_out,int f_in);
++void do_filesystem_compatibility_checks(const char *path);
++int filesystem_supports_hfs_compression(const char *path);
+ int claim_connection(char *fname, int max_connections);
+ void set_filter_dir(const char *dir, unsigned int dirlen);
+ void *push_local_filters(const char *dir, unsigned int dirlen);
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/receiver.c rsync-3.0.7/receiver.c
+--- rsync-3.0.7_base/receiver.c	2009-04-12 14:48:59.000000000 -0500
++++ rsync-3.0.7/receiver.c	2010-07-01 17:03:45.000000000 -0500
+@@ -483,8 +483,13 @@
+ 			rprintf(FINFO, "recv_files(%s)\n", fname);
+ 
+ #ifdef SUPPORT_XATTRS
+-		if (iflags & ITEM_REPORT_XATTR && do_xfers)
++		if (iflags & ITEM_REPORT_XATTR && do_xfers) {
+ 			recv_xattr_request(file, f_in);
++			// I've added logic to set_file_attrs that will prevent 
++			// it from running set_xattrs unless they've actually changed. So
++			// here we indicate that xattrs should be copied
++			file->flags |= ITEM_REPORT_XATTR;
++		}
+ #endif
+ 
+ 		if (!(iflags & ITEM_TRANSFER)) {
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/rounding.h rsync-3.0.7/rounding.h
+--- rsync-3.0.7_base/rounding.h	1969-12-31 18:00:00.000000000 -0600
++++ rsync-3.0.7/rounding.h	2010-07-01 17:03:45.000000000 -0500
+@@ -0,0 +1 @@
++#define EXTRA_ROUNDING 1
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/rsync.1 rsync-3.0.7/rsync.1
+--- rsync-3.0.7_base/rsync.1	2010-07-01 16:39:55.000000000 -0500
++++ rsync-3.0.7/rsync.1	2010-07-01 17:03:45.000000000 -0500
+@@ -422,6 +422,8 @@
+      \-\-chmod=CHMOD           affect file and/or directory permissions
+  \-A, \-\-acls                  preserve ACLs (implies \-p)
+  \-X, \-\-xattrs                preserve extended attributes
++     \-\-hfs\-compression       preserve HFS compression (if source & destination support it)
++     \-\-protect\-decmpfs       preserve HFS compression (regardless of volume support)
+  \-o, \-\-owner                 preserve owner (super-user only)
+  \-g, \-\-group                 preserve group
+      \-\-devices               preserve device files (super-user only)
+@@ -1119,6 +1121,20 @@
+ receiving side.  It does not try to affect user flags.  This option overrides
+ \fB\-\-force\-change\fP and \fB\-\-force\-schange\fP.
+ .IP 
++.IP "\fB\\-\-hfs\-compression\fP"
++This option causes rsync to preserve HFS+ compression on filesystems that support it. Filesystem compression was introduced to HFS+ in Mac OS 10.6. A file that is compressed has no data in its data fork. Rather, the compressed data is stored in an extended attribute named com.apple.decmpfs and a file flag is set to indicate that the file is compressed (UF_COMPRESSED). HFS+ decompresses this data "on-the-fly" and presents it to the operating system as a normal file. Normal attempts to copy compressed files (e.g. in the Finder, via cp, ditto, etc.) will copy the file's decompressed contents, remove the UF_COMPRESSED file flag, and discard the com.apple.decmpfs extended attribute. This option will preserve the data in the com.apple.decmpfs extended attribute and ignore the synthesized data fork contents as long as both the source and destination filesystems support HFS+ compression.
++.IP 
++If the source or destination filesystem does not support HFS+ compression, this option will be disabled for both ends of the transfer. Compressed files will be decompressed on the destination, data in the com.apple.decmpfs extended attribute will be discarded, and the UF_COMPRESSED flag will not be set. This option is appropriate if viewing the contents of compressed files is required on operating systems that do not support HFS+ compression.
++.IP 
++This option enables \fB\-\-fileflags\fP and \fB\-\-xattrs\fP.
++.IP 
++.IP "\fB\-\-protect\-decmpfs\fP"
++The com.apple.decmpfs extended attribute is hidden by default from list/get xattr calls, therefore normal attempts to copy compressed files will functionally decompress those files. While this is desirable behavior when copying files to filesystems that do not support HFS+ compression, it has serious performance and capacity impacts when backing up or restoring the Mac OS X filesystem.
++.IP 
++This option will transfer the com.apple.decmpfs extended attribute regardless of support on the source or destination. If a source file is compressed and an existing file on the destination is not compressed, the data fork of the destination file will be truncated and the com.apple.decmpfs xattr will be transferred instead. Note that compressed files will not be readable to the operating system of the destination if that operating system does not support HFS+ compression. Once restored (with or without this option) to an operating system that supports HFS+ compression, however, these files will be accessible as usual.
++.IP 
++This option enables \fB\-\-fileflags\fP and \fB\-\-xattrs\fP.
++.IP 
+ .IP "\fB\-\-chmod\fP"
+ This option tells rsync to apply one or more
+ comma-separated \(dq\&chmod\(dq\& strings to the permission of the files in the
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/rsync.c rsync-3.0.7/rsync.c
+--- rsync-3.0.7_base/rsync.c	2010-07-01 16:39:55.000000000 -0500
++++ rsync-3.0.7/rsync.c	2010-07-01 17:03:45.000000000 -0500
+@@ -456,13 +456,25 @@
+ #ifdef SUPPORT_XATTRS
+ 	if (am_root < 0)
+ 		set_stat_xattr(fname, file, new_mode);
+-	if (preserve_xattrs && fnamecmp)
++
++	// I added the "&& file->flags & ITEM_REPORT_XATTR" so rsync doesn't copy xattrs 
++	// in cases where they haven't changed. I also populate sxp->st.st_flags with the file_struct's flags
++	// so rsync_xal_set has access to the UF_COMPRESSED flag
++	if (preserve_xattrs && fnamecmp && file->flags & ITEM_REPORT_XATTR) {
++		uint32 tmpflags = sxp->st.st_flags;
++		sxp->st.st_flags = F_FFLAGS(file);
+ 		set_xattr(fname, file, fnamecmp, sxp);
++		sxp->st.st_flags = tmpflags;
++		if (S_ISDIR(sxp->st.st_mode))
++			link_stat(fname, &sx2.st, 0);
++	}
+ #endif
+-
+ 	if (!preserve_times || (S_ISDIR(sxp->st.st_mode) && preserve_times == 1))
+ 		flags |= ATTRS_SKIP_MTIME;
+ 	if (!(flags & ATTRS_SKIP_MTIME)
++#ifdef SUPPORT_HFS_COMPRESSION
++		&& !(sxp->st.st_flags & UF_COMPRESSED) // setting this flag alters mtime, defer setting mtime to after set_fileflags
++#endif
+ 	    && cmp_time(sxp->st.st_mtime, file->modtime) != 0) {
+ 		int ret = set_modtime(fname, file->modtime, sxp->st.st_mode, ST_FLAGS(sxp->st));
+ 		if (ret < 0) {
+@@ -564,6 +576,16 @@
+ 		 && !set_fileflags(fname, fileflags))
+ 			goto cleanup;
+ 		updated = 1;
++#ifdef SUPPORT_HFS_COMPRESSION
++		int ret = set_modtime(fname, file->modtime, new_mode, fileflags);
++		if (ret < 0) {
++			rsyserr(FERROR_XFER, errno, "failed to set times on %s",
++				full_fname(fname));
++			goto cleanup;
++		}
++		if (ret != 0)
++			file->flags |= FLAG_TIME_FAILED;
++#endif
+ 	}
+ #endif
+ 
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/rsync.h rsync-3.0.7/rsync.h
+--- rsync-3.0.7_base/rsync.h	2010-07-01 16:39:55.000000000 -0500
++++ rsync-3.0.7/rsync.h	2010-07-01 17:03:45.000000000 -0500
+@@ -490,6 +490,27 @@
+ #define ST_FLAGS(st) NO_FFLAGS
+ #endif
+ 
++#ifndef XATTR_SHOWCOMPRESSION
++#define XATTR_SHOWCOMPRESSION 0x0020
++#endif
++#ifndef UF_COMPRESSED
++#define UF_COMPRESSED 0x00000020
++#endif
++#ifndef XATTR_DECMPFS_NAME
++#define	XATTR_DECMPFS_NAME	  "com.apple.decmpfs"
++#endif
++#ifndef XATTR_RESOURCEFORK_NAME
++#define	XATTR_RESOURCEFORK_NAME	  "com.apple.ResourceFork"
++#endif
++#ifndef VOL_CAP_FMT_DECMPFS_COMPRESSION
++#define VOL_CAP_FMT_DECMPFS_COMPRESSION	0x00010000
++#endif
++#define GETXATTR_FETCH_LIMIT (1024*1024*64)
++
++#if defined SUPPORT_XATTRS && defined SUPPORT_FILEFLAGS
++#define SUPPORT_HFS_COMPRESSION 1
++#endif
++
+ /* Find a variable that is either exactly 32-bits or longer.
+  * If some code depends on 32-bit truncation, it will need to
+  * take special action in a "#if SIZEOF_INT32 > 4" section. */
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/sender.c rsync-3.0.7/sender.c
+--- rsync-3.0.7_base/sender.c	2009-12-12 19:23:03.000000000 -0600
++++ rsync-3.0.7/sender.c	2010-07-01 17:03:45.000000000 -0500
+@@ -34,6 +34,8 @@
+ extern int io_error;
+ extern int allowed_lull;
+ extern int preserve_xattrs;
++extern int preserve_hfs_compression;
++extern int fs_supports_hfs_compression;
+ extern int protocol_version;
+ extern int remove_source_files;
+ extern int updating_basis_file;
+@@ -309,6 +311,20 @@
+ 			exit_cleanup(RERR_PROTOCOL);
+ 		}
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++		if (st.st_flags & UF_COMPRESSED) {
++			if (preserve_hfs_compression > 0) {
++				// We're sending the compression xattr, not the decompressed data fork. Setting rsync's idea of the 
++				// file size to 0 effectively prevents the transfer of the data fork
++				st.st_size = 0;
++				file->len32 = 0;
++			} else if (fs_supports_hfs_compression)
++				// If the sender's filesystem supports compression, then we'll be able to send the decompressed data fork
++				// and the decmpfs xattr will be hidden (not sent). As such, we need to strip the compression flag.
++				st.st_flags &= ~UF_COMPRESSED;
++		}
++#endif
++	
+ 		if (st.st_size) {
+ 			int32 read_size = MAX(s->blength * 3, MAX_MAP_SIZE);
+ 			mbuf = map_file(fd, st.st_size, read_size, s->blength);
+diff -Naur -X /Volumes/bombich/Development/Bombich_Software/rsync/Diffs/diff_ignore rsync-3.0.7_base/xattrs.c rsync-3.0.7/xattrs.c
+--- rsync-3.0.7_base/xattrs.c	2010-07-01 16:39:55.000000000 -0500
++++ rsync-3.0.7/xattrs.c	2010-07-01 17:03:45.000000000 -0500
+@@ -47,6 +47,7 @@
+ #define XSTATE_ABBREV	1
+ #define XSTATE_DONE	2
+ #define XSTATE_TODO	3
++#define XSTATE_DECMPFS	4
+ 
+ #define USER_PREFIX "user."
+ #define UPRE_LEN ((int)sizeof USER_PREFIX - 1)
+@@ -89,7 +90,7 @@
+ {
+ 	size_t i;
+ 	rsync_xa *rxas = xalp->items;
+-
++	
+ 	for (i = 0; i < xalp->count; i++) {
+ 		free(rxas[i].datum);
+ 		/*free(rxas[i].name);*/
+@@ -206,7 +207,7 @@
+ 	return ptr;
+ }
+ 
+-static int rsync_xal_get(const char *fname, item_list *xalp)
++static int rsync_xal_get(const char *fname, stat_x *sxp)
+ {
+ 	ssize_t list_len, name_len;
+ 	size_t datum_len, name_offset;
+@@ -216,6 +217,9 @@
+ #endif
+ 	rsync_xa *rxa;
+ 	int count;
++	item_list *xalp;
++	
++	xalp = sxp->xattr;
+ 
+ 	/* This puts the name list into the "namebuf" buffer. */
+ 	if ((list_len = get_xattr_names(fname)) < 0)
+@@ -244,23 +248,36 @@
+ 				continue;
+ 		}
+ 
+-		datum_len = name_len; /* Pass extra size to get_xattr_data() */
+-		if (!(ptr = get_xattr_data(fname, name, &datum_len, 0)))
+-			return -1;
+-
+-		if (datum_len > MAX_FULL_DATUM) {
+-			/* For large datums, we store a flag and a checksum. */
+-			name_offset = 1 + MAX_DIGEST_LEN;
+-			sum_init(checksum_seed);
+-			sum_update(ptr, datum_len);
+-			free(ptr);
+-
++		if (strcmp(name, XATTR_DECMPFS_NAME) == 0 || (sxp->st.st_flags & UF_COMPRESSED && strcmp(name, XATTR_RESOURCEFORK_NAME) == 0)) {
++			// It's too expensive to calculate checksums for every xattr containing decmpfs payload.
++			// Instead, we'll copy these every time as long as the file modification 
++			// date has changed. This seems to be inline with Apple's intentions
++			// for how fs compression will be used
++			datum_len = 1;
++			name_offset = datum_len;
+ 			if (!(ptr = new_array(char, name_offset + name_len)))
+ 				out_of_memory("rsync_xal_get");
+-			*ptr = XSTATE_ABBREV;
+-			sum_end(ptr + 1);
+-		} else
+-			name_offset = datum_len;
++			*ptr = XSTATE_DECMPFS;
++		} else {
++		
++			datum_len = name_len; /* Pass extra size to get_xattr_data() */
++			if (!(ptr = get_xattr_data(fname, name, &datum_len, 0)))
++				return -1;
++
++			if (datum_len > MAX_FULL_DATUM) {
++				/* For large datums, we store a flag and a checksum. */
++				name_offset = 1 + MAX_DIGEST_LEN;
++				sum_init(checksum_seed);
++				sum_update(ptr, datum_len);
++				free(ptr);
++
++				if (!(ptr = new_array(char, name_offset + name_len)))
++					out_of_memory("rsync_xal_get");
++				*ptr = XSTATE_ABBREV;
++				sum_end(ptr + 1);
++			} else
++				name_offset = datum_len;
++		}
+ 
+ 		rxa = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
+ 		rxa->name = ptr + name_offset;
+@@ -287,7 +304,7 @@
+ 	if (IS_SPECIAL(sxp->st.st_mode) || IS_DEVICE(sxp->st.st_mode))
+ 		return 0;
+ 
+-	if (rsync_xal_get(fname, sxp->xattr) < 0) {
++	if (rsync_xal_get(fname, sxp) < 0) {
+ 		free_xattr(sxp);
+ 		return -1;
+ 	}
+@@ -325,7 +342,7 @@
+ 		if (sys_lsetxattr(dest, name, ptr, datum_len) < 0) {
+ 			int save_errno = errno ? errno : EINVAL;
+ 			rsyserr(FERROR_XFER, errno,
+-				"rsync_xal_set: lsetxattr(\"%s\",\"%s\") failed",
++				"copy_xattrs: lsetxattr(\"%s\",\"%s\") failed",
+ 				dest, name);
+ 			errno = save_errno;
+ 			return -1;
+@@ -336,6 +353,7 @@
+ 	return 0;
+ }
+ 
++// /*
+ static int find_matching_xattr(item_list *xalp)
+ {
+ 	size_t i, j;
+@@ -385,11 +403,14 @@
+ 	new_lst->count = xalp->count;
+ 	xalp->count = 0;
+ }
++// /*
+ 
+ /* Send the make_xattr()-generated xattr list for this flist entry. */
+ int send_xattr(stat_x *sxp, int f)
+ {
+-	int ndx = find_matching_xattr(sxp->xattr);
++	// find_matching_xattr is a waste of cycles for MOSX clients
++	//int ndx = find_matching_xattr(sxp->xattr);
++	int ndx = -1;
+ 
+ 	/* Send 0 (-1 + 1) to indicate that literal xattr data follows. */
+ 	write_varint(f, ndx + 1);
+@@ -447,6 +468,12 @@
+ 	int snd_cnt, rec_cnt;
+ 	int cmp, same, xattrs_equal = 1;
+ 
++	// If the file is marked compressed, we'll only compare xattrs if the mod date of the files are different
++	if (F_FFLAGS(file) & UF_COMPRESSED && sxp != NULL && sxp->st.st_flags & UF_COMPRESSED) {
++		if (cmp_time(sxp->st.st_mtime, file->modtime) == 0)
++			return 0;
++	}
++
+ 	if (sxp && XATTR_READY(*sxp)) {
+ 		rec_rxa = sxp->xattr->items;
+ 		rec_cnt = sxp->xattr->count;
+@@ -475,7 +502,12 @@
+ 		cmp = rec_cnt ? strcmp(snd_rxa->name, rec_rxa->name) : -1;
+ 		if (cmp > 0)
+ 			same = 0;
+-		else if (snd_rxa->datum_len > MAX_FULL_DATUM) {
++		else if (snd_rxa->datum_len == 1 && snd_rxa->datum[0] == XSTATE_DECMPFS) { // TODO: had (have?) a SIGBUS crash here, added "snd_rxa->datum_len == 1 && "
++			// If we've gotten this far, we're going to assume the xattrs are different 
++			// because the files are different in size, mod date, or flags
++			same = 0;
++			snd_rxa->datum[0] = XSTATE_TODO;
++		} else if (snd_rxa->datum_len > MAX_FULL_DATUM) {
+ 			same = cmp == 0 && snd_rxa->datum_len == rec_rxa->datum_len
+ 			    && memcmp(snd_rxa->datum + 1, rec_rxa->datum + 1,
+ 				      MAX_DIGEST_LEN) == 0;
+@@ -522,9 +554,10 @@
+ 
+ 	lst += F_XATTR(file);
+ 	for (rxa = lst->items, cnt = lst->count; cnt--; rxa++) {
+-		if (rxa->datum_len <= MAX_FULL_DATUM)
++		if (rxa->datum_len <= MAX_FULL_DATUM && !(F_FFLAGS(file) & UF_COMPRESSED))
+ 			continue;
+ 		switch (rxa->datum[0]) {
++		case XSTATE_DECMPFS:
+ 		case XSTATE_ABBREV:
+ 			/* Items left abbreviated matched the sender's checksum, so
+ 			 * the receiver will cache the local data for future use. */
+@@ -550,7 +583,8 @@
+ 
+ 			/* Re-read the long datum. */
+ 			if (!(ptr = get_xattr_data(fname, rxa->name, &len, 0))) {
+-				rprintf(FERROR_XFER, "failed to re-read xattr %s for %s\n", rxa->name, fname);
++				if (errno != ENOTSUP && errno != ENOATTR)
++					rprintf(FERROR_XFER, "failed to re-read xattr %s for %s\n", rxa->name, fname);
+ 				write_varint(f_out, 0);
+ 				continue;
+ 			}
+@@ -596,7 +630,7 @@
+ 				who_am_i(), num, f_name(file, NULL));
+ 			exit_cleanup(RERR_STREAMIO);
+ 		}
+-		if (!XATTR_ABBREV(*rxa) || rxa->datum[0] != XSTATE_ABBREV) {
++		if ((!XATTR_ABBREV(*rxa) || rxa->datum[0] != XSTATE_ABBREV) && rxa->datum[0] != XSTATE_DECMPFS) {
+ 			rprintf(FERROR, "[%s] internal abbrev error on %s (%s, len=%ld)!\n",
+ 				who_am_i(), f_name(file, NULL), rxa->name, (long)rxa->datum_len);
+ 			exit_cleanup(RERR_STREAMIO);
+@@ -739,7 +773,10 @@
+ 
+ 	if (prior_xattr_count == (size_t)-1)
+ 		prior_xattr_count = rsync_xal_l.count;
+-	ndx = find_matching_xattr(sxp->xattr);
++	
++	// find_matching_xattr is a waste of cycles for MOSX clients
++	//ndx = find_matching_xattr(sxp->xattr);
++	ndx = -1;
+ 	if (ndx < 0)
+ 		rsync_xal_store(sxp->xattr); /* adds item to rsync_xal_l */
+ 
+@@ -793,19 +830,21 @@
+ 				ret = -1;
+ 				continue;
+ 			}
+-			if (len != rxas[i].datum_len) {
++			if (len != rxas[i].datum_len && rxas[i].datum[0] != XSTATE_DECMPFS) { // We expect the length to not match with decmpfs xattrs
+ 				free(ptr);
+ 				goto still_abbrev;
+ 			}
+ 
+-			sum_init(checksum_seed);
+-			sum_update(ptr, len);
+-			sum_end(sum);
+-			if (memcmp(sum, rxas[i].datum + 1, MAX_DIGEST_LEN) != 0) {
+-				free(ptr);
+-				goto still_abbrev;
++			if (!(sxp->st.st_flags & UF_COMPRESSED)) {
++				sum_init(checksum_seed);
++				sum_update(ptr, len);
++				sum_end(sum);
++				if (memcmp(sum, rxas[i].datum + 1, MAX_DIGEST_LEN) != 0) {
++					free(ptr);
++					goto still_abbrev;
++				}
+ 			}
+-
++			
+ 			if (fname == fnamecmp)
+ 				; /* Value is already set when identical */
+ 			else if (sys_lsetxattr(fname, name, ptr, len) < 0) {
+@@ -831,7 +870,7 @@
+ 
+ 		if (sys_lsetxattr(fname, name, rxas[i].datum, rxas[i].datum_len) < 0) {
+ 			rsyserr(FERROR_XFER, errno,
+-				"rsync_xal_set: lsetxattr(\"%s\",\"%s\") failed",
++				"rsync_xal_set: sys_lsetxattr failed: >>%s>>%s>>",
+ 				fname, name);
+ 			ret = -1;
+ 		} else /* make sure caller sets mtime */
+@@ -869,6 +908,9 @@
+ 		}
+ 	}
+ 
++	// Memory leak?
++	rsync_xal_free(xalp);
++
+ 	return ret;
+ }
+ 
