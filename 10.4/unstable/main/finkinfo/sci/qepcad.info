@@ -1,19 +1,19 @@
 Info2: <<
 Package: qepcad%type_pkg[-gcc4.5]
-Version: 1.54
-Revision: 2
+Version: 1.61
+Revision: 1
 Architecture: i386, x86_64
 # Arch-restriction inherited fom saclib
 Source: http://www.usna.edu/Users/cs/qepcad/INSTALL/%{Ni}-B.%v.tar.gz
-Source-MD5: 9e60576b8ba64ee9f935deb0b67dc336
-Source2: http://www.usna.edu/Users/cs/qepcad/SLFQ/simplify-1.10.tar.gz
-Source2-MD5: 418c7e8cb5c35a3900a4206611393abd
+Source-MD5: eeaec754cfd66251aa44862db69926c0
+Source2: http://www.usna.edu/Users/cs/qepcad/SLFQ/simplify-1.18.tar.gz
+Source2-MD5: 8b4ea6c64ddd54b8aed622420b3c1981
 SourceDirectory: qesource
 Type: -gcc4.5 (boolean)
 BuildDepends: readline5, saclib%type_pkg[-gcc4.5] (>= 2.2.5-1), sed, flex-devel, (%type_pkg[-gcc4.5]) gcc45-compiler, freeglut
 Depends: readline5-shlibs, (%type_pkg[-gcc4.5]) gcc45-shlibs, ( %m != x86_64 ) singular, freeglut-shlibs
 Recommends: saclib%type_pkg[-gcc4.5]
-# Strictly speaking, the recommends would be a "depends" when using qepcapd under gdb 
+# Strictly speaking, the recommends would be a "depends" when using qepcad under gdb 
 Conflicts: %{Ni}, %{Ni}-gcc44, %{Ni}-gcc45
 Replaces: %{Ni}, %{Ni}-gcc44, %{Ni}-gcc45
 
@@ -21,6 +21,8 @@ PatchScript: <<
   #!/bin/sh -ev
   find . -name '*.o' -exec rm -f \{\} \;
   chmod -R a+rX	.	# else gdb can't find files when not working as root
+  ## no /usr/local
+  sed -i'' -e 's,#!/usr/local/bin/perl,#!/usr/bin/env perl,' extensions/{newadj/ps,rend/rgbinfo}.pl
   ## CFLAGS and LDFLAGS and the like :
   if [ "%type_raw[-gcc4.5]" == "-gcc4.5" ] ; then nopic=''; else nopic="-mdynamic-no-pic"; fi
   cflags="$nopic -Wall -Wextra -Wstrict-aliasing=2"
@@ -48,21 +50,28 @@ PatchScript: <<
   sed -i'' -e '/^GLBASE/s,/usr,&/X11R6,' -e '/^GLUTBASE/s,/usr,%p,' plot2d/Makefile
 #  sed -i'' -e '/^GL\(UT\|\)BASE/s,/usr,&/X11R6,' plot2d/Makefile
   ## using standard dirs, and no env vars :
-  sed -i'' -e 's,qepath [+],string("%p/etc") +,' -e 's,default.qepcadrc,qepcadrc,' {cad2d/src,source/main}/MAIN.c
+  sed -i'' -e 's,qepath [+],string("%p/etc") +,' -e 's,default.qepcadrc,qepcadrc,' source/main/BEGINQEPCAD.c
   sed -i'' -e 's,qepcad.help,%p/share/%{Ni}/&,' -e 's,/bin/%p,,' source/userint/HELPFRD.c
-  sed -i'' -e 's,getenv("qe"),"%p",' {cad2d/src,source/main}/MAIN.c extensions/rend/PLOT_2D_CAD.cc source/userint/HELPFRD.c
+  sed -i'' -e 's,getenv("qe"),"%p",' source/main/BEGINQEPCAD.c extensions/rend/PLOT_2D_CAD.cc source/userint/HELPFRD.c
   sed      -e 's,^#S,S,' -e 's,/usr,%p,' < default.qepcadrc > qepcadrc
   sed -i'' -e 's,default\.,%p/etc/,' README
   sed -i'' -e 's,#.*\(/libduma.a\),#%p/lib\1,' source/Makefile
   # no symbols taken fron libcurses
   sed -i'' -e 's, -lcurses,,' ../simplify/Makefile
+  # missing declaration:
+  sed -i'' -e '17a int yyparse (fpart* &result);' ../simplify/main_parse.cc
+  # get -I%p/include after the -I. flags ; additional "-I\${saclib}/include" at end: also taken care of by CPATH in CompileScript
+  sed -i'' -e 's,-I\${saclib}/include,,' -e 's,-I\.,& -I\${saclib}/include,' `find .. -name Makefile`
 <<
-# We set ourselves the CPPFLAGS, else -I%p/include comes before -I.  (FIXME ! have to adapt def of INCLUDES in all Makefiles))
+# We set ourselves the CPPFLAGS, else -I%p/include comes before -I.
 NoSetCPPFLAGS: true
+SetCPPFLAGS: -I%p/lib/flex/include
 NoSetLDFLAGS: true
+SetLDFLAGS: -L%p/lib/flex/lib
 SetLIBRARY_PATH: %p/lib
 CompileScript: <<
   #!/bin/sh -ev
+  export PATH="%p/lib/flex/bin:$PATH"
   if [ "%type_raw[-gcc4.5]" == "-gcc4.5" ]; then export PATH=%p/lib/gcc4.5/bin:$PATH; fi
   export CPATH=%p/include
   export saclib=%p
@@ -70,8 +79,7 @@ CompileScript: <<
   make both
   cd cad2d; make both; cd -
   cd plot2d; make; cd -
-  ## simplify is apparently not yet ready for 64bit _ might try next round, but clearly work involved... (lots of bad casts, etc)
-  if [ "%m" != "x86_64" ] ; then cd ../simplify ; make opt parse; cd -; fi
+  cd ../simplify ; make opt parse; cd -
 <<
 InstallScript: <<
   mkdir -p %i/include/%{Ni} %i/lib/%{Ni} %i/bin %i/share/%{Ni} %i/share/doc/%{Ni}/simplify %i/etc
@@ -96,12 +104,15 @@ InstallScript: <<
   # singular still not available on x86_64
   if [ "%m" == "x86_64" ] ; then sed -i -e 's,SINGULAR,#&,' qepcadrc; fi
   cp -p qepcadrc %i/etc
-  if [ "%m" != "x86_64" ] ; then cp -p ../simplify/{slfq,parself} %i/bin; fi
+  cp -p ../simplify/{slfq,parself} %i/bin
   cp -pPR ../simplify/{README,examples} %i/share/doc/%{Ni}/simplify
+  # put docfiles under %{Ni} , for user's convenience
+  cp -p LICENSE LOG README TODO %i/share/doc/%{Ni}
+  cp -p cad2d/README %i/share/doc/%{Ni}/README_cad2d
+  if [ "%N" != "%{Ni}" ] ; then ln -s %{Ni} %i/share/doc/%N ; fi
   chmod -R a+rX %i
 <<
 ConfFiles: %p/etc/qepcadrc
-DocFiles: LICENSE LOG README TODO
 Description: Tarski's Quantifier Elimination
 DescUsage: <<
   http://www.usna.edu/Users/cs/qepcad/B/user/UsingQEPCAD.html
