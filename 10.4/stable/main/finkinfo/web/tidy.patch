@@ -1,7 +1,7 @@
-diff -urN tidy/build/gmake/Makefile tidy.patched/build/gmake/Makefile
---- tidy/build/gmake/Makefile	2005-07-15 03:58:10.000000000 -0300
-+++ tidy.patched/build/gmake/Makefile	2006-03-09 11:33:58.000000000 -0300
-@@ -58,13 +58,13 @@
+diff -ruN tidy.orig/build/gmake/Makefile tidy/build/gmake/Makefile
+--- tidy.orig/build/gmake/Makefile	2005-07-15 00:58:10.000000000 -0600
++++ tidy/build/gmake/Makefile	2008-08-26 12:05:45.000000000 -0600
+@@ -58,13 +58,14 @@
  PROJECT=tidy
  
  # Installation variables.  Spaces OK, only dir create and file copy operations.
@@ -9,6 +9,7 @@ diff -urN tidy/build/gmake/Makefile tidy.patched/build/gmake/Makefile
 -devinst_prefix=/usr/local
 +runinst_prefix=${PREFIX}
 +devinst_prefix=${PREFIX}
++librun=${LIBRUN}
  
  bininst = ${runinst_prefix}/bin
  libinst = ${devinst_prefix}/lib
@@ -18,7 +19,7 @@ diff -urN tidy/build/gmake/Makefile tidy.patched/build/gmake/Makefile
  
  # Internal variables. - No spaces allowed: libtool chokes on spaces in directory names.
  TOPDIR = ../..
-@@ -84,7 +84,7 @@
+@@ -84,7 +85,7 @@
  # flags only supported with gcc 3.x
  # CFLAGS += -Wunused-parameter
  
@@ -27,15 +28,44 @@ diff -urN tidy/build/gmake/Makefile tidy.patched/build/gmake/Makefile
  OTHERCFLAGS+= -D_DEBUG=1
  # OTHERCFLAGS+= -DSUPPORT_ACCESSIBILITY_CHECKS=1 -DSUPPORT_UTF16_ENCODINGS=1 -DSUPPORT_ASIAN_ENCODINGS=1
  ifdef SUPPORT_UTF16_ENCODINGS
-@@ -116,6 +116,7 @@
+@@ -108,14 +109,18 @@
+ # Tidy lib related variables
+ TIDY_MAJOR = 1
+ TIDY_MINOR = 0
++TIDY_MICRO = 0
+ 
+ # This will come from autoconf again
+ LIBPREFIX = lib
+ LIBSUFFIX = .a
++SHLIBSUFFIX = .dylib
+ OBJSUF = .o
  
  LIBRARY = $(LIBDIR)/$(LIBPREFIX)$(PROJECT)$(LIBSUFFIX)
++SHLIB = $(LIBPREFIX)$(PROJECT).$(TIDY_MINOR)$(SHLIBSUFFIX)
  AR=ar -r
 +RANLIB = ranlib
  
  XSLTPROC = xsltproc
  
-@@ -175,7 +176,7 @@
+@@ -158,10 +163,16 @@
+         $(SRCDIR)/tidy-int.h
+ 
+ 
+-all:    $(LIBRARY) $(EXES)
++all:    $(SHLIB) $(LIBRARY) $(EXES)
+ 
+ doc:    $(DOCS)
+ 
++$(SHLIB): $(OBJFILES)
++	if [ ! -d $(LIBDIR) ]; then mkdir $(LIBDIR); fi
++	$(CC) -dynamiclib  -o $(LIBDIR)/$(SHLIB) $(OBJFILES) $(LDFLAGS) -install_name  $(libinst)/$(SHLIB) -compatibility_version $(TIDY_MAJOR) -current_version $(TIDY_MAJOR)
++	ln -s $(LIBDIR)/$(SHLIB) $(LIBDIR)/$(LIBPREFIX)$(PROJECT)$(SHLIBSUFFIX)
++	ln -s $(LIBDIR)/$(SHLIB) $(LIBDIR)/$(LIBPREFIX)$(PROJECT).$(TIDY_MINOR).$(TIDY_MINOR).$(TIDY_MICRO)$(SHLIBSUFFIX)
++
+ $(LIBRARY): $(OBJFILES)
+ 	if [ ! -d $(LIBDIR) ]; then mkdir $(LIBDIR); fi
+ 	$(AR) $@ $(OBJFILES)
+@@ -175,7 +186,7 @@
  
  $(BINDIR)/$(PROJECT):	$(APPDIR)/tidy.c $(HFILES) $(LIBRARY)
  	if [ ! -d $(BINDIR) ]; then mkdir $(BINDIR); fi
@@ -44,9 +74,19 @@ diff -urN tidy/build/gmake/Makefile tidy.patched/build/gmake/Makefile
  
  $(BINDIR)/tab2space: $(APPDIR)/tab2space.c
  	if [ ! -d $(BINDIR) ]; then mkdir $(BINDIR); fi
-diff -urN tidy/include/platform.h tidy.patched/include/platform.h
---- tidy/include/platform.h	2005-06-16 03:58:05.000000000 -0300
-+++ tidy.patched/include/platform.h	2006-03-01 10:39:56.000000000 -0300
+@@ -211,6 +222,9 @@
+ installib: $(LIBRARY)
+ 	if [ ! -d "$(libinst)" ]; then mkdir -p "$(libinst)"; fi
+ 	cp -f $(LIBRARY) "$(libinst)/"
++	cp -f $(LIBDIR)/$(SHLIB) "$(libinst)/"
++	ln -s $(librun)/$(SHLIB) $(libinst)/$(LIBPREFIX)$(PROJECT)$(SHLIBSUFFIX)
++	ln -s $(librun)/$(SHLIB) $(libinst)/$(LIBPREFIX)$(PROJECT).$(TIDY_MINOR).$(TIDY_MINOR).$(TIDY_MICRO)$(SHLIBSUFFIX)
+ 
+ installexes: $(EXES)
+ 	if [ ! -d "$(bininst)" ]; then mkdir -p "$(bininst)"; fi
+diff -ruN tidy.orig/include/platform.h tidy/include/platform.h
+--- tidy.orig/include/platform.h	2005-06-16 00:58:05.000000000 -0600
++++ tidy/include/platform.h	2008-08-26 11:38:37.000000000 -0600
 @@ -33,7 +33,7 @@
    It enables tidy to find config files named ~/.tidyrc if 
    the HTML_TIDY environment variable is not set.
@@ -65,3 +105,20 @@ diff -urN tidy/include/platform.h tidy.patched/include/platform.h
  
  
  /* Enable/disable support for Big5 and Shift_JIS character encodings */
+@@ -498,14 +498,14 @@
+ 
+ /* hack for gnu sys/types.h file which defines uint and ulong */
+ 
+-#if defined(BE_OS) || defined(SOLARIS_OS) || defined(BSD_BASED_OS) || defined(OSF_OS) || defined(IRIX_OS) || defined(AIX_OS)
++#if defined(BE_OS) || defined(SOLARIS_OS) || defined(MAC_OS) || defined(BSD_BASED_OS) || defined(OSF_OS) || defined(IRIX_OS) || defined(AIX_OS)
+ #include <sys/types.h>
+ #endif
+ #if !defined(HPUX_OS) && !defined(CYGWIN_OS) && !defined(MAC_OS_X) && !defined(BE_OS) && !defined(SOLARIS_OS) && !defined(BSD_BASED_OS) && !defined(OSF_OS) && !defined(IRIX_OS) && !defined(AIX_OS) && !defined(LINUX_OS)
+ typedef unsigned int uint;
+ #endif
+ #if defined(HPUX_OS) || defined(CYGWIN_OS) || defined(MAC_OS) || defined(BSD_BASED_OS) || defined(_WIN32)
+-typedef unsigned long ulong;
++typedef long ulong;
+ #endif
+ 
+ #ifndef TIDY_EXPORT /* Define it away for most builds */
