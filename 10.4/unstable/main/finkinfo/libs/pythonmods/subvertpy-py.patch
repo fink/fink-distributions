@@ -1,0 +1,424 @@
+=== modified file 'NEWS'
+--- NEWS	2011-06-17 13:07:11 +0000
++++ NEWS	2011-06-17 21:38:57 +0000
+@@ -1,3 +1,11 @@
++0.8.3   UNRELEASED "manual override"
++
++ BUG FIXES
++
++  * Fix memory management in subvertpy.ra.Auth. (Jelmer Vernooij)
++
++  * Fix type for revnum in process_committed_queue. (Jelmer Vernooij, #730931)
++
+ 0.8.2   2011-06-17 "mathematically annoying"
+ 
+  BUG FIXES
+
+=== modified file 'setup.py'
+--- setup.py	2011-06-17 13:07:11 +0000
++++ setup.py	2011-06-17 21:38:57 +0000
+@@ -329,7 +329,7 @@
+         ]
+ 
+ 
+-subvertpy_version = (0, 8, 2)
++subvertpy_version = (0, 8, 3)
+ subvertpy_version_string = ".".join(map(str, subvertpy_version))
+ 
+ 
+
+=== modified file 'subvertpy/__init__.py'
+--- subvertpy/__init__.py	2011-06-02 17:22:51 +0000
++++ subvertpy/__init__.py	2011-06-17 21:38:57 +0000
+@@ -17,7 +17,7 @@
+ """Python bindings for Subversion."""
+ 
+ __author__ = "Jelmer Vernooij <jelmer@samba.org>"
+-__version__ = (0, 8, 2)
++__version__ = (0, 8, 3)
+ 
+ NODE_DIR = 2
+ NODE_FILE = 1
+
+=== modified file 'subvertpy/_ra.c'
+--- subvertpy/_ra.c	2011-06-15 21:44:07 +0000
++++ subvertpy/_ra.c	2011-06-17 21:38:57 +0000
+@@ -1048,7 +1048,7 @@
+ 	PyObject *update_editor;
+ 	bool send_deltas = true;
+ 
+-	if (!PyArg_ParseTuple(args, "llO|b", &revision, &low_water_mark, &update_editor, &send_deltas))
++	if (!PyArg_ParseTuple(args, "llO|b:replay", &revision, &low_water_mark, &update_editor, &send_deltas))
+ 		return NULL;
+ 
+ 	if (ra_check_busy(ra))
+@@ -1118,7 +1118,7 @@
+ 	PyObject *cbs;
+ 	bool send_deltas = true;
+ 
+-	if (!PyArg_ParseTuple(args, "lllO|b", &start_revision, &end_revision, &low_water_mark, &cbs, &send_deltas))
++	if (!PyArg_ParseTuple(args, "lllO|b:replay_range", &start_revision, &end_revision, &low_water_mark, &cbs, &send_deltas))
+ 		return NULL;
+ 
+ 	if (!PyTuple_Check(cbs)) {
+@@ -1157,7 +1157,7 @@
+ 	RemoteAccessObject *ra = (RemoteAccessObject *)self;
+ 	svn_revnum_t rev;
+ 	PyObject *py_props;
+-	if (!PyArg_ParseTuple(args, "l", &rev))
++	if (!PyArg_ParseTuple(args, "l:rev_proplist", &rev))
+ 		return NULL;
+ 
+ 	if (ra_check_busy(ra))
+@@ -1191,7 +1191,8 @@
+ #endif
+ 	svn_error_t *err;
+ 
+-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|OOb", kwnames, &revprops, &commit_callback, &lock_tokens, &keep_locks))
++	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|OOb:get_commit_editor",
++		kwnames, &revprops, &commit_callback, &lock_tokens, &keep_locks))
+ 		return NULL;
+ 
+ 	pool = Pool(NULL);
+@@ -2084,6 +2085,7 @@
+ {
+ 	AuthProviderObject *auth_provider = (AuthProviderObject *)self;
+ 	Py_XDECREF(auth_provider->callback);
++	auth_provider->callback = NULL;
+ 	apr_pool_destroy(auth_provider->pool);
+ 	PyObject_Del(self);
+ }
+@@ -2105,50 +2107,50 @@
+ 	char *kwnames[] = { "providers", NULL };
+ 	apr_array_header_t *c_providers;
+ 	svn_auth_provider_object_t **el;
+-	PyObject *providers = Py_None;
++	PyObject *providers;
+ 	AuthObject *ret;
+ 	int i;
+ 
+-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|O", kwnames, &providers))
++	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O", kwnames, &providers))
+ 		return NULL;
+ 
+ 	ret = PyObject_New(AuthObject, &Auth_Type);
+ 	if (ret == NULL)
+ 		return NULL;
+ 
++	ret->providers = NULL;
++
++	ret->pool = Pool(NULL);
++	if (ret->pool == NULL) {
++		PyErr_NoMemory();
++		Py_DECREF(ret);
++		return NULL;
++	}
++
+ 	if (!PySequence_Check(providers)) {
+ 		PyErr_SetString(PyExc_TypeError, "Auth providers should be a sequence");
+-		PyObject_Del(ret);
+-		return NULL;
+-	}
+-
+-	ret->pool = Pool(NULL);
+-	if (ret->pool == NULL) {
+-		PyErr_NoMemory();
+-		apr_pool_destroy(ret->pool);
+-		PyObject_Del(ret);
+-		return NULL;
+-	}
+-
++		Py_DECREF(ret);
++		return NULL;
++	}
++
++	Py_INCREF(providers);
+ 	ret->providers = providers;
+-	Py_INCREF(providers);
+ 
+-	c_providers = apr_array_make(ret->pool, PySequence_Size(providers), sizeof(svn_auth_provider_object_t *));
++	c_providers = apr_array_make(ret->pool, PySequence_Size(providers),
++								 sizeof(svn_auth_provider_object_t *));
+ 	if (c_providers == NULL) {
+ 		PyErr_NoMemory();
+-		apr_pool_destroy(ret->pool);
+-		PyObject_Del(ret);
++		Py_DECREF(ret);
+ 		return NULL;
+ 	}
+ 	for (i = 0; i < PySequence_Size(providers); i++) {
++		PyObject *item;
+ 		AuthProviderObject *provider;
+ 		el = (svn_auth_provider_object_t **)apr_array_push(c_providers);
+-		/* FIXME: Check that provider is indeed a AuthProviderObject object */
+ 		provider = (AuthProviderObject *)PySequence_GetItem(providers, i);
+ 		if (!PyObject_TypeCheck(provider, &AuthProvider_Type)) {
+ 			PyErr_SetString(PyExc_TypeError, "Invalid auth provider");
+-			apr_pool_destroy(ret->pool);
+-			PyObject_Del(ret);
++			Py_DECREF(ret);
+ 			return NULL;
+ 		}
+ 		*el = provider->provider;
+@@ -2364,6 +2366,7 @@
+ 	AuthObject *auth = (AuthObject *)self;
+ 	apr_pool_destroy(auth->pool);
+ 	Py_XDECREF(auth->providers);
++	PyObject_Del(auth);
+ }
+ 
+ static PyTypeObject Auth_Type = {
+@@ -2500,7 +2503,8 @@
+ 		return NULL;
+ 	Py_INCREF(prompt_func);
+ 	auth->callback = prompt_func;
+-	svn_auth_get_username_prompt_provider(&auth->provider, py_username_prompt, (void *)prompt_func, retry_limit, auth->pool);
++	svn_auth_get_username_prompt_provider(&auth->provider, py_username_prompt,
++		 (void *)prompt_func, retry_limit, auth->pool);
+ 	return (PyObject *)auth;
+ }
+ 
+@@ -2826,26 +2830,34 @@
+ {
+ 	AuthProviderObject *auth;
+ 	PyObject *callback = Py_None;
+-
+-	if (!PyArg_ParseTuple(args, "|O", &callback))
+-		return NULL;
+-
++	apr_pool_t *pool;
++
++	if (!PyArg_ParseTuple(args, "|O:get_simple_provider", &callback))
++		return NULL;
++
++	pool = Pool(NULL);
++	if (pool == NULL)
++		return NULL;
+ 	auth = PyObject_New(AuthProviderObject, &AuthProvider_Type);
+-	if (auth == NULL)
+-		return NULL;
+-	auth->pool = Pool(NULL);
+-	if (auth->pool == NULL)
+-		return NULL;
++	if (auth == NULL) {
++		apr_pool_destroy(pool);
++		return NULL;
++	}
++	auth->pool = pool;
+ #if ONLY_SINCE_SVN(1, 6)
+ 	Py_INCREF(callback);
+ 	auth->callback = callback;
+-	svn_auth_get_simple_provider2(&auth->provider, py_cb_get_simple_provider_prompt, callback, auth->pool);
++	svn_auth_get_simple_provider2(&auth->provider,
++		  py_cb_get_simple_provider_prompt, auth->callback, auth->pool);
+ #else
++	auth->callback = NULL;
++	auth->provider = NULL;
+ 	if (callback != Py_None) {
+-		PyErr_SetString(PyExc_NotImplementedError, "callback not supported with svn < 1.6");
++		PyErr_SetString(PyExc_NotImplementedError,
++			"callback not supported with svn < 1.6");
++		Py_DECREF(auth);
+ 		return NULL;
+ 	}
+-	auth->callback = NULL;
+ 	svn_auth_get_simple_provider(&auth->provider, auth->pool);
+ #endif
+ 	return (PyObject *)auth;
+
+=== modified file 'subvertpy/_ra_iter_log.c'
+--- subvertpy/_ra_iter_log.c	2011-02-17 19:24:25 +0000
++++ subvertpy/_ra_iter_log.c	2011-06-17 21:38:57 +0000
+@@ -56,6 +56,7 @@
+ 	Py_XDECREF(iter->exc_val);
+ 	Py_DECREF(iter->ra);
+ 	apr_pool_destroy(iter->pool);
++	PyObject_Del(iter);
+ }
+ 
+ static PyObject *log_iter_next(LogIteratorObject *iter)
+
+=== modified file 'subvertpy/repos.c'
+--- subvertpy/repos.c	2011-06-15 21:44:07 +0000
++++ subvertpy/repos.c	2011-06-17 21:38:57 +0000
+@@ -46,7 +46,7 @@
+     apr_hash_t *hash_config, *hash_fs_config;
+ 	RepositoryObject *ret;
+ 
+-	if (!PyArg_ParseTuple(args, "s|OO", &path, &config, &fs_config))
++	if (!PyArg_ParseTuple(args, "s|OO:create", &path, &config, &fs_config))
+ 		return NULL;
+ 
+     pool = Pool(NULL);
+@@ -245,9 +245,9 @@
+ static void fs_dealloc(PyObject *self)
+ {
+ 	FileSystemObject *fsobj = (FileSystemObject *)self;
+-
+ 	Py_DECREF(fsobj->repos);
+ 	apr_pool_destroy(fsobj->pool);
++	PyObject_DEL(fsobj);
+ }
+ 
+ PyTypeObject FileSystem_Type = {
+
+=== modified file 'subvertpy/tests/test_client.py'
+--- subvertpy/tests/test_client.py	2011-06-02 10:05:50 +0000
++++ subvertpy/tests/test_client.py	2011-06-17 21:38:57 +0000
+@@ -71,9 +71,11 @@
+         adm = wc.WorkingCopy(None, os.path.join(os.getcwd(), "dc"))
+         e = adm.entry(os.path.join(os.getcwd(), "dc", "trunk"))
+         self.assertEquals(e.kind, NODE_DIR)
++        self.assertEquals(e.revision, -1)
+         adm2 = wc.WorkingCopy(None, os.path.join(os.getcwd(), "dc", "trunk"))
+         e = adm2.entry(os.path.join(os.getcwd(), "dc", "trunk", "foo"))
+         self.assertEquals(e.kind, NODE_FILE)
++        self.assertEquals(e.revision, 0)
+ 
+     def test_get_config(self):
+         self.assertIsInstance(client.get_config().__dict__, dict)
+
+=== modified file 'subvertpy/tests/test_wc.py'
+--- subvertpy/tests/test_wc.py	2011-03-02 17:11:58 +0000
++++ subvertpy/tests/test_wc.py	2011-06-17 21:38:57 +0000
+@@ -191,7 +191,16 @@
+         self.build_tree({"checkout/bar": "\x00\x01"})
+         self.client_add('checkout/bar')
+         adm = wc.WorkingCopy(None, "checkout")
+-        self.assertEquals("bar", adm.entry("checkout/bar").name)
++        entry = adm.entry("checkout/bar")
++        self.assertEquals("bar", entry.name)
++        self.assertEquals(NODE_FILE, entry.kind)
++        self.assertEquals(0, entry.revision)
++        self.client_commit("checkout", "msg")
++        adm = wc.WorkingCopy(None, "checkout")
++        entry = adm.entry("checkout/bar")
++        self.assertEquals("bar", entry.name)
++        self.assertEquals(NODE_FILE, entry.kind)
++        self.assertEquals(1, entry.revision)
+ 
+     def test_get_actual_target(self):
+         repos_url = self.make_client("repos", ".")
+@@ -230,6 +239,10 @@
+         self.assertIsInstance(tmpfile, str)
+         self.assertEquals(16, len(digest))
+ 
++        bar = adm.entry("bar")
++        self.assertEquals(-1, bar.cmt_rev)
++        self.assertEquals(0, bar.revision)
++
+         cq = wc.CommittedQueue()
+         cq.queue("bar", adm)
+         adm.process_committed_queue(cq, 1, "2010-05-31T08:49:22.430000Z", "jelmer")
+@@ -237,6 +250,8 @@
+         self.assertEquals("bar", bar.name)
+         self.assertEquals(NODE_FILE, bar.kind)
+         self.assertEquals(wc.SCHEDULE_NORMAL, bar.schedule)
++        self.assertIs(None, bar.checksum)
++        self.assertEquals(1, bar.cmt_rev)
+         self.assertEquals(1, bar.revision)
+ 
+     def test_process_committed_queue(self):
+
+=== modified file 'subvertpy/util.c'
+--- subvertpy/util.c	2011-06-15 21:44:07 +0000
++++ subvertpy/util.c	2011-06-17 21:38:57 +0000
+@@ -705,6 +705,8 @@
+ 	StreamObject *streamself = (StreamObject *)self;
+ 
+ 	apr_pool_destroy(streamself->pool);
++
++	PyObject_Del(self);
+ }
+ 
+ static PyObject *stream_init(PyTypeObject *type, PyObject *args, PyObject *kwargs)
+
+=== modified file 'subvertpy/wc.c'
+--- subvertpy/wc.c	2011-06-15 21:44:07 +0000
++++ subvertpy/wc.c	2011-06-17 21:38:57 +0000
+@@ -474,7 +474,8 @@
+ 	AdmObject *ret;
+ 	char *kwnames[] = { "associated", "path", "write_lock", "depth", NULL };
+ 
+-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "Os|bi", kwnames, &associated, &path, &write_lock, &depth))
++	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "Os|bi", kwnames,
++			&associated, &path, &write_lock, &depth))
+ 		return NULL;
+ 
+ 	ret = PyObject_New(AdmObject, &Adm_Type);
+@@ -748,7 +749,8 @@
+ 	apr_pool_t *temp_pool;
+ 	svn_depth_t depth = svn_depth_infinity;
+ 
+-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|zlOi", kwnames, &path, &copyfrom_url, &copyfrom_rev, &notify_func, &depth))
++	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|zlOi", kwnames, &path,
++			&copyfrom_url, &copyfrom_rev, &notify_func, &depth))
+ 		return NULL;
+ 
+ 	ADM_CHECK_CLOSED(admobj);
+@@ -816,9 +818,8 @@
+ 	PyObject *notify_func=Py_None;
+ 	bool keep_local = false;
+ 
+-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|Ob", kwnames, 
+-									 &path, &notify_func, 
+-									 &keep_local))
++	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "s|Ob:delete", kwnames, 
++			&path, &notify_func, &keep_local))
+ 		return NULL;
+ 
+ 	ADM_CHECK_CLOSED(admobj);
+@@ -863,8 +864,9 @@
+ 	svn_boolean_t honor_depth_exclude = FALSE;
+ 	char *kwnames[] = { "path", "reporter", "restore_files", "recurse", "use_commit_times", "notify_func", "depth_compatibility_trick", "honor_depth_exclude,", NULL };
+ 
+-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sO|bbbObb", kwnames, &path, &reporter, &restore_files, &recurse, &use_commit_times,
+-						  &notify_func, &depth_compatibility_trick, &honor_depth_exclude))
++	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sO|bbbObb", kwnames, &path,
++			&reporter, &restore_files, &recurse, &use_commit_times,
++			&notify_func, &depth_compatibility_trick, &honor_depth_exclude))
+ 		return NULL;
+ 
+ 	ADM_CHECK_CLOSED(admobj);
+@@ -915,8 +917,9 @@
+ 	svn_boolean_t allow_unver_obstructions = FALSE;
+ 	svn_boolean_t depth_is_sticky = FALSE;
+ 
+-	if (!PyArg_ParseTuple(args, "s|bbOzbb", &target, &use_commit_times, &recurse, &notify_func, &diff3_cmd,
+-						  &depth_is_sticky, &allow_unver_obstructions))
++	if (!PyArg_ParseTuple(args, "s|bbOzbb", &target, &use_commit_times,
++			&recurse, &notify_func, &diff3_cmd, &depth_is_sticky,
++			&allow_unver_obstructions))
+ 		return NULL;
+ 
+ 	ADM_CHECK_CLOSED(admobj);
+@@ -1199,7 +1202,7 @@
+ 	svn_stream_t *new_contents, *new_base_contents;
+ 	apr_hash_t *new_props, *new_base_props;
+ 
+-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sOOOO|ziO", kwnames,
++	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sOOOO|zlO", kwnames,
+ 			&dst_path, &py_new_base_contents, &py_new_contents, &py_new_base_props, 
+ 			&py_new_props, &copyfrom_url, &copyfrom_rev, &notify))
+ 		return NULL;
+@@ -1334,7 +1337,8 @@
+ 	svn_boolean_t recurse = TRUE;
+ 	PyObject *py_validator = Py_None;
+ 
+-	if (!PyArg_ParseTuple(args, "sss|bO", &path, &from, &to, &recurse, &py_validator))
++	if (!PyArg_ParseTuple(args, "sss|bO:relocate", &path, &from, &to, &recurse,
++			&py_validator))
+ 		return NULL;
+ 
+ 	ADM_CHECK_CLOSED(admobj);
+@@ -1483,7 +1487,8 @@
+ 	char *date, *author;
+ 	CommittedQueueObject *py_queue;
+ 
+-	if (!PyArg_ParseTuple(args, "O!Iss", &CommittedQueue_Type, &py_queue, &revnum, &date, &author))
++	if (!PyArg_ParseTuple(args, "O!lss", &CommittedQueue_Type, &py_queue,
++			&revnum, &date, &author))
+ 		return NULL;
+ 
+ 	ADM_CHECK_CLOSED(admobj);
+
