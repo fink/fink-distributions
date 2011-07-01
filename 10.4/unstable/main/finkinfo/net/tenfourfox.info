@@ -1,14 +1,12 @@
 Info3: <<
 Package: tenfourfox
 Version: 4.0.1
-Revision: 2
+Revision: 3
 Distribution: 10.4, 10.5
 Architecture: powerpc
 Description: Port of Firefox 4 to 10.4 and PowerPC
 License: OSI-Approved
 Maintainer: David Fang <fangism@users.sourceforge.net>
-Conflicts: tenfourfox5
-Replaces: tenfourfox5
 Depends: <<
 #	bzip2-shlibs,
 #	fontconfig2-shlibs (>= 2.4.1-1),
@@ -45,32 +43,73 @@ BuildDepends: <<
 	system-openssl-dev,
 	system-sdk-10.4
 <<
+Conflicts: tenfourfox5
+Replaces: tenfourfox5
 Source: http://releases.mozilla.org/pub/mozilla.org/firefox/releases/%v/source/firefox-%v.source.tar.bz2
 SourceDirectory: mozilla-2.0
 Source-MD5: 9abda7d23151e97913c8555a64c13f34
 Source2: http://tenfourfox.googlecode.com/files/TenFourFox-changesets-20110422.zip
 Source2-MD5: 3edbc7aba3cacb52337ee4d553b860fd
 PatchFile: %n.patch
-PatchFile-MD5: 54a6d68b8289a0224d76d9e8f42335d7
+PatchFile-MD5: f79377eb04452a23e0425372b70b4891
 PatchScript: <<
   #!/bin/sh -ev
   # apply patchset from TenFourFox:
   for f in ../exports/*
   do
     echo "Patching in changeset $f ..."
-#    patch -p1 < $f || { echo "... patch $f failed." ; patch_err=1 ;}
-#    hg import --no-commit -p1 $f || { echo "... patch $f failed." ; patch_err=1 ;}
     git apply -p1 $f || { echo "... patch $f failed." ; patch_err=1 ;}
   done
   test -z "$patch_err" || { echo "Patch error above.  Aborting." ; exit 1;}
   ### apply the patch
   echo "Applying patch %{PatchFile} ..."
-  /usr/bin/sed -e 's|@FINKPREFIX@|%p|g' -e 's|@FINK_ARCH_TARGET@|%m|g' <%{PatchFile} | /usr/bin/patch -p1
+  /usr/bin/sed -e 's|@FINKPREFIX@|%p|g' \
+	-e 's|@FINK_ARCH_TARGET@|%m|g' \
+	< %{PatchFile} | /usr/bin/patch -p1
   # leave @executable_path alone and take care of adjusting install_names
   # between build and install, below.
   # configure inputs were patched, hence regeneration
   export PATH=%p/lib/autoconf2.13/bin:$PATH
   autoconf
+  mkdir -p opt-bin
+  pushd opt-bin
+    # darwin9 only: python with hacked environment
+    # b/c python requires run-time M_D_T to be consistent with build-time
+    # the rest of the build should use M_D_T=10.4
+    this_dist=`sw_vers -productVersion | cut -d. -f1-2`
+    if test $this_dist = 10.5
+    then
+      realpy=`which python`
+      echo "#!/bin/sh -e" > python
+      echo "export MACOSX_DEPLOYMENT_TARGET=$this_dist" >> python
+      echo "exec $realpy \"\$@\"" >> python
+      chmod +x python
+      echo "PYTHON=%b/opt-bin/python" >> ../.mozconfig
+      # and then force python-wrapped gcc calls back to M_D_T=10.4
+      echo "#!/bin/sh -e" > MDT10.4
+      echo "export MACOSX_DEPLOYMENT_TARGET=10.4" >> MDT10.4
+      echo "exec \"\$@\"" >> MDT10.4
+      chmod +x MDT10.4
+      sed -i.orig -e '/^GCC_PREFIX=/s|flag-sort|MDT10.4 &|' ../.mozconfig
+    fi
+  popd
+  # enable processor-specific optimization and tuning
+  for f in *.mozcfg
+  do
+	sed -i.orig -e '/AUTOCONF/s|autoconf213|autoconf|' \
+		-e '/MOZ_MAKE_FLAGS/s|^|# |' \
+		-e '/MOZ_OBJDIR/s|^|# |' $f
+  done
+  # .mozconfig will dispatch the right CPU.mozcfg
+  cpu=`machine`
+  case $cpu in
+    ppc750) alt=G3 ;;
+    ppc7400) alt=G4 ;;
+    ppc7450) alt=G4e ;;
+    ppc970) alt=G5 ;;
+  esac
+  sed -i.orig -e "/OPTIMIZED_FOR/s|Debugging|$cpu ($alt)|" netwerk/protocol/http/OptimizedFor.h
+  echo "%n-%v-%r build tuned for $cpu ($alt)" > BUILD.OPTIMIZATION
 <<
 # even on 10.5
 SetMACOSX_DEPLOYMENT_TARGET: 10.4
@@ -86,7 +125,7 @@ make=%p/bin/make
 echo "open -a %p/Applications/TenFourFox.app \"$@\"" ;} > tenfourfox
 chmod +x tenfourfox
 
-export PATH=%p/lib/autoconf2.13/bin:$PATH
+export PATH=%b/opt-bin:%p/lib/autoconf2.13/bin:$PATH
 export PKG_CONFIG_PATH=%p/lib/system-openssl/lib/pkgconfig:$PKG_CONFIG_PATH
 $make -w -f client.mk build
 objdir=obj-%m-apple-darwin`uname -r`
@@ -134,9 +173,13 @@ rm -f /Applications/Fink/TenFourFox.app
 DocFiles: LEGAL LICENSE README.txt toolkit/content/license.html
 # shlibs are all private for now, until there is actual interest in them
 Shlibs: <<
+	!%p/Applications/TenFourFox.app/Contents/MacOS/libangle.dylib
 	!%p/Applications/TenFourFox.app/Contents/MacOS/libfreebl3.dylib
+	!%p/Applications/TenFourFox.app/Contents/MacOS/libgkgfx.dylib
 	!%p/Applications/TenFourFox.app/Contents/MacOS/libmozalloc.dylib
+	!%p/Applications/TenFourFox.app/Contents/MacOS/libmozjs.dylib
 	!%p/Applications/TenFourFox.app/Contents/MacOS/libmozsqlite3.dylib
+	!%p/Applications/TenFourFox.app/Contents/MacOS/libmozz.dylib
 	!%p/Applications/TenFourFox.app/Contents/MacOS/libnspr4.dylib
 	!%p/Applications/TenFourFox.app/Contents/MacOS/libnss3.dylib
 	!%p/Applications/TenFourFox.app/Contents/MacOS/libnssckbi.dylib
@@ -147,7 +190,10 @@ Shlibs: <<
 	!%p/Applications/TenFourFox.app/Contents/MacOS/libsmime3.dylib
 	!%p/Applications/TenFourFox.app/Contents/MacOS/libsoftokn3.dylib
 	!%p/Applications/TenFourFox.app/Contents/MacOS/libssl3.dylib
+	!%p/Applications/TenFourFox.app/Contents/MacOS/libthebes.dylib
 	!%p/Applications/TenFourFox.app/Contents/MacOS/libxpcom.dylib
+	!%p/Applications/TenFourFox.app/Contents/MacOS/libxpcom_core.dylib
+	!%p/Applications/TenFourFox.app/Contents/MacOS/libycbcr.dylib
 <<
 Homepage: http://www.tenfourfox.com/
 DescDetail: <<
@@ -187,9 +233,20 @@ I suspect only the gtk+2 toolkit uses it.
 I've added it to BuildConflicts to be safe.
 <<
 DescPort: <<
+All the hard work is done by the developers of TenFourFox, 
+led by Cameron Kaiser.
+
 Bunch of patches to rules.mk and client.mk are for enabling
 parallel builds to share the same jobserver as the master/parent
 make, so recursive instances of make benefit from -jN MAKEFLAGS.  
+
+Compiling on darwin9 (10.5) was a big pain (MACOSX_DEPLOYMENT_TARGET):
+M_D_T needed to be set to 10.4 to use the 10.4 SDK.
+Python scripts (wrappers) however need M_D_T equal to that with which
+python was built, which happens to be 10.5.
+M_D_T was overriden in wrapped calls to python, but then gcc 
+needed the outermost M_D_T, so CC/CXX were wrapped in yet
+another layer of M_D_T.
 
 Using system-provided libraries:
 --------------------------------
