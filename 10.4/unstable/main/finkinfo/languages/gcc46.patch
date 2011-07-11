@@ -1,0 +1,737 @@
+diff -uNr gcc-4.6-20100629/libjava/configure gcc-4.6-20100629.fink/libjava/configure
+--- gcc-4.6-20100629/libjava/configure	2010-06-11 00:12:38.000000000 -0400
++++ gcc-4.6-20100629.fink/libjava/configure	2010-06-29 17:51:26.000000000 -0400
+@@ -1610,6 +1610,8 @@
+                           default=yes
+   --enable-java-maintainer-mode
+                           allow rebuilding of .class and .h files
++  --enable-libjava-multilib
++                          build libjava as multilib
+   --disable-dependency-tracking  speeds up one-time build
+   --enable-dependency-tracking   do not reject slow dependency extractors
+   --enable-maintainer-mode  enable make rules and dependencies not useful
+@@ -3353,6 +3355,16 @@
+ fi
+ 
+ 
++# Check whether --enable-libjava-multilib was given.
++if test "${enable_libjava_multilib+set}" = set; then
++  enableval=$enable_libjava_multilib;
++fi
++
++if test "$enable_libjava_multilib" = no; then
++  multilib=no
++  ac_configure_args="$ac_configure_args --disable-multilib"
++fi
++
+ # It may not be safe to run linking tests in AC_PROG_CC/AC_PROG_CXX.
+ 
+ 
+diff -uNr gcc-4.6-20100629/libjava/configure.ac gcc-4.6-20100629.fink/libjava/configure.ac
+--- gcc-4.6-20100629/libjava/configure.ac	2010-06-11 00:12:38.000000000 -0400
++++ gcc-4.6-20100629.fink/libjava/configure.ac	2010-06-29 17:51:26.000000000 -0400
+@@ -139,6 +139,13 @@
+ 	[allow rebuilding of .class and .h files]))
+ AM_CONDITIONAL(JAVA_MAINTAINER_MODE, test "$enable_java_maintainer_mode" = yes)
+ 
++AC_ARG_ENABLE(libjava-multilib,
++	AS_HELP_STRING([--enable-libjava-multilib], [build libjava as multilib]))
++if test "$enable_libjava_multilib" = no; then
++  multilib=no
++  ac_configure_args="$ac_configure_args --disable-multilib"
++fi
++
+ # It may not be safe to run linking tests in AC_PROG_CC/AC_PROG_CXX.
+ GCC_NO_EXECUTABLES
+ 
+--- gcc-4.6.1.orig/libjava/libgcj.spec.in	2011-06-18 00:30:08.000000000 -0400
++++ gcc-4.6.1/libjava/libgcj.spec.in	2011-06-18 00:30:33.000000000 -0400
+@@ -7,6 +7,6 @@
+ *startfile: @THREADSTARTFILESPEC@ %(startfileorig)
+ 
+ %rename lib liborig
+-*lib: @LD_START_STATIC_SPEC@ @LIBGCJ_SPEC@ @LD_FINISH_STATIC_SPEC@ @LIBMATHSPEC@ @LDLIBICONV@ @GCSPEC@ @THREADSPEC@ @ZLIBSPEC@ @SYSTEMSPEC@ %(libgcc) @LIBSTDCXXSPEC@ %(liborig)
++*lib: @LD_START_STATIC_SPEC@ @LIBGCJ_SPEC@ @LD_FINISH_STATIC_SPEC@ @LIBMATHSPEC@ @GCSPEC@ @THREADSPEC@ @ZLIBSPEC@ @SYSTEMSPEC@ %(libgcc) @LIBSTDCXXSPEC@ %(liborig)
+ 
+ *jc1: @HASH_SYNC_SPEC@ @DIVIDESPEC@ @CHECKREFSPEC@ @JC1GCSPEC@ @EXCEPTIONSPEC@ @BACKTRACESPEC@ @IEEESPEC@ @ATOMICSPEC@ @LIBGCJ_BC_SPEC@ -fkeep-inline-functions
+--- gcc-4.6.1.orig/libjava/Makefile.am	2011-06-18 00:31:10.000000000 -0400
++++ gcc-4.6.1/libjava/Makefile.am	2011-06-18 00:32:35.000000000 -0400
+@@ -492,7 +492,7 @@
+ libgcj_la_LDFLAGS = -rpath $(toolexeclibdir) $(THREADLDFLAGS) $(extra_ldflags) $(THREADLIBS) \
+ 	$(LIBLTDL) $(SYS_ZLIBS) $(LIBJAVA_LDFLAGS_NOUNDEF) \
+ 	-version-info `grep -v '^\#' $(srcdir)/libtool-version` \
+-	$(LIBGCJ_LD_SYMBOLIC_FUNCTIONS)
++	$(LIBGCJ_LD_SYMBOLIC_FUNCTIONS) $(LDLIBICONV)
+ libgcj_la_LIBADD = \
+ 	classpath/native/fdlibm/libfdlibm.la \
+ 	java/lang/Object.lo \
+--- gcc-4.6.1.orig/libjava/Makefile.in	2011-06-18 00:33:10.000000000 -0400
++++ gcc-4.6.1/libjava/Makefile.in	2011-06-18 00:33:59.000000000 -0400
+@@ -1066,7 +1066,7 @@
+ libgcj_la_LDFLAGS = -rpath $(toolexeclibdir) $(THREADLDFLAGS) $(extra_ldflags) $(THREADLIBS) \
+ 	$(LIBLTDL) $(SYS_ZLIBS) $(LIBJAVA_LDFLAGS_NOUNDEF) \
+ 	-version-info `grep -v '^\#' $(srcdir)/libtool-version` \
+-	$(LIBGCJ_LD_SYMBOLIC_FUNCTIONS)
++	$(LIBGCJ_LD_SYMBOLIC_FUNCTIONS) $(LDLIBICONV)
+ 
+ libgcj_la_LIBADD = \
+ 	classpath/native/fdlibm/libfdlibm.la \
+--- gcc-4.6.1/gcc/tree-vect-stmts.c.orig	2011-06-17 21:31:24.000000000 -0400
++++ gcc-4.6.1/gcc/tree-vect-stmts.c	2011-06-27 10:12:04.000000000 -0400
+@@ -5113,6 +5113,15 @@
+       && GET_MODE_CLASS (inner_mode) != MODE_FLOAT)
+     return NULL_TREE;
+ 
++  /* We shouldn't end up building VECTOR_TYPEs of non-scalar components.
++     When the component mode passes the above test simply use a type
++     corresponding to that mode.  The theory is that any use that
++     would cause problems with this will disable vectorization anyway.  */
++  if (!SCALAR_FLOAT_TYPE_P (scalar_type)
++      && !INTEGRAL_TYPE_P (scalar_type)
++      && !POINTER_TYPE_P (scalar_type))
++    scalar_type = lang_hooks.types.type_for_mode (inner_mode, 1);
++
+   /* If no size was supplied use the mode the target prefers.   Otherwise
+      lookup a vector mode of the specified size.  */
+   if (size == 0)
+--- gcc-4.6.1/gcc/testsuite/lib/prune.exp.orig	2011-06-30 10:28:47.000000000 -0400
++++ gcc-4.6.1/gcc/testsuite/lib/prune.exp	2011-06-30 10:29:22.000000000 -0400
+@@ -56,7 +56,10 @@
+     regsub -all "(^|\n)\[^\n\]*ld: warning: can't add line info to anonymous symbol\[^\n\]*" $text "" text
+     regsub -all "(^|\n)\[^\n\]*warning: DWARFDebugInfoEntry::AppendDependants\[^\n\]*AT_\[^\n\]*_bound\[^\n\]*FORM_ref4\[^\n\]*" $text "" text
+     regsub -all "(^|\n)\[^\n\]*warning:\[^\n\]*TAG_variable:  AT_location\[^\n\]*didn't have valid function low pc\[^\n\]*" $text "" text
+-    
++   
++    # Ignore harmless warnings from Xcode 4.0.
++    regsub -all "(^|\n)\[^\n\]*ld: warning: could not create compact unwind for\[^\n\]*" $text "" text
++ 
+     #send_user "After:$text\n"
+ 
+     return $text
+--- gcc-4.6.1/libstdc++-v3/testsuite/lib/prune.exp.orig	2011-06-30 10:27:54.000000000 -0400
++++ gcc-4.6.1/libstdc++-v3/testsuite/lib/prune.exp	2011-06-30 10:28:29.000000000 -0400
+@@ -55,6 +55,10 @@
+     regsub -all "(^|\n)\[^\n\]*warning: DWARFDebugInfoEntry::AppendDependants\[^\n\]*AT_\[^\n\]*_bound\[^\n\]*FORM_ref4\[^\n\]*" $text "" text
+     regsub -all "(^|\n)\[^\n\]*warning:\[^\n\]*TAG_variable:  AT_location\[^\n\]*didn't have valid function low pc\[^\n\]*" $text "" text
+ 
++    # Ignore harmless warnings from Xcode 4.0.
++    regsub -all "(^|\n)\[^\n\]*ld: warning: could not create compact unwind for\[^\n\]*" $text "" text
++
++
+     foreach p $additional_prunes {
+ 	if { [string length $p] > 0 } {
+ 	    # Following regexp matches a complete line containing $p.
+--- gcc-4.6.1/libffi/src/powerpc/darwin_closure.S.orig	2011-07-01 22:02:53.000000000 -0400
++++ gcc-4.6.1/libffi/src/powerpc/darwin_closure.S	2011-07-01 22:03:24.000000000 -0400
+@@ -534,7 +534,7 @@
+ 	.lazy_symbol_pointer
+ L_ffi_closure_helper_DARWIN$lazy_ptr:
+ 	.indirect_symbol _ffi_closure_helper_DARWIN
+-	.long	dyld_stub_binding_helper
++	.g_long	dyld_stub_binding_helper
+ 
+ #if defined(__ppc64__)
+ 	.section __TEXT,__picsymbolstub1,symbol_stubs,pure_instructions,32
+@@ -553,7 +553,8 @@
+ 	.lazy_symbol_pointer
+ L_darwin64_struct_ret_by_value_p$lazy_ptr:
+ 	.indirect_symbol _darwin64_struct_ret_by_value_p
+-	.long	dyld_stub_binding_helper
++	.g_long	dyld_stub_binding_helper
++
+ 	.section __TEXT,__picsymbolstub1,symbol_stubs,pure_instructions,32
+ 	.align 5
+ L_darwin64_pass_struct_floats$stub:
+@@ -570,6 +571,6 @@
+ 	.lazy_symbol_pointer
+ L_darwin64_pass_struct_floats$lazy_ptr:
+ 	.indirect_symbol _darwin64_pass_struct_floats
+-	.long	dyld_stub_binding_helper
++	.g_long	dyld_stub_binding_helper
+ #  endif
+ #endif
+--- gcc-4.6.2/include/simple-object.h.orig	2011-07-07 16:30:26.000000000 -0400
++++ gcc-4.6.2/include/simple-object.h	2011-07-07 16:30:33.000000000 -0400
+@@ -45,12 +45,13 @@
+    descriptor, and OFFSET, an offset within the file.  The offset is
+    for use with archives, and should be 0 for an ordinary object file.
+    The descriptor must remain open until done with the returned
+-   simple_object_read.  SEGMENT_NAME is used on Mach-O and is required
+-   on that platform: it means to only look at sections within the
+-   segment with that name.  It is ignored for other object file
+-   formats.  On error, this function returns NULL, and sets *ERRMSG to
+-   an error string and sets *ERR to an errno value or 0 if there is no
+-   relevant errno.  */
++   simple_object_read.  SEGMENT_NAME is used to provide a GNU extension
++   to Mach-O.  When provided, only sections within that segment will be
++   considered and, additionally, they will be processed according to a GNU
++   sub-sectioning extension to Mach-O.  SEGMENT_NAME is ignored for other
++   object file formats.  On error, this function returns NULL, and sets
++   *ERRMSG to an error string and sets *ERR to an errno value or 0 if there
++   is no relevant errno.  */
+ 
+ extern simple_object_read *
+ simple_object_start_read (int descriptor, off_t offset,
+@@ -139,12 +140,12 @@
+ /* Start creating a new object file which is like ATTRS.  You must
+    fetch attribute information from an existing object file before you
+    can create a new one.  There is currently no support for creating
+-   an object file de novo.  The segment name is only used on Mach-O,
+-   where it is required.  It means that all sections are created
+-   within that segment.  It is ignored for other object file formats.
+-   On error this function returns NULL, sets *ERRMSG to an error
+-   message, and sets *ERR to an errno value or 0 if there isn't
+-   one.  */
++   an object file de novo.  SEGMENT_NAME is only used on Mach-O and, if
++   set, it will cause all sections supplied to be stored according to a
++   GNU sub-sectioning extension to the format.  It is ignored for other
++   object file formats.  On error this function returns NULL, sets *ERRMSG
++   to an error message, and sets *ERR to an errno value or 0 if there
++   isn't one.  */
+ 
+ extern simple_object_write *
+ simple_object_start_write (simple_object_attributes *attrs,
+--- gcc-4.6.2/libiberty/simple-object-mach-o.c.orig	2011-07-07 16:29:00.000000000 -0400
++++ gcc-4.6.2/libiberty/simple-object-mach-o.c	2011-07-07 16:30:33.000000000 -0400
+@@ -170,9 +170,14 @@
+ 
+ #define MACH_O_NAME_LEN (16)
+ 
+-/* A GNU specific extension for long section names.  */
+-
+-#define GNU_SECTION_NAMES "__section_names"
++/* A GNU-specific extension to wrap multiple subsections using three 
++   mach-o sections within a given segment.  The section '__subsect_sects'
++   is subdivided according to the index '__subsect_index' and each sub
++   sect is named according to the names supplied in '__subsect_names'.  */
++
++#define GNU_SECTION_SECTS "__subsect_sects"
++#define GNU_SECTION_INDEX "__subsect_index"
++#define GNU_SECTION_NAMES "__subsect_names"
+ 
+ /* Private data for an simple_object_read.  */
+ 
+@@ -214,7 +219,18 @@
+   unsigned int reserved;
+ };
+ 
+-/* See if we have a Mach-O file.  */
++/* See if we have a Mach-O MH_OBJECT file:
++
++   A standard MH_OBJECT (from as) will have three load commands:
++   0 - LC_SEGMENT/LC_SEGMENT64
++   1 - LC_SYMTAB
++   2 - LC_DYSYMTAB
++   
++   The LC_SEGMENT/LC_SEGMENT64 will introduce a single anonymous segment
++   containing all the sections.
++   
++   Files written by simple-object will have only the segment command
++   (no symbol tables).  */
+ 
+ static void *
+ simple_object_mach_o_match (
+@@ -258,17 +274,9 @@
+     }
+ #endif
+ 
+-  /* We require the user to provide a segment name.  This is
+-     unfortunate but I don't see any good choices here.  */
+-
+-  if (segment_name == NULL)
+-    {
+-      *errmsg = "Mach-O file found but no segment name specified";
+-      *err = 0;
+-      return NULL;
+-    }
+-
+-  if (strlen (segment_name) > MACH_O_NAME_LEN)
++  /* Although a standard MH_OBJECT has a single anonymous segment, we allow
++     a segment name to be specified - but don't act on it at this stage.  */
++  if (segment_name && strlen (segment_name) > MACH_O_NAME_LEN)
+     {
+       *errmsg = "Mach-O segment name too long";
+       *err = 0;
+@@ -294,13 +302,14 @@
+   filetype = (*fetch_32) (b + offsetof (struct mach_o_header_32, filetype));
+   if (filetype != MACH_O_MH_OBJECT)
+     {
+-      *errmsg = "Mach-O file is not object file";
++      *errmsg = "Mach-O file is not an MH_OBJECT file";
+       *err = 0;
+       return NULL;
+     }
+ 
+   omr = XNEW (struct simple_object_mach_o_read);
+-  omr->segment_name = xstrdup (segment_name);
++  if (segment_name)
++    omr->segment_name = xstrdup (segment_name);
+   omr->magic = magic;
+   omr->is_big_endian = is_big_endian;
+   omr->cputype = (*fetch_32) (b + offsetof (struct mach_o_header_32, cputype));
+@@ -356,8 +365,16 @@
+     }
+ }
+ 
+-/* Handle a segment in a Mach-O file.  Return 1 if we should continue,
+-   0 if the caller should return.  */
++/* Handle a segment in a Mach-O file.
++
++   This will callback to the function pfn for each section found in the
++   segment named in 
++   
++   We implement a sub-section scheme (which will, in principle, work
++   with any segment).  At present, likely to be meaningless except for
++   __GNU_LTO.  
++   
++   Return 1 if we should continue, 0 if the caller should return.  */
+ 
+ static int
+ simple_object_mach_o_segment (simple_object_read *sobj, off_t offset,
+@@ -376,11 +393,16 @@
+   size_t segname_offset;
+   size_t sectname_offset;
+   unsigned int nsects;
+-  unsigned char *secdata;
++  unsigned char *secdata = NULL;
+   unsigned int i;
+-  unsigned int strtab_index;
+-  char *strtab;
+-  size_t strtab_size;
++  int strtab_index, index_index, sections_index;
++  char *strtab = NULL;
++  size_t strtab_size = 0;
++  unsigned char *index = NULL;
++  size_t index_size;
++  unsigned int n_lto_sects = 0;
++  size_t lto_sect_size = 0;
++  off_t lto_sect_offset = (off_t)0;
+ 
+   fetch_32 = (omr->is_big_endian
+ 	      ? simple_object_fetch_big_32
+@@ -417,28 +439,30 @@
+       return 0;
+     }
+ 
+-  /* Scan for a __section_names section.  This is in effect a GNU
+-     extension that permits section names longer than 16 chars.  */
+-
+-  for (i = 0; i < nsects; ++i)
+-    {
+-      size_t nameoff;
+-
+-      nameoff = i * sechdrsize + segname_offset;
+-      if (strcmp ((char *) secdata + nameoff, omr->segment_name) != 0)
+-	continue;
+-      nameoff = i * sechdrsize + sectname_offset;
+-      if (strcmp ((char *) secdata + nameoff, GNU_SECTION_NAMES) == 0)
+-	break;
+-    }
+-
+-  strtab_index = i;
+-  if (strtab_index >= nsects)
+-    {
+-      strtab = NULL;
+-      strtab_size = 0;
+-    }
+-  else
++  /* If the user has set a segment name to be processed for GNU sub-sections
++     then scan for the three relevant sections.  */
++  strtab_index = index_index = sections_index = -1;
++  if (omr->segment_name && strlen (omr->segment_name) > 0)
++    for (i = 0; i < nsects; ++i)
++      {
++	size_t nameoff;
++
++	nameoff = i * sechdrsize + segname_offset;
++	if (strcmp ((char *) secdata + nameoff, omr->segment_name) != 0)
++	  continue;
++
++	nameoff = i * sechdrsize + sectname_offset;
++	if (strcmp ((char *) secdata + nameoff, GNU_SECTION_NAMES) == 0)
++	  strtab_index = i;
++	else if (strcmp ((char *) secdata + nameoff, GNU_SECTION_INDEX) == 0)
++	  index_index = i;
++	else if (strcmp ((char *) secdata + nameoff, GNU_SECTION_SECTS) == 0)
++	  sections_index = i;
++      }
++
++  /* Support code compiled with the orginal LTO implementation of one mach-o 
++     section for each LTO section.  */
++  if (strtab_index >= 0)
+     {
+       off_t strtab_offset;
+ 
+@@ -457,28 +481,107 @@
+ 	}
+     }
+ 
+-  /* Process the sections.  */
++  /* The new version puts all the LTO data into a single mach-o section and
++     provides a separate index from which we implement sub-sectioning.
++     For now, it is not an error for this to be missing, we could have an
++     old-style file.  */
++  if (index_index >= 0)
++    {
++      off_t index_offset;
++
++      simple_object_mach_o_section_info (omr->is_big_endian, is_32,
++					 secdata + index_index * sechdrsize,
++					 &index_offset, &index_size);
++      index = XNEWVEC (unsigned char, index_size);
++      if (!simple_object_internal_read (sobj->descriptor,
++					sobj->offset + index_offset,
++					index, index_size,
++					errmsg, err))
++	{
++	  XDELETEVEC (index);
++	  XDELETEVEC (strtab);
++	  XDELETEVEC (secdata);
++	  return 0;
++	}
++    }
++
++  if (sections_index >= 0)
++    simple_object_mach_o_section_info (omr->is_big_endian, is_32,
++				       secdata + sections_index * sechdrsize,
++				       &lto_sect_offset, &lto_sect_size);
++  /* The index contains 4 uint32_t per sub-section:
++     sub-section offset/length, sub-section name/length.  
++     We fix this for both 32 and 64 bit mach-o for now, since other 
++     fields limit the maximum size of an object to 4G.  */
++  n_lto_sects = index_size / 16;
++
++  /* Process the sections:
++
++     If we have a SEGMENT_NAME and it is finite sized, then fish out the
++     sub-sections when we encounter the sub-sections entry.  Otherwise 
++     proceed as below.
++
++     If we have a strtab and the name matches the form of this, then
++     substitute the name as per the original scheme.
++     
++     Otherwise, the section name is 'segment_name,section_name' in line
++     with assembler usage.  */
+ 
+   for (i = 0; i < nsects; ++i)
+     {
+       const unsigned char *sechdr;
+-      char namebuf[MACH_O_NAME_LEN + 1];
++      char namebuf[MACH_O_NAME_LEN*2 + 2]; /* space for segment,section\0.  */
+       char *name;
+       off_t secoffset;
+       size_t secsize;
+ 
+-      if (i == strtab_index)
++      if (i == strtab_index || i == index_index)
+ 	continue;
+ 
+       sechdr = secdata + i * sechdrsize;
+ 
+-      if (strcmp ((char *) sechdr + segname_offset, omr->segment_name) != 0)
++      if (omr->segment_name 
++	  && strlen (omr->segment_name) > 0
++	  && strcmp ((char *) sechdr + segname_offset, omr->segment_name) != 0)
+ 	continue;
+ 
++      if (i == sections_index)
++	{
++	/* If we have a new-style file - handle that here.  */
++	if (n_lto_sects && index)
++	  {
++	    int j;
++	    for (j = 0; j < n_lto_sects; ++j)
++	      {
++		unsigned int subsect_offset, subsect_length, name_offset;
++		subsect_offset = (*fetch_32) (index + 16 * j);
++		subsect_length = (*fetch_32) (index + 16 * j + 4);
++		name_offset = (*fetch_32) (index + 16 * j + 8);
++		/* We don't use the name_length yet.  */
++	  
++		secoffset = lto_sect_offset + subsect_offset;
++		secsize = subsect_length;
++		name = strtab + name_offset;
++
++		if (!(*pfn) (data, name, secoffset, secsize))
++		  {
++		    *errmsg = NULL;
++		    *err = 0;
++		    XDELETEVEC (index);
++		    XDELETEVEC (strtab);
++		    XDELETEVEC (secdata);
++		    return 0;
++		  }
++	      }
++	  }
++	  continue;
++	}
++
+       memcpy (namebuf, sechdr + sectname_offset, MACH_O_NAME_LEN);
+       namebuf[MACH_O_NAME_LEN] = '\0';
+ 
+       name = &namebuf[0];
++
+       if (strtab != NULL && name[0] == '_' && name[1] == '_')
+ 	{
+ 	  unsigned long stringoffset;
+@@ -497,6 +600,16 @@
+ 	      name = strtab + stringoffset;
+ 	    }
+ 	}
++      else
++	{
++	  /* Compose a section name like __SEGMENT,__section.  */
++	  size_t l;
++	  memset (namebuf, 0, MACH_O_NAME_LEN*2+2);
++	  memcpy (namebuf, (char *) sechdr + segname_offset, MACH_O_NAME_LEN);
++	  l = strlen (namebuf);
++	  namebuf[l] = ',';
++	  memcpy (namebuf, (char *) sechdr + sectname_offset, MACH_O_NAME_LEN);
++	}
+ 
+       simple_object_mach_o_section_info (omr->is_big_endian, is_32, sechdr,
+ 					 &secoffset, &secsize);
+@@ -505,12 +618,14 @@
+ 	{
+ 	  *errmsg = NULL;
+ 	  *err = 0;
++	  XDELETEVEC (index);
+ 	  XDELETEVEC (strtab);
+ 	  XDELETEVEC (secdata);
+ 	  return 0;
+ 	}
+     }
+ 
++  XDELETEVEC (index);
+   XDELETEVEC (strtab);
+   XDELETEVEC (secdata);
+ 
+--- gcc-4.6.2/gcc/config/darwin.c.orig	2011-07-07 16:28:52.000000000 -0400
++++ gcc-4.6.2/gcc/config/darwin.c	2011-07-07 16:30:33.000000000 -0400
+@@ -1753,19 +1753,52 @@
+   return (!strncmp ((const char *)p, "_OBJC_", 6));
+ }
+ 
+-/* LTO support for Mach-O.  */
++/* LTO support for Mach-O.
+ 
+-/* Section names for LTO sections.  */
+-static unsigned int lto_section_names_offset = 0;
++   This version uses three mach-o sections to encapsulate the (unlimited
++   number of) lto sections.
++   
++   __GNU_LTO, __lto_sections  contains the concatented GNU LTO section data.
++   __GNU_LTO, __section_names contains the GNU LTO section names.
++   __GNU_LTO, __section_index contains an array of values that index these.
++
++   Indexed thus:
++     <section offset from the start of __GNU_LTO, __lto_sections>,
++     <section length>
++     <name offset from the start of __GNU_LTO, __section_names,
++     <name length>.
++
++   At present, for both m32 and m64 mach-o files each of these fields is
++   represented  by a uint32_t.  This is because, AFAICT, a mach-o object
++   cannot exceed 4Gb because the section_64 offset field (see below) is 32bits.
++   
++    uint32_t offset;
++   "offset  An integer specifying the offset to this section in the file."  */
++
++/* Count lto section numbers. */
++static unsigned int lto_section_num = 0;
++
++/* A vector of information about LTO sections, at present, we only have
++   the name.  TODO: see if we can get the data length somehow.  */
++typedef struct GTY(()) darwin_lto_section_e {
++  const char *sectname;
++} darwin_lto_section_e ;
++DEF_VEC_O(darwin_lto_section_e);
++DEF_VEC_ALLOC_O(darwin_lto_section_e, gc);
+ 
+-/* This is the obstack which we use to allocate the many strings.  */
+-static struct obstack lto_section_names_obstack;
++static GTY (()) VEC (darwin_lto_section_e, gc) * lto_section_names;
+ 
+-/* Segment name for LTO sections.  */
++/* Segment for LTO (sub-)sections.  */
+ #define LTO_SEGMENT_NAME "__GNU_LTO"
+ 
+-/* Section name for LTO section names section.  */
+-#define LTO_NAMES_SECTION "__section_names"
++/* Section for LTO sub-sections names.  */
++#define LTO_NAMES_SECTION "__subsect_names"
++
++/* Section for LTO sub-sections index.  */
++#define LTO_INDEX_SECTION "__subsect_index"
++
++/* Section for LTO sub-sections.  */
++#define LTO_SECTS_SECTION "__subsect_sects"
+ 
+ /* File to temporarily store LTO data.  This is appended to asm_out_file
+    in darwin_end_file.  */
+@@ -1808,37 +1841,37 @@
+ 			  unsigned int flags,
+ 			  tree decl ATTRIBUTE_UNUSED)
+ {
+-  /* LTO sections go in a special segment __GNU_LTO.  We want to replace the
+-     section name with something we can use to represent arbitrary-length
+-     names (section names in Mach-O are at most 16 characters long).  */
++  /* LTO sections go in a special section that encapsulates the (unlimited)
++     number of GNU LTO sections within a single mach-o one.  */
+   if (strncmp (name, LTO_SECTION_NAME_PREFIX,
+ 	       strlen (LTO_SECTION_NAME_PREFIX)) == 0)
+     {
++      darwin_lto_section_e e;
+       /* We expect certain flags to be set...  */
+       gcc_assert ((flags & (SECTION_DEBUG | SECTION_NAMED))
+ 		  == (SECTION_DEBUG | SECTION_NAMED));
+ 
+-      /* Add the section name to the things to output when we end the
+-	 current assembler output file.
+-	 This is all not very efficient, but that doesn't matter -- this
+-	 shouldn't be a hot path in the compiler...  */
+-      obstack_1grow (&lto_section_names_obstack, '\t');
+-      obstack_grow (&lto_section_names_obstack, ".ascii ", 7);
+-      obstack_1grow (&lto_section_names_obstack, '"');
+-      obstack_grow (&lto_section_names_obstack, name, strlen (name));
+-      obstack_grow (&lto_section_names_obstack, "\\0\"\n", 4);
+-
+-      /* Output the dummy section name.  */
+-      fprintf (asm_out_file, "\t# %s\n", name);
+-      fprintf (asm_out_file, "\t.section %s,__%08X,regular,debug\n",
+-	       LTO_SEGMENT_NAME, lto_section_names_offset);
+-
+-      /* Update the offset for the next section name.  Make sure we stay
+-	 within reasonable length.  */  
+-      lto_section_names_offset += strlen (name) + 1;
+-      gcc_assert (lto_section_names_offset > 0
+-		  && lto_section_names_offset < ((unsigned) 1 << 31));
+-    }
++      /* Switch to our combined section.  */
++      fprintf (asm_out_file, "\t.section %s,%s,regular,debug\n",
++	       LTO_SEGMENT_NAME, LTO_SECTS_SECTION);
++      /* Output a label for the start of this sub-section.  */
++      fprintf (asm_out_file, "L_GNU_LTO%d:\t;# %s\n",
++	       lto_section_num, name);
++      /* We have to jump through hoops to get the values of the intra-section
++         offsets... */
++      fprintf (asm_out_file, "\t.set $gnu$lto$offs%d,L_GNU_LTO%d-L_GNU_LTO0\n",
++	       lto_section_num, lto_section_num);
++      fprintf (asm_out_file, "\t.set $gnu$lto$size%d,L_GNU_LTO%d-L_GNU_LTO%d\n",
++	       lto_section_num, lto_section_num+1, lto_section_num);
++      lto_section_num++;
++      e.sectname = xstrdup (name);
++      /* Keep the names, we'll need to make a table later.
++         TODO: check that we do not revisit sections, that would break 
++         the assumption of how this is done. */
++      if (lto_section_names == NULL)
++        lto_section_names = VEC_alloc (darwin_lto_section_e, gc, 16);
++      VEC_safe_push (darwin_lto_section_e, gc, lto_section_names, &e);
++   }
+   else if (strncmp (name, "__DWARF,", 8) == 0)
+     darwin_asm_dwarf_section (name, flags, decl);
+   else
+@@ -2711,16 +2744,12 @@
+   darwin_asm_output_dwarf_delta (file, size, lab, sname);
+ }
+ 
+-/* Called from the within the TARGET_ASM_FILE_START for each target. 
+-  Initialize the stuff we need for LTO long section names support.  */
++/* Called from the within the TARGET_ASM_FILE_START for each target.  */
+ 
+ void
+ darwin_file_start (void)
+ {
+-  /* We fill this obstack with the complete section text for the lto section
+-     names to write in darwin_file_end.  */
+-  obstack_init (&lto_section_names_obstack);
+-  lto_section_names_offset = 0;
++  /* Nothing to do.  */
+ }
+ 
+ /* Called for the TARGET_ASM_FILE_END hook.
+@@ -2731,8 +2760,6 @@
+ void
+ darwin_file_end (void)
+ {
+-  const char *lto_section_names;
+-
+   machopic_finish (asm_out_file);
+   if (strcmp (lang_hooks.name, "GNU C++") == 0)
+     {
+@@ -2762,6 +2789,13 @@
+ 	  lto_asm_txt = buf = (char *) xmalloc (n + 1);
+ 	  while (fgets (lto_asm_txt, n, lto_asm_out_file))
+ 	    fputs (lto_asm_txt, asm_out_file);
++	  /* Put a termination label.  */
++	  fprintf (asm_out_file, "\t.section %s,%s,regular,debug\n",
++		   LTO_SEGMENT_NAME, LTO_SECTS_SECTION);
++	  fprintf (asm_out_file, "L_GNU_LTO%d:\t;# end of lto\n",
++		   lto_section_num);
++	  /* Make sure our termination label stays in this section.  */
++	  fputs ("\t.space\t1\n", asm_out_file);
+ 	}
+ 
+       /* Remove the temporary file.  */
+@@ -2770,21 +2804,49 @@
+       free (lto_asm_out_name);
+     }
+ 
+-  /* Finish the LTO section names obstack.  Don't output anything if
+-     there are no recorded section names.  */
+-  obstack_1grow (&lto_section_names_obstack, '\0');
+-  lto_section_names = XOBFINISH (&lto_section_names_obstack, const char *);
+-  if (strlen (lto_section_names) > 0)
++  /* Output the names and indices.  */
++  if (lto_section_names && VEC_length (darwin_lto_section_e, lto_section_names))
+     {
+-      fprintf (asm_out_file,
+-	       "\t.section %s,%s,regular,debug\n",
++      int count;
++      darwin_lto_section_e *ref;
++      /* For now, we'll make the offsets 4 bytes and unaligned - we'll fix
++         the latter up ourselves. */
++      const char *op = integer_asm_op (4,0); 
++
++      /* Emit the names. */
++      fprintf (asm_out_file, "\t.section %s,%s,regular,debug\n",
+ 	       LTO_SEGMENT_NAME, LTO_NAMES_SECTION);
+-      fprintf (asm_out_file,
+-	       "\t# Section names in %s are offsets into this table\n",
+-	       LTO_SEGMENT_NAME);
+-      fprintf (asm_out_file, "%s\n", lto_section_names);
++      FOR_EACH_VEC_ELT (darwin_lto_section_e, lto_section_names, count, ref)
++	{
++	  fprintf (asm_out_file, "L_GNU_LTO_NAME%d:\n", count);
++         /* We have to jump through hoops to get the values of the intra-section
++            offsets... */
++	  fprintf (asm_out_file, 
++		   "\t.set $gnu$lto$noff%d,L_GNU_LTO_NAME%d-L_GNU_LTO_NAME0\n",
++		   count, count);
++	  fprintf (asm_out_file,
++		   "\t.set $gnu$lto$nsiz%d,L_GNU_LTO_NAME%d-L_GNU_LTO_NAME%d\n",
++		   count, count+1, count);
++	  fprintf (asm_out_file, "\t.asciz\t\"%s\"\n", ref->sectname);
++	}
++      fprintf (asm_out_file, "L_GNU_LTO_NAME%d:\t;# end\n", lto_section_num);
++      /* make sure our termination label stays in this section.  */
++      fputs ("\t.space\t1\n", asm_out_file);
++
++      /* Emit the Index. */
++      fprintf (asm_out_file, "\t.section %s,%s,regular,debug\n",
++	       LTO_SEGMENT_NAME, LTO_INDEX_SECTION);
++      fputs ("\t.align\t2\n", asm_out_file);
++      fputs ("# Section offset, Section length, Name offset, Name length\n", asm_out_file);
++      FOR_EACH_VEC_ELT (darwin_lto_section_e, lto_section_names, count, ref)
++	{
++	  fprintf (asm_out_file, "%s $gnu$lto$offs%d\t;# %s\n",
++		   op, count, ref->sectname);
++	  fprintf (asm_out_file, "%s $gnu$lto$size%d\n", op, count);
++	  fprintf (asm_out_file, "%s $gnu$lto$noff%d\n", op, count);
++	  fprintf (asm_out_file, "%s $gnu$lto$nsiz%d\n", op, count);
++	}
+     }
+-  obstack_free (&lto_section_names_obstack, NULL);
+ 
+   /* If we have section anchors, then we must prevent the linker from
+      re-arranging data.  */
