@@ -1,0 +1,276 @@
+# HG changeset patch
+# User mringwal@vs22
+# Date 1217354865 -7200
+# Node ID e5d4e455632a97f05c5c349c0feb6e920d369233
+# Parent  d3e0a84ea42b942f85e4dc1b09279904c445e9c0
+include <stdint.h> before <dvdread/ifo_read.h>
+
+diff -r d3e0a84ea42b -r e5d4e455632a configure.in
+--- a/configure.in	Tue Jul 29 20:06:56 2008 +0200
++++ b/configure.in	Tue Jul 29 20:07:45 2008 +0200
+@@ -10,8 +10,7 @@
+ 
+ AC_CHECK_LIB(dvdread, DVDOpen, , AC_MSG_ERROR([libdvdread not found!]))
+ AC_MSG_CHECKING([for dvdread/ifo_read.h])
+-AC_TRY_COMPILE([#include <dvdread/ifo_read.h>
+-		#include <stdint.h>], ,
++AC_TRY_COMPILE(#include <stdint.h>] #include <dvdread/ifo_read.h> , ,
+ 	AC_MSG_RESULT([yes]), 
+ 	AC_MSG_RESULT([no]) 
+ 	AC_MSG_ERROR([Header files for dvdread not found]))
+# HG changeset patch
+# User mringwal@vs22
+# Date 1217354907 -7200
+# Node ID ee207a462bd8280fa980b21434d78952903f30de
+# Parent  e5d4e455632a97f05c5c349c0feb6e920d369233
+add endiness test to fix power pc
+
+diff -r e5d4e455632a -r ee207a462bd8 configure.in
+--- a/configure.in	Tue Jul 29 20:07:45 2008 +0200
++++ b/configure.in	Tue Jul 29 20:08:27 2008 +0200
+@@ -8,6 +8,12 @@
+   CFLAGS="$CFLAGS -W -Wall"
+ fi
+ 
++dnl test endianess - important for libdvdread includes on powerpc
++AC_C_BIGENDIAN
++if test x$ac_cv_c_bigendian = "xyes"; then
++    CFLAGS="$CFLAGS -DWORDS_BIGENDIAN"   
++fi
++
+ AC_CHECK_LIB(dvdread, DVDOpen, , AC_MSG_ERROR([libdvdread not found!]))
+ AC_MSG_CHECKING([for dvdread/ifo_read.h])
+ AC_TRY_COMPILE(#include <stdint.h>] #include <dvdread/ifo_read.h> , ,
+# HG changeset patch
+# User mringwal@vs22
+# Date 1217355455 -7200
+# Node ID 9ab4a5121debe4f4c07295dd1ba5f262cf341176
+# Parent  ee207a462bd8280fa980b21434d78952903f30de
+fix inclusion of libdvdread: stdtypes first, WORDS_BIGENDIAN
+
+diff -r ee207a462bd8 -r 9ab4a5121deb configure
+--- a/configure	Tue Jul 29 20:08:27 2008 +0200
++++ b/configure	Tue Jul 29 20:17:35 2008 +0200
+@@ -2887,8 +2887,8 @@
+ cat confdefs.h >>conftest.$ac_ext
+ cat >>conftest.$ac_ext <<_ACEOF
+ /* end confdefs.h.  */
++#include <stdint.h>
+ #include <dvdread/ifo_read.h>
+-		#include <stdint.h>
+ int
+ main ()
+ {
+diff -r ee207a462bd8 -r 9ab4a5121deb lsdvd.c
+--- a/lsdvd.c	Tue Jul 29 20:08:27 2008 +0200
++++ b/lsdvd.c	Tue Jul 29 20:17:35 2008 +0200
+@@ -13,13 +13,18 @@
+  *  2003-04-19  Cleanups get_title_name, added dvdtime2msec, added helper macros,
+  *			  output info structures in form of a Perl module, by Henk Vergonet.
+  */
+-#include <dvdread/ifo_read.h>
+ #include <string.h>
+ #include <sys/stat.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <unistd.h>
+ #include <stdint.h>
++
++#ifdef __BIG_ENDIAN__
++#define WORDS_BIGENDIAN
++#endif
++
++#include <dvdread/ifo_read.h>
+ #include "lsdvd.h"
+ #include "ocode.h"
+ 
+# HG changeset patch
+# User mringwal@vs22
+# Date 1217356795 -7200
+# Node ID e7bc321430b48845e88973a19337b0f7a9d1f5ed
+# Parent  9ab4a5121debe4f4c07295dd1ba5f262cf341176
+autodetec path to dvd drive
+
+diff -r 9ab4a5121deb -r e7bc321430b4 lsdvd.c
+--- a/lsdvd.c	Tue Jul 29 20:17:35 2008 +0200
++++ b/lsdvd.c	Tue Jul 29 20:39:55 2008 +0200
+@@ -19,6 +19,11 @@
+ #include <stdlib.h>
+ #include <unistd.h>
+ #include <stdint.h>
++
++#include <paths.h>
++#include <sys/param.h>
++#include <IOKit/IOKitLib.h>
++#include <IOKit/IOBSD.h>
+ 
+ #ifdef __BIG_ENDIAN__
+ #define WORDS_BIGENDIAN
+@@ -87,6 +92,82 @@
+ //extern void oxml_print(struct dvd_info *dvd_info);
+ //extern void oruby_print(struct dvd_info *dvd_info);
+ //extern void ohuman_print(struct dvd_info *dvd_info);
++
++char deviceFilePath[MAXPATHLEN]; //MAXPATHLEN is defined in sys/param.h
++
++int getBSDnameForDVDService( io_object_t device, char *path){
++    CFTypeRef deviceNameAsCFString = NULL;
++    Boolean gotString = false;
++    size_t devPathLength;
++
++    /* the DVD drive is the child of the IODVDBlockStorageDriver child */
++    io_iterator_t children;
++    kern_return_t krc = IORegistryEntryGetChildIterator(device, kIOServicePlane, &children);
++    if (krc == KERN_SUCCESS) {     
++        io_service_t child;
++        while ((child = IOIteratorNext(children)))
++        {
++            io_string_t type;
++            IOObjectGetClass(child, type);
++            if (strcmp( type, "IODVDBlockStorageDriver") == 0){
++                io_service_t drive;
++                IORegistryEntryGetChildEntry(child, kIOServicePlane, &drive);
++                if (child){
++                    deviceNameAsCFString = IORegistryEntryCreateCFProperty( drive, CFSTR(kIOBSDNameKey), kCFAllocatorDefault, kNilOptions);
++                }                                        
++            }
++            IOObjectRelease(child);
++        }
++        IOObjectRelease(children);
++    }            
++    if (deviceNameAsCFString) {
++        path[0] = '\0';
++        devPathLength = strlen(_PATH_DEV); //_PATH_DEV is defined in paths.h
++        strcpy(path, _PATH_DEV);
++        gotString = CFStringGetCString( deviceNameAsCFString, path + strlen(path), MAXPATHLEN - strlen(deviceFilePath), kCFStringEncodingASCII);
++    
++    }
++    if (gotString) {
++        printf("Auto-detected DVD file path: %s\n", path);
++        //deviceFilePath will look something like /dev/disk1
++        return 0;
++    }            
++    return -1;
++}
++
++/*
++ * Find all DVD drives
++ */
++int GetADVD(char *dvdPath)
++{
++    /*
++     * Create a matching dictionary to search for DVD services in the IOKit.
++     */
++    CFMutableDictionaryRef RefMatchingDict = IOServiceMatching("IODVDServices");
++    if (RefMatchingDict == NULL){
++        // no dvd drives found
++    }
++
++    /*
++     * Get a collection of DVD services.
++     */
++    io_iterator_t DVDServices = 0;
++    // IOReturn rc =
++	IOServiceGetMatchingServices(kIOMasterPortDefault, RefMatchingDict, &DVDServices);
++ 
++    io_object_t DVDService;
++	int err = -1;
++    while ((DVDService = IOIteratorNext(DVDServices)) != 0)
++    {
++		err = getBSDnameForDVDService( DVDService, dvdPath );
++        IOObjectRelease(DVDService);
++		if (!err) break;  // found one
++    }
++    IOObjectRelease(DVDServices);
++	return err;
++}
++
++
+ 
+ int dvdtime2msec(dvd_time_t *dt)
+ {
+@@ -274,7 +355,15 @@
+ 		}
+ 	}
+ 
+-	if (argv[optind]) { dvd_device = argv[optind];	}
++	if (argv[optind]) {
++		dvd_device = argv[optind];
++	} else {
++		if (GetADVD(deviceFilePath)) {
++			fprintf(stderr, "Can't find a mounted DVD\n");
++			return 1;
++		}
++		dvd_device = deviceFilePath;
++	}
+ 	
+ 	ret = stat(dvd_device, &dvd_stat);
+ 	if ( ret < 0 ) {
+# HG changeset patch
+# User mringwal@vs22
+# Date 1217358973 -7200
+# Node ID 69313947489440b5712bf577a385a45f8a1cea88
+# Parent  e7bc321430b48845e88973a19337b0f7a9d1f5ed
+use DVDUDFVolumeInfo to read DVD title on Mac OS X
+
+diff -r e7bc321430b4 -r 693139474894 lsdvd.c
+--- a/lsdvd.c	Tue Jul 29 20:39:55 2008 +0200
++++ b/lsdvd.c	Tue Jul 29 21:16:13 2008 +0200
+@@ -32,6 +32,9 @@
+ #include <dvdread/ifo_read.h>
+ #include "lsdvd.h"
+ #include "ocode.h"
++
++/** max dvd title len */
++#define MAX_DVD_TITLE_LEN 32
+ 
+ static struct { char code[3];	char name[20];}
+ language[] = {
+@@ -203,40 +206,25 @@
+ 	if ( pt->minute > 59 ) { pt->minute -= 60; pt->hour++; }
+ }
+ 
+-/*
+- *  The following method is based on code from vobcopy, by Robos, with thanks.
+- */
+ int get_title_name(const char* dvd_device, char* title)
+ {
+-	FILE *filehandle = 0;
+-	int  i;
+-
+-	if (! (filehandle = fopen(dvd_device, "r"))) {
++    dvd_reader_t* reader = DVDOpen( dvd_device );
++    if (!reader) {
+ 		fprintf(stderr, "Couldn't open %s for title\n", dvd_device);
+ 		strcpy(title, "unknown");
+ 		return -1;
+ 	}
+ 
+-	if ( fseek(filehandle, 32808, SEEK_SET )) {
+-		fclose(filehandle);
+-		fprintf(stderr, "Couldn't seek in %s for title\n", dvd_device);
++	if (DVDUDFVolumeInfo( reader, title, MAX_DVD_TITLE_LEN, (unsigned char *) 0, 0)){
++		DVDClose(reader);
++		fprintf(stderr, "Couldn't read title\n");
+ 		strcpy(title, "unknown");
+ 		return -1;
+ 	}
+ 
+-	if ( 32 != (i = fread(title, 1, 32, filehandle)) ) {
+-		fclose(filehandle);
+-		fprintf(stderr, "Couldn't read enough bytes for title.\n");
+-		strcpy(title, "unknown");
+-		return -1;
+-	}
++    DVDClose(reader);
+ 
+-	fclose (filehandle);
+-
+-	title[32] = '\0';
+-	while(i-- > 2)
+-	if(title[i] == ' ') title[i] = '\0';
+-	return 0;
++    return 0;
+ }
+ 
+ char* lang_name(char* code)

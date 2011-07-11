@@ -1,0 +1,175 @@
+Package: ghostscript-esp
+Version: 8.71
+Revision: 1
+Description: Ghostscript with better CJK and cups support
+Depends: x11, ghostscript-fonts, libjpeg8-shlibs, libpng14-shlibs, libiconv, applesystemfonts (>= 1.1-2), appleotffonts (>= 0.1-11), system-perl, libtiff-shlibs, libpaper1-shlibs, libjasper.1-shlibs, fontconfig2-shlibs, libjbig2dec-shlibs (>= 0.11-2)
+BuildDepends: x11-dev, libjpeg8, libpng14, cups-dev, libiconv-dev, pkgconfig, fink (>= 0.24.12), libtiff, libpaper1-dev, libjasper.1, fontconfig2-dev, libjbig2dec-dev (>= 0.11-2)
+Conflicts: ghostscript (>= 0), ghostscript-nox, ghostscript6, ghostscript6-nox, ghostscript7, system-ghostscript, system-ghostscript8, system-ghostscript6
+Replaces: ghostscript (>= 0), ghostscript-nox, ghostscript6, ghostscript6-nox, ghostscript7
+Provides: ghostscript
+License: Restrictive/Distributable
+Source: mirror:sourceforge:ghostscript/ghostscript-%v.tar.gz
+# downloaded from http://www.rmatsumoto.org/tex-ps-pdf/convert-euc.txt
+Source2: http://fink.sodan.ecc.u-tokyo.ac.jp/pkgdists/convert-euc-20070119.txt
+Source3: http://gentoo.gg3.net/distfiles/ghostscript-gpl-8.71-patchset-4.tar.bz2
+Source4: http://www.cymric.jp/old/mac/Font.tar.bz2
+Source5: http://tyche.pu-toyama.ac.jp/~a-urasim/gs/ghostscript-7.07-a-urasim3.patch
+Source6: http://www.aihara.co.jp/~taiji/gyve/tmp/modify_ps2pdfwr.patch
+Source7: http://www.aihara.co.jp/~taiji/gyve/tmp/modify_ps2pdfwr-20050921.patch
+Source8: http://www.aihara.co.jp/~taiji/gyve/tmp/test2/gs707/gscjk_ak.ps
+Source-MD5:  51a522a5b4818bd3dc7c1c0e9dd22bad
+Source2-MD5: d79bdc356974869471eea82bce66819d
+Source3-MD5: 5d376efe8109dd91e7ecb6e876444cc1
+Source4-MD5: 16c831e17cd85d435c5c0cf7260ba58f
+Source5-MD5: e2fc756c72fde76325c0386e992ace44
+Source6-MD5: a72863d1612c99333c7ab10b20ec2dff
+Source7-MD5: 27903349daf2046d4e244d3d6f81bfaf
+Source8-MD5: 5442aaff387191c807e80e3ecc0d5903
+PatchFile: %n.patch
+PatchFile-MD5: b90f227a4a2fa1697c2bc76befdaccf5
+PatchScript: <<
+ # We use system's libraries, so simply delete a local library trees.
+ rm -R expat jasper jbig2dec jpeg libpng tiff zlib
+
+ # See DescPackaging
+ sed -e "s|<PREFIX>|%p|g" \
+     -e "s|@XFONTPATH@|`xfontpath basedir`|g" < %{PatchFile} | patch -p1
+ 
+ # Apply Gentoo Linux's patches, many of which were borrowed from Fedora
+ rm ../patches/ghostscript-gpl-8.64-gsdjvu-1.3.patch
+ rm ../patches/ghostscript-gpl-8.71-jbig2dec-nullderef.patch
+ rm ../patches/ghostscript-gpl-8.71-libpng14.patch
+ for file in ../patches/*.patch; do patch -p1 < ${file}; done
+
+ # See http://tyche.pu-toyama.ac.jp/~a-urasim/gs/
+ patch -d contrib/eplaser -p2 < ../ghostscript-7.07-a-urasim3.patch
+
+ # 1. for libpng14 detection, 2. delete needless link
+ sed -i.bak -e 's|png_check_sig|png_create_write_struct|g' \
+            -e 's| -lstdc++||' configure
+
+ # Change dirs to be installed for cups
+ sed -i.bak -e 's|@CUPSSERVERBIN@|@libdir@/cups|' \
+            -e 's|@CUPSSERVERROOT@|@prefix@/etc/cups|' \
+            -e 's|@CUPSDATA@|@datadir@/cups|' base/Makefile.in
+
+ # Add files to be installed
+ sed -i.bak -e 's|\(ps2pdfwr\)|\1 ps2jpdf convert-euc|' base/unixinst.mak
+
+ #########################   start making ps2jpdf   #########################
+ cp lib/ps2pdfwr lib/ps2jpdf
+
+ # Update the patch to 8.71's pdf2pdfwr.
+ sed -i.bak -e 's|exec gs|exec "$GS_EXECUTABLE"|' \
+            -e 's|\(pdfwrite\)|\1 -sstdout=%%stderr|' ../modify_ps2pdfwr.patch
+
+ # modify ps2jpdf to use NeverEmbed
+ sed s/ps2pdfwr/ps2jpdf/ < ../modify_ps2pdfwr.patch          | patch -p0 -d lib
+
+ # add NeverEmbedCIDFontList and AlwaysEmbedCIDFontList
+ sed s/ps2pdfwr/ps2jpdf/ < ../modify_ps2pdfwr-20050921.patch | patch -p0 -d lib
+
+ # to handle hyperref's bookmarks, convert EUC into Unicode
+ sed -i.bak \
+  's:\(exec.* -f\) "$infile":cat "$infile" | %p/bin/convert-euc | \1 -:' \
+    lib/ps2jpdf
+
+ # fix PATH of system-perl
+ sed -e 's:/usr/local/bin/perl5:/usr/bin/perl:' < ../convert-euc-20070119.txt \
+  > lib/convert-euc
+
+ #########################   finish making ps2jpdf   #########################
+
+ # Install map-settings
+ mv Resource/Init/cidfmap Resource/Init/cidfmap.sample
+
+ sed -i.bak -e 's|cidfmap.GS|cidfmap.mac|' \
+     ../fontmaps/cidfmap
+ echo '%% Users can override the settings above by writing cidfmap.local.' \
+  >> ../fontmaps/cidfmap
+ echo '(cidfmap.local) .runlibfileifexists' \
+  >> ../fontmaps/cidfmap
+
+ cp  ../fontmaps/cidfmap  Resource/Init
+
+ # Borrowed from http://www.cymric.jp/old/mac/gs-tiger.html
+ cp ../Font/* Resource/Font
+ for file in Resource/Font/*-EUC-* ; do \
+  sed 's|EUC|RKSJ|g' < ${file} > ${file/EUC/RKSJ}; done
+
+ mkdir Resource/CIDFont
+
+ # Delete execute bit from eps files
+ chmod -x          examples/*.eps
+
+ # Correct syntax errors (deletes garbages).
+ mv ../gscjk_ak.ps examples
+<<
+NoSetMAKEFLAGS: true
+SetMAKEFLAGS: -j1
+SetCPPFLAGS:-I%p/lib/fontconfig2/include
+SetLDFLAGS: -L%p/lib/fontconfig2/lib
+SetCFLAGS: -I%p/include
+ConfigureParams: <<
+ --mandir='%p/share/man' --with-x --enable-cups --with-omni \
+ --x-includes=/usr/X11R6/include --x-libraries=/usr/X11R6/lib \
+ --disable-cairo --disable-gtk --with-jpeg2k --disable-compile-inits \
+ --enable-fontconfig --with-drivers=ALL --without-ijs --with-jbig2dec \
+ --with-libpaper --with-jasper --with-system-libtiff \
+ --with-fontpath="`xfontpath basedir`":"`cups-config --datadir`/fonts:/usr/X11R6/lib/X11/fonts:/usr/X11/lib/X11/fonts"
+<<
+CompileScript: <<
+#!/bin/sh -ev
+ export CPATH=%p/include:/usr/X11R6/include
+ ./configure %c
+ make CFLAGS_STANDARD="-O2"
+<<
+InstallScript: <<
+#!/bin/bash -ev
+ export OTFPATH=`xfontpath basedir`/appleotf
+ export CIDPATH=%i/share/ghostscript/%v/Resource/CIDFont
+
+ make install install-doc DESTDIR=%d
+
+ install -m 755 -d                 %i/share/doc
+ ln -s %p/share/ghostscript/%v/doc %i/share/doc/html
+
+ for font in HiraKakuPro{,N}-W{3,6} HiraMaruPro{,N}-W4 HiraMinPro{,N}-W{3,6} HiraKakuStd{,N}-W8
+ do
+   ln -s $OTFPATH/${font}.otf $CIDPATH/${font}
+ done
+
+ install -m 755 -d             %i/share/ghostscript/%v/examples/cjk
+ install -m 644 examples/cjk/* %i/share/ghostscript/%v/examples/cjk
+
+ install -m 755 -d       %i/sbin
+ install -m 755 finkcups %i/sbin
+<<
+DocFiles: LICENSE
+PreRmScript: [ -x %p/sbin/finkcups ] && %p/sbin/finkcups remove
+DescUsage: <<
+[About Font]
+ ESP Ghostscript now supports for applesystemfonts and appleotffonts.
+
+ In order to create PDF file from PS file WITHOUT embedded fonts,
+ run "ps2jpdf" command instead of "ps2pdf*" command.
+ See ps2jpdf for details. It doesn't embed fonts by default. In addition,
+ ps2jpdf converts EUC characters in hyperref's bookmarks into Unicode ones.
+
+[About CUPS]
+ In order to enable ESP GS's CUPS, run the following command manually: 
+  $ sudo %p/sbin/finkcups add
+ This makes symbolic links in system's CUPS directory. Backup files are
+ automatically created if files already exist. When this package
+ (ghostscript-esp) is removed, original files are restored from those backups.
+<<
+DescPackaging: <<
+ A patch to gdevpdfm.c is borrowed from Fink's ghostscript.patch.
+
+ A patch to cidfmap.mac adds entries of Mac's CJK fonts, based on the site:
+ http://oku.edu.mie-u.ac.jp/~okumura/texwiki/?Ghostscript%208.xx#cidfmap-macosx
+
+ A patch to finkcups makes a shell script for handling CUPS files.
+<<
+Maintainer: Todai Fink Team <fink@sodan.ecc.u-tokyo.ac.jp>
+Homepage: http://ghostscript.com/

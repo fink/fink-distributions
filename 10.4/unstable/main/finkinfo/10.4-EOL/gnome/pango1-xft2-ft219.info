@@ -1,0 +1,236 @@
+Package: pango1-xft2-ft219
+# >1.24.5 bad! https://bugzilla.gnome.org/show_bug.cgi?id=593240
+Version: 1.24.5
+Revision: 7
+Description: GTK+ - i18n libs (for freetype >= 2.1.9)
+License: LGPL
+Maintainer: The Gnome Core Team <fink-gnome-core@lists.sourceforge.net>
+
+Depends: <<
+	%N-shlibs (= %v-%r),
+	cairo-shlibs (>= 1.8.8-3),
+	dpkg-base-files,
+	fontconfig2-shlibs (>= 2.8.0-4),
+	freetype219-shlibs (>= 2.3.12-1),
+	glib2-shlibs (>= 2.22.0-1),
+	x11-shlibs,
+	xft2-shlibs (>= 2.1.14-1)
+<<
+BuildDepends: <<
+	cairo (>= 1.8.8-3),
+	fink (>= 0.24.12-1),
+	fink-package-precedence,
+	fontconfig2-dev (>= 2.8.0-4),
+	freetype219 (>= 2.3.12-1),
+	glib2-dev (>= 2.22.0-1),
+	glitz,
+	gtk-doc (>= 1.8-1),
+	libthai-dev (>= 0.1.12-1),
+	pixman (>= 0.16.0-1),
+	pkgconfig (>= 0.23),
+	x11-dev,
+	xft2-dev (>= 2.1.14-1)
+<<
+
+Source: mirror:gnome:sources/pango/1.24/pango-%v.tar.bz2
+Source-MD5: 815416a452e9cccc172fed9862401f37
+PatchFile: %n.patch
+PatchFile-MD5: 9f40cfe38bbfa36fad5d78ed29fdeaa0
+PatchScript: <<
+	#!/bin/bash -ev
+	perl -pi -e 's,(-dynamiclib)( +-single_module)*,$1 -single_module,g' configure
+	# no need to patch aclocal.m4...causes regeneration of autotools
+	#perl -pi -e 's,(-dynamiclib)( +-single_module)*,$1 -single_module,g' aclocal.m4
+	SYSCONFDIR=%p/lib/pango-ft219/etc
+	perl -p -e 'BEGIN{$s=shift} s|\@SYSCONFDIR\@|$s|' $SYSCONFDIR <%{PatchFile} | patch -p1
+	sed -e 's|query|ft219-query|' update-pango-modules > update-pango-ft219-modules
+
+	cat <<'END' >xrender.pc
+prefix=/usr/X11R6
+exec_prefix=/usr/X11R6/bin
+libdir=/usr/X11R6/lib
+includedir=/usr/X11R6/include
+
+Name: Xrender
+Description: X Render Library
+Version: 0.8.4
+Requires: 
+Cflags: -I${includedir}  
+Libs: -L${libdir} -lXrender -lX11 -lXext
+END
+<<
+
+SetCPPFLAGS: -I%p/lib/fontconfig2/include
+SetLDFLAGS: -L%p/lib/fontconfig2/lib -no-undefined -bind_at_load
+SetCFLAGS: -Os
+ConfigureParams: --mandir=%p/share/man --enable-dependency-tracking --includedir=%p/lib/pango-ft219/include --libdir=%p/lib/pango-ft219/lib --sysconfdir=%p/lib/pango-ft219/etc --x-includes=/usr/X11R6/include --x-libraries=/usr/X11R6/lib --disable-explicit-deps --enable-gtk-doc
+CompileScript: <<
+	#!/bin/bash -ev
+	export PKG_CONFIG_PATH=%p/lib/glib-2.0/pkgconfig-strict:%p/lib/fontconfig2/lib/pkgconfig:%p/lib/xft2/lib/pkgconfig
+	if [ `uname -r | cut -d. -f1` = 8 ]; then
+		# apple x11 ships lib but no .pc on 10.4, so hack a local one
+		PKG_CONFIG_PATH=%p/lib/glib-2.0/pkgconfig-strict:$PKG_CONFIG_PATH:`pwd`
+	fi
+	LD_TWOLEVEL_NAMESPACE=1 ac_cv_header_Carbon_Carbon_h=no ./configure %c
+	make
+	fink-package-precedence --prohibit-bdep %n-dev .
+<<
+InfoTest: <<
+	TestDepends: glib2-dev (>= 2.22.0-1), glib2-shlibs (>= 2.22.0-1)
+	TestScript: make check || exit 2
+<<
+
+InstallScript: <<
+	#!/bin/bash -ev
+	make -j1 install DESTDIR=%d
+	SYSCONFDIR=%i/lib/pango-ft219/etc
+	mv %i/bin/pango-querymodules %i/bin/pango-ft219-querymodules
+	mv %i/share/man/man1/pango-querymodules.1 %i/share/man/man1/pango-ft219-querymodules.1
+	install -d -m 755 %i/sbin
+	install -c -m 755 update-pango-ft219-modules %i/sbin/
+	install -d -m 755 $SYSCONFDIR/pango
+
+	# everything is buried in a private hierarchy...
+	# now symlink from the default places
+	# must not symlink dirs...risk of confusing dpkg
+
+	pushd %i/lib/pango-ft219
+
+		# 1. clone actual directory structure
+		# NB: will fail miserably if space in %i or %p
+		# but fink hopelessly can't handle that anyway
+		/usr/bin/find . -type d -print0 | /usr/bin/xargs -0 -n 1 -I" " mkdir -pv "%i/ "
+		# 2. sylink the individual files
+		/usr/bin/find . \( -type f -o -type l \) -print0 | /usr/bin/xargs -0 -n 1 -I" " ln -sv "%p/lib/pango-ft219/ " "%i/ "
+
+		# adjust to emit paths pointing to the default places
+		#must edit actual files...perl-pie replaces symlink
+		#with actual file (!= acting through the symlink)
+		perl -pi -e 's,%p/lib/pango-ft219,%p,g' lib/pkgconfig/*
+		# lib/*.la #Scared of libtool!
+
+
+	popd
+
+	# only keep the main ld files, not all the underlying pieces
+	# plugins, or support data
+	pushd %i
+		rm lib/libpango*-1.0.*.dylib
+		rm -r lib/pango
+		rm -r etc
+	popd
+<<
+DocFiles: AUTHORS COPYING ChangeLog HACKING NEWS README THANKS
+SplitOff: <<
+	Package: %N-shlibs
+	Description: GTK+ - i18n text shared libraries (for freetype >= 2.1.9)
+	Depends: <<
+		cairo-shlibs (>= 1.8.8-3),
+		fontconfig2-shlibs (>= 2.8.0-4),
+		freetype219-shlibs (>= 2.3.12-1),
+		glib2-shlibs (>= 2.22.0-1),
+		libthai-shlibs (>= 0.1.12-1),
+		x11-shlibs,
+		xft2-shlibs (>= 2.1.14-1)
+	<<
+	DocFiles: AUTHORS COPYING ChangeLog HACKING NEWS README THANKS
+	Files: <<
+		lib/pango-ft219/lib/libpango-1.0.*.dylib
+		lib/pango-ft219/lib/libpangocairo-1.0.*.dylib
+		lib/pango-ft219/lib/libpangoft2-1.0.*.dylib
+		lib/pango-ft219/lib/libpangox-1.0.*.dylib
+		lib/pango-ft219/lib/libpangoxft-1.0.*.dylib
+		lib/pango-ft219/lib/pango
+	<<
+	Shlibs: <<
+		%p/lib/pango-ft219/lib/libpango-1.0.0.dylib      2401.0.0 %n (>= 1.24.2-1)
+		%p/lib/pango-ft219/lib/libpangocairo-1.0.0.dylib 2401.0.0 %n (>= 1.24.2-1)
+		%p/lib/pango-ft219/lib/libpangoft2-1.0.0.dylib   2401.0.0 %n (>= 1.24.2-1)
+		%p/lib/pango-ft219/lib/libpangox-1.0.0.dylib     2401.0.0 %n (>= 1.24.2-1)
+		%p/lib/pango-ft219/lib/libpangoxft-1.0.0.dylib   2401.0.0 %n (>= 1.24.2-1)
+	<<
+<<
+SplitOff2: <<
+	Package: %N-dev
+	Description: GTK+ - i18n text development headers and libraries (for freetype >= 2.1.9)
+	Depends: %N (= %v-%r), pkgconfig (>= 0.23)
+	BuildDependsOnly: True
+	Conflicts: pango1-dev, pango1-xft2-dev
+	Replaces: pango1-dev, pango1-xft2-dev
+	DocFiles: AUTHORS COPYING ChangeLog HACKING NEWS README THANKS
+	Files: <<
+		lib/pango-ft219/include
+		lib/pango-ft219/lib
+		include
+		lib/libpango*
+		lib/pkgconfig
+		share/gtk-doc
+	<<
+<<
+
+PostInstScript: <<
+	if [ configure = "$1" ]; then
+		update-pango-ft219-modules
+	fi
+<<
+PostRmScript: <<
+	case "$1" in
+		purge)
+			SYSCONFDIR=%p/lib/pango-ft219/etc
+			rm -f $SYSCONFDIR/pango/pango.modules
+			rmdir $SYSCONFDIR/pango || true
+			;;
+	esac
+<<
+ConfFiles: %p/lib/pango-ft219/etc/pango/pangox.aliases
+
+Homepage: http://www.pango.org
+DescDetail: <<
+System for layout and rendering of internationalized text.
+
+These packages link against fink's freetype219 instead of the freetype
+that comes as part of x11.  They also have cairo support.
+<<
+DescUsage: <<
+Packages which install pango module(s) should call update-pango-ft219-modules
+in their PostInstScript and PostRmScript to update the pango.modules file.
+
+The headers and libraries needed at build time are in
+%p/lib/pango-ft219/{include,lib}, and also (as of 1.22.0-3) in the
+normal places (%p/{include,lib}).
+<<
+DescPort: <<
+	Instead of requiring xslt to build this package, we just manually
+	patch the pregenerated manpage target that is included in the
+	tarball.
+
+	check uses some C++ but it doesn't leak out into the installed
+	package
+<<
+DescPackaging: <<
+	Need to use glib that has errno patches to avoid self-test
+	failure.
+
+	Minimize propagation of InheritedBuildDepends
+
+	Make sure we get cairo-1.8 after pdf got re-enabled in it
+
+	Disable atsui because it gives poor font display sometimes
+	(not doing subpixel rendering?) See:
+	http://bugzilla.gnome.org/show_bug.cgi?id=554740
+
+	Make sure fink-supplied library paths come before x11's.
+
+	Make sure local -I come before global. See:
+	http://bugzilla.gnome.org/show_bug.cgi?id=572529
+
+	Ignoring "uninitialized value in concatenation" during gtkdoc
+	processing. See:
+	http://bugzilla.gnome.org/show_bug.cgi?id=584952
+
+	Whitespace beteen -I and its pathname isn't completely
+	portable.
+
+	Fix for new strictness in gtk-doc-1.17. See:
+	http://bugs.gentoo.org/show_bug.cgi?id=357205
+<<

@@ -1,0 +1,136 @@
+Info2: <<
+Package: lpsolve-scilab
+Version: 5.5.0.12
+Revision: 1
+# rev-up and change next line at every new version of scilab or lpsolve
+Type: scilab (4.1.2), maj (5.5)
+
+BuildDepends: lpsolve%type_raw[maj]-dev (>= %v-1), libxslt-bin, scilab-atlas (>= %type_raw[scilab]-1) | scilab (>= %type_raw[scilab]-1), sed | ssed
+Depends: lpsolve%type_raw[maj]-shlibs (>= %type_raw[maj].0.0-1), scilab-atlas (>= %type_raw[scilab]-1) | scilab (>= %type_raw[scilab]-1)
+
+Source: mirror:sourceforge:lpsolve/lp_solve_%v_scilab_source.tar.gz
+Source-MD5: e885927a3b9ce0d8374bb3d272a84818
+SourceDirectory: lp_solve_%type_raw[maj]
+
+PatchScript: <<
+#!/bin/sh -ev
+  # get rid of long path
+  mv extra/scilab/lpsolve/* .; rm -fR extra
+  # adapt paths
+  perl -pi.bak -e 's,/usr/lib/liblpsolve%type_pkg[maj]\.so,%p/lib/liblpsolve.dylib,' builder.sce
+  perl -pi.bak -e 's,c:/scilab\-2\.7,%p/lib/scilab-%type_raw[scilab],; s,z:/lp_solve_%type_raw[maj],%p/include/lpsolve,; s,\$.*\),%b,' Path.incl
+  # add trailing / to Mpath, and handle the 'loading' of man-pages and macros self, but using formatman(.,"xml")
+  sed -ri -e "s:/[']+\+p,end([']*):&\n  \1p=p+\1'/'\1\1:" -e "s,^(  )',\1&," -e "/genlib|\/man/d" \
+	-e "s:(formatman(\(.*))\):\1,'xml'):" -e "s,-1,0," builder.sce
+  # missing "endfunction"
+  for f in macros/*.sci; do echo endfunction >> $f ; done
+  # buglets in man files
+  sed -ri.bak -e "/dual problem|lp created/,/TP 10/{ /.TP 10/d }" man/lp*.man
+  sed -ri.bak -e '/SH NAME/,+2{ /^$/d }' man/sclpsolve.man
+  # useless files, which may further prevent regeneration of some of them
+  rm macros/*.bin man/*.cat libs/*.dll
+  # add hash.c to the needed sources :
+  sed -ri.bak -e '/^files=/,/^end/{
+	/MSDOS/d
+	/^end/d
+	}' src/builder.sce
+  # and fix hash.c :
+  sed -ri.bak -e 's,malloc.h,stdlib.h,' src/hash.c
+<<
+CompileScript: <<
+#!/bin/sh -ev
+  # next doesn't work.. Try the same with '-f'
+#  scilab -nb -nwni -e "exec builder.sce;exit;"
+  cat > cmd <<-'EOF'
+	exec builder.sce
+	genlib("lpsolvelib",'macros')
+	exit
+	EOF
+  scilab -nb -nwni -f cmd
+  ## first the interface itself, that the builder forgot to make
+  # (the removal of some symbols dosn't save very much, should really take control of the compilations too then)
+  cc -bundle src/lpmex_gateway.o libs/sclpsolve.a %p/lib/liblpsolve.dylib -o liblpmex.so \
+        -bundle_loader %p/lib/scilab-%type_raw[scilab]/bin/scilex -Wl,-x -dead-strip
+  nm -m liblpmex.so|fgrep -v ' (from '|sed -r -e 's,.* ,,'|fgrep hash > unexp_sym
+  cc -bundle src/lpmex_gateway.o libs/sclpsolve.a %p/lib/liblpsolve.dylib -o liblpmex.so \
+        -bundle_loader %p/lib/scilab-%type_raw[scilab]/bin/scilex -Wl,-x -dead-strip \
+	-unexported_symbols_list unexp_sym
+  ## now the help pages
+  rm man/{whatis,*.bak,*.man}
+  # the %%helps(1,:) is needed as first item next to ensure 'man/eng' in the first item of %%helps,
+  # else xmltohtml breaks on the var 'manpath' in gener_index; one cannot put the whole %%helps
+  # as first item since then, if %N is already installed, (rel) links would be made (from %b) to
+  # the installed .htm files instead of to the current dir, and those would be wrong when installed.
+  cat > cmd <<-'EOF'
+	%%helps = [%%helps(1,:); '%b/man','Mixed Integer Linear Programming']
+	xmltohtml('%b/man','Mixed Integer Linear Programming')
+	exit
+	EOF
+  scilab -nb -nw -f cmd
+  rm -f man/*.xml
+#  sed -ri -e 's,%b/man,%p/share/%N/help,' *.htm
+#  mv *.htm man
+  mv man/scilab.htm .
+<<
+InstallScript: <<
+#!/bin/sh -ev
+  mkdir -p %i/share/%N %i/share/doc/%N/examples %i/lib/scilab-%type_raw[scilab]/contrib %i/share/doc/lpsolve%type_raw[maj]-shlibs
+  ln -s ../%n %i/share/doc/lpsolve%type_raw[maj]-shlibs
+  cp -pPR liblpmex.so %i/lib/scilab-%type_raw[scilab]/contrib
+  cp -pPR macros %i/share/%N
+  cp -pPR man %i/share/%N/help
+  cp -p {ex,lpd}*.sce %i/share/doc/%N/examples
+<<
+DocFiles: <<
+  scilab.htm
+  README.txt:README
+<<
+PostInstScript: <<
+## Next point currently broken, commented out :
+## updating scilab's main contents.htm and index.htm
+#  cd %p/share/%N/help
+#  sed -i.bak -e "/^<\/body>/i\
+#$(fgrep lpsolve contents.htm|sed -r -e 's,/dd>,&\\,' -e '$s,\\$,,')" %p/lib/scilab-%type_raw[scilab]/man/eng/contents.htm
+#  sed -i.bak -e "/<\/dl>/i\
+#`fgrep lpsolve index.htm`" %p/lib/scilab-%type_raw[scilab]/man/eng/index.htm
+#  # the .bak above and their removal next is for compatibility with stupid /usr/bin/sed, to avoid a dep on sed|ssed
+#  # (and similarly in PreRmScript)
+#  rm -f {contents,index}.htm %p/lib/scilab-%type_raw[scilab]/man/eng/*.htm.bak
+## This point hopefully not broken :
+# updating scilab's startup file to make lpsolve known
+# add_help_chapter('Mixed Integer Linear Programming','%p/share/%N/help')  ?
+  echo "%%helps = [%%helps; '%p/share/%N/help','Mixed Integer Linear Programming']
+lpsolvelib=lib('%p/share/%N/macros/')
+addinter('%p/lib/scilab-%type_raw[scilab]/contrib/liblpmex.so','lpmex_gateway','sclpsolve')" \
+	>> %p/lib/scilab-%type_raw[scilab]/scilab.star
+<<
+PreRmScript: <<
+  sed -i.bak -e "/lpsolve/d" %p/lib/scilab-%type_raw[scilab]/{scilab.star,man/eng/{contents,index}.htm}
+  rm -f %p/lib/scilab-%type_raw[scilab]/{scilab.star,man/eng/{contents,index}.htm}.bak
+<<
+
+Description: Scilab interface to the mixed LP pkg lpsolve
+DescPort: <<
+hack your way through ...
+<<
+DescPackaging: <<
+- Effort to follow fink's FHS policy
+- Patching scilab.star in the Pre.. and Post scripts is non-kosher: it
+clearly would lead to trouble if scilab is reinstalled w/o afterwards
+reinstalling this pkg. If scilab.star can't be made a conf-file, maybe
+it can be made to source a (system-wide, in %p/etc) conf-file as its
+last command ?
+- Also the removal in the PostInstScript of files installed by dpkg
+is probably not very kosher _ will eg trigger dpkg-checkall..
+But those files are meaningless at that stage...
+_ Installation of doc into scilab's help for the moment broken (changes in scilab).
+<<
+DescUsage: <<
+For doc on lpsolve, install lpsolve-extra and go to %p/share/doc/lpsolve-extra,
+or cf http://lpsolve.sourceforge.net/%type_raw[maj]/
+For doc on this interface from Scilab, cf %p/share/doc/%n/scilab.htm
+<<
+License: LGPL
+HomePage: http://sourceforge.net/projects/lpsolve/
+Maintainer: JF Mertens <jfmertens@users.sourceforge.net>
+<<

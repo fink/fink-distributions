@@ -1,0 +1,486 @@
+Package: svn
+Version: 1.4.6
+Revision: 15
+Description: Subversion - svnserve, tools
+License: BSD
+Maintainer: Christian Schaffner <chris01@users.sourceforge.net>
+
+# Dependencies:
+Depends: %N-shlibs (= %v-%r), daemonic
+BuildDepends: <<
+  fink (>= 0.24.12-1),
+  libapr.0-dev,
+  libaprutil.0-dev,
+  db47-aes | db47,
+  expat1,
+  libxml2 (>= 2.5.10-12),
+  neon26,
+  openldap24-dev,
+  cyrus-sasl2-dev (>= 2.1.15-23),
+  system-openssl-dev,
+  texinfo (>= 4.2-22),
+  libiconv-dev (>= 1.9.1-11),
+  gdbm3,
+  gettext-bin,
+  gettext-tools,
+  libgettext8-dev,
+  io-string-pm,
+  libtool14 (>= 1.5.10-1),
+  autoconf (>= 2.60-1),
+  automake1.11
+<<
+Conflicts: svn-client-ssl, svn-client (<= 0.26.0-2), apache2 (<< 2.0.47-1)
+Replaces: svn-client-ssl, svn-client (<= 1.1.1-11), svn-ssl
+
+# Unpack Phase:
+Source: http://subversion.tigris.org/downloads/subversion-%v.tar.bz2
+Source-MD5: 9c7cf517362c1c9332b610339e5cce6b
+
+# Patch Phase:
+PatchFile: %n-%v.patch
+PatchFile-MD5: 82d93aba22bec8dc95941d4e426af82a
+PatchScript: <<
+ sed -e 's|@FINKBUILD@|%b|g' -e 's|@FINKPREFIX@|%p|g' < %{PatchFile} | patch -p1
+<<
+
+# Compile Phase:
+NoSetLDFLAGS: true
+NoSetLIBS: true
+SetLDFLAGS: -L%p/lib/system-openssl/lib -L%p/lib
+
+ConfigureParams: --libexecdir='${prefix}/lib/svn' --mandir='${prefix}/share/man' --infodir='${prefix}/share/info' --with-neon=%p --with-apr=%p/bin/apr-1-config --with-apr-util=%p/bin/apu-1-config --enable-shared --disable-static --without-apxs --without-apache --disable-mod-activation --without-jdk --disable-javahl --with-jikes=no --disable-swig-bindings --without-swig --without-python --without-perl --without-ruby --with-berkeley-db='db.h:%p/include/db4:%p/lib:db-4.7' --disable-neon-version-check --disable-dependency-tracking LIBS='-ldb-4.7'
+GCC: 4.0
+CompileScript: <<
+#! /bin/sh -ev
+ # recreate configure with libtool 1.5
+ ./autogen.sh
+ # This bit enables stripping unused libs on 10.5 and later.
+ let version=`uname -r | cut -f 1 -d .`
+ if [ $version -ge 9 ]; then
+   export LDFLAGS="$LDFLAGS -Wl,-dead_strip_dylibs"
+ fi
+
+ ### Configure shared
+ export F77=no; ./configure %c
+
+ ### make everything shared
+ make CPPFLAGS='-I$(top_srcdir)/subversion/include -I$(top_builddir)/subversion -I%p/include/neon -I%p/include/apache2 -I%p/lib/system-openssl/include -I%p/include/db4 -I%p/include  -DDARWIN -DSIGPROCMASK_SETS_THREAD_MASK' INCLUDES=''  SVN_APRUTIL_LIBS='%p/lib/libaprutil.la %p/lib/libexpat.la'
+<<
+InfoTest: <<
+ TestConfigureParams: --disable-keychain
+ TestScript: <<
+#! /bin/sh -ev
+
+ ### Run tests over ra_local using BDB:
+ echo "Running tests over ra_local using BDB..."
+ make check CLEANUP=true FS_TYPE=bdb
+ 
+ ### Run tests over ra_local using fs_fs:
+ echo "Running tests over ra_local using fs_fs..."
+ make check CLEANUP=true FS_TYPE=fsfs
+
+ ### Run tests over ra_svn using BDB:
+ echo "Running tests over ra_svn using BDB..."
+ killall -v -u `whoami` svnserve || true
+ ./subversion/svnserve/svnserve -d -r `pwd`/subversion/tests/cmdline
+ sleep 1
+ make check CLEANUP=true BASE_URL=svn://localhost FS_TYPE=bdb
+ killall -v -u `whoami` svnserve || true
+
+ ### Run tests over ra_svn using fs_fs:
+ echo "Running tests over ra_svn using fs_fs..."
+ killall -v -u `whoami` svnserve || true
+ ./subversion/svnserve/svnserve -d -r `pwd`/subversion/tests/cmdline
+ sleep 1
+ make check CLEANUP=true BASE_URL=svn://localhost FS_TYPE=fsfs
+ killall -v -u `whoami` svnserve || true
+
+ ### Run tests over ra_dav using BDB:
+ if [ "`fink list -i -t libapache2-mod-svn | cut -f 3`" != "%v-%r" ]; then
+  echo 
+  echo 'WARNING:' 
+  echo 'libapache2-mod-svn-%v-%r needs to be installed for dav tests to work.' 
+  echo
+ else
+  echo "Running tests over ra_dav using BDB..."
+  /usr/bin/install -d %b/fink/apache2
+  %p/sbin/apache2ctl -f %b/fink/httpd.conf -k start
+  sleep 1
+  make check CLEANUP=true BASE_URL=http://localhost:52080 FS_TYPE=bdb
+  %p/sbin/apache2ctl -f %b/fink/httpd.conf -k stop
+  sleep 3
+ fi
+
+ ### Run tests over ra_dav using fs_fs:
+ if [ "`fink list -i -t libapache2-mod-svn | cut -f 3`" != "%v-%r" ]; then
+  echo 
+  echo 'WARNING:' 
+  echo 'libapache2-mod-svn-%v-%r needs to be installed for dav tests to work.' 
+  echo
+ else
+  echo "Running tests over ra_dav using fs_fs..."
+  /usr/bin/install -d %b/fink/apache2
+  %p/sbin/apache2ctl -f %b/fink/httpd.conf -k start
+  sleep 1
+  make check CLEANUP=true BASE_URL=http://localhost:52080 FS_TYPE=fsfs
+  %p/sbin/apache2ctl -f %b/fink/httpd.conf -k stop
+  sleep 3
+ fi
+<<
+# End InfoTest
+<<
+
+# Install Phase:
+DocFiles: BUGS CHANGES COMMITTERS COPYING HACKING INSTALL README
+InstallScript: <<
+ make -j1 install DESTDIR=%d
+ 
+ ### Install docu and notes
+ /usr/bin/install -d %i/share
+ /usr/bin/install -d %i/share/doc
+ /usr/bin/install -d %i/share/doc/%n
+ cp -r www %i/share/doc/%n
+ cp -r doc/user %i/share/doc/%n
+ cp -r notes %i/share/doc/%n
+ 
+ ### Configure and install examples, tools and notes
+ /usr/bin/install -d %i/share/%n
+ cp -r tools/backup %i/share/%n/tools
+ cp -r tools/bdb %i/share/%n/tools
+ cp -r tools/client-side %i/share/%n/tools
+ cp -r tools/dev %i/share/%n/tools
+ cp -r tools/diff %i/share/%n/tools
+ cp -r tools/examples %i/share/%n/tools
+ cp -r tools/hook-scripts %i/share/%n/tools
+ cp -r tools/test-scripts %i/share/%n/tools
+ cp -r tools/xslt %i/share/%n/tools
+ 
+ cp -r contrib %i/share/%n
+
+ # Remove unneeded .in files
+ find %i/share/%n -name \*.in -print0 | xargs -0 rm -f
+ 
+ # Install default directory for repositories
+ /usr/bin/install -d %i/var
+ /usr/bin/install -m 770 -d %i/var/svn
+ 
+ #No need for dependency_libs in .la files if not building static libs
+ perl -pi -e "s/dependency_libs=.*$/dependency_libs=''/" %i/lib/*.la
+<<
+
+DaemonicName: svnserve
+DaemonicFile: <<
+ <service>
+  <description>Subversion server</description>
+  <message>Subversion server</message>
+
+  <daemon name="svnserve">
+    <executable background="no">/usr/bin/sudo</executable>
+    <parameters>-u www %p/bin/svnserve -d -r %p/var/svn</parameters>
+  </daemon>
+ </service>
+<<
+PostInstScript: <<
+ chown www:admin %p/var/svn
+ daemonic install svnserve
+<<
+PreRmScript: <<
+ if [ $1 != "upgrade" ]; then
+   daemonic remove svnserve
+ fi
+<<
+
+PreInstScript: <<
+ if [ "$1" = upgrade ]; then
+   if dpkg --compare-versions "$2" lt "1.2.0"; then
+     /bin/echo ""
+     /bin/echo "WARNING: Subversion (svn) 1.2.3 or later uses Berkeley DB4.4 (db44)."
+     /bin/echo "If you are upgrading from an earlier version and you are using"
+     /bin/echo "BDB repositories please read"
+     /bin/echo ""
+     /bin/echo "  http://subversion.tigris.org/faq.html#bdb43-upgrade"
+     /bin/echo ""
+     /bin/echo "and"
+     /bin/echo ""
+     /bin/echo "  http://subversion.tigris.org/faq.html#dumpload"
+     /bin/echo ""
+     /bin/echo "To install svnadmin binary linked to an older Berkeley DB version"
+     /bin/echo "please install the fink package 'svnadmin-dbXX', e.g. by typing"
+     /bin/echo ""
+     /bin/echo "  fink install svnadmin-db43"
+     /bin/echo ""
+     /bin/echo "and following the documentation of svnadmin-dbXX, e.g.:"
+     /bin/echo ""
+     /bin/echo "  fink info svnadmin-db43"
+     /bin/echo ""
+     /bin/echo "Do you want to continue [Y/n] ?\c";
+     if read -t 3600 CONTINUECHOICE; then
+       case $CONTINUECHOICE in
+         y|Y|'' ) ;;
+         * ) exit 1 ;;
+       esac
+     else
+       echo "Time-out."
+     fi
+   fi
+ fi
+ exit 0
+<<
+SplitOff: <<
+  Description: Subversion - Development headers and libs
+  Package: %N-dev
+  Depends: %N-shlibs (= %v-%r), fink-obsolete-packages
+  BuildDependsOnly: True
+  Conflicts: svn-client-ssl (<= 0.26.0-2), svn15-dev
+  Replaces: svn-ssl-dev, svn-client-ssl (<= 0.26.0-2), svn15-dev
+  Files: <<
+    include
+    lib/*.la
+    lib/libsvn_client-1.dylib
+    lib/libsvn_delta-1.dylib
+    lib/libsvn_diff-1.dylib
+    lib/libsvn_fs-1.dylib
+    lib/libsvn_fs_base-1.dylib
+    lib/libsvn_fs_fs-1.dylib
+    lib/libsvn_ra-1.dylib
+    lib/libsvn_ra_dav-1.dylib
+    lib/libsvn_ra_local-1.dylib
+    lib/libsvn_ra_svn-1.dylib
+    lib/libsvn_repos-1.dylib
+    lib/libsvn_subr-1.dylib
+    lib/libsvn_wc-1.dylib
+  <<
+  DocFiles: COPYING HACKING
+<<
+SplitOff2: <<
+  Description: Subversion - Shared libraries
+  Package: %N-shlibs
+  Conflicts: svn-client-ssl (<= 0.26.0-2)
+  Replaces: svn-ssl-shlibs, svn-client-ssl (<= 0.26.0-2)
+  Depends: <<
+    libapr.0-shlibs,
+    libaprutil.0-shlibs,
+    db47-aes-shlibs | db47-shlibs,
+    expat1-shlibs,
+    libiconv,
+    libxml2-shlibs (>= 2.6.1-1),
+    neon26-shlibs,
+    openldap24-shlibs,
+    cyrus-sasl2-shlibs,
+    libgettext8-shlibs,
+    fink-obsolete-packages
+  <<
+  Files: <<
+    lib/libsvn_client-1.0.0.0.dylib
+    lib/libsvn_delta-1.0.0.0.dylib
+    lib/libsvn_diff-1.0.0.0.dylib
+    lib/libsvn_fs-1.0.0.0.dylib
+    lib/libsvn_fs_base-1.0.0.0.dylib
+    lib/libsvn_fs_fs-1.0.0.0.dylib
+    lib/libsvn_ra-1.0.0.0.dylib
+    lib/libsvn_ra_dav-1.0.0.0.dylib
+    lib/libsvn_ra_local-1.0.0.0.dylib
+    lib/libsvn_ra_svn-1.0.0.0.dylib
+    lib/libsvn_repos-1.0.0.0.dylib
+    lib/libsvn_subr-1.0.0.0.dylib
+    lib/libsvn_wc-1.0.0.0.dylib
+    lib/libsvn_client-1.0.dylib
+    lib/libsvn_delta-1.0.dylib
+    lib/libsvn_diff-1.0.dylib
+    lib/libsvn_fs-1.0.dylib
+    lib/libsvn_fs_base-1.0.dylib
+    lib/libsvn_fs_fs-1.0.dylib
+    lib/libsvn_ra-1.0.dylib
+    lib/libsvn_ra_dav-1.0.dylib
+    lib/libsvn_ra_local-1.0.dylib
+    lib/libsvn_ra_svn-1.0.dylib
+    lib/libsvn_repos-1.0.dylib
+    lib/libsvn_subr-1.0.dylib
+    lib/libsvn_wc-1.0.dylib
+  <<
+  Shlibs: <<
+    %p/lib/libsvn_client-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_delta-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_diff-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_fs-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_fs_base-1.0.dylib 1.0.0 %n (>= 1.1.0-11)
+    %p/lib/libsvn_fs_fs-1.0.dylib 1.0.0 %n (>= 1.1.0-11)
+    %p/lib/libsvn_ra-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_ra_dav-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_ra_local-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_ra_svn-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_repos-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_subr-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+    %p/lib/libsvn_wc-1.0.dylib 1.0.0 %n (>= 0.30.0-11)
+  <<
+  DocFiles: BUGS CHANGES COMMITTERS COPYING HACKING INSTALL README TRANSLATING
+<<
+SplitOff3: <<
+  Description: Subversion - Client
+  Package: svn-client
+  Depends: %N-shlibs (= %v-%r)
+  Replaces: svn-client-ssl, %N (<= 1.0.2-11)
+  Files: <<
+    bin/svn
+    bin/svnversion
+    bin/svnsync
+    share/locale
+    share/man/man1/svn.1
+    share/man/man1/svnversion.1
+    share/man/man1/svnsync.1
+    share/%N/contrib/client-side
+    share/%N/tools/client-side
+  <<
+  DocFiles: BUGS CHANGES COMMITTERS COPYING HACKING INSTALL README
+  DescUsage: <<
+    This installs the subversion client.
+    Type 'svn help' for usage and look in %p/share/%N/tools and 
+    %p/share/%N/contrib.
+  <<
+  DescPackaging: <<
+    The "Replaces: %N (<= 1.0.2-11)" is needed since the man page of 
+    svnversion was (incorrectly) in the %N package < 1.0.2 and was 
+    moved to the client split off in 1.0.2-11.
+  <<
+<<
+SplitOff8: <<
+ Package: %N-doc
+ Replaces: svn-ssl-doc
+ Description: Subversion - Documentation
+ Files: <<
+  share/doc
+ <<
+ DocFiles: COPYING
+<<
+
+# Additional Info
+DescDetail: <<
+The goal of the Subversion project is to build a version control system that is
+a compelling replacement for CVS in the open source community. 
+	
+Subversion's Features:
+- Most current CVS features
+- Directories, renames, and file meta-data are versioned
+- Commits are truly atomic
+- Branching and tagging are cheap (constant time) operations
+- Client/server protocol sends diffs in both directions
+- Time costs are proportional to change size, not data size
+- Efficient handling of binary files  - it uses a binary diffing algorithm to
+  transmit and store successive revisions
+- Versioning of symbolic links
+- Choice of database or plain-file repository implementations 
+- Apache network server option, with WebDAV/DeltaV  protocol
+- Standalone server option
+
+Subversion is broken into these packages in fink:
+
+- The "svn-client" package installs a command-line client program for using
+  subversion. Type 'fink describe svn-client' to get usage help.
+  
+- The "%N" package installs a stand-alone server 'svnserve'.
+  Install this package if you want to maintain a stand-alone server.
+  Type 'fink describe %N' to get usage help.
+  
+- The "%N-doc" package installs html documentation, and notes from the 
+  developers of svn.
+  
+- The "libapache2-mod-svn" package contains an apache2 module to enable
+  serving a repository via web-dav. Type 'fink describe libapache2-mod-svn'
+  to get usage help.
+
+- The "%N-shlibs" package contains the shared libraries for the other
+  packages. It is installed automatically by fink when needed.
+
+- The "%N-dev" package contains the development headers and libraries.
+  It is installed automatically by fink when needed.
+  
+- The "%N-swig-pm586" package contains the swig perl bindings to call
+  svn from perl. Type 'fink describe %N-swig-pm586' to get usage help.
+ 
+- The "%N-swig-py24" package contains the swig python bindings to call
+  svn from python. Type 'fink describe %N-swig-py24' to get usage help.
+ 
+- The "%N-swig-rb18" package contains the swig ruby bindings to call
+  svn from ruby. Type 'fink describe %N-swig-rb18' to get usage help.
+ 
+- The "%N-javahl" package contains the java bindings to call
+  svn from java. Type 'fink describe %N-javahl' to get usage help.
+ 
+For More Information, check the main Subversion website below and read the book
+at <http://svnbook.red-bean.com/>. Also check out the documentation in
+%p/share/doc/%N. These files are in the "%N-doc" package.
+<<
+DescUsage: <<
+ Type 'svnserve --help', 'man svnserve', 'svnadmin help', or 'man svnadmin'
+ for usage.
+ Some tools (e.g. hook and back-up scripts) and examples are stored in 
+ %p/share/%N/tools and %p/share/%N/contrib
+ 
+ You can start the Subversion server manually using a command similar to
+ '/usr/bin/sudo -u www %p/bin/svnserve -d -r %p/var/svn' or you can 
+ run 'daemonic enable svnserve' as root to create a StartupItem for it.
+ 
+ 'svnserve' is run as user 'www' in order that apache and svnserve can
+ access the same repositories at the same time under '%p/var/svn'
+ 
+ You could install the repositories under the preconfigured directory
+ %p/var/svn
+ which should have the correct permissions. Make sure that all files
+ in the new repository have the correct permissions for svnserve (and apache)
+ to read and write. E.g. run 'chown -R www %p/var/svn/yourrepos' and 
+ 'chmod -R go-rwx %p/var/svn/yourrepos'.
+
+ WARNING:
+ 
+ Subversion (svn) 1.2.3 or later uses Berkeley DB 4.4 (db44).
+ If you are upgrading from an earlier version and you are using
+ BDB repositories please read
+
+  http://subversion.tigris.org/faq.html#bdb43-upgrade
+
+ and
+
+  http://subversion.tigris.org/faq.html#dumpload
+
+ To install svnadmin binary linked to an older Berkeley DB version
+ please install the fink package 'svnadmin-dbXX', e.g. by typing
+
+   fink install svnadmin-db43
+ 
+ and following the documentation of svnadmin-dbXX, e.g.:
+ 
+   fink info svnadmin-db43
+<<
+DescPackaging: <<
+ To run the tests over ra_dav 'libapache2-mod-svn' needs to be already built
+ and installed.
+
+ The "Replaces: %N (<= 1.1.1-11)" is needed since svnlook was 
+ (incorrectly) in the svn-client package < 1.1.1 and was 
+ moved to the main package in 1.1.1-11.
+<<
+DescPort: <<
+Patch needed to stop relinking a .dylib in the install path, 
+but hardcoding the %p/lib path in the link command (i.e. %p) instead 
+of using %i
+
+The patch also fixes problem with dependency_libs in other packages 
+having -ldb-4.1 or libdb-4.1.la in there, so that libtool ignores 
+these.
+
+Tests patched to not fail if run as root.
+
+Many thanks to Peter O'Gorman for the help with the libtool patch.
+
+Many thanks to Ben Reser for fixing the perl bindings. The patch is
+alredy included in the upstream development tree.
+
+The swig java bindings don't work currently. Check out this thread:
+<http://www.contactor.se/~dast/svn/archive-2004-05/index.shtml#1055>
+
+Added 'export F77=no;' to configure in order not to fail if the 
+fort77 package is installed.
+
+svn-config is no longer available as of svn 1.4.
+<<
+Homepage: http://subversion.tigris.org/

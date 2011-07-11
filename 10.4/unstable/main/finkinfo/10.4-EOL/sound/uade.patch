@@ -1,0 +1,467 @@
+diff -Naur uade-0.81/configure uade-0.81-fink/configure
+--- uade-0.81/configure	2004-01-05 22:10:21.000000000 +0000
++++ uade-0.81-fink/configure	2004-02-10 13:35:55.000000000 +0000
+@@ -159,10 +159,11 @@
+ elif test -n "$OS" && test "$OS" = "Darwin"; then
+ 	echo
+ 	echo "Configuring for MacOSX"
+-	SDL=yes
+ 	ARCHFLAGS="$ARCHFLAGS -no-cpp-precomp"
+-	ARCHLIBS="-lpoll"
++	SOUNDLIBS="-framework coreaudio"
+ 	echo "#define HAVE_MACOSX" >> config.h
++	echo '#include "sd-sound-macosx.c"' > src/sd-sound.c
++	echo '#include "sd-sound-macosx.h"' > src/sd-sound.h
+ 	echo '#include "uade-os-unix.c"' > osdep/uade-os.c;
+ 	echo '#include "uade-os-unix.h"' > osdep/uade-os.h;
+ elif test -n "$OS" && test "$OS" = "Linux"; then
+@@ -238,7 +239,7 @@
+     else
+ 	plugin="$HOME/.xmms/Plugins/Input"
+     fi
+-    docdir="$prefix/doc/uade-$VERSION"
++    docdir=$docprefix # obey the command line, motherfucker!
+ fi
+ 
+ if test "$xmmsinputplugindir" != "automatic"; then
+diff -Naur uade-0.81/INSTALL.MacOSX uade-0.81-fink/INSTALL.MacOSX
+--- uade-0.81/INSTALL.MacOSX	2004-01-05 22:10:21.000000000 +0000
++++ uade-0.81-fink/INSTALL.MacOSX	2004-02-11 04:00:05.000000000 +0000
+@@ -1,3 +1,22 @@
++To install just UADE:
++
++1. Install Fink
++2. Try "fink install uade"
++   If that doesn't work, the Fink people haven't approved my patch yet :)
++
++3. Download http://www.kyz.uklinux.net/downloads/uade-0.81-1.patch
++4. Extract UADE archive and install patch.
++   $ tar jxvf uade-0.81.tar.bz2
++   $ cd uade-0.81
++   $ patch -p1 < ../uade-0.81-1.patch
++
++5. Configure, make, install
++   $ ./configure --no-plugin --prefix=@FINKPREFIX@ --interaction \
++       --docprefix=@FINKPREFIX@/share/doc/uade
++   $ make
++   $ sudo make install
++
++
+ Small instructions to compile UADE & XMMS-plugin on MacOS X (Darwin).
+ 
+ Requirements:
+diff -Naur uade-0.81/Makefile.in uade-0.81-fink/Makefile.in
+--- uade-0.81/Makefile.in	2004-01-05 22:10:21.000000000 +0000
++++ uade-0.81-fink/Makefile.in	2004-02-11 04:06:24.000000000 +0000
+@@ -44,27 +44,18 @@
+ 	mkdir -p $(BINDIR)
+ 	mkdir -p $(DATADIR)/players
+ 	mkdir -p $(DOCDIR)
+-	chmod og+rx $(DATADIR)
+-	chmod og+rx $(DATADIR)/players
+ 	cp -f score $(DATADIR)/
+-	chmod og+r $(DATADIR)/score
+ 	cp -f uaerc $(DATADIR)/
+-	chmod og+r $(DATADIR)/uaerc
+-	chmod 644 contrib/default-db/db-content
+ 	cp -f contrib/default-db/db-content $(DATADIR)/
+-	chmod og+r $(DATADIR)/db-content
+ 	cp -f -R players $(DATADIR)/ || true
+-	chmod og+r $(DATADIR)/players/*
+ 	cp -f plugindir/uadelogo3.xpm $(DATADIR)/uadelogo.xpm
+-	chmod og+rx $(DATADIR)/uadelogo.xpm
+ 	cp -f uade $(BINDIR)/
+-	chmod og+rx $(BINDIR)/uade
+ 	cp -f pwrap.pl $(BINDIR)/
+-	chmod og+rx $(BINDIR)/pwrap.pl
+ 	cp -rf uade-docs/* $(DOCDIR)/
+ 	cp -f COPYING INSTALL* README $(DOCDIR)/
+-	chmod -R og+rX $(DOCDIR)
+-	cat contrib/default-db/db-content >> $(DATADIR)/db-content
++	find $(DATADIR) $(DOCDIR) -type d | xargs chmod 755
++	find $(DATADIR) $(DOCDIR) -type f | xargs chmod 644
++	chmod 755 $(BINDIR)/uade $(BINDIR)/pwrap.pl
+ 	@test "{USEXMMS}" = "no" || $(MAKE) plugininstall
+ 
+ miniinstall:	
+diff -Naur uade-0.81/src/sd-sound-macosx.c uade-0.81-fink/src/sd-sound-macosx.c
+--- uade-0.81/src/sd-sound-macosx.c	1970-01-01 01:00:00.000000000 +0100
++++ uade-0.81-fink/src/sd-sound-macosx.c	2004-02-11 03:52:00.000000000 +0000
+@@ -0,0 +1,210 @@
++/* 
++  * UAE - The Un*x Amiga Emulator
++  * 
++  * Support for Mac OS X CoreAudio
++  * 
++  * (C) 2004 Stuart Caie
++  * based on the Fink esound patch by Shawn Hsiao and Masanori Sekino
++  */
++
++#include "../config.h"
++
++#include "sysconfig.h"
++#include "sysdeps.h"
++
++#include "config.h"
++#include "options.h"
++#include "memory.h"
++#include "custom.h"
++#include "gensound.h"
++#include "sd-sound.h"
++#include "uade.h"
++
++#include <CoreAudio/AudioHardware.h>
++#include <pthread.h>
++#include <mach/mach.h>
++#include <mach/thread_policy.h>
++#include <sys/param.h>
++#include <sys/sysctl.h>
++
++/* the UAE soundbuffer */
++uae_u16 *sndbuffer = NULL, *sndbufpt;
++int sndbufsize = 0;
++
++static AudioDeviceID outputDevice;
++static Float32 *outputBuf = NULL;
++static int outputAvail = 0, outputSize = 0;
++static pthread_mutex_t outputMutex;
++static pthread_cond_t outputCond;
++
++
++static OSStatus sound_callback(AudioDeviceID inDevice,
++  const AudioTimeStamp *inNow, const AudioBufferList *inInputData,
++  const AudioTimeStamp *inInputTime, AudioBufferList *outOutputData,
++  const AudioTimeStamp *inOutputTime, void *inClientData)
++{
++  Float32 *buf = outOutputData->mBuffers[0].mData;
++  pthread_mutex_lock(&outputMutex);
++  memcpy(&buf[0], &outputBuf[0], outputAvail * sizeof(Float32));
++  outputAvail = 0;
++  pthread_mutex_unlock(&outputMutex);
++  pthread_cond_signal(&outputCond);
++  return kAudioHardwareNoError;
++}
++
++void finish_sound_buffer (void) {
++  /* convert data to floats and put into buffer */
++  uae_s16 *sndp16 = (uae_s16 *) sndbuffer;
++  uae_s8  *sndp8  = (uae_s8 *)  sndbuffer;
++  Float32 scale = 1.0 / ((currprefs.sound_bits == 16) ? 32768.0 : 128.0);
++  int i;
++
++  pthread_mutex_lock(&outputMutex);
++
++  /* wait for existing buffer data to be consumed */
++  while (outputAvail) pthread_cond_wait(&outputCond, &outputMutex);
++
++  /* refill buffer */
++  if (currprefs.stereo) {
++    if (currprefs.sound_bits == 16) {
++      for (i = 0; i < outputSize; i++) {
++        outputBuf[i] = *sndp16++ * scale;
++      }
++    }
++    else {
++      for (i = 0; i < outputSize; i++) {
++        outputBuf[i] = *sndp8++ * scale;
++      }
++    }
++  }
++  else {
++    if (currprefs.sound_bits == 16) {
++      for (i = 0; i < outputSize; i += 2) {
++	outputBuf[i] = outputBuf[i+1] = *sndp16++ * scale;
++      }
++    }
++    else {
++      for (i = 0; i < outputSize; i += 2) {
++	outputBuf[i] = outputBuf[i+1] = *sndp8++ * scale;
++      }
++    }
++  }
++  outputAvail = outputSize;
++  pthread_mutex_unlock(&outputMutex);
++}
++
++/* dump any sound currently in the buffer */
++void flush_sound (void) {
++  sndbufpt = sndbuffer;
++}
++
++/* initialise sound device */
++int init_sound(void) {
++  struct thread_time_constraint_policy ttcpolicy;
++  int bus_speed, mib[2] = { CTL_HW, HW_BUS_FREQ };
++  AudioValueRange frameRange;
++  UInt32 size, frames;
++
++currprefs.sound_bits = 16;
++currprefs.stereo = 0;
++currprefs.sound_maxbsiz = 4096;
++
++  /* get realtime priority */
++  size = sizeof(bus_speed);
++  sysctl(mib, 2, &bus_speed, &size, NULL, 0);
++  ttcpolicy.period      = bus_speed / 120;
++  ttcpolicy.computation = bus_speed / 2400;
++  ttcpolicy.constraint  = bus_speed / 1200;
++  ttcpolicy.preemptible = 1;
++  thread_policy_set(mach_thread_self(), THREAD_TIME_CONSTRAINT_POLICY,
++		    (int *) &ttcpolicy, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
++
++  /* get default output device ID */
++  size = sizeof(outputDevice);
++  if (AudioHardwareGetProperty(kAudioHardwarePropertyDefaultOutputDevice,
++			       &size, &outputDevice)) return 0;
++
++  /* get minimum and maximum frame sizes */
++  size = sizeof(frameRange);
++  if (AudioDeviceGetProperty(outputDevice, 0, 0,
++                             kAudioDevicePropertyBufferFrameSizeRange,
++                             &size, &frameRange)) return 0;
++
++  /* Assume the user's buffer size preference is already 16 bit stereo, so
++   * divide by 4 to get the number of frames (a frame is one sample, regardless
++   * of bit width or number of channels) */
++  frames = currprefs.sound_maxbsiz / 4;
++  if (frames < (UInt32) frameRange.mMinimum) {
++    frames = (UInt32) frameRange.mMinimum;
++  }
++  if (frames > (UInt32) frameRange.mMaximum) {
++    frames = (UInt32) frameRange.mMaximum;
++  }
++
++  /* set hardware audio buffer size */
++  if (AudioDeviceSetProperty(outputDevice, 0, 0, 0,
++			     kAudioDevicePropertyBufferFrameSize,
++			     sizeof(frames), &frames)) return 0;
++
++  /* outputSize is the number of samples in our conversion buffer. This is
++   * always twice the number of frames, as we are always generating stereo */
++  outputSize = frames * 2;
++
++  if (currprefs.sound_bits == 16) {
++    init_sound_table16();
++    sample_handler = currprefs.stereo ? sample16s_handler : sample16_handler;
++    sndbufsize     = currprefs.stereo ? (frames * 4)      : (frames * 2);
++  }
++  else {
++    init_sound_table8();
++    sample_handler = currprefs.stereo ? sample8s_handler : sample8_handler;
++    sndbufsize     = currprefs.stereo ? (frames * 2)     : (frames * 1);
++  }
++  sample_evtime = (long) (maxhpos * maxvpos * 50) / currprefs.sound_freq;
++
++  if (!(sndbuffer = malloc(sndbufsize))) return 0;
++  if (!(outputBuf = malloc(outputSize * sizeof(Float32)))) return 0;
++  if (pthread_mutex_init(&outputMutex, NULL)) return 0;
++  if (pthread_cond_init(&outputCond, NULL)) return 0;
++  if (AudioDeviceAddIOProc(outputDevice, &sound_callback, NULL)) return 0;
++  if (AudioDeviceStart(outputDevice, &sound_callback)) return 0;
++  sndbufpt = sndbuffer;
++  return sound_available = 1;
++}
++
++/* uninitialise sound device */
++void close_sound() {
++  AudioDeviceStop(outputDevice, &sound_callback);
++  AudioDeviceRemoveIOProc(outputDevice, &sound_callback);
++  pthread_cond_destroy(&outputCond);
++  pthread_mutex_destroy(&outputMutex);
++  free(outputBuf); outputBuf = NULL;
++  free(sndbuffer); sndbuffer = NULL;
++}
++
++/* determine whether sound is available */
++int setup_sound() {
++  AudioStreamBasicDescription format;
++  UInt32 size;
++
++  if (!uade_local_sound) return sound_available = 1;
++
++  /* get default output device ID */
++  size = sizeof(outputDevice);
++  if (AudioHardwareGetProperty(kAudioHardwarePropertyDefaultOutputDevice,
++			       &size, &outputDevice)) return 0;
++
++  /* get properties of default output device default channel stream */
++  size = sizeof(format);
++  if (AudioDeviceGetProperty(outputDevice, 0, 0,
++			     kAudioDevicePropertyStreamFormat,
++			     &size, &format)) return 0;
++
++  /* We need an output device that takes lpcm float samples, and it has to
++   * be at the sample rate of our output already, as we don't resample. */
++  return sound_available =
++    ( (format.mFormatID == kAudioFormatLinearPCM) &&
++      (format.mFormatFlags & kLinearPCMFormatFlagIsFloat) &&
++      (currprefs.sound_freq == ((int) format.mSampleRate)) &&
++      (format.mChannelsPerFrame == 2) );
++}
+diff -Naur uade-0.81/src/sd-sound-macosx.h uade-0.81-fink/src/sd-sound-macosx.h
+--- uade-0.81/src/sd-sound-macosx.h	1970-01-01 01:00:00.000000000 +0100
++++ uade-0.81-fink/src/sd-sound-macosx.h	2004-02-11 03:52:00.000000000 +0000
+@@ -0,0 +1,71 @@
++ /* 
++  * UAE - The Un*x Amiga Emulator
++  * 
++  * Support for Mac OS X CoreAudio
++  * 
++  * (C) 2004 Stuart Caie
++  */
++
++#include <unistd.h>
++#include <errno.h>
++#include "uade.h"
++#include "uade-os.h"
++#include "effects.h"
++
++extern uae_u16 *sndbuffer, *sndbufpt;
++extern int sndbufsize;
++extern void finish_sound_buffer (void);
++
++static __inline__ void check_sound_buffers (void) {
++
++  if ((char *)sndbufpt - (char *)sndbuffer >= sndbufsize) {
++
++    if ((char *)sndbufpt - (char *)sndbuffer > sndbufsize) {
++      fprintf(stderr, "uade: A fug in sound buffer writing. Report this!\n");
++    }
++
++    if (uade_do_panning) {
++      int samples = (((char *) sndbufpt) - ((char *) sndbuffer)) / 4;
++      uade_effect_pan((short *) sndbuffer, samples, uade_pan_value);
++    }
++
++    if (uade_remote_slave) {
++      uade_remote->write((void *) sndbuffer, sndbufsize);
++
++    } else {
++      uade_test_sound_block((void *) sndbuffer, sndbufsize);
++
++      if (uade_swap_output_bytes)
++	uade_swap_buffer_bytes(sndbuffer, sndbufsize);
++
++      if (uade_usingoutpipe) {
++	uade_write_to_outpipe(sndbuffer, sndbufsize);
++
++      } else {
++	finish_sound_buffer();
++      }
++    }
++    sndbufpt = sndbuffer;
++  }
++}
++
++#define PUT_SOUND_BYTE(b) do { \
++  *(uae_u8 *)sndbufpt = b; \
++  sndbufpt = (uae_u16 *)(((uae_u8 *)sndbufpt) + 1); \
++} while (0)
++#define PUT_SOUND_WORD(b) do { \
++  *(uae_u16 *)sndbufpt = b; \
++  sndbufpt = (uae_u16 *)(((uae_u8 *)sndbufpt) + 2); \
++} while (0)
++#define PUT_SOUND_BYTE_LEFT(b) PUT_SOUND_BYTE(b)
++#define PUT_SOUND_WORD_LEFT(b) PUT_SOUND_WORD(b)
++#define PUT_SOUND_BYTE_RIGHT(b) PUT_SOUND_BYTE(b)
++#define PUT_SOUND_WORD_RIGHT(b) PUT_SOUND_WORD(b)
++#define SOUND16_BASE_VAL 0
++#define SOUND8_BASE_VAL 0
++
++#define DEFAULT_SOUND_MAXB (6144 * 4)
++#define DEFAULT_SOUND_MINB (14 * 4)
++#define DEFAULT_SOUND_BITS 16
++#define DEFAULT_SOUND_FREQ 44100
++#define HAVE_STEREO_SUPPORT
+diff -Naur uade-0.81/src/unix-shell.c uade-0.81-fink/src/unix-shell.c
+--- uade-0.81/src/unix-shell.c	2004-01-05 22:10:21.000000000 +0000
++++ uade-0.81-fink/src/unix-shell.c	2004-02-11 03:52:17.000000000 +0000
+@@ -9,7 +9,6 @@
+ #include <ctype.h>
+ #include <glob.h>
+ #include <unistd.h>
+-#include <sys/poll.h>
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ #include <errno.h>
+diff -Naur uade-0.81/src/unix-shell-int.c uade-0.81-fink/src/unix-shell-int.c
+--- uade-0.81/src/unix-shell-int.c	2004-01-05 22:10:21.000000000 +0000
++++ uade-0.81-fink/src/unix-shell-int.c	2004-02-11 03:52:17.000000000 +0000
+@@ -10,7 +10,6 @@
+ #include <dirent.h>
+ #include <glob.h>
+ #include <unistd.h>
+-#include <sys/poll.h>
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ #include <termios.h>
+@@ -23,6 +22,11 @@
+ #include "../osdep/strl.c"
+ #include "unix-shell.h"
+ 
++#include "../config.h"
++#ifndef HAVE_MACOSX
++#include <sys/poll.h>
++#endif
++
+ #include "unix-shell-int.h"
+ 
+ #define INTERACTION_EOL 1
+@@ -383,7 +387,12 @@
+ }
+ 
+ int us_interaction(struct uade_command *cmd, int wait_for) {
++#ifdef HAVE_MACOSX
++  fd_set fds;
++  struct timeval timeout;
++#else
+   struct pollfd ifd;
++#endif
+   int ret, maxlen;
+   int i, j;
+   int bytes_read;
+@@ -413,10 +422,34 @@
+   }
+ 
+   cmd->ret = 0;
+-  memset(&ifd, 0, sizeof(ifd));
+-
+   bytes_read = 0;
+ 
++#ifdef HAVE_MACOSX
++  FD_ZERO(&fds); FD_SET(0, &fds);
++  timeout.tv_sec = timeout.tv_usec = 0;
++  ret = select(1, &fds, NULL, &fds, wait_for ? NULL : &timeout);
++  if (ret > 0) {
++    maxlen = sizeof(cmd_buf) - cmd_buf_size;
++    if (maxlen > 0) {
++      ret = read(0, &cmd_buf[cmd_buf_size], maxlen);
++      if (ret < 0) {
++	if (errno != EINTR) {
++	  goto no_interaction;
++	}
++      } else if (ret == 0) {
++	goto no_interaction;
++      } else {
++	cmd_buf_size += ret;
++	bytes_read = ret;
++      }
++    }
++  } else if (ret < 0) {
++    if (errno != EINTR) {
++      goto no_interaction;
++    }
++  }
++#else
++  memset(&ifd, 0, sizeof(ifd));
+   ifd.fd = 0;
+   ifd.events = POLLIN;
+   ret = poll(&ifd, 1, wait_for ? -1 : 0);
+@@ -442,6 +475,7 @@
+       goto no_interaction;
+     }
+   }
++#endif
+ 
+   for (i = cmd_buf_size - bytes_read; i < cmd_buf_size;) {
+     if (cmd_buf[i] == '\t') {

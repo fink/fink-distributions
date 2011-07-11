@@ -1,0 +1,221 @@
+Info4: <<
+Package: libcurl4%type_pkg[-64bit]
+Version: 7.21.7
+Revision: 1+10.6
+Type: -64bit (boolean)
+Architecture: ( %type_raw[-64bit] = -64bit ) i386
+Distribution: 10.6
+Description: Lib. for transferring files with URL syntax
+DescDetail: <<
+	curl is a command line tool for transferring files with URL syntax,
+	supporting FTP, FTPS, HTTP, HTTPS, SCP, SFTP, TFTP, TELNET, DICT, LDAP,
+	LDAPS and FILE. curl supports SSL certificates, HTTP POST, HTTP PUT,
+	FTP uploading, HTTP form based upload, proxies, cookies, user+password
+	authentication (Basic, Digest, NTLM, Negotiate, kerberos...), file
+	transfer resume, proxy tunneling and a busload of other useful tricks.
+<<
+DescPackaging: <<
+  Now use System's OpenSSL.
+  
+  No longer need --mandir. Private symbols now hidden with gcc 4.
+  Depend on pkgconfig >= 0.20-1
+  per http://wiki.finkproject.org/index.php/Fink:Packaging:pkg-config
+  
+  Removed -I/usr/include -L/usr/lib from krb5-config.
+  
+  No longer build static libs.
+  
+  Packages depending on libcurl4 no longer need to depend on its dependencies,
+  just Depend on libcurl4-shlibs and BuildDepend on libcurl4.
+  
+  Add -dead_strip_dylibs to LDFLAGS on >=10.5 to not link indirect libs.
+  
+  7.19.4 fixes an arbitrary file access vulnerability described at:
+  http://curl.haxx.se/docs/adv_20090303.html
+  
+  7.21.7 fixes inappropriate GSSAPI delegation described at
+  http://curl.haxx.se/docs/adv_20110623.html
+      
+  Versions of curl before 7.11.1-11 were maintained by Max Horn.
+<<
+Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
+Homepage: http://curl.haxx.se/
+License: BSD
+
+Source: http://curl.haxx.se/download/curl-%v.tar.bz2
+#Source: mirror:custom:curl-%v.tar.bz2
+Source-MD5: 5f6d50c4d4ee38c57fe37e3cff75adbd
+
+Depends: %N-shlibs (= %v-%r), pkgconfig (>= 0.20-1), ( %type_raw[-64bit] = -64bit ) 64bit-cpu
+BuildDepends: <<
+	fink (>= 0.26.2),
+	libcares2%type_pkg[-64bit] (>= 1.7.4-1),
+	librtmp%type_pkg[-64bit] (>= 2.3-1),
+	libssh2.1%type_pkg[-64bit] (>= 1.2.7-1),
+	system-openssl-dev
+<<
+Conflicts: curl-dev, curl-ssl-dev, curl-unified-dev, libcurl3, libcurl3-ssl, libcurl3-unified, libcurl4, libcurl4-64bit
+Replaces: curl-dev, curl-ssl-dev, curl-unified-dev, libcurl3, libcurl3-ssl, libcurl3-unified, libcurl4, libcurl4-64bit
+BuildDependsOnly: True
+
+PatchScript: <<
+	#Since we're not building static libs, no need to cascade dep libs.
+	perl -pi -e 's/link_all_deplibs=yes/link_all_deplibs=no/g' configure
+	#Clear out unnecessary junk. Leave -lssl in curl-config as a hack for pycurl.
+	perl -pi -e 's,\@LDFLAGS\@,,g; s,\@LIBCURL_LIBS\@,-lssl,g' curl-config.in
+	perl -pi -e 's,\@LDFLAGS\@,,g; s,\@LIBCURL_LIBS\@,,g' libcurl.pc.in
+	#There is no more libcurl.a so trick curl-config --static-libs into using libcurl.dylib. Fixes building of pycurl.
+	perl -pi -e 's/\@libext\@/dylib/' curl-config.in
+	#There are issues connecting to servers with IPv6 and IPv4 addresses when our
+	#connection only supports IPv4. Default to using IPv4.
+	perl -pi -e 's/^#if ARES_VERSION.*$/#if 0/' lib/hostares.c
+	#Set up to use system's ldap
+	/bin/cp /usr/include/lber*.h .
+	/bin/cp /usr/include/ldap*.h .
+	/bin/cp /usr/lib/libldap.dylib .
+<<
+
+NoSetCPPFLAGS: true
+NoSetLDFLAGS: true
+SetCPPFLAGS: -I%b -I%p/lib/system-openssl/include -I%p/include
+SetLDFLAGS: -L%b -L%p/lib/system-openssl/lib -L%p/%lib
+SetCFLAGS: -Os
+ConfigureParams: <<
+	--with-ssl=%p/lib/system-openssl \
+	--without-gnutls \
+	--with-libssh2=%p \
+	--with-gssapi=/usr \
+	--enable-ldap \
+	--disable-ldaps \
+	--with-ldap-lib=ldap \
+	--with-lber-lib=no \
+	--without-libidn \
+	--with-librtmp \
+	--enable-hidden-symbols \
+	--enable-ares \
+	--with-ca-bundle=%p/etc/ssl/certs/ca-bundle.crt \
+	--disable-static \
+	--libdir='${prefix}/%lib' \
+	--disable-dependency-tracking
+<<
+UseMaxBuildJobs: true
+
+CompileScript: <<
+	#!/bin/bash -ev
+	# This bit enables stripping unused libs on 10.5 and later.
+	let version=`uname -r | cut -f 1 -d .`
+	if [ $version -ge 9 ]; then
+		export LDFLAGS="$LDFLAGS -Wl,-dead_strip_dylibs"
+	fi
+	
+	if [ "%type_raw[-64bit]" == "-64bit" ]; then
+		export CC="gcc -m64"
+	fi
+	%{default_script}
+<<
+
+InstallScript: <<
+	perl -pi -e 's/-g -Os -Wl,-search_paths_first //g; s/-dynamic //g' curl-config libcurl.pc
+	make install DESTDIR=%d
+	#No need for dependency_libs in .la files if not building static libs
+	perl -pi -e "s/dependency_libs=.*$/dependency_libs=''/" %i/%lib/*.la
+	/bin/mkdir -p %I/share/doc/%N
+	/bin/cp docs/*.html %I/share/doc/%N
+	/bin/mkdir -p %I/share/doc/%N/libcurl
+	/bin/cp docs/libcurl/*.html %I/share/doc/%N/libcurl
+	/bin/mkdir -p %I/share/aclocal
+	/bin/cp docs/libcurl/libcurl.m4 %I/share/aclocal
+<<
+DocFiles: CHANGES COPYING README RELEASE-NOTES
+
+SplitOff: <<
+	Package: %N-shlibs
+  
+	Depends: <<
+		( %type_raw[-64bit] = -64bit ) 64bit-cpu,
+		ca-bundle,
+		libcares2%type_pkg[-64bit]-shlibs (>= 1.7.4-1),
+		librtmp%type_pkg[-64bit]-shlibs (>= 2.3-1),
+		libssh2.1%type_pkg[-64bit]-shlibs (>= 1.2.7-1)
+	<<
+    
+	Files: %lib/libcurl.4.*dylib
+	Shlibs: %p/%lib/libcurl.4.dylib 7.0.0 %n (>= 7.20.0-1) %type_num[-64bit]
+	DocFiles: CHANGES COPYING README RELEASE-NOTES
+<<
+
+SplitOff2: <<
+  Package: curl%type_pkg[-64bit]
+  Description: Tool for transferring files with URL syntax
+  DescUsage: For additional documentation see the %N package.
+  
+  Depends: %N-shlibs (= %v-%r), ( %type_raw[-64bit] = -64bit ) 64bit-cpu
+  Conflicts: curl, curl-64bit
+  Replaces: curl-ssl (<< %v-%r), curl-unified (<< %v-%r), curl, curl-64bit
+  
+  Files: bin/curl share/man/man1/curl.1
+  DocFiles: CHANGES COPYING README RELEASE-NOTES docs/BINDINGS docs/BUGS docs/CONTRIBUTE docs/FAQ docs/FEATURES docs/HISTORY docs/KNOWN_BUGS docs/INTERNALS docs/MANUAL docs/RESOURCES docs/THANKS docs/TODO docs/TheArtOfHttpScripting docs/LICENSE-MIXING docs/SSLCERTS docs/VERSIONS
+<<
+
+InfoTest: <<
+  TestDepends: stunnel4
+  TestScript: <<
+    #!/bin/bash -ev
+    
+    #These tests fail if you use OpenDNS or your ISP sucks
+    #and uses wildcard dns lookups.
+    echo '20' >>tests/data/DISABLED
+    echo '507' >>tests/data/DISABLED
+    echo '534' >>tests/data/DISABLED
+    
+    #This test fails when run as root.
+	echo '1001' >>tests/data/DISABLED
+	echo '1112' >>tests/data/DISABLED
+	
+	#This test seems to hang.
+	echo '283' >>tests/data/DISABLED
+	echo '525' >>tests/data/DISABLED
+	echo '1007' >>tests/data/DISABLED
+	echo '1099' >>tests/data/DISABLED
+	echo '2002' >>tests/data/DISABLED
+	echo '2003' >>tests/data/DISABLED
+
+	#The SSH tests will also be skipped as root but this isn't fatal.
+	
+    #Build and run the tests. Disable use of valgrind because it takes a LONG time.
+    make test-full TEST_F="-a -p -r -n" || exit 2
+  <<
+<<
+
+#Mirrors taken from http://curl.haxx.se/metalink.cgi?curl=tar.bz2 on 20081128
+CustomMirror: <<
+	eur-at: http://gd.tuwien.ac.at/utils/archivers/curl/
+	eur-at: ftp://gd.tuwien.ac.at/utils/archivers/curl/
+	eur-be: ftp://ftp.spegulo.be/pub/curl/
+	sam-cl: http://curl.freeby.pctools.cl/download/
+	eur-fr: ftp://miroir-francais.fr/pub/curl/download/
+	eur-de: http://curl.de-mirror.de/download/
+	eur-de: http://www.mirrorspace.org/curl/
+	eur-de: http://curl.online-mirror.de/download/
+	eur-de: http://curl.linux-mirror.org/download/
+	eur-de: http://dl.ambiweb.de/mirrors/curl.haxx.se/
+	eur-de: http://curl.oslevel.de/download/
+	eur-de: http://curl.mirror.at.stealer.net/download/
+	eur-de: http://curl.basemirror.de/download/
+	eur-de: http://curl.very-clever.com/download/
+	asi-hk: http://www.execve.net/curl/
+	eur-il: http://curl.cheap.co.il/download/
+	eur-nl: http://curl.nedmirror.nl/download/
+	eur-nl: http://curl.osmirror.nl/download/
+	eur-nl: http://curl.xxtracker.org/download/
+	eur-pl: http://curl.piotrkosoft.net/download/
+	eur-se: http://curl.haxx.se/download/
+	eur-se: http://cool.haxx.se/curl/
+	eur-se: http://curl2.haxx.se/download/
+	eur-se: ftp://ftp.sunet.se/pub/www/utilities/curl/
+	asi-tw: http://curl.cs.pu.edu.tw/download/
+	nam-us: http://curl.download.nextag.com/download/
+	nam-us: http://curl.hoxt.com/download/
+	eur-uk: http://curl.smudge-it.co.uk/download/
+<<
+<<

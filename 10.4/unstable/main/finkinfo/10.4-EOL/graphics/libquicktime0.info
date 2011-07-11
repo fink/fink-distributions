@@ -1,0 +1,208 @@
+Package: libquicktime0
+Version: 0.9.10
+Revision: 15
+###
+Source: mirror:sourceforge:libquicktime/libquicktime-%v.tar.gz
+Source-MD5: 5ff99f1a7b22f9e1ed85240f736fd14c
+###
+BuildDepends: <<
+	pkgconfig (>= 0.23),
+	atk1 (>= 1.24.0-1),
+	cairo (>= 1.8-1),
+	expat1,
+	fontconfig2-dev (>= 2.4.1-1),
+	freetype219 (>= 2.3.7-7),
+	gettext-bin,
+	gettext-tools,
+	glib2-dev (>= 2.18.0-1),
+	gtk+2-dev (>= 2.14.0-1), 
+	libgettext3-dev, 
+	libiconv-dev, 
+	pango1-xft2-ft219-dev (>= 1.22.0-4),
+	pixman (>= 0.12.0-1),
+	x11-dev, 
+	xft2-dev,
+	lame-dev, 
+	libavcodec1-dev (>= 0.4.9-pre1-1), 
+	libdv4, 
+	libjpeg, 
+	libogg, 
+	libpng3, 
+	libxml2 (>= 2.6.30-1),
+	libvorbis0, 
+	ffmpeg-dev, 
+	libfaad1-dev, 
+	libmp4v21-dev, 
+	faac-dev,
+	libgnugetopt,
+	libx264-dev 
+<<
+
+Depends: %N-shlibs (= %v-%r), gtk+2 (>= 2.12.0-1), libavcodec1-shlibs
+BuildDependsOnly: True
+Conflicts: libquicktime1
+Replaces: libquicktime0-bin (<= 0.9.4-1013), libquicktime0-shlibs (<< 0.9.4-1013), libquicktime1
+###
+PatchScript: <<
+  ### Fix for vorbis, needs ogg too
+#  perl -pi -e 's, -lvorbis , -lvorbis -logg ,g' configure
+
+  ### Fix libjpeg, libpng
+#  perl -pi -e 's,-ljpeg(.*),\"-L%p/lib -ljpeg$1\",g' configure
+  perl -pi -e 's,-lpng(.*),-L%p/lib -lpng$1,g' configure
+
+  ### pin to version in fink libavcodec1-dev package, and remove unsupported codec stuff
+  perl -pi -e 's,AVCODEC_BUILD="3277056",AVCODEC_BUILD="4718",g' configure
+  perl -pi -e 'undef $/; s,({\n.*id: CODEC_ID_QDM2),#if 0\n\1,' plugins/ffmpeg/lqt_ffmpeg.c
+  perl -pi -e 's,#if 1 (/\* Doesn),#endif\n#if 0 \1,' plugins/ffmpeg/lqt_ffmpeg.c
+  perl -pi -e 's,^(.*if\(codec->decoder->id == CODEC_ID_ALAC\)),#if 0\n\1,' plugins/ffmpeg/audio.c
+  perl -pi -e 's,(sizeof\(AVCodecContext\)\);),\1\n#endif,' plugins/ffmpeg/audio.c
+  perl -pi -e 's,(codec->avctx->time_base),//\1,' plugins/ffmpeg/video.c
+  perl -pi -e 's,(  PARAM_FLAG2),//\1,' plugins/ffmpeg/params.c
+  perl -pi -e 's,(  PARAM_FLOAT\("ff_border_masking),//\1,' plugins/ffmpeg/params.c
+  perl -pi -e 's,(  PARAM_QP2LAMBDA\("ff_mb),//\1,' plugins/ffmpeg/params.c
+  perl -pi -e 's,(  PARAM_INT\("ff_me_penalty_compensation),//\1,' plugins/ffmpeg/params.c
+  perl -pi -e 's,(  PARAM_INT\("ff_bidir_refine),//\1,' plugins/ffmpeg/params.c
+  perl -pi -e 's,(  PARAM_INT\("ff_brd_scale),//\1,' plugins/ffmpeg/params.c
+  perl -pi -e 's,(  PARAM_INT\("ff_scenechange_factor),//\1,' plugins/ffmpeg/params.c
+
+  ### fix for x264 :
+  perl -pi -e 's,i_rf_constant,f_rf_constant,g' plugins/x264/x264.c
+
+  # package is pretty old, needs legacy-only/deprecated gtk stuff
+  perl -pi -e 's/-DGTK_DISABLE_DEPRECATED//' configure
+<<
+###
+NoSetLDFLAGS: true
+SetLDFLAGS: -bind_at_load -dylib_file /System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib:/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib
+SetLIBS: -L%p/lib
+SetCPPFLAGS: -DLIBOSS_INTERNAL -I/usr/X11R6/include
+###
+ConfigureParams: --prefix=%p --enable-gpl --with-avcodec=%p --with-vorbis=%p --with-pic --enable-static --enable-shared --mandir=%p/share/man --with-dv --disable-dependency-tracking --x-libraries=/usr/X11R6/lib --x-includes=/usr/X11R6/include
+###
+InstallScript: <<
+    #!/bin/sh -ev
+    make -j1 install DESTDIR=%d
+#    rm -rf %i/lib/libquicktime.a
+#    rm -rf %i/lib/libquicktime.la
+# add quicktime compatibility headers (include/libquicktime/quicktime is now include/lqt)
+    for header in colormodels lqt lqt_codecapi lqt_version quicktime libdv lqt1394_config lqt_codecinfo qtprivate; do
+	test -d %i/include/libquicktime/quicktime || mkdir -p %i/include/libquicktime/quicktime
+	file="%i/include/libquicktime/quicktime/${header}.h"
+	touch ${file}
+	echo "#ifndef QUICKTIME_COMPAT_`echo ${header} | sed 'y/abcdefghijklmnopqrstuvwxyz/ABCDEFGHIJKLMNOPQRSTUVWXYZ/'`_H" >> $file
+	echo "#define QUICKTIME_COMPAT_`echo ${header} | sed 'y/abcdefghijklmnopqrstuvwxyz/ABCDEFGHIJKLMNOPQRSTUVWXYZ/'`_H" >> $file
+	echo " " >> $file
+	echo "#warning libquicktime header files have moved to %p/include/lqt/ - please adjust your include statements." >> $file
+	echo " " >> $file
+	echo "#include <lqt/${header}.h>" >> $file
+	echo " " >> $file
+	echo "#endif" >> $file
+    done
+    readme="%i/include/libquicktime/README"
+    touch "$readme"
+    echo "This separate 'libquicktime' directory is here so that the old" >> "$readme"
+    echo "libquicktime headers in the 'quicktime' directory do not conflict with" >> "$readme"
+    echo "the Apple QuickTime headers.  Because Apples almost always use a" >> "$readme"
+    echo "case-insensitive file system, QuickTime/QuickTime.h is the same as" >> "$readme"
+    echo "quicktime/quicktime.h.  Since Apple QuickTime and libquicktime are no" >> "$readme"
+    echo "longer compatible APIs, this situation is bad and should be avoided." >> "$readme"
+    echo "Hence this kludge." >> "$readme"
+<<
+###
+DocFiles: README COPYING
+License: LGPL
+###
+Description: Library for working with Quicktime files
+###
+SplitOff: <<
+    Package: %N-shlibs
+    Description: Shared libraries for libquicktime
+    Depends: faac-shlibs, lame-shlibs, libdv4-shlibs, libfaad1-shlibs, libgnugetopt-shlibs, libiconv, libjpeg-shlibs, libogg-shlibs, libpng3-shlibs, libvorbis0-shlibs
+    Files: <<
+      lib/libquicktime.0.0.0.dylib
+      lib/libquicktime.0.dylib
+      lib/libquicktime/lqt_audiocodec.so
+      lib/libquicktime/lqt_dv.so
+      lib/libquicktime/lqt_faac.so
+      lib/libquicktime/lqt_faad2.so
+      lib/libquicktime/lqt_lame.so
+      lib/libquicktime/lqt_mjpeg.so
+      lib/libquicktime/lqt_png.so
+      lib/libquicktime/lqt_rtjpeg.so
+      lib/libquicktime/lqt_videocodec.so
+      lib/libquicktime/lqt_vorbis.so
+    <<
+    Shlibs: %p/lib/libquicktime.0.dylib 1.0.0 %n (>= 0.9.2pre1-2)
+    DocFiles: README COPYING AUTHORS ChangeLog NEWS TODO
+<<
+SplitOff2: <<    
+    Package: %N-bin
+    Depends: audiofile-shlibs, esound-shlibs, gtk+2-shlibs (>= 2.14.0-1), libavcodec1-shlibs (>= 0.4.9-pre1-1), liboss1-shlibs, %N-shlibs (>= %v-%r), x11
+    Conflicts: libquicktime1-bin
+    Replaces: libquicktime0 (<< 0.9.4-1), libquicktime1-bin
+    Description: Various commands using libquicktime
+    Files: <<
+        bin/lqt_transcode
+        bin/lqtplay
+        bin/qtdechunk
+        bin/qtdump
+        bin/qtinfo
+        bin/qtrechunk
+        bin/qtstreamize
+        bin/qtyuv4toyuv
+        share/man
+    <<
+    DocFiles: README COPYING
+<<
+###
+DescDetail: <<
+libquicktime is an enhanced version of quicktime4linux with plug-in 
+support for dealing with various audio/video media types.
+
+The goal is to have a simple and stable library, which can create reasonable
+compatible Quicktime and AVI files either uncompressed (for high-end or
+production applications) or with decent compression codecs for end user
+applications. Today, we write Quicktime files with a wide range of
+uncompressed codecs for professional use. Together with sample accurate
+seeking, this makes libquicktime the library of choice for editing
+applications.
+
+Find more info at http://libquicktime.sourceforge.net/ 
+<<
+DescPort: <<
+Sorted out various flags and stuff to make 'configure' compatible with 
+MacOS 10.1 compiler and fink libs + includes.  Also libjpeg/libpng 
+tests were not working... but now ok.
+
+Some of the filenames in the tarball are 'case sensitive' in that there 
+are two different files whose names differ only in case (RTjpeg.c and 
+rtjpeg.c also RTjpeg.h and rtjpeg.h) these have  been renamed, the 
+Makefile.in changed and #includes fixed.  Argh!
+
+Oh no. There's a framework called Quicktime - 
+Other packages' #include <quicktime/quicktime.h> picks up the one from
+libquicktime0 instead, so we bury ours in a libquicktime0 subdir of
+%p/include. Our lqt-config passes the needed -I flag to find it, but
+it's invisible otherwise.
+
+The plugin loading needs to use dlsym_auto_underscore instead of dlsym.  
+For some reason the programs using the library need to run as root 
+- suspect it's the plugin loading.
+
+Don't compile utils/lqtplay.c as it uses sys/soundcard.h 
+... one day might might fix it.
+
+...why did I choose this as my first! - needs splitoffs - back to the 
+manuals again... done!
+
+Lots of fun with libtool!  ltmain.sh (~1.4.?) has various known 
+problems patched but had to disable relinking completely - but why 
+was it doing it?  Seems fine without it - which is probably what you
+would expect.
+
+No need for static libs or libtool stuff for runtime plugin modules
+<<
+###
+Homepage: http://libquicktime.sourceforge.net/
+Maintainer: Hans-Christoph Steiner <hans@at.or.at>

@@ -1,0 +1,204 @@
+Package: noip
+Version: 1.6
+Revision: 4
+###
+BuildDepends: fink (>= 0.24.12)
+Depends: daemonic
+###
+Source: http://www.no-ip.com/client/linux/%n_updater_v%v.tar.gz
+Source-MD5: 6503e2e7d8ea35c304744a318b400a09 
+###
+PatchFile: %n.patch
+PatchFile-MD5: 4a57362e933c78b54a3acdf88179ea6e
+PatchScript: <<
+  sed -e s,@FINKPREFIX@,%p, %{PatchFile} | patch -p1
+<<
+CompileScript: make
+###
+InstallScript: <<
+  mkdir -p %i/bin
+  cp noip %i/bin
+  mkdir -p %i/etc
+  cp no-ip.conf.sample %i/etc/no-ip.conf
+  chmod 600 %i/etc/no-ip.conf
+<<
+###
+PostInstScript: <<
+#
+# configuration file builder script for no-ip
+#
+CONFIG=%p/etc/no-ip.conf
+if [ -e $CONFIG ]
+then
+    EXISTS=Y
+else
+    EXISTS=N
+fi
+#
+# get answers
+#
+echo "Greetings!"
+echo
+echo "The no-ip dynamic DNS system requires a configuration file."
+echo "The answers to the next five questions will build one."
+echo
+echo "What is your email address for no-ip.com? (name@email.addr)"
+/bin/echo  "> \c"
+read LOGIN
+echo "What is the password for the login account? (password)"
+/bin/echo  "> \c"
+read PASSWORD
+#
+GRP=foo
+while [ "$GRP" = "foo" ] 
+do
+    echo "Are you using a groupname instead of a host.domain.name? (Y/N)"
+    echo "Answer 'N' if you do not understand the question."
+    /bin/echo  "> \c"
+    read GRP
+    case $GRP in
+        Y*)     GRP=Y;;
+        y*)     GRP=Y;;
+        N*)     GRP=N;;
+        n*)     GRP=N;;
+        *)      GRP=foo
+                echo "===> Try again!";;
+    esac
+done
+#
+hostdom="BoGuS"
+if [ "$GRP" = "Y" ] 
+then
+    echo "What is the groupname you are using? (mygroup)"
+    /bin/echo  "> \c"
+    read HOST
+else
+    while [ "$hostdom" = "BoGuS" ]
+    do
+        echo "What is the host.domain.name you are using? (host.no-ip.com)"
+        /bin/echo  "> \c"
+        read FQDN
+        HOST=`echo $FQDN | awk -F. '{print $1}'` 
+        FOO2=`echo $FQDN | awk -F. '{print $2}'` 
+        FOO3=`echo $FQDN | awk -F. '{print $3}'` 
+        if [ "$HOST" = "" -o "$FOO2" = "" ]
+        then
+            echo "===> host.domain.name must have at least two fields divided by dots."
+        else
+            hostdom="ok"
+        fi
+        if [ "$FOO3" = "" ] 
+        then
+            DOMAIN=$HOST.$FOO2 
+            HOST="-"
+        else
+            DOMAIN=$FOO2.$FOO3 
+        fi
+    done
+fi
+#
+NAT=foo
+while [ $NAT = "foo" ]
+do
+    echo "Do you have a router which uses NAT/masquerading? (Y/N)" 
+    /bin/echo  "> \c" 
+    read NAT
+    case $NAT in
+        Y*)     NAT=Y;;
+        y*)     NAT=Y;;
+        N*)     NAT=N;;
+        n*)     NAT=N;;
+        *)      NAT=foo
+                echo "===> Try again!";;
+    esac
+done
+#
+if [ "$NAT" = "N" ] 
+then
+    devs=`ifconfig -a | egrep "^\w*:" | awk -F: '{print $1}' | tr -d ' ' | tr '\n' ' '`
+    DEV=foo
+    while [ "$DEV" = "foo" ]
+    do
+        echo "Which device is your net connection? (one of: $devs)"
+        /bin/echo  "> \c"
+        read DEVICE
+        for i in $devs;do
+            if [ "$DEVICE" = "$i" ] 
+            then
+                DEV=$i
+            fi
+        done
+        if [ "$DEV" = "foo" ]
+        then
+            echo "===> Try again!"
+        fi
+    done
+else
+    DEV="unused"
+fi
+#
+# make config file 
+#
+echo "LOGIN    = $LOGIN"                >$CONFIG
+echo "PASSWORD = $PASSWORD"     >>$CONFIG
+if [ "$GRP" = "Y" ] 
+then
+    echo "GROUP    = $HOST"     >>$CONFIG
+    echo "HOSTNAME = ;"         >>$CONFIG
+    echo "DOMAIN   = ;"         >>$CONFIG
+else
+    echo "GROUP    = ;"         >>$CONFIG
+    echo "HOSTNAME = $HOST"     >>$CONFIG
+    echo "DOMAIN   = $DOMAIN"   >>$CONFIG
+fi
+echo "DAEMON   = Y"             >>$CONFIG
+echo "PROXY    = Y"             >>$CONFIG
+echo "INTERVAL = 10"            >>$CONFIG
+echo "NAT      = $NAT"          >>$CONFIG
+echo "DEVICE   = $DEV"          >>$CONFIG
+#
+if [ "$EXISTS" = "Y" ] 
+then
+    echo "Configuration file [$CONFIG] updated." 
+else
+    echo "Configuration file [$CONFIG] created." 
+fi
+  # update init script if necessary
+  daemonic update %n
+exit 0
+<<
+###
+PreRmScript: <<
+  # clean up
+  [ -f %p/var/run/%n.pid ] && kill `cat %p/var/run/%n.pid`
+  if [ $1 != "upgrade" ]; then
+    daemonic remove %n
+  fi
+<<
+DaemonicName: noip
+DaemonicFile: <<
+  <service>
+    <description>No-IP.com Updater Daemon</description>
+    <message>No-IP.com Updater Daemon</message>
+
+    <daemon name="noip">
+      <executable background="yes">%p/bin/noip</executable>
+      <!-- the daemon will background itself, but may take a while
+           to start up to the point where it does so -->
+      <pidfile>%p/var/run/noip.pid</pidfile>
+    </daemon>
+
+  </service>
+<<
+###
+DocFiles: COPYING README.FIRST
+ConfFiles: %p/etc/no-ip.conf
+###
+Description: Client for the no-ip.com dynamic DNS service
+DescDetail: <<
+Client for the no-ip.com dynamic DNS service
+<<
+###
+License: GPL
+Maintainer: Justin F. Hallett <thesin@users.sourceforge.net>
+Homepage: http://www.no-ip.com/

@@ -1,0 +1,197 @@
+diff -Naur yc-4.0.13.orig/yc.el yc-4.0.13/yc.el
+--- yc-4.0.13.orig/yc.el	2007-09-22 14:18:56.000000000 +0900
++++ yc-4.0.13/yc.el	2007-09-25 14:43:24.000000000 +0900
+@@ -1708,10 +1708,20 @@
+ (defvar yc-rc-bushu-dic-list nil)
+ (defvar yc-rc-user-dic-list nil)
+ 
+-(defun yc-rc-load (files)
+-  (if (not (listp files)) (setq files (list files)))
+-  (let (romkana-table stay-after-validate n-henkan-for-ichiran)
+-    (while (car files)
++;; Fink canna 3.7p3-5 compatibility
++(defun yc-rc-load (files &optional noerror)
++  (if (listp files) ;; yc mode
++      (yc-load-internal files)
++    ;; canna compatible mode
++    (cond ((yc-load-internal (list files)) t)
++	  (noerror nil)
++	  (t (error "load: file not found")))))
++
++(defun yc-load-internal (files)
++  (let (romkana-table stay-after-validate n-henkan-for-ichiran
++	loaded-files
++	(canna-directory (get-yc-canna-lib-path)))
++    (while files
+       (when (and (file-exists-p (expand-file-name (car files)))
+ 		 (file-readable-p (expand-file-name (car files))))
+ 	(setq yc-rc-dic-list nil
+@@ -1726,7 +1736,9 @@
+ 				     (read-from-string buffer (cdr expr))
+ 				   (error nil))))
+ 	    (yc-eval-sexp (car expr)))))
++      (setq loaded-files (cons (car files) loaded-files))
+       (setq files (cdr files)))
++    (setq loaded-files (nreverse loaded-files))
+     (if romkana-table
+ 	(setq yc-rH-conv-dic (yc-search-file-first-in-path
+ 			      romkana-table (list "." (getenv "HOME")
+@@ -1736,7 +1748,8 @@
+     (setq yc-dic-list (or (reverse yc-rc-dic-list) yc-dic-list)
+ 	  yc-bushu-dic-list (or yc-rc-bushu-dic-list yc-bushu-dic-list)
+ 	  yc-user-dic-list (or yc-rc-user-dic-list yc-user-dic-list))
+-    (yc-var-unintern)))
++    (yc-var-unintern)
++    loaded-files))
+ 
+ (defun yc-eval-sexp (sexp)
+   (eval (print (yc-sexp-expand t sexp))))
+diff -Naur yc-4.0.13.orig/fink/yc-install yc-4.0.13/fink/yc-install
+--- yc-4.0.13.orig/fink/yc-install	1970-01-01 00:00:00.000000000 +0000
++++ yc-4.0.13/fink/yc-install	2005-03-16 10:57:53.000000000 +0000
+@@ -0,0 +1,72 @@
++#! /bin/sh -e
++#  @PREFIX@/lib/emacsen-common/packages/install/yc
++# [ This particular script hasn't been tested, so be careful. ]
++
++set -e
++
++FLAVOR=$1
++PACKAGE=yc
++
++if [ "X${FLAVOR}" = "X" ]; then
++    echo Need argument to determin FLAVOR of emacs;
++    exit 1
++fi
++
++if [ "X${PACKAGE}" = "X" ]; then
++    echo Internal error: need package name;
++    exit 1;
++fi
++
++## Checking MULE supported XEmacs. (for XEmacs/MULE is needed elisp)
++if [ ${FLAVOR} = "xemacs20" -o ${FLAVOR} = "xemacs21" ]; then
++CHECKMULE=`${FLAVOR} -batch -vanilla -eval "(if (featurep 'mule)(message \"MULE\"))" 2>&1 `
++  if [ "${CHECKMULE}" != "MULE" ]; then
++		echo
++		echo "install/${PACKAGE}: Ignoring ${FLAVOR}."
++		echo "${PACKAGE} needs MULE supported XEmacs."
++		exit
++	fi
++fi
++
++ELDIR=@PREFIX@/share/emacs/site-lisp/${PACKAGE}
++ELCDIR=@PREFIX@/share/${FLAVOR}/site-lisp/${PACKAGE}
++
++#STARTDIR=@PREFIX@/etc/${FLAVOR}/site-start.d
++#STARTFILE="${PACKAGE}-init.el";
++
++COMPILE="-batch -q -f batch-byte-compile"
++
++case "${FLAVOR}" in
++	emacs)
++	;;
++	emacs19)
++	echo "install/${PACKAGE}: Ignoring ${FLAVOR}."
++	;;
++	*)
++
++	/bin/echo "install/${PACKAGE}: Byte-compiling for ${FLAVOR} ...\c"
++
++	rm -rf ${ELCDIR}
++	install -m 755 -d ${ELCDIR}
++
++	# Copy the temp .el files (and Makefile or so)
++	cp ${ELDIR}/* ${ELCDIR}/
++
++	# Byte compile them
++	(cd ${ELCDIR}
++		${FLAVOR} ${COMPILE} yc.el > CompilationLog 2>&1
++#		${FLAVOR} ${COMPILE} ${STARTFILE} >> CompilationLog 2>&1
++		rm -f *.el )
++
++	gzip -9 ${ELCDIR}/CompilationLog
++
++#	if [ -e  ${ELCDIR}/${STARTFILE}c ]; then
++#		mv ${ELCDIR}/${STARTFILE}c ${STARTDIR}/50${STARTFILE}c;
++#	else
++#		ln -f -s ${ELDIR}/${STARTFILE} ${STARTDIR}/50${STARTFILE};
++#	fi
++	echo " done."
++	;;
++esac
++
++exit 0;
+diff -Naur yc-4.0.13.orig/fink/yc-remove yc-4.0.13/fink/yc-remove
+--- yc-4.0.13.orig/fink/yc-remove	1970-01-01 00:00:00.000000000 +0000
++++ yc-4.0.13/fink/yc-remove	2005-03-16 10:57:53.000000000 +0000
+@@ -0,0 +1,37 @@
++#!/bin/sh
++# @PREFIX@/lib/emacsen-common/packages/remove/yc
++# [ This particular script hasn't been tested either, so be careful. ]
++set -e
++
++FLAVOR=$1
++PACKAGE=yc
++
++if [ "X${FLAVOR}" = "X" ]; then
++    echo Need argument to determin FLAVOR of emacs;
++    exit 1
++fi
++
++if [ "X${PACKAGE}" = "X" ]; then
++    echo Internal error: need package name;
++    exit 1;
++fi
++
++ELDIR=@PREFIX@/share/emacs/site-lisp/${PACKAGE}
++ELCDIR=@PREFIX@/share/${FLAVOR}/site-lisp/${PACKAGE}
++#STARTDIR=@PREFIX@/etc/${FLAVOR}/site-start.d
++#STARTFILE="${PACKAGE}-init.el";
++
++case "${FLAVOR}" in
++	emacs)
++	;;
++	emacs19)
++	echo "remove/${PACKAGE}: Ignoring ${FLAVOR}."
++	;;
++	*)
++
++	/bin/echo "remove/${PACKAGE}: Handling removal of emacsen flavor ${FLAVOR} ...\c"
++	rm -rf ${ELCDIR}
++#	rm -f ${STARTDIR}/50${STARTFILE}*
++	echo " done."
++	;;
++esac
+diff -Naur yc-4.0.13.orig/fink/yc-startup yc-4.0.13/fink/yc-startup
+--- yc-4.0.13.orig/fink/yc-startup	1970-01-01 00:00:00.000000000 +0000
++++ yc-4.0.13/fink/yc-startup	2006-06-30 18:36:43.000000000 +0000
+@@ -0,0 +1,28 @@
++;; -*-emacs-lisp-*-
++;;
++;; Emacs startup file for the Fink yc package
++;;
++(if (not (file-exists-p "@PREFIX@/share/emacs/site-lisp/yc/yc.el"))
++    (message "Package yc removed but not purged. Skipping setup.")
++  (setq load-path 
++	(cons 
++	 (concat "@PREFIX@/share/" (symbol-name fink-emacs-flavor)
++		 "/site-lisp/yc")
++	 load-path))
++  
++  (global-set-key "\M-\ " 'yc-mode)
++  (setq yc-stop-chars "(){}<>")
++  ;(setq yc-server-host "unix")
++  (setq yc-use-color t)
++  (setq yc-canna-lib-path "@PREFIX@/share/canna")
++  (setq yc-icanna-path "@PREFIX@/lib/yc/icanna")
++
++  ;; comment out the following 3 lines to not to activate yc per default.
++  ;; force-yc-input-mode is temporarily commented out because it breaks
++  ;; default buffer-file-coding-system since Emacs CVS 2005-12-25.
++  ;; Alternatively, we only set default-input-method.
++  (setq yc-connect-server-at-startup nil)
++  (load-library "yc")
++  (setq default-input-method "japanese-yc") ;(force-yc-input-mode)
++  ;(global-yc-mode 1) ;; if you want to use global-yc-mode, uncomment this.
++  )

@@ -1,0 +1,169 @@
+Info2: <<
+Package: bind9%type_pkg[ssl]
+Version: 9.5.999
+Revision: 3
+Type: v (9.6.0-P1), ssl (.)
+# type "v" is there for the cases where we have some form of pre-release
+# version, where to keep version comparisons sane, "%v" cannot coincide
+# with the upstream version "v"
+
+# Please keep bind9.info and bind9.patch identical in crypto and in net except for the type field.
+
+Depends: <<
+  %N-shlibs (=%v-%r), daemonic, (%type_raw[ssl] = -ssl) db47-aes-shlibs, db47-aes-shlibs | db47-shlibs,
+  (%type_raw[ssl] = -ssl) mysql-ssl15-shlibs, (%type_raw[ssl] = -ssl) openldap24-shlibs,
+  (%type_raw[ssl] = -ssl) postgresql83-shlibs, (%type_raw[ssl] = -ssl) unixodbc2-shlibs
+<<
+BuildDepends: <<
+  (%type_raw[ssl] = -ssl) cyrus-sasl2-dev, (%type_raw[ssl] = -ssl) db47-aes, db47-aes | db47,
+  libiconv-dev, libxml2, (%type_raw[ssl] = -ssl) mysql-ssl15-dev, (%type_raw[ssl] = -ssl) openldap24-dev,
+  (%type_raw[ssl] = -ssl) openssl098-dev (>= 0.9.8h-1), (%type_raw[ssl] = .) system-openssl-dev,
+  (%type_raw[ssl] = -ssl) postgresql83-dev, (%type_raw[ssl] = -ssl) unixodbc2, fink (>= 0.24.12-1)
+<<
+## "checking for .. " also needs tetex-base w3m libxml2-bin libxslt-bin
+## but configure would still have to be patched to find the docbook stuff (looks in hard-coded places).
+Conflicts: host, %{Ni}-ssl, %{Ni}
+Replaces: host, %{Ni}-ssl, %{Ni}
+Provides: host, %{Ni}-ssl, %{Ni}
+# The Provides host is because other pkgs like xtraceroute depend on host and not on the alternative
+# The Provides make switching between the crypto and non-crypto variants difficult.. (switch with dpkg --force-conflicts ...)
+Source: ftp://ftp.isc.org/isc/%{Ni}/%type_raw[v]/bind-%type_raw[v].tar.gz
+Source-MD5: 886b7eae55cfdc8cd8d2ca74a2f99c6e
+Source2: ftp://ftp.internic.net/domain/named.root
+Source2-MD5: 4f3ccd43094cdaa684deaf186d2c028d
+Source2ExtractDir: bind-%type_raw[v]/etc
+# the patch file should be re-checked. I updated _ ie, removed .. _ the named.root part (was from 97...), but nothing else
+PatchFile: %{Ni}.patch
+PatchFile-MD5: 93f0a85f504c95ae6489a0320c1f699c
+PatchScript: <<
+  sed 's|@FINKPREFIX@|%p|g' <%{PatchFile} | patch -p1
+  perl -pi -e 's,(\{d\}\.)so,\1dylib,; s,db\-4\.2,db-4.7,' configure
+  perl -pi -e 's, -lcrypt -lm,,' configure
+  perl -pi -e 's,needothers=true,needothers=false,; s,\@DNS_CRYPTO_LIBS\@,,' isc-config.sh.in
+<<
+SetCFLAGS: -Os -fstrict-aliasing
+SetLIBRARY_PATH: %p/lib
+NoSetLDFLAGS: true
+NoSetCPPFLAGS: true
+SetLDFLAGS: -Wl,-x -Wl,-dead_strip
+ConfigureParams: <<
+ --mandir=%i/share/man --infodir=%p/share/info \
+ --with-libtool --enable-threads --with-dlz-filesystem=yes --with-dlz-bdb=%p --with-dlz-stub=yes --disable-static \
+ (%type_raw[ssl] = -ssl) --with-dlz-postgres=yes (%type_raw[ssl] = -ssl) --with-dlz-mysql=%p \
+ (%type_raw[ssl] = -ssl) --with-dlz-ldap=%p (%type_raw[ssl] = -ssl) --with-dlz-odbc=%p \
+ (%type_raw[ssl] = .) --with-openssl=%p/lib/system-openssl (%type_raw[ssl] = -ssl) --with-openssl=%p
+<<
+CompileScript: <<
+ #!/bin/sh -ev
+ export CPATH=%p/include/db4:%p/include
+ export STD_CDEFINES="-DDIG_SIGCHASE=1"
+ %{default_script}
+<<
+InfoTest: <<
+  # the following may slightly change your system environment while running
+  TestScript: ( ./bin/tests/system/ifconfig.sh up; make -k check 2>&1|tee /tmp/bind9.test ) || true
+<<
+InstallScript: <<
+  make install prefix=%i
+  mkdir -p %i/var/cache/bind
+  cp -pPR etc/* %i/etc
+  mkdir -p %i/share/doc/%n
+  ln -s ../%N-shlibs/COPYRIGHT %i/share/doc/%n
+  install -m 644 doc/arm/Bv9ARM.pdf %i/share/doc/%n
+  #No need for dependency_libs in .la files if not building static libs
+  perl -pi -e "s/dependency_libs=.*$/dependency_libs=''/" %i/lib/*.la
+<<
+PreInstScript: <<
+  ## in case existing one is a symlink (as in %r=1)
+  rm -f %p/share/doc/%n 2>/dev/null || :
+<<
+DocFiles: CHANGES FAQ README NSEC3-NOTES
+ConfFiles: <<
+  %p/etc/named.conf
+  %p/etc/named.0
+  %p/etc/named.127
+  %p/etc/named.255
+  %p/etc/named.local
+  %p/etc/named.root
+<<
+DaemonicName: bind9
+DaemonicFile: <<
+<service>
+<description>Bind9 DNS Server</description>
+<message>Bind9 DNS Server</message>
+
+<daemon name="bind9">
+<executable background="yes">%p/sbin/named</executable>
+<!-- the daemon will background itself, but may take a while
+     to start up to the point where it does so -->
+<configfile>%p/etc/named.conf</configfile>
+<parameters>-c %p/etc/named.conf</parameters>
+<pidfile>%p/var/run/named.pid</pidfile>
+</daemon>
+
+</service>
+<<
+Splitoff: <<
+ Package: %N-shlibs
+ Depends: libiconv, libxml2-shlibs, (%type_raw[ssl] = -ssl) openssl098-shlibs
+ Conflicts: %{Ni}-ssl-shlibs, %{Ni}-shlibs
+ Replaces: %{Ni}-ssl-shlibs, %{Ni}-shlibs
+ Provides: %{Ni}-ssl-shlibs, %{Ni}-shlibs
+ Files: lib/*.*.dylib
+ Shlibs: <<
+	%p/lib/libbind9.50.dylib	51.0.0	%n	(>= 9.5.999-1)
+	%p/lib/libdns.50.dylib	51.0.0	%n	(>= 9.5.999-1)
+	%p/lib/libisc.50.dylib	51.0.0	%n	(>= 9.5.999-1)
+	%p/lib/libisccc.50.dylib	51.0.0	%n	(>= 9.5.999-1)
+	%p/lib/libisccfg.50.dylib	51.0.0	%n	(>= 9.5.999-1)
+	%p/lib/liblwres.50.dylib	51.0.0	%n	(>= 9.5.999-1)
+ <<
+ DocFiles: COPYRIGHT
+<<
+Splitoff2: <<
+ Package: %N-dev
+ Conflicts: %{Ni}-ssl-dev, %{Ni}-dev, %{Ni} (<< 9.3.9)
+ Replaces: %{Ni}-ssl-dev, %{Ni}-dev, %{Ni} (<< 9.3.9)
+ Provides: %{Ni}-ssl-dev, %{Ni}-dev
+ Files: include lib bin/isc-config.sh
+ Depends: %N-shlibs (=%v-%r)
+ BuildDependsOnly: true
+ InstallScript: mkdir -p %i/share/doc; ln -s %N-shlibs %i/share/doc/%n
+<<
+Description: Berkeley Internet Name Domain
+DescDetail: <<
+The Berkeley Internet Name Domain (BIND) implements an Internet name
+server for Unix operating systems. The BIND consists of a server (or
+`daemon') called `named' and a resolver library (now available as a
+separate pkg, libbind6).  A name server is a network service that
+enables clients to name resources or objects and share this
+information with other objects in the network.
+<<
+DescPort: <<
+Update of bind9, + policy conformance (making shared libs too, shlibs policy, etc), + cleanup, by jfm
+File is commented as to main points. Using this as a TODO :
+_ probably needs a good DescUsage field (from what I remember about bind from long ago)
+_ other subdirs of contrib to make ? (dbus eg ?)
+
+The "-ssl" variant is in fact the "fully-enabled" variant (doesn't seem putting this with
+conditionals in the description field should work ...), name kept just for historical reasons.
+It still uses openssl098, to be sure to build with headers and libs from the same version,
+(and that can be updated at a moment's notice in case of security troubles),
+and to avoid configure finding openssl too old, + warning about potential security problems,
+caused by Apple's headers (mismatching the lib version).
+
+Updated to db47 and openldap24. Disabled static libs and cleaned *.la
+of dependency_libs so packages depending on this don't need to depend on
+inherited dependencies. --danielj7
+<<
+DescUsage: <<
+Don't forget to run at least rndc-confgen before using. And better:
+read the manpages...
+<<
+License: Public Domain
+DescPackaging: <<
+Previous packages by Matthew Flanagan <mpf@progsoc.org>
+<<
+Maintainer: None <fink-devel@lists.sourceforge.net>
+Homepage: http://www.isc.org/products/BIND/
+<<

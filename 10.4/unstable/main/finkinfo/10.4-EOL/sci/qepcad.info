@@ -1,0 +1,141 @@
+Info2: <<
+Package: qepcad%type_pkg[-gcc4.5]
+Version: 1.61
+Revision: 1
+Architecture: i386, x86_64
+# Arch-restriction inherited fom saclib
+Source: http://www.usna.edu/Users/cs/qepcad/INSTALL/%{Ni}-B.%v.tar.gz
+Source-MD5: eeaec754cfd66251aa44862db69926c0
+Source2: http://www.usna.edu/Users/cs/qepcad/SLFQ/simplify-1.18.tar.gz
+Source2-MD5: 8b4ea6c64ddd54b8aed622420b3c1981
+SourceDirectory: qesource
+Type: -gcc4.5 (boolean)
+BuildDepends: readline5, saclib%type_pkg[-gcc4.5] (>= 2.2.5-1), sed, flex-devel, (%type_pkg[-gcc4.5]) gcc45-compiler, freeglut
+Depends: readline5-shlibs, (%type_pkg[-gcc4.5]) gcc45-shlibs, ( %m != x86_64 ) singular, freeglut-shlibs
+Recommends: saclib%type_pkg[-gcc4.5]
+# Strictly speaking, the recommends would be a "depends" when using qepcad under gdb 
+Conflicts: %{Ni}, %{Ni}-gcc44, %{Ni}-gcc45
+Replaces: %{Ni}, %{Ni}-gcc44, %{Ni}-gcc45
+
+PatchScript: <<
+  #!/bin/sh -ev
+  find . -name '*.o' -exec rm -f \{\} \;
+  chmod -R a+rX	.	# else gdb can't find files when not working as root
+  ## no /usr/local
+  sed -i'' -e 's,#!/usr/local/bin/perl,#!/usr/bin/env perl,' extensions/{newadj/ps,rend/rgbinfo}.pl
+  ## CFLAGS and LDFLAGS and the like :
+  if [ "%type_raw[-gcc4.5]" == "-gcc4.5" ] ; then nopic=''; else nopic="-mdynamic-no-pic"; fi
+  cflags="$nopic -Wall -Wextra -Wstrict-aliasing=2"
+  # Makefiles don't respect CC or CXX
+  if [ "%type_raw[-gcc4.5]" == "-gcc4.5" ]; then CXX=g++-4
+	elif test -f /usr/bin/g++-4.2; then CXX=g++-4.2
+	else CXX=g++
+  fi
+  find .. -name Makefile -exec sed -i'' -e "s,g[+][+],$CXX,g" \{\} \;
+  # get rid of gcc45's libgcc_s
+  if [ `uname -r | cut -f1 -d.` -ge 9 ]; then LDFLAGS="-Wl,-dead_strip_dylibs"; else LDFLAGS=''; fi
+  # to strip binaries ( using "-s" would lead at launch to dyld error "lazy pointer not found" ):
+  echo '__mh_execute_header' > symlst
+  sed -i'' -e "s;(EXE)\|(LIBS);& -Wl,-x -exported_symbols_list %b/symlst -dead_strip $LDFLAGS;" \
+	   -e "s;(EXED);& $LDFLAGS;" \
+	   -e "s,O4,O3 -fstrict-aliasing $cflags," \
+	   -e "s,= *-g,&gdb3 -gfull $cflags -DNO_SACLIB_MACROS," \
+	   {.,cad2d,plot2d,source}/Makefile extensions/adj2d/new_make
+  sed -i'' -e "s;O4;O3 -fstrict-aliasing $cflags -Wl,-x -exported_symbols_list %b/symlst -dead_strip $LDFLAGS;" \
+	-e "s, -g,&gdb3 -gfull $cflags," ../simplify/Makefile
+  sed -i'' -e 's,gmake,make,' Makefile
+#  sed -i'' -e 's,-lreadline,-L%p/lib &,' {../simplify,cad2d,source}/Makefile	# SetLIBRARY_PATH takes care of this
+## Now libglut is in (my, at least_ apparently NOT Apple's)) X11 - let us thus try to get everything from there,
+## and save next line in case of trouble with some other X11's. Line IS needed, for Apple's X11
+  sed -i'' -e '/^GLBASE/s,/usr,&/X11R6,' -e '/^GLUTBASE/s,/usr,%p,' plot2d/Makefile
+#  sed -i'' -e '/^GL\(UT\|\)BASE/s,/usr,&/X11R6,' plot2d/Makefile
+  ## using standard dirs, and no env vars :
+  sed -i'' -e 's,qepath [+],string("%p/etc") +,' -e 's,default.qepcadrc,qepcadrc,' source/main/BEGINQEPCAD.c
+  sed -i'' -e 's,qepcad.help,%p/share/%{Ni}/&,' -e 's,/bin/%p,,' source/userint/HELPFRD.c
+  sed -i'' -e 's,getenv("qe"),"%p",' source/main/BEGINQEPCAD.c extensions/rend/PLOT_2D_CAD.cc source/userint/HELPFRD.c
+  sed      -e 's,^#S,S,' -e 's,/usr,%p,' < default.qepcadrc > qepcadrc
+  sed -i'' -e 's,default\.,%p/etc/,' README
+  sed -i'' -e 's,#.*\(/libduma.a\),#%p/lib\1,' source/Makefile
+  # no symbols taken fron libcurses
+  sed -i'' -e 's, -lcurses,,' ../simplify/Makefile
+  # missing declaration:
+  sed -i'' -e '17a\
+int yyparse (fpart* &result);' ../simplify/main_parse.cc
+  # get -I%p/include after the -I. flags ; additional "-I\${saclib}/include" at end: also taken care of by CPATH in CompileScript
+  sed -i'' -e 's,-I\${saclib}/include,,' -e 's,-I\.,& -I\${saclib}/include,' `find .. -name Makefile`
+<<
+# We set ourselves the CPPFLAGS, else -I%p/include comes before -I.
+NoSetCPPFLAGS: true
+SetCPPFLAGS: -I%p/lib/flex/include
+NoSetLDFLAGS: true
+SetLDFLAGS: -L%p/lib/flex/lib
+SetLIBRARY_PATH: %p/lib
+CompileScript: <<
+  #!/bin/sh -ev
+  export PATH="%p/lib/flex/bin:$PATH"
+  if [ "%type_raw[-gcc4.5]" == "-gcc4.5" ]; then export PATH=%p/lib/gcc4.5/bin:$PATH; fi
+  export CPATH=%p/include
+  export saclib=%p
+  export qe=`pwd`
+  make both
+  cd cad2d; make both; cd -
+  cd plot2d; make; cd -
+  cd ../simplify ; make opt parse; cd -
+<<
+InstallScript: <<
+  mkdir -p %i/include/%{Ni} %i/lib/%{Ni} %i/bin %i/share/%{Ni} %i/share/doc/%{Ni}/simplify %i/etc
+### headers
+  # Apple's cp doesn't support "--parents", according to its manpage :
+  for f in `find . -type f -name '*.h'|sed -e 's,^\./,,'`; do mkdir -p %i/include/%{Ni}/`dirname $f`; cp -p $f %i/include/%{Ni}/$f ; done
+  mv %i/include/%{Ni}/source/* %i/include/%{Ni}
+  sed -ri -e 's,CAServer.h",db/&,' %i/include/%{Ni}/db/CAPolicy.h
+  sed -ri -e 's,unnamedpipe.h",db/&,' %i/include/%{Ni}/db/SINGULAR.h
+  mv `find %i/include/%{Ni}/extensions -name '*.h'` %i/include/%{Ni}
+  mv %i/include/%{Ni}/cad2d/src/cad2d.h %i/include/%{Ni}
+  sed -ri -e 's,\.\./\.\./extensions/lift2D/,,' %i/include/%{Ni}/cad2d.h
+  sed -ri -e 's,sac_ext/sac_ext.h,sac_ext.h,' %i/include/%{Ni}/oldadj.h
+  mv %i/include/%{Ni}/plot2d/Point.h %i/include/%{Ni}
+  rm -fR %i/include/%{Ni}/{plot2d,cad2d,extensions,source}
+  cp -p ../simplify/*.h %i/include/%{Ni}
+###  the rest
+  cp -p `find . -name '*.a'` %i/lib/%{Ni}
+  ranlib %i/lib/%{Ni}/*.a
+  cp -p source/%{Ni}{,d} cad2d/cad2d{,d} plot2d/ADJ2D_plot %i/bin
+  cp -p source/qepcad.help %i/share/%{Ni}
+  # singular still not available on x86_64
+  if [ "%m" == "x86_64" ] ; then sed -i -e 's,SINGULAR,#&,' qepcadrc; fi
+  cp -p qepcadrc %i/etc
+  cp -p ../simplify/{slfq,parself} %i/bin
+  cp -pPR ../simplify/{README,examples} %i/share/doc/%{Ni}/simplify
+  # put docfiles under %{Ni} , for user's convenience
+  cp -p LICENSE LOG README TODO %i/share/doc/%{Ni}
+  cp -p cad2d/README %i/share/doc/%{Ni}/README_cad2d
+  if [ "%N" != "%{Ni}" ] ; then ln -s %{Ni} %i/share/doc/%N ; fi
+  chmod -R a+rX %i
+<<
+ConfFiles: %p/etc/qepcadrc
+Description: Tarski's Quantifier Elimination
+DescUsage: <<
+  http://www.usna.edu/Users/cs/qepcad/B/user/UsingQEPCAD.html
+  For instructions on the use of help, type "help" at qepcad's prompt.
+  Can be spectacular as a simplifier.
+  E.g., run "slfq -N 20 %p/share/doc/qepcad/simplify/Ex4" to see
+  what the beast is capable of (+/- 30 min here) - and view input file..
+  For QE , still limited ..
+  Linking with singular brings a substantial increase in efficiency;
+  however not possible in 64bit mode (the more efficient), due to
+  continuing absence of singular for that arch.
+  64bit users who ca build a 32bit singular can still use it advantageously
+  by replacing in %p/etc/qepcadrc (which IS a conf file!) the line
+  containing "SINGULAR" by
+SINGULAR /your/path/to/32bit_singular_executable
+<<
+DescPackaging: <<
+  Install by hand; there is no install target.
+  Patch srcs so files can be installed in standard directories
+  (and so as to avoid having to set additional env vars).
+<<
+License: OSI-Approved
+Homepage: http://www.usna.edu/Users/cs/qepcad/B/QEPCAD.html
+Maintainer: JF Mertens <jfmertens@users.sourceforge.net>
+<<

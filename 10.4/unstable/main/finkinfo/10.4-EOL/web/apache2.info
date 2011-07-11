@@ -1,0 +1,1135 @@
+Package: apache2
+Version: 2.2.14
+Revision: 1
+###
+Replaces: apache2, apache2-ssl
+Provides: httpd
+BuildDepends: fink (>= 0.24.12), libaprutil.0-dev, libapr.0-dev, pcre, pkgconfig, system-openssl-dev, system-pkgconfig-openssl, openldap24-dev
+Depends: %N-mpm-prefork (= %v-%r) | %N-mpm-worker (= %v-%r) | %N-mpm-event (= %v-%r)
+###
+Source: mirror:apache:httpd/httpd-%v.tar.gz
+Source-MD5: 2c1e3c7ba00bcaa0163da7b3e66aaa1e
+###
+PatchFile: %n.patch
+PatchFile-MD5: 1b3754c5f2cdf7e83f94db0e5a7e6f03
+PatchScript: <<
+  sed -e 's,@FINKPREFIX@,%p,g' %{PatchFile} | patch -p1
+
+  ### FIX LAYOUT
+  perl -pi -e 's,/usr,,g' config.layout
+  perl -pi -e 's,/share/apache2/default-site/htdocs,/var/www/apache2-default,g' config.layout
+  perl -pi -e 's,/var/run,/var/run/apache2,g' config.layout
+  perl -pi -e 's,/etc/apache2/build,/share/apache2/build,g' config.layout
+
+  ### No need to build apr or aprutil
+  perl -pi -e 's,srclib ,,g' Makefile.in
+
+  ### Force use of awk over gawk
+  perl -pi -e 's,gawk mawk nawk awk,awk mawk nawk gawk,g' configure
+
+  ### Force system ssl for mod_ssl
+  perl -pi -e 's,SSL_LIBS="-lssl,SSL_LIBS="-L%p/lib/system-openssl/lib/ -lssl,g' configure
+<<
+###
+NoSetLDFLAGS: true
+NoSetLIBS: true
+SetLDFLAGS: -L%p/lib
+NoSetCFLAGS: true
+SetCFLAGS: -I%b/include -I%p/lib/system-openssl/include -I%p/lib/system-openssl/include/openssl -I%p/include
+###
+DocFiles: ABOUT_APACHE LICENSE CHANGES INSTALL LAYOUT README* VERSIONING
+###
+# This is insufficiently flexible.
+# --enable-mods-shared=all --enable-modules=all
+ConfigureParams: <<
+  --enable-layout=Debian \
+  --enable-authn-file=shared \
+  --enable-authn-dbm=shared \
+  --enable-authn-anon=shared \
+  --enable-authn-dbd=shared \
+  --enable-authn-default=shared \
+  --enable-authn-alias=shared \
+  --enable-authz-host=shared \
+  --enable-authz-groupfile=shared \
+  --enable-authz-user=shared \
+  --enable-authz-dbm=shared \
+  --enable-authz-owner=shared \
+  --enable-authnz-ldap=shared \
+  --enable-authz-default=shared \
+  --enable-auth-basic=shared \
+  --enable-auth-digest=shared \
+  --disable-isapi \
+  --enable-file-cache=shared \
+  --enable-cache=shared \
+  --enable-disk-cache=shared \
+  --enable-mem-cache=shared \
+  --enable-dbd=shared \
+  --enable-bucketeer=shared \
+  --enable-dumpio=shared \
+  --enable-ext-filter=shared \
+  --enable-include=shared \
+  --enable-filter=shared \
+  --enable-charset-lite=shared \
+  --enable-deflate=shared \
+  --enable-ldap=shared \
+  --enable-log-config \
+  --enable-log-forensic=shared \
+  --enable-logio \
+  --enable-env=shared \
+  --enable-mime-magic=shared \
+  --enable-cern-meta=shared \
+  --enable-expires=shared \
+  --enable-headers=shared \
+  --enable-ident=shared \
+  --enable-usertrack=shared \
+  --enable-unique-id=shared \
+  --enable-setenvif=shared \
+  --enable-version=shared \
+  --enable-proxy=shared \
+  --enable-proxy-connect=shared \
+  --enable-proxy-ftp=shared \
+  --enable-proxy-http=shared \
+  --enable-proxy-ajp=shared \
+  --enable-proxy-balancer=shared \
+  --enable-ssl=shared \
+  --enable-mime=shared \
+  --enable-dav=shared \
+  --enable-status=shared \
+  --enable-autoindex=shared \
+  --enable-asis=shared \
+  --enable-info=shared \
+  --enable-suexec=shared \
+  --enable-cgi=shared \
+  --enable-cgid=shared \
+  --enable-dav-fs=shared \
+  --enable-dav-lock=shared \
+  --enable-vhost-alias=shared \
+  --enable-negotiation=shared \
+  --enable-dir=shared \
+  --enable-imagemap=shared \
+  --enable-actions=shared \
+  --enable-speling=shared \
+  --enable-userdir=shared \
+  --enable-alias=shared \
+  --enable-rewrite=shared \
+  --enable-so \
+  --with-apr=%p/bin/apr-1-config \
+  --with-apr-util=%p/bin/apu-1-config \
+  --with-pcre=%p \
+  --with-ssl=/usr \
+  --with-program-name=apache2 \
+  --with-suexec-bin=%p/lib/apache2/suexec2 \
+  --with-suexec-caller=www \
+  --with-suexec-userdir=Sites \
+  --with-suexec-docroot=%p/var/www \
+  --with-suexec-logfile=%p/var/log/apache2/suexec.log
+<<
+CompileScript: <<
+#!/bin/sh -ex
+  if [ -e %p/include/httpd.h ]; then 
+    echo "" 
+    echo "::: You have an OLD version of fink apache2 installed." 
+    echo "::: Please \"fink remove apache2\" and retry!" 
+    echo "" 
+    exit 1 
+  fi
+<<
+InstallScript: <<
+#!/bin/sh -ex
+
+MPMS="prefork event worker";
+
+for i in $MPMS;
+	do echo "Running ./configure --with-mpm=$i %c";
+	./configure --with-mpm=$i %c;
+	make;
+	make install DESTDIR=%d;
+	mv %i/sbin/apache2 apache2-$i;
+	mv %i/lib/apache2/modules/httpd.exp httpd.exp-$i;
+	cd server; make clean; cd -;
+done
+
+make install DESTDIR=%d
+rm -rf %i/sbin/apache2
+rm -rf %i/lib/apache2/modules/httpd.exp
+
+for i in $MPMS;
+	do install -m 755 apache2-$i %i/sbin/;
+	install -m 755 httpd.exp-$i %i/lib/apache2/modules/;
+done
+
+# config stuff
+rm -rf %i/etc/apache2/*.conf
+
+# move the html manual to a more suitable location
+mkdir -p %i/share/doc/apache2-doc
+mv %i/var/www/apache2-default/manual %i/share/doc/apache2-doc
+
+# fink html manual
+grep -rl apachectl %i/share/doc/apache2-doc/manual | xargs perl -pi -e 's/apachectl(?!\.html)/apache2ctl/g'
+
+# ssl stuff
+cp fink/ssleay.cnf %i/share/apache2/ssleay.cnf
+install -m 755 fink/ssl-certificate %i/sbin/apache2-ssl-certificate
+
+# This is needed to apache and aache2 and co-exist
+mkdir -p %i/etc/apache2/mods-available
+mkdir -p %i/etc/apache2/mods-enabled
+mkdir -p %i/etc/apache2/sites-available
+mkdir -p %i/etc/apache2/sites-enabled
+mkdir -p %i/etc/apache2/conf.d
+mkdir -p %i/etc/apache2/ssl
+mkdir -p %i/share/apache2/config
+mkdir -p %i/var/lock/apache2
+mkdir -p %i/var/cache/apache2/proxy
+mkdir -p %i/var/log/apache2
+mkdir -p %i/var/run/apache2
+
+rm %i/share/man/man8/apachectl.8
+rm %i/share/man/man8/httpd.8
+
+mv %i/sbin/dbmmanage %i/bin/dbmmanage
+mv %i/sbin/htdbm %i/bin/htdbm
+mv %i/sbin/htdigest %i/bin/htdigest
+mv %i/sbin/htpasswd %i/bin/htpasswd
+
+cp %b/support/check_forensic %i/sbin
+chmod +x %i/sbin/check_forensic
+cp %b/support/split-logfile %i/sbin
+chmod +x %i/sbin/split-logfile
+
+mkdir -p %i/share/man/man8
+cp fink/*.8 %i/share/man/man8
+
+
+mv %i/sbin/apachectl %i/sbin/apache2ctl
+mv %i/share/man/man8/apxs.8 %i/share/man/man8/apxs2.8
+mv %i/sbin/suexec %i/lib/apache2/suexec2
+mv %i/share/man/man8/suexec.8 %i/share/man/man8/suexec2.8
+
+mv %i/sbin/apxs %i/bin/apxs2
+perl -pi -e 's,get_vars\(\"sbindir\"\) \. \"/envvars\",\"%p/etc/apache2/envvars\",g' %i/bin/apxs2
+
+mv %i/sbin/envvars* %i/share/apache2/build/
+mv %i/share/apache2/build/envvars %i/etc/apache2/
+cp fink/robots.txt %i/var/www/apache2-default/
+
+cp -R fink/config-dir/* %i/etc/apache2/
+
+mv %i/etc/apache2/extra/* %i/share/apache2/config
+mv %i/etc/apache2/original/* %i/share/apache2/config
+
+chmod +x %i/lib/cgi-bin/*
+
+for i in fink/a2-scripts/*;
+	do install -m755 $i %i/sbin/;
+done
+
+cp fink/apache2-doc.conf %i/etc/apache2/conf.d/apache2-doc
+
+chmod 4750 %i/lib/apache2/suexec2
+
+mkdir -p %i/etc/logrotate.d
+cp fink/logrotate %i/etc/logrotate.d/apache2
+
+mkdir -p %i/etc/bash_completion.d
+install -m755 fink/bash_completion %i/etc/bash_completion.d/apache2
+<<
+###
+SplitOff: <<
+  Package: %N-common
+  Depends: apache2-utils (= %v-%r), bash-completion, daemonic, file, logrotate
+  Replaces: apache2 (<= 2.0.47-1), apache, apache2-common, apache2-ssl-common, apache2-ssl-dev (<= 2.0.47-4), libapache2-mod-auth-anon, libapache2-mod-cgid, libapache2-mod-expires, libapache2-mod-headers, libapache2-mod-info, libapache2-mod-mime-magic, libapache2-mod-proxy, libapache2-mod-proxy-connect, libapache2-mod-proxy-ftp, libapache2-mod-proxy-http, libapache2-mod-rewrite, libapache2-mod-speling, libapache2-mod-suexec, libapache2-mod-unique-id, libapache2-mod-usertrack, libapache2-mod-vhost-alias, libapache2-mod-auth-dbm, libapache2-mod-auth-digest, libapache2-mod-actions, libapache2-mod-bucketeer, libapache2-mod-isapi, libapache2-mod-ldap, libapache2-mod-auth-ldap, libapache2-mod-ssl, libapache2-ssl-mod-auth-anon, libapache2-ssl-mod-cgid, libapache2-ssl-mod-expires, libapache2-ssl-mod-headers, libapache2-ssl-mod-info, libapache2-ssl-mod-mime-magic, libapache2-ssl-mod-proxy, libapache2-ssl-mod-proxy-connect, libapache2-ssl-mod-proxy-ftp, libapache2-ssl-mod-proxy-http, libapache2-ssl-mod-rewrite, libapache2-ssl-mod-speling, libapache2-ssl-mod-suexec, libapache2-ssl-mod-unique-id, libapache2-ssl-mod-usertrack, libapache2-ssl-mod-vhost-alias, libapache2-ssl-mod-auth-dbm, libapache2-ssl-mod-auth-digest, libapache2-ssl-mod-actions, libapache2-ssl-mod-bucketeer, libapache2-ssl-mod-isapi, libapache2-ssl-mod-ldap, libapache2-ssl-mod-auth-ldap, libapache2-ssl-mod-ssl
+  Conflicts: apache2 (<= 2.0.47-1), apache, libapache2-mod-svn (<= 1.5.1-1)
+  ConfFiles: <<
+    %p/etc/apache2/apache2.conf
+    %p/etc/apache2/conf.d/charset
+    %p/etc/apache2/envvars
+    %p/etc/apache2/magic
+    %p/etc/apache2/mime.types
+    %p/etc/apache2/mods-available/actions.conf
+    %p/etc/apache2/mods-available/actions.load
+    %p/etc/apache2/mods-available/alias.conf
+    %p/etc/apache2/mods-available/alias.load
+    %p/etc/apache2/mods-available/asis.load
+    %p/etc/apache2/mods-available/auth_basic.load
+    %p/etc/apache2/mods-available/auth_digest.load
+    %p/etc/apache2/mods-available/authn_alias.load
+    %p/etc/apache2/mods-available/authn_anon.load
+    %p/etc/apache2/mods-available/authn_dbd.load
+    %p/etc/apache2/mods-available/authn_dbm.load
+    %p/etc/apache2/mods-available/authn_default.load
+    %p/etc/apache2/mods-available/authn_file.load
+    %p/etc/apache2/mods-available/authnz_ldap.load
+    %p/etc/apache2/mods-available/authz_dbm.load
+    %p/etc/apache2/mods-available/authz_default.load
+    %p/etc/apache2/mods-available/authz_groupfile.load
+    %p/etc/apache2/mods-available/authz_host.load
+    %p/etc/apache2/mods-available/authz_owner.load
+    %p/etc/apache2/mods-available/authz_user.load
+    %p/etc/apache2/mods-available/autoindex.conf
+    %p/etc/apache2/mods-available/autoindex.load
+    %p/etc/apache2/mods-available/bucketeer.load
+    %p/etc/apache2/mods-available/cache.load
+    %p/etc/apache2/mods-available/cern_meta.load
+    %p/etc/apache2/mods-available/cgi.load
+    %p/etc/apache2/mods-available/cgid.conf
+    %p/etc/apache2/mods-available/cgid.load
+    %p/etc/apache2/mods-available/charset_lite.load
+    %p/etc/apache2/mods-available/dav.load
+    %p/etc/apache2/mods-available/dav_fs.conf
+    %p/etc/apache2/mods-available/dav_fs.load
+    %p/etc/apache2/mods-available/dav_lock.load
+    %p/etc/apache2/mods-available/dbd.load
+    %p/etc/apache2/mods-available/deflate.conf
+    %p/etc/apache2/mods-available/deflate.load
+    %p/etc/apache2/mods-available/dir.conf
+    %p/etc/apache2/mods-available/dir.load
+    %p/etc/apache2/mods-available/disk_cache.conf
+    %p/etc/apache2/mods-available/disk_cache.load
+    %p/etc/apache2/mods-available/dump_io.load
+    %p/etc/apache2/mods-available/env.load
+    %p/etc/apache2/mods-available/expires.load
+    %p/etc/apache2/mods-available/ext_filter.load
+    %p/etc/apache2/mods-available/file_cache.load
+    %p/etc/apache2/mods-available/filter.load
+    %p/etc/apache2/mods-available/headers.load
+    %p/etc/apache2/mods-available/ident.load
+    %p/etc/apache2/mods-available/imagemap.load
+    %p/etc/apache2/mods-available/include.load
+    %p/etc/apache2/mods-available/info.conf
+    %p/etc/apache2/mods-available/info.load
+    %p/etc/apache2/mods-available/ldap.load
+    %p/etc/apache2/mods-available/log_forensic.load
+    %p/etc/apache2/mods-available/mem_cache.conf
+    %p/etc/apache2/mods-available/mem_cache.load
+    %p/etc/apache2/mods-available/mime.conf
+    %p/etc/apache2/mods-available/mime.load
+    %p/etc/apache2/mods-available/mime_magic.conf
+    %p/etc/apache2/mods-available/mime_magic.load
+    %p/etc/apache2/mods-available/negotiation.conf
+    %p/etc/apache2/mods-available/negotiation.load
+    %p/etc/apache2/mods-available/proxy.conf
+    %p/etc/apache2/mods-available/proxy.load
+    %p/etc/apache2/mods-available/proxy_ajp.load
+    %p/etc/apache2/mods-available/proxy_balancer.load
+    %p/etc/apache2/mods-available/proxy_connect.load
+    %p/etc/apache2/mods-available/proxy_ftp.load
+    %p/etc/apache2/mods-available/proxy_http.load
+    %p/etc/apache2/mods-available/rewrite.load
+    %p/etc/apache2/mods-available/setenvif.conf
+    %p/etc/apache2/mods-available/setenvif.load
+    %p/etc/apache2/mods-available/speling.load
+    %p/etc/apache2/mods-available/ssl.conf
+    %p/etc/apache2/mods-available/ssl.load
+    %p/etc/apache2/mods-available/status.conf
+    %p/etc/apache2/mods-available/status.load
+    %p/etc/apache2/mods-available/suexec.load
+    %p/etc/apache2/mods-available/unique_id.load
+    %p/etc/apache2/mods-available/userdir.conf
+    %p/etc/apache2/mods-available/userdir.load
+    %p/etc/apache2/mods-available/usertrack.load
+    %p/etc/apache2/mods-available/version.load
+    %p/etc/apache2/mods-available/vhost_alias.load
+    %p/etc/apache2/ports.conf
+    %p/etc/apache2/sites-available/default
+    %p/etc/bash_completion.d/apache2
+    %p/etc/logrotate.d/apache2
+    %p/share/apache2/ssleay.cnf
+  <<
+  Files: <<
+    etc/bash_completion.d
+    etc/logrotate.d
+    etc/apache2/*.conf
+    etc/apache2/envvars
+    etc/apache2/magic
+    etc/apache2/mime.types
+    etc/apache2/mods*
+    etc/apache2/sites*
+    etc/apache2/ssl
+    etc/apache2/conf.d/charset
+    lib/cgi-bin
+    share/apache2/icons
+    share/apache2/error
+    share/apache2/config
+    var/www
+    var/log
+    var/run
+    var/lock
+    var/cache
+    sbin/apache2ctl
+    share/man/man8/apache2.8
+    share/man/man8/apache2ctl.8
+    share/man/man8/suexec2.8
+    share/man/man8/a2enmod.8
+    share/man/man8/a2dismod.8
+    share/man/man8/a2ensite.8
+    share/man/man8/a2dissite.8
+    share/apache2/ssleay.cnf
+    sbin/a2dismod
+    sbin/a2enmod
+    sbin/a2dissite
+    sbin/a2ensite
+    sbin/modhandler.py
+    sbin/update-apache2-modules
+    sbin/apache2-ssl-certificate
+    lib/apache2/suexec2
+    lib/apache2/modules/*.so
+  <<
+  InstallScript: <<
+    mkdir -p %i/etc/apache2/users
+  <<  
+  DocFiles: ABOUT_APACHE LICENSE CHANGES INSTALL LAYOUT README* VERSIONING
+  DaemonicName: apache2
+  DaemonicFile: <<
+   <service>
+    <description>Apache2 web server</description>
+    <message>Apache2 web server</message>
+
+    <daemon name="apache2">
+      <executable background="yes">%p/sbin/apache2ctl</executable>
+      <parameters> -k start</parameters>
+    </daemon>
+   </service>
+  <<
+  PreInstScript: <<
+# set -e  # implicit in fink's .deb scripts
+
+if [ -f %p/etc/apache2/httpd.conf ]; then
+	# Check to see it's not just a place holder
+	if [ `stat -c %%s %p/etc/apache2/httpd.conf` -gt 368 ]; then
+		echo ""
+		echo "WARNING: the modules and base directory have changed.  This will"
+		echo "         affect the logs, htdocs, cgi-bin, etc directories.  You"
+		echo "         *MUST*  update your config files, by choosing 'Y' at the"
+		echo "         conf file update prompt, or by updating your current conf"
+		echo "         conf files to reflect the changes."
+		echo ""
+		/bin/echo  "Do you want to continue [Y/n] ? \c";
+		read CONTINUECHOICE
+		case $CONTINUECHOICE in
+			y|Y|'' ) ;;
+			* ) exit 1 ;;
+		esac 
+	fi
+fi
+exit 0
+  <<
+  PostInstScript: <<
+# set -e  # implicit in fink's .deb scripts
+
+if [ "$1" != "configure" ]; then
+	exit 0
+fi
+
+mod_is_enabled() {
+	test -L /etc/apache2/mods-enabled/$1.load
+}
+
+#set up default site and dummy error and access logs
+if [ "$2" = "<unknown>" -o -z "$2" ]; then
+	if [ ! -L %p/etc/apache2/sites-enabled/000-default -a \
+	     ! -f %p/etc/apache2/sites-enabled/000-default ]; then
+		ln -s %p/etc/apache2/sites-available/default %p/etc/apache2/sites-enabled/000-default
+	fi
+	touch %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+	chown root:admin %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+	chmod 0640 %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+fi
+
+# setup some default modules
+a2enmod alias
+a2enmod autoindex
+a2enmod dir
+a2enmod env
+a2enmod mime
+a2enmod negotiation
+a2enmod setenvif
+a2enmod status
+a2enmod auth_basic
+# Those come from mod_auth:
+a2enmod authz_default
+a2enmod authz_user
+a2enmod authz_groupfile
+a2enmod authn_file
+# This comes from mod_access:
+a2enmod authz_host
+# Enable userdir so it's just like the OS X Apache install
+a2enmod userdir
+
+chown -R root:www %p/var/lock/apache2
+chown -R root:www %p/var/cache/apache2
+chown -R root:www %p/var/log/apache2
+chown -R root:www %p/var/run/apache2
+chown root:www %p/lib/apache2/suexec2
+
+exit 0
+  <<
+  PostRmScript: <<
+# set -e  # implicit in fink's .deb scripts
+
+if [ "$1" = "purge" ]
+then
+	rm -rf %p/var/cache/apache2
+	rm -rf %p/var/lib/apache2
+	rm -rf %p/var/log/apache2
+	rm -rf %p/var/lock/apache2
+	rm -rf %p/var/run/apache2
+	# /etc mess
+	rm -f %p/etc/default/apache2
+	for i in `find %p/etc/apache2 -type l`; do
+		rm -f "$i"
+	done
+fi
+
+exit 0
+  <<
+  Description: Next generation, scalable, extendable web server
+  DescDetail: <<
+ Apache v2 is the next generation of the omnipresent Apache web server. This
+ version - a total rewrite - introduces many new improvements, such as
+ threading, a new API, IPv6 support, request/response filtering, and more.
+ .
+ It is also considerably faster, and can be easily extended to provide services
+ other than http.
+ .
+ This package contains all the standard apache2 modules, including SSL support.
+ However, it does *not* include the server itself; for this you need to
+ install one of the apache2-mpm-* packages; such as worker or prefork.
+  <<
+<<
+###
+SplitOff2: <<
+  Package: apache-utils
+  Depends: apache2-utils (= %v-%r)
+  DocFiles: LICENSE
+<<
+SplitOff3: <<
+  Package: %N-utils
+  Depends: libapr.0-shlibs, libaprutil.0-shlibs, pcre-shlibs
+  Replaces: apache2, apache2-ssl, apache2-common, apache2-ssl-common
+  Files: <<
+    bin/dbmmanage
+    bin/htdbm
+    bin/htdigest
+    bin/htpasswd
+    sbin/ab
+    sbin/check_forensic
+    sbin/checkgid
+    sbin/htcacheclean
+    sbin/httxt2dbm
+    sbin/logresolve
+    sbin/split-logfile
+    sbin/rotatelogs
+    share/man/man1/dbmmanage.1
+    share/man/man1/htpasswd.1
+    share/man/man1/htdigest.1
+    share/man/man1/htdbm.1
+    share/man/man8/checkgid.8
+    share/man/man8/htcacheclean.8
+    share/man/man8/httxt2dbm.8
+    share/man/man8/logresolve.8
+    share/man/man8/rotatelogs.8
+    share/man/man8/ab.8
+    share/man/man8/check_forensic.8
+  <<
+  DocFiles: LICENSE
+  Description: Utility programs for webservers
+  DescDetail: <<
+ Provides some add-on programs useful for any webserver.  These include:
+  - ab (Apache benchmark tool)
+  - logresolve (Resolve IP addresses to hostname in logfiles)
+  - htpasswd (Manipulate basic authentication files)
+  - htdigest (Manipulate digest authentication files)
+  - dbmmanage (Manipulate basic authentication files in DBM format, using perl)
+  - htdbm (Manipulate basic authentication files in DBM format, using APR)
+  - rotatelogs (Periodically stop writing to a logfile and open a new one)
+  - split-logfile (Split a single log including multiple vhosts)
+  - checkgid (Checks whether the caller can setgid to the specified group)
+  - check_forensic (Extract mod_log_forensic output from apache log files)
+  <<
+<<
+SplitOff4: <<
+  Package: %N-dev
+  Description: Apache2 Developement Files
+  Depends: %N-common (= %v-%r)
+  Replaces: apache2 (<= 2.0.47-1), apache, apache-dev, apache2-dev, apache2-ssl-dev
+  Conflicts: apache2 (<= 2.0.47-1), apache, apache-dev
+  Files: <<
+    include/apache2
+    bin/apxs2
+    share/man/man8/apxs2.8
+    share/apache2/build
+  <<
+  DocFiles: LICENSE
+<<
+###
+SplitOff5: <<
+  Package: %N-docs
+  Description: Apache2 Manual
+  Replaces: apache2 (<= 2.0.47-1), apache-docs, apache2-docs, apache2-ssl-docs
+  Conflicts: apache2 (<= 2.0.47-1), apache-docs
+  ConfFiles: %p/etc/apache2/conf.d/apache2-doc
+  Files: <<
+    share/doc/apache2-doc/manual
+    etc/apache2/conf.d/apache2-doc
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+# set -e  # implicit in fink's .deb scripts
+
+if [ "$1" = "upgrade" ]; then
+	%p/sbin/apache2ctl restart
+fi
+  <<
+  PostRmScript: <<
+# set -e  # implicit in fink's .deb scripts
+
+if [ "$1" = "upgrade" ]; then
+	%p/sbin/apache2ctl restart
+fi
+  <<
+<<
+SplitOff6: <<
+  Package: %N-mpm-prefork
+  Description: Apache2 Server Binary - [MPM PREFORK *RECOMMENDED*]
+  DescDetail: <<
+    This Multi-Processing Module (MPM) implements a non-threaded,
+    pre-forking web server that handles requests in a manner similar to
+    Apache 1.3. It is appropriate for sites that need to avoid threading for
+    compatibility with non-thread-safe libraries. It is also the best MPM
+    for isolating each request, so that a problem with a single request will
+    not affect any other.
+
+    It is not as fast, but is considered to be more stable.
+  <<
+  Depends: libaprutil.0-shlibs, libapr.0-shlibs, %N-common (= %v-%r), pcre-shlibs
+  Replaces: apache2 (<= 2.0.47-1), apache2-ssl-mpm-worker, apache2-ssl-mpm-perchild, apache2-ssl-mpm-leader, apache2-ssl-mpm-threadpool, apache2-mpm-worker, apache2-mpm-perchild, apache2-mpm-leader, apache2-mpm-threadpool, apache2-mpm-prefork, apache2-ssl-mpm-prefork, apache2-mpm-event
+  Conflicts: apache2 (<= 2.0.47-1), apache2-mpm-worker, apache2-mpm-perchild, apache2-mpm-leader, apache2-mpm-threadpool, apache2-mpm-event
+  Files: <<
+    sbin/apache2-prefork
+    lib/apache2/modules/httpd.exp-prefork
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+# set -e  # implicit in fink's .deb scripts
+
+if [ "$1" = "upgrade" ]; then
+	%p/bin/daemonic update apache2
+	%p/sbin/apache2ctl restart
+fi
+
+update-alternatives --install %p/sbin/apache2 apache2 %p/sbin/apache2-prefork 60
+update-alternatives --install %p/lib/apache2/modules/httpd.exp httpd.exp %p/lib/apache2/modules/httpd.exp-prefork 60
+
+%p/bin/daemonic enable apache2
+
+if [ -f /Library/StartupItems/daemonic-apache2/daemonic-apache2 ]
+then
+	%p/sbin/apache2ctl restart
+fi
+
+exit 0
+  <<
+  PreRmScript: <<
+# set -e  # implicit in fink's .deb scripts
+
+if [ $1 != "upgrade" ]
+then
+	%p/sbin/apache2ctl stop
+	%p/bin/daemonic disable apache2
+	update-alternatives --remove apache2 %p/sbin/apache2-prefork
+	update-alternatives --remove httpd.exp %p/lib/apache2/modules/httpd.exp-prefork
+fi
+
+exit 0
+  <<
+<<
+###
+SplitOff7: <<
+  Package: %N-mpm-perchild
+  Description: Apache2 Server Binary - [MPM PERCHILD *OBSOLETE*]
+  DescDetail: <<
+    OBSOLETE please install one of the other mpms (prefork, worker, event)
+  <<
+  Depends: fink-obsolete-packages, apache2-mpm-prefork (= %v-%r) | apache2-mpm-worker (= %v-%r) | apache2-mpm-event (= %v-%r)
+  DocFiles: LICENSE
+<<
+###
+SplitOff8: <<
+  Package: %N-mpm-worker
+  Description: Apache2 Server Binary - [MPM WORKER]
+  DescDetail: <<
+    The worker MPM provides a threaded implementation for Apache HTTPD. It is
+    considerably faster than the traditional model, and is the recommended MPM.
+
+    Worker generally is a good choice for high-traffic servers because it
+    has a smaller memory footprint than the prefork MPM.
+  <<
+  Depends: libaprutil.0-shlibs, libapr.0-shlibs, %N-common (= %v-%r), pcre-shlibs
+  Replaces: apache2 (<= 2.0.47-1), apache2-ssl-mpm-prefork, apache2-ssl-mpm-perchild, apache2-ssl-mpm-leader, apache2-ssl-mpm-threadpool, apache2-mpm-worker, apache2-mpm-perchild, apache2-mpm-leader, apache2-mpm-threadpool, apache2-mpm-prefork, apache2-ssl-mpm-worker, apache2-mpm-event
+  Conflicts: apache2 (<= 2.0.47-1),apache2-mpm-perchild, apache2-mpm-leader, apache2-mpm-threadpool, apache2-mpm-prefork, apache2-mpm-event
+  Files: <<
+    sbin/apache2-worker
+    lib/apache2/modules/httpd.exp-worker
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+# set -e  # implicit in fink's .deb scripts
+
+if [ "$1" = "upgrade" ]; then
+	%p/bin/daemonic update apache2
+	%p/sbin/apache2ctl restart
+fi
+
+update-alternatives --install %p/sbin/apache2 apache2 %p/sbin/apache2-worker 60
+update-alternatives --install %p/lib/apache2/modules/httpd.exp httpd.exp %p/lib/apache2/modules/httpd.exp-worker 60
+
+%p/bin/daemonic enable apache2
+
+if [ -f /Library/StartupItems/daemonic-apache2/daemonic-apache2 ]
+then
+	%p/sbin/apache2ctl restart
+fi
+
+exit 0
+  <<
+  PreRmScript: <<
+# set -e  # implicit in fink's .deb scripts
+
+if [ $1 != "upgrade" ]
+then
+	%p/sbin/apache2ctl stop
+	%p/bin/daemonic disable apache2
+	update-alternatives --remove apache2 %p/sbin/apache2-worker
+	update-alternatives --remove httpd.exp %p/lib/apache2/modules/httpd.exp-worker
+fi
+
+exit 0
+  <<
+<<
+###
+SplitOff9: <<
+  Package: %N-mpm-leader
+  Description: Apache2 Server Binary - [MPM LEADER *OBSOLETE*]
+  DescDetail: <<
+    OBSOLETE please install one of the other mpms (prefork, worker, event)
+  <<
+  Depends: fink-obsolete-packages, apache2-mpm-prefork (= %v-%r) | apache2-mpm-worker (= %v-%r) | apache2-mpm-event (= %v-%r)
+  DocFiles: LICENSE
+<<
+###
+SplitOff10: <<
+  Package: %N-mpm-threadpool
+  Description: Apache2 Server Binary - [MPM THREADPOOL *OBSOLETE*]
+  DescDetail: <<
+    OBSOLETE please install one of the other mpms (prefork, worker, event)
+  <<
+  Depends: fink-obsolete-packages, apache2-mpm-prefork (= %v-%r) | apache2-mpm-worker (= %v-%r) | apache2-mpm-event (= %v-%r)
+  DocFiles: LICENSE
+<<
+SplitOff11: <<
+  Package: %N-mpm-event
+  Description: Apache2 Server Binary - [MPM EVENT *EXPERIMENTAL*]
+  DescDetail: <<
+    The event Multi-Processing Module (MPM) is designed to allow more
+    requests to be served simultaneously by passing off some processing
+    work to supporting threads, freeing up the main threads to work on
+    new requests.
+
+    This MPM is especially suitable for sites that see extensive KeepAlive
+    traffic
+  <<
+  Depends: libaprutil.0-shlibs, libapr.0-shlibs, %N-common (= %v-%r), pcre-shlibs
+  Replaces: apache2 (<= 2.0.47-1), apache2-ssl-mpm-prefork, apache2-ssl-mpm-perchild, apache2-ssl-mpm-leader, apache2-ssl-mpm-threadpool, apache2-mpm-worker, apache2-mpm-perchild, apache2-mpm-leader, apache2-mpm-threadpool, apache2-mpm-prefork, apache2-ssl-mpm-worker, apache2-mpm-event
+  Conflicts: apache2 (<= 2.0.47-1),apache2-mpm-perchild, apache2-mpm-leader, apache2-mpm-threadpool, apache2-mpm-prefork, apache2-mpm-event
+  Files: <<
+    sbin/apache2-event
+    lib/apache2/modules/httpd.exp-event
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+# set -e  # implicit in fink's .deb scripts
+
+if [ "$1" = "upgrade" ]; then
+	%p/bin/daemonic update apache2
+	%p/sbin/apache2ctl restart
+fi
+
+update-alternatives --install %p/sbin/apache2 apache2 %p/sbin/apache2-event 60
+update-alternatives --install %p/lib/apache2/modules/httpd.exp httpd.exp %p/lib/apache2/modules/httpd.exp-event 60
+
+%p/bin/daemonic enable apache2
+
+if [ -f /Library/StartupItems/daemonic-apache2/daemonic-apache2 ]
+then
+	%p/sbin/apache2ctl restart
+fi
+
+exit 0
+  <<
+  PreRmScript: <<
+# set -e  # implicit in fink's .deb scripts
+
+if [ $1 != "upgrade" ]
+then
+	%p/sbin/apache2ctl stop
+	%p/bin/daemonic disable apache2
+	update-alternatives --remove apache2 %p/sbin/apache2-event
+	update-alternatives --remove httpd.exp %p/lib/apache2/modules/httpd.exp-event
+fi
+
+exit 0
+  <<
+<<
+###
+SplitOff27: <<
+  Package: libapache2-mod-auth-anon
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff28: <<
+  Package: libapache2-mod-cgid
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff29: <<
+  Package: libapache2-mod-expires
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff30: <<
+  Package: libapache2-mod-headers
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff31: <<
+  Package: libapache2-mod-info
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff32: <<
+  Package: libapache2-mod-mime-magic
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  Docfiles: LICENSE
+<<
+SplitOff33: <<
+  Package: libapache2-mod-proxy
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff34: <<
+  Package: libapache2-mod-proxy-connect
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff35: <<
+  Package: libapache2-mod-proxy-ftp
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff36: <<
+  Package: libapache2-mod-proxy-http
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff37: <<
+  Package: libapache2-mod-rewrite
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff38: <<
+  Package: libapache2-mod-speling
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff39: <<
+  Package: libapache2-mod-suexec
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff40: <<
+  Package: libapache2-mod-unique-id
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff41: <<
+  Package: libapache2-mod-usertrack
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff42: <<
+  Package: libapache2-mod-vhost-alias
+  Depends: apache2-common (=%v-%r)
+  DocFiles: LICENSE
+<<
+SplitOff43: <<
+  Package: libapache2-mod-auth-dbm
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff44: <<
+  Package: libapache2-mod-auth-digest
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff45: <<
+  Package: libapache2-mod-actions
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff46: <<
+  Package: libapache2-mod-bucketeer
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff47: <<
+  Package: libapache2-mod-isapi
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff48: <<
+  Package: libapache2-mod-ldap
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff49: <<
+  Package: libapache2-mod-auth-ldap
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff50: <<
+  Package: libapache2-mod-ssl
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff51: <<
+  Package: apache2-ssl
+  Depends: apache2 (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2 instead
+  DocFiles: LICENSE
+<<
+SplitOff52: <<
+  Package: apache2-ssl-common
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff53: <<
+  Package: apache2-ssl-dev
+  Depends: apache2-dev (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-dev instead
+  DocFiles: LICENSE
+<<
+SplitOff54: <<
+  Package: apache2-ssl-docs
+  Depends: apache2-docs (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-docs instead
+  DocFiles: LICENSE
+<<
+SplitOff55: <<
+  Package: libapache2-ssl-mod-auth-anon
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff56: <<
+  Package: libapache2-ssl-mod-cgid
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff57: <<
+  Package: libapache2-ssl-mod-expires
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff58: <<
+  Package: libapache2-ssl-mod-headers
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff59: <<
+  Package: libapache2-ssl-mod-info
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff60: <<
+  Package: libapache2-ssl-mod-mime-magic
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  Docfiles: LICENSE
+<<
+SplitOff61: <<
+  Package: libapache2-ssl-mod-proxy
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff62: <<
+  Package: libapache2-ssl-mod-proxy-connect
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff63: <<
+  Package: libapache2-ssl-mod-proxy-ftp
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff64: <<
+  Package: libapache2-ssl-mod-proxy-http
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff65: <<
+  Package: libapache2-ssl-mod-rewrite
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff66: <<
+  Package: libapache2-ssl-mod-speling
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff67: <<
+  Package: libapache2-ssl-mod-suexec
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff68: <<
+  Package: libapache2-ssl-mod-unique-id
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff69: <<
+  Package: libapache2-ssl-mod-usertrack
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff70: <<
+  Package: libapache2-ssl-mod-vhost-alias
+  Depends: apache2-common (=%v-%r)
+  DocFiles: LICENSE
+<<
+SplitOff71: <<
+  Package: libapache2-ssl-mod-auth-dbm
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff72: <<
+  Package: libapache2-ssl-mod-auth-digest
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff73: <<
+  Package: libapache2-ssl-mod-actions
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff74: <<
+  Package: libapache2-ssl-mod-bucketeer
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff75: <<
+  Package: libapache2-ssl-mod-isapi
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff76: <<
+  Package: apache2-ssl-mpm-prefork
+  Depends: apache2-mpm-prefork (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-mpm-prefork instead
+  DocFiles: LICENSE
+<<
+SplitOff77: <<
+  Package: apache2-ssl-mpm-perchild
+  Depends: apache2-mpm-prefork (= %v-%r) | apache2-mpm-worker (= %v-%r) | apache2-mpm-event (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-mpm-perchild instead
+  DocFiles: LICENSE
+<<
+SplitOff78: <<
+  Package: apache2-ssl-mpm-worker
+  Depends: apache2-mpm-worker (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-mpm-worker instead
+  DocFiles: LICENSE
+<<
+SplitOff79: <<
+  Package: apache2-ssl-mpm-leader
+  Depends: apache2-mpm-prefork (= %v-%r) | apache2-mpm-worker (= %v-%r) | apache2-mpm-event (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-mpm-leader instead
+  DocFiles: LICENSE
+<<
+SplitOff80: <<
+  Package: apache2-ssl-mpm-threadpool
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff81: <<
+  Package: libapache2-ssl-mod-ldap
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff82: <<
+  Package: libapache2-ssl-mod-auth-ldap
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+SplitOff83: <<
+  Package: libapache2-ssl-mod-ssl
+  Depends: apache2-common (= %v-%r), fink-obsolete-packages
+  Description: OBSOLETE use apache2-common instead
+  DocFiles: LICENSE
+<<
+###
+Description: Next generation, extendable web server
+DescDetail: <<
+ Apache v2 is the next generation of the omnipresent Apache web server. This
+ version - a total rewrite - introduces many new improvements, such as
+ threading, a new API, IPv6 support, request/response filtering, and more.
+<<
+License: BSD
+Homepage: http://www.apache.org
+Maintainer: Justin F. Hallett <thesin@users.sourceforge.net>

@@ -1,0 +1,119 @@
+Package: sqlite3
+Version: 3.6.13
+Revision: 1002
+Architecture: x86_64
+
+Description: Embedded SQL database, version 3
+DescDetail: <<
+SQLite is a C library that implements an embeddable SQL database engine.
+Programs that link with the SQLite library can have SQL database access
+without running a separate RDBMS process. The distribution comes with a
+standalone command-line access program ( sqlite ) that can be used to
+administer an SQLite database and which serves as an example of how to
+use the SQLite library.
+<<
+
+License: Public Domain 
+Maintainer: None <fink-devel@lists.sourceforge.net>
+DescPort: Initial port by Pepe Barbe <pepe.barbe@gmail.com>
+Homepage: http://www.sqlite.org/
+
+DocFiles: README VERSION LICENSE
+
+Source: http://sqlite.org/sqlite-%v.tar.gz
+Source-MD5: 652a01797e7538811e4997a5847bc026
+
+# Patch so that 'make test' works and the lemon binary is buffer overflow
+# safe if we ever decide to install at (Debian and Ubuntu installs it).
+PatchFile: %n.patch
+PatchFile-MD5: a2b5800ef97ad3462a0b239e16048016
+PatchScript: <<
+	%{default_script}
+	head -n 10 src/sqlite.h.in > LICENSE
+<<
+ConfigureParams: --with-tcl=%p/lib --enable-threadsafe --enable-load-extension
+NoSetCPPFLAGS: true
+SetCPPFLAGS: -I%p/include/readline
+SetCFLAGS: -Os -DSQLITE_ENABLE_COLUMN_METADATA=1
+# Compiling with the -D flag is needed for libgda
+
+Depends: %N-shlibs (= %v-%r), readline5-shlibs (>= 5.0-1004)
+BuildDepends: tcltk-dev, readline5 (>= 5.0-1004), libncurses5 (>= 5.4-20041023-1006), fink (>= 0.28)
+# Does NOT conflict with package sqlite
+BuildConflicts: lclint
+# lclint installs %p/lib/Makefile, which leads configure to believe
+# it has to use tcltk from its builddir, hence failure
+
+CompileScript: <<
+    #!/bin/sh -ev
+    perl -pi -e "s,tclsh8.4,tclsh8.5,," ./configure
+    TCLLIBDIR=%p/lib/tcl8.5/sqlite3 config_TARGET_READLINE_LIBS='-L%p/lib -lreadline -lncurses' \
+        ./configure %c
+    make
+<<
+
+# Tests can't be run as root without crashing packaging
+#InfoTest: <<
+#    TestScript: make test || exit 2
+#<<
+
+InstallScript: <<
+    #!/bin/sh -ev
+    TCLLIBDIR=%p/lib/tcl8.5/sqlite3 make install DESTDIR=%d
+    make sqlite3_analyzer
+    cp -r sqlite3_analyzer %i/bin
+    mv "%i/lib/tcl8.5/sqlite3/libtclsqlite3.dylib" "%i/lib/tcl8.5/sqlite3/libtclsqlite3.0.dylib"    
+    ln -s "libtclsqlite3.0.dylib" "%i/lib/tcl8.5/sqlite3/libtclsqlite3.dylib"
+    install_name_tool -id "%p/lib/tcl8.5/sqlite3/libtclsqlite3.dylib" "%i/lib/tcl8.5/sqlite3/libtclsqlite3.0.dylib"
+<<
+
+SplitOff: << 
+    Package: %N-shlibs
+    Description: Embedded SQL database (shared libraries)
+    DocFiles: VERSION LICENSE
+    Files: lib/libsqlite3.*.dylib
+    Shlibs: %p/lib/libsqlite3.0.dylib 9.0.0 %n (>= 3.0.8-1)
+<<
+
+SplitOff2: << 
+    Package: %N-dev
+    Description: Embedded SQL database (include files and linkable libraries)
+    Depends: %N-shlibs (= %v-%r)
+    # Does NOT conflict with sqlite-dev, strangely enough
+
+    # lib/libsqlite3.dylib accidentally placed in %N for a time
+    Replaces: %N (<< 3.6.9-1003)
+
+    DocFiles: VERSION LICENSE
+    BuildDependsOnly: True
+    Files: <<
+        include
+        lib/libsqlite3.la
+        lib/libsqlite3.a
+        lib/libsqlite3.dylib
+        lib/pkgconfig
+    <<
+<<
+SplitOff3: <<
+    Package: %N-tcl
+    Description: Embedded SQL database (Tcl/Tk bindings)
+    Depends: %N-shlibs (= %v-%r), tcltk (>= 8.5.6)
+    Conflicts: %N-tcltk
+    Replaces: %N-tcltk
+    DocFiles: VERSION LICENSE
+    Files: <<
+    lib/tcl8.5/sqlite3/libtclsqlite3.dylib
+    lib/tcl8.5/sqlite3/libtclsqlite3.0.dylib
+    lib/tcl8.5/sqlite3/pkgIndex.tcl
+    <<
+    Shlibs: <<
+       %p/lib/tcl8.5/sqlite3/libtclsqlite3.dylib 0.0.0 %n (>= 3.0.8-1)
+     <<
+<<
+SplitOff4: <<
+    Package: %N-analyzer
+    Description: SQLite3 analyzer program
+    Depends: %N-tcl
+    DocFiles: VERSION LICENSE
+    Files: %p/bin/sqlite3_analyzer
+<<

@@ -1,0 +1,186 @@
+Info2: <<
+Package: lpsolve
+Description: Mixed Integer Linear Programming (ILP) solver
+Type: maj (5.5)
+Version: 5.5.0.13
+Revision: 1
+
+BuildDepends: sed | ssed, bison, flex-devel
+Depends: %N%type_raw[maj]-shlibs (= %v-%r)
+Suggests: lpsolve-extra
+
+Source: mirror:sourceforge:%n/lp_solve_%v_source.tar.gz
+Source-MD5: e8e71b1bf86267597d5776ab0f69721d
+SourceDirectory: lp_solve_%type_raw[maj]
+
+PatchScript: <<
+#!/bin/sh -ev
+# try for last digit of 'current version' the (hex) sum of the last 2 'digits' of %v (hopefully the next to last stays 0..)
+comp_v=`sed -e 's,\.[^.]*$,,' <<<'%v'`
+M=`sed -e 's,.*\.,,' <<<"$comp_v"`
+m=`sed -e 's,.*\.,,' <<<"%v"`
+cv=$(( 16*$M + $m ))
+curr_v="%type_raw[maj].$cv"
+## no strict-aliasing for the lib, since it gives a warning in lp_matrix.c 2357-2358)
+  sed -i.bak -e "{
+	/fpic/d
+	s;\-shared.*;*.o -dynamiclib -single_module -Wl,-x -dead_strip -exported_symbols_list ../exp_sym -compatibility_version $comp_v -current_version $curr_v -o lib%N.%v.dylib -install_name %p/lib/lib%N.%type_raw[maj].dylib;
+	s,ar rv,ar rc,
+	/ranlib/d
+	s,%type_pkg[maj],.%v,
+	}" %N%type_pkg[maj]/ccc
+## for executable, use -mdynamic-no-pic, and strip. Also, link with the library:
+  sed -i.bak -e '{
+# should use -Os here, since far from time-critical code, but the resulting size would be identical...
+	s,\-O3,& -fstrict-aliasing -Wall,
+	s,\$src.*,-mdynamic-no-pic -s -dead_strip lp_solve.c ../%N%type_pkg[maj]/lib%N.dylib -o lp_solve,
+	}' lp_solve/ccc
+## Dynamic library filenames on darwin end with ".dylib", not ".so". Also, give full path for dlopen.
+  perl -pi.bak -e 's,lib%N%type_pkg[maj].so,%p/lib/lib%N.dylib,' lp_explicit.h
+## hard-code the paths to the modules, for the user's convenience (preserving the possibility to specify
+## a full path, absolute or relative), since fink doesn't give us a decent DYLD(_FALLBACK)_LIBRARY_PATH...
+  perl -pi.bak -e "s:( +)  strcat\(((bfp|xli)name), \".so\"\);:$&\n\1char finklib[127]=\"%p/lib/\";
+\1if(strrchr(\2,'/') != NULL) finklib[0]=0;
+\1strcat(finklib,\2);:;
+	s:(dlopen\().*name:\1finklib:" lp_lib.c
+# Use vecLib :
+ sed -i.bak -e 's;myBLAS;/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework/Versions/Current/libBLAS.dylib;' lp_lib.h
+# avoid implicit declaration of isspace
+ sed -i.bak -e '1i #include <ctype.h>' lp_solve/lp_solve.c
+#
+ sed -i.bak -e '/WIN32/,/endif/{
+	/WIN32/d
+	/endif/d
+	}' bfp/bfp_LUSOL/lp_LUSOL.h
+ sed -i.bak -e '/3, "\.so"/,+1{
+	s,3,6,
+	s,so,dylib,
+	}' shared/{commonlib,myblas}.c
+## if one wanted to remove all srcs compiled here from lpsolve-extra, one would need to uncomment the next 2 lines:
+#  tr ' ' '\n'<<<"allocINT createLink firstActiveLink is_nativeBLAS load_BLAS nextActiveLink removeLink sortByINT\
+# daxpy dscal idamax init_BLAS unload_BLAS allocREAL timeNow freeLink allocCHAR"|sed -r -e 's,^,   ,' >> lp_solve.def
+# this would cost 596 bytes in the size of the lib, and for the so's:
+# GLPK, CPLEX, LINDO: +4, LUSOL -3860, etaPFI +120, DIMACS, MathProg: -
+# Thus: not worthwhile (at least not till default bfp and xli are taken out of the lib...) 
+# make the .bat script usable
+  sed -ri -e 's,^del,rm,' -e 's,\r$,,' -e '/^rem /d' lp_rlp.bat
+<<
+
+CompileScript: <<
+#!/bin/sh -ev
+  export PATH=%p/lib/flex/bin:$PATH
+  export CPATH=%p/lib/flex/include:%p/include
+  export LIBRARY_PATH=%p/lib/flex/lib:%p/lib
+  # Run bison and flex
+  . ./lp_rlp.bat
+
+  # Build the library
+  sed -r -e '/EXPORTS/d' -e 's,^ +,_,' < lp_solve.def > exp_sym
+  cd %N%type_pkg[maj]
+  sh -ev ccc
+
+  # Symbolic links to library
+  ln -s lib%N.%v.dylib lib%N.%type_raw[maj].dylib
+  ln -s lib%N.%type_raw[maj].dylib lib%N.dylib
+  ln -s lib%N.%v.a lib%N.a
+
+  # Build the lp_solve executable
+  cd ../lp_solve
+  sh -ev ccc
+<<
+
+InstallScript: <<
+#!/bin/sh -ev
+
+  # Libraries
+  mkdir -p %i/lib
+  cp -pPR %N%type_pkg[maj]/lib%N* %i/lib
+
+  # Headers
+  mkdir -p %i/include/%N/bfp/bfp_LUSOL/LUSOL
+  mkdir -p %i/include/%N/colamd
+  mkdir -p %i/include/%N/shared
+  cp *.{h,def} %i/include/%N
+  cp bfp/*.h %i/include/%N/bfp
+  cp bfp/bfp_LUSOL/*.h %i/include/%N/bfp/bfp_LUSOL
+  cp bfp/bfp_LUSOL/LUSOL/*.h %i/include/%N/bfp/bfp_LUSOL/LUSOL
+  cp colamd/*.h %i/include/%N/colamd
+  cp shared/*.h %i/include/%N/shared
+#  # Additional "headers" (for %N-extra):
+#  cp yacc_read.c lp_Hash.c lp_utils.c %i/include/%N
+#  cp shared/{commonlib,myblas}.c %i/include/%N/shared
+#  cp colamd/colamd.c %i/include/%N/colamd
+
+  # Executable
+  mkdir -p %i/bin
+  install lp_solve/lp_solve %i/bin
+
+  # link the doc files:
+  mkdir -p %i/share/doc
+  ln -s %N%type_raw[maj]-shlibs %i/share/doc/%n
+<<
+
+SplitOff: <<
+  Package: %N%type_raw[maj]-shlibs
+  Files: lib/lib%N.*.dylib
+  Shlibs: %p/lib/lib%N.%type_raw[maj].dylib 5.5.0 %n (>= 5.5.0.0-1)
+  DocFiles: README.txt
+<<
+
+SplitOff2: <<
+  Package: %N%type_raw[maj]-dev
+  Depends: %N%type_raw[maj]-shlibs (= %v-%r)
+  Replaces: lpsolve-extra (<= 5.5.0.10-3)
+  BuildDependsOnly: true
+    Files: include lib
+  InstallScript: <<
+    # link the doc files:
+    mkdir -p %i/share/doc
+    ln -s %N%type_raw[maj]-shlibs %i/share/doc/%n
+  <<
+<<
+
+DescDetail: <<
+lp_solve is a free linear (integer) programming solver based on the revised
+simplex method and the Branch-and-bound method for the integers. It solves pure
+linear, (mixed) integer/binary, semi-continuous and special ordered sets (SOS)
+models. It can be called as a library from different languages like C, VB,
+.NET, Delphi, Excel, Java, ...
+<<
+
+DescPort: <<
+Experimenting with -combine is very negative:
+total size of .o files w/o combining : 751216; combined: 876720; stripped dylib after combining: 753208
+(cmp to 601832  _ cf below)
+(independently [except of course for the size of the combined .o file, 876720] of whether first compile, then link,
+or, "compile-and-link in 1 go")
+
+Those figures are quite robust: the following sizes of the dylib are independent of the various combinations
+of '-s' and '-gfull' in the compile stage :
+-fno-common, -single-module: 601776
+-fno-common, multiple-modules: 609436
+common; -single-module: 601832
+
+[Above figures from before using the exported_symbols_list; now size=509400,
+ and adding -DINTEGERTIME would gain an additional 32 bytes, and -fno-common 56]
+<<
+
+DescPackaging: <<
+Library name changed from "%N%type_pkg[maj]" to "%N".
+So the install_name (and the splitoff-names) must contain "%type_raw[maj]"...
+
+Use dynamic linking for the executable.
+
+Demos, docs, MP-language interfaces, and additional engines, are in lpsolve-extra pkg.
+Interfaces from octave, python, and scilab are in the corresponding lpsolve-xyz pkgs.
+<<
+
+DescUsage: <<
+For demo and docs, install lpsolve-extra and go to %p/share/doc/lpsolve-extra,
+or cf http://lpsolve.sourceforge.net/%type_raw[maj]/
+<<
+
+License: LGPL
+HomePage: http://sourceforge.net/projects/%N/
+Maintainer: JF Mertens <jfmertens@users.sourceforge.net>
+<<

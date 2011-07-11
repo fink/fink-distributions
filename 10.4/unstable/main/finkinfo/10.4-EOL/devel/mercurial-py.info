@@ -1,0 +1,148 @@
+Info2: <<
+Package: mercurial-py%type_pkg[python]
+Version: 1.9
+Revision: 1
+Distribution: (%type_pkg[python] = 24) 10.4, (%type_pkg[python] = 24) 10.5
+Type: python (2.4 2.5 2.6 2.7)
+Depends: python%type_pkg[python], ca-bundle
+BuildDepends: gettext-tools, fink (>= 0.24.12), docutils-py%type_pkg[python] (>= 0.7-1)
+# These are only needed when converting from the appropriate VCS.
+# pygments-py%type_pkg[python] is only needed for the highlight extension.
+# pyopenssl-py%type_pkg[python] is needed by hgweb for ssl support.
+Suggests: bzr-py%type_pkg[python], cvsps, darcs, git, arch-tla, monotone, svn-swig-py%type_pkg[python], pygments-py%type_pkg[python]
+Provides: mercurial
+Source: http://www.selenic.com/mercurial/release/mercurial-%v.tar.gz
+Source-MD5: d4842129fa2732eb6ed1180467bc32e2
+PatchScript: <<
+	perl -pi -e 's|/etc/|%p/etc/|g' doc/hg.1* doc/hgrc.5*
+	# In fixing building with Xcode 4.0 on system python, they broke
+	# building on fink. Make the -arch stuff go away.
+	perl -pi -e 's/-arch i386 -arch x86_64//' setup.py
+<<
+CompileScript: <<
+%p/bin/python%type_raw[python] setup.py build
+cd doc; make PREFIX=%p PYTHON=%p/bin/python%type_raw[python]
+<<
+InstallScript: <<
+# Bin
+%p/bin/python%type_raw[python] setup.py install --root %d
+/usr/bin/find contrib -name '*.pyc' -delete
+cp contrib/hgk %i/bin/
+cd %i/bin; for filename in *; do mv -v $filename $filename-py%type_pkg[python]; done;
+
+# Docs
+cd doc; make PREFIX=%p PYTHON=%p/bin/python%type_raw[python] DESTDIR=%d install
+cd %i/share/man; for i in 1 5; do cd "man$i"; for filename in *; \
+  do cutname=`echo "$filename" | cut -d "." -f 1 -`; \
+  mv -v $filename $cutname-py%type_pkg[python].$i; done; cd ..; done;
+
+mkdir -p %i/etc/mercurial
+cat contrib/sample.hgrc contrib/mergetools.hgrc > %i/etc/mercurial/hgrc-py%type_pkg[python]
+rm -f contrib/sample.hgrc contrib/mergetools.hgrc
+# Need to point to CA certs now.
+echo '[web]\ncacerts = %p/etc/ssl/certs/ca-bundle.crt' >> %i/etc/mercurial/hgrc-py%type_pkg[python]
+
+# Extras
+mkdir -p %i/etc/bash_completion.d
+mv contrib/bash_completion %i/etc/bash_completion.d/hg-py%type_pkg[python]
+
+mkdir -p %i/share/emacs/site-lisp
+mv contrib/mercurial.el %i/share/emacs/site-lisp/mercurial-py%type_pkg[python].el
+mv contrib/mq.el %i/share/emacs/site-lisp/mq-py%type_pkg[python].el
+
+rm -Rf contrib/win32 contrib/macosx contrib/buildrpm
+mkdir -p %i/share/doc/%n/contrib
+cp -r contrib/* %i/share/doc/%n/contrib/
+<<
+
+# Mercurial can fail if LC_LANG isn't set correctly.
+# Set HGENCODING to a known good value. User can always override.
+# HG needs to be set for hgk to work.
+RuntimeVars: <<
+	HGENCODING: UTF-8
+	HG: %p/bin/hg
+<<
+
+PostInstScript: <<
+# Bin
+for name in hg hgk; do update-alternatives --install %p/bin/$name $name %p/bin/$name-py%type_pkg[python] %type_pkg[python]; done;
+
+update-alternatives --install %p/etc/bash_completion.d/hg hg_completion %p/etc/bash_completion.d/hg-py%type_pkg[python] %type_pkg[python]
+update-alternatives --install %p/etc/mercurial/hgrc hgrc %p/etc/mercurial/hgrc-py%type_pkg[python] %type_pkg[python]
+
+update-alternatives --install %p/share/emacs/site-lisp/mercurial.el mercurial.el %p/share/emacs/site-lisp/mercurial-py%type_pkg[python].el %type_pkg[python]
+update-alternatives --install %p/share/emacs/site-lisp/mq.el mq.el %p/share/emacs/site-lisp/mq-py%type_pkg[python].el %type_pkg[python]
+
+for filename in hg.1 hgignore.5 hgrc.5; do name=`echo $filename | cut -d "." -f 1 -`; i=`echo $filename | cut -d "." -f 2 -`; \
+  update-alternatives --install %p/share/man/man$i/$name.$i $name.$i %p/share/man/man$i/$name-py%type_pkg[python].$i %type_pkg[python]; done;
+<<
+
+PreRmScript: <<
+if [ $1 != "upgrade" ]; then
+
+  for name in hg hgk; do update-alternatives --remove $name %p/bin/$name-py%type_pkg[python]; done;
+
+  update-alternatives --remove hg_completion %p/etc/bash_completion.d/hg-py%type_pkg[python]
+  update-alternatives --remove hgrc %p/etc/mercurial/hgrc-py%type_pkg[python]
+
+  update-alternatives --remove mercurial.el %p/share/emacs/site-lisp/mercurial-py%type_pkg[python].el
+  update-alternatives --remove mq.el %p/share/emacs/site-lisp/mq-py%type_pkg[python].el
+
+  for filename in hg.1 hgignore.5 hgrc.5; do name=`echo $filename | cut -d "." -f 1 -`; i=`echo $filename | cut -d "." -f 2 -`; \
+    update-alternatives --remove $name.$i %p/share/man/man$i/$name-py%type_pkg[python].$i; done;
+fi
+<<
+
+UseMaxBuildJobs: true
+InfoTest: <<
+	TestScript: <<
+		#!/bin/bash -ev
+		cd tests
+		# test-subrepo-svn.t fails with svn 1.4.
+		sed -i.bak '1 s/svn/svn15/' test-subrepo-svn.t
+		# Tests expect a 'python' executable, so make one that's predictable.
+		ln -s %p/bin/python%type_raw[python] python
+		export PATH=".:$PATH"
+		%p/bin/python%type_raw[python] run-tests.py $MAKEFLAGS || exit 2
+	<<
+	TestSuiteSize: large
+<<
+
+DocFiles: README COPYING CONTRIBUTORS doc/*.html
+ConfFiles: %p/etc/mercurial/hgrc-py%type_pkg[python]
+Description: Lightweight distributed SCM 
+DescDetail: <<
+Mercurial is a fast, lightweight source control management 
+system designed for efficient handling of very large 
+distributed projects. Features include:
+
+ * O(1) delta-compressed file storage and retrieval scheme
+ * Complete cross-indexing of file and changesets for 
+   efficient exploration of project history
+ * Robust SHA1-based integrity checking and append-only 
+   storage model
+ * Decentralized development model with arbitrary merging 
+   between trees
+ * High-speed HTTP-based network merge protocol
+ * Easy-to-use command-line interface
+ * Integrated stand-alone web interface
+ * Small Python codebase
+ * GPL license
+<<
+DescUsage: <<
+The Bookmarks extension is now always enabled. If you previously
+had it enabled with 'hgext.bookmarks =' in your hgrc file, please
+remove that line.
+<<
+DescPackaging: <<
+Formerly maintained by Pepe Barbe <pepe.barbe@gmail.com>
+
+Python-using packages that need this must Depend on 'mercurial-py%type_pkg[python]'
+to ensure that the python versions match.
+Packages that just need the 'hg' command line tool can Depend
+on just 'mercurial' if they don't care about python version.
+<<
+License: GPL
+Homepage: http://mercurial.selenic.com/
+Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
+<<

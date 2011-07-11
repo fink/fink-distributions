@@ -1,0 +1,162 @@
+Package: tomcat5
+Version: 5.5.28
+Revision: 1
+Type: java(1.5)
+
+CustomMirror: <<
+	Primary: http://ranger.users.finkproject.org/distfiles
+	eur-NL: http://ranger.users.finkproject.org/distfiles
+	nam-US: http://ranger.befunk.com/fink
+	nam-US: http://astrange.ithinksw.net/~astrange/ranger-fink
+	nam-CA: http://www.southofheaven.net/befunk
+<<
+Source: mirror:apache:tomcat/tomcat-5/v%v/bin/apache-tomcat-%v.tar.gz
+Source-MD5: ffe786075c2cdd9c1fde7640bce79d35 
+#Source2: mirror:apache:tomcat/tomcat-5/v%v/bin/apache-tomcat-%v-admin.tar.gz
+#Source2-MD5: 344cf521d2b295464c87d7d9b60e628d 
+PatchFile: %n.patch
+PatchFile-MD5: 1a4a0291281992c9fcb834ab7a4d85d1
+PatchScript: sed -e 's:@PREFIX@:%p:g' < %{PatchFile} | patch -p1
+
+BuildDepends: fink (>= 0.24.12), passwd (>= 20070108-1)
+Depends: passwd (>= 20070108-1), system-java (>= 1.5-1), daemonic
+ConfFiles: <<
+	%p/etc/%N/tomcat.conf
+	%p/var/%N/conf/catalina.policy
+	%p/var/%N/conf/catalina.properties
+	%p/var/%N/conf/context.xml
+	%p/var/%N/conf/logging.properties
+	%p/var/%N/conf/server-minimal.xml
+	%p/var/%N/conf/server.xml
+	%p/var/%N/conf/tomcat-users.xml
+	%p/var/%N/conf/web.xml
+<<
+Conflicts: tomcat (<< 4.1.30-1), tomcat4, tomcat6
+Replaces: tomcat (<< 4.1.30-1), tomcat4
+Provides: tomcat
+CompileScript: <<
+	rsync -avr --exclude=dist ./ dist/
+<<
+InstallScript: <<
+#!/bin/sh -ex
+
+	# main install
+	install -d -m 755 %i/var/%N
+	cp -R dist/* %i/var/%N/
+
+	# scripts
+	rm -rf %i/var/%N/bin/*.bat
+	install -d -m 755 %i/bin
+	install -c -m 755 tomcat %i/bin/%N
+
+	# docs
+	install -d -m 755 %i/share/doc/%N
+	mv %i/var/%N/*.txt %i/var/%N/LICENSE %i/share/doc/%N/
+
+	# logs
+	install -d -m 755 %i/var/log
+	chown tomcat:tomcat %i/var/log
+	chmod 755 %i/var/log
+	ln -sf %p/var/%N/logs %i/var/log/%N
+
+	# web apps
+	install -d -m 755 %i/share/webapps
+	mv %i/var/%N/webapps/* %i/share/webapps/
+	chown tomcat:tomcat %i/share/webapps/
+	rmdir %i/var/%N/webapps
+	pushd %i/var/%N
+	ln -sf ../../share/webapps webapps
+	chown tomcat:tomcat %i/var/%N/webapps
+	popd
+
+	# configuration files
+	install -d -m 755 %i/etc/%N
+	install -m 644 tomcat.conf %i/etc/%N/
+
+	# misc
+	sudo chmod 0775 %i/share/webapps/* %i/var/%N/logs
+
+	# fix up perms
+	find %i/var/%N -type d -exec chmod 755 {} \;
+	find %i/var/%N -type f -exec chmod 644 {} \;
+	chmod 755 %i/var/%N/bin/*.sh
+	chown -R tomcat:tomcat %i/var/%N
+
+<<
+DaemonicFile: <<
+<service>
+ <description>Tomcat servlet 2.4 engine</description>
+ <message>Tomcat servlet 2.4 engine</message>
+ <daemon name="%N">
+  <executable background="no">/usr/bin/sudo</executable>
+  <parameters>-u tomcat %p/bin/%N start</parameters>
+ </daemon>
+</service>
+<<
+
+PostInstScript: <<
+	# update daemonic init script if necessary
+	daemonic install %N
+
+	# why fink installer set the file to root?
+	chown tomcat %p/var/%N/webapps
+<<
+PreRmScript: <<
+	# clean up
+	if [ $1 != "upgrade" ]; then
+	     %p/bin/%N stop || true
+	     daemonic remove %N || true
+	     rm -Rf %p/var/%N/work/* || true
+	     rm -Rf %p/var/%N/logs/* || true
+	fi
+<<
+
+Recommends: %N-webapps, tomcat5-admin
+SplitOff: <<
+	Package: %N-webapps
+	Files: <<
+		share/webapps
+		var/%N/conf/Catalina/localhost/*
+	<<
+	ConfFiles: <<
+		%p/var/%N/conf/Catalina/localhost/host-manager.xml
+		%p/var/%N/conf/Catalina/localhost/manager.xml
+	<<
+	PostInstScript: <<
+		chown -R tomcat:tomcat %p/var/%N/conf
+	<<
+	Depends: %N (>= %v-%r)
+	Conflicts: tomcat4-webapps
+	Replaces: tomcat, tomcat4, tomcat4-webapps, tomcat5
+<<
+
+Homepage: http://jakarta.apache.org/tomcat/index.html
+Maintainer: elcepi <elcepi@users.sourceforge.net>
+Description: Java Servlet 2.4 Container and Web Server
+DescDetail: <<
+Apache Tomcat version 5.5 implements the Servlet 2.4 and JavaServer Pages
+2.0 specifications from the Java Community Process, and includes many
+additional features that make it a useful platform for developing and
+deploying web applications and web services.
+<<
+DescPackaging: <<
+Tomcat is designed to be somewhat self-contained, and so does not fit
+the fink (and debian, for that matter) packaging guidelines.  I followed
+the way it's set up in the RedHat packages and put it in /var/tomcat5
+(I think debian does it this way as well.)
+
+
+It is not possible to build it using the --build-as-nobody flag since
+it needs to change the ownership of the files to user tomcat:tomcat
+<<
+DescUsage: <<
+To start, stop, or restart Tomcat, do:
+
+  sudo -u tomcat %p/bin/%N <command>
+
+To enable Tomcat to start upon bootup, issue the command:
+
+  sudo daemonic enable %N
+<<
+License: BSD
+DocFiles: LICENSE NOTICE RELEASE-NOTES

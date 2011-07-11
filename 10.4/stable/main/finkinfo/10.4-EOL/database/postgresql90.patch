@@ -1,0 +1,154 @@
+diff -Nurd postgresql-9.0beta3/pgsql.sh postgresql-9.0beta3-new/pgsql.sh
+--- postgresql-9.0beta3/pgsql.sh	1969-12-31 18:00:00.000000000 -0600
++++ postgresql-9.0beta3-new/pgsql.sh	2010-07-26 11:06:05.000000000 -0500
+@@ -0,0 +1,83 @@
++#!/bin/sh
++
++die () {
++	echo "failed"
++	echo ""
++	echo "*** bailing because an error ocurred:"
++	echo ""
++	echo "$*"
++	exit 1
++}
++
++PREFIX="@INSTPREFIX@/opt/postgresql-9.0"
++DATADIR="@INSTPREFIX@/var/postgresql-9.0/data"
++LOGFILE="@INSTPREFIX@/var/postgresql-9.0/pgsql.log"
++
++export LANG=C
++unset LC_ALL
++
++export PATH="$PREFIX/bin:@INSTPREFIX@/bin:$PATH"
++
++SHMMAX=`sysctl kern.sysv.shmmax | cut -d' ' -f2-`
++SHMMNI=`sysctl kern.sysv.shmmni | cut -d' ' -f2-`
++SHMALL=`sysctl kern.sysv.shmall | cut -d' ' -f2-`
++
++if [ "$SHMMAX" -lt "8388608" ] || [ "$SHMMNI" -lt "64" ] || [ "$SHMALL" -lt "32768" ]; then
++	echo "WARNING: You probably need to set your shared memory resources higher for"
++	echo "         PostgreSQL to function.  For more information on raising your shared"
++	echo "         memory settings, see:"
++	echo "         http://wiki.finkproject.org/index.php/Shared_Memory_Regions_on_Darwin"
++	echo ""
++	echo "         I am also creating a default configuration in /etc/sysctl.conf.pg"
++	echo "         that contains values that will work with the default PostgreSQL "
++	echo "         memory settings.  To use it, rename it to /etc/sysctl.conf (if you"
++	echo "         don't have one already) and reboot."
++	echo ""
++	echo "         For now, I'll try setting your sysctl to something higher and then"
++	echo "         running things anyways.  Good luck!  =)"
++	echo ""
++	sysctl -w kern.sysv.shmmax=8388608
++	sysctl -w kern.sysv.shmmin=1
++	sysctl -w kern.sysv.shmmni=64
++	sysctl -w kern.sysv.shmseg=8
++	sysctl -w kern.sysv.shmall=32768
++	echo ""
++	cat <<END >/etc/sysctl.conf.pg
++kern.sysv.shmmax=8388608
++kern.sysv.shmmin=1
++kern.sysv.shmmni=64
++kern.sysv.shmseg=8
++kern.sysv.shmall=32768
++END
++fi
++
++if [ ! -d "$DATADIR" ]; then
++	printf -- "- making postgresql directories: "
++	sudo mkdir -p "$DATADIR"
++	sudo chown -R postgres "$DATADIR/.."
++	echo "ok"
++
++	printf -- "- initializing database in $DATADIR: "
++	sudo -u postgres ${PREFIX}/bin/initdb -E UNICODE -D "$DATADIR" >/tmp/pgsql-init-9.0.log 2>&1 || die "couldn't initialize database"
++	echo "ok"
++fi
++
++PG_COMMAND="sudo -u postgres env"
++if [ -n "$PGPORT" ]; then
++	PG_COMMAND="$PG_COMMAND PGPORT=$PGPORT"
++fi
++PG_COMMAND="$PG_COMMAND ${PREFIX}/bin/pg_ctl"
++
++case "$1" in
++	init)
++		;;
++	start)
++		$PG_COMMAND -D "$DATADIR" -l "$LOGFILE" start
++		;;
++	restart)
++		$PG_COMMAND -D "$DATADIR" -m fast restart
++		;;
++	stop)
++		$PG_COMMAND -D "$DATADIR" -m fast stop
++		;;
++esac
+diff -Nurd postgresql-9.0beta3/src/Makefile.global.in postgresql-9.0beta3-new/src/Makefile.global.in
+--- postgresql-9.0beta3/src/Makefile.global.in	2010-07-06 17:03:05.000000000 -0500
++++ postgresql-9.0beta3-new/src/Makefile.global.in	2010-07-26 14:14:55.000000000 -0500
+@@ -243,7 +243,7 @@
+ ifdef PGXS
+   LDFLAGS = -L$(libdir)
+ else
+-  LDFLAGS = -L$(top_builddir)/src/port
++  LDFLAGS = -L$(top_builddir)/src/port -L$(top_builddir)/src/interfaces/libpq -L$(top_builddir)/src/interfaces/ecpg/ecpglib -L$(top_builddir)/src/interfaces/ecpg/pgtypeslib -L$(top_builddir)/src/interfaces/ecpg/compatlib
+ endif
+ LDFLAGS += @LDFLAGS@
+ 
+diff -Nurd postgresql-9.0beta3/src/backend/utils/misc/postgresql.conf.sample postgresql-9.0beta3-new/src/backend/utils/misc/postgresql.conf.sample
+--- postgresql-9.0beta3/src/backend/utils/misc/postgresql.conf.sample	2010-07-03 16:23:58.000000000 -0500
++++ postgresql-9.0beta3-new/src/backend/utils/misc/postgresql.conf.sample	2010-07-26 11:06:05.000000000 -0500
+@@ -77,7 +77,7 @@
+ # - Security and Authentication -
+ 
+ #authentication_timeout = 1min		# 1s-600s
+-#ssl = off				# (change requires restart)
++ssl = off				# (change requires restart)
+ #ssl_ciphers = 'ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH'	# allowed SSL ciphers
+ 					# (change requires restart)
+ #ssl_renegotiation_limit = 512MB	# amount of data between renegotiations
+diff -Nurd postgresql-9.0beta3/src/bin/initdb/initdb.c postgresql-9.0beta3-new/src/bin/initdb/initdb.c
+--- postgresql-9.0beta3/src/bin/initdb/initdb.c	2010-02-25 20:01:15.000000000 -0600
++++ postgresql-9.0beta3-new/src/bin/initdb/initdb.c	2010-07-26 11:06:05.000000000 -0500
+@@ -114,7 +114,7 @@
+ 
+ /* defaults */
+ static int	n_connections = 10;
+-static int	n_buffers = 50;
++static int	n_buffers = 20;
+ 
+ /*
+  * Warning messages for authentication methods
+diff -Nurd postgresql-9.0beta3/src/interfaces/ecpg/compatlib/Makefile postgresql-9.0beta3-new/src/interfaces/ecpg/compatlib/Makefile
+--- postgresql-9.0beta3/src/interfaces/ecpg/compatlib/Makefile	2010-01-02 10:58:10.000000000 -0600
++++ postgresql-9.0beta3-new/src/interfaces/ecpg/compatlib/Makefile	2010-07-26 13:54:16.000000000 -0500
+@@ -21,6 +21,7 @@
+ 	-I$(libpq_srcdir) -I$(top_srcdir)/src/include/utils $(CPPFLAGS)
+ override CFLAGS += $(PTHREAD_CFLAGS)
+ 
++LDFLAGS := -L../ecpglib -L../pgtypeslib $(LDFLAGS)
+ SHLIB_LINK = -L../ecpglib -lecpg -L../pgtypeslib -lpgtypes $(libpq) \
+ 	$(filter -lintl -lm, $(LIBS)) $(PTHREAD_LIBS)
+ 
+diff -Nurd postgresql-9.0beta3/src/interfaces/ecpg/ecpglib/Makefile postgresql-9.0beta3-new/src/interfaces/ecpg/ecpglib/Makefile
+--- postgresql-9.0beta3/src/interfaces/ecpg/ecpglib/Makefile	2010-01-05 10:38:23.000000000 -0600
++++ postgresql-9.0beta3-new/src/interfaces/ecpg/ecpglib/Makefile	2010-07-26 13:54:28.000000000 -0500
+@@ -33,6 +33,7 @@
+ OBJS += thread.o
+ endif
+ 
++LDFLAGS := -L../pgtypeslib $(LDFLAGS)
+ SHLIB_LINK = -L../pgtypeslib -lpgtypes $(libpq) $(filter -lintl -lm, $(LIBS)) $(PTHREAD_LIBS)
+ 
+ SHLIB_EXPORTS = exports.txt
+diff -Nurd postgresql-9.0beta3/src/makefiles/Makefile.darwin postgresql-9.0beta3-new/src/makefiles/Makefile.darwin
+--- postgresql-9.0beta3/src/makefiles/Makefile.darwin	2010-07-05 18:15:56.000000000 -0500
++++ postgresql-9.0beta3-new/src/makefiles/Makefile.darwin	2010-07-26 11:06:31.000000000 -0500
+@@ -10,4 +10,4 @@
+ 
+ # Rule for building a shared library from a single .o file
+ %.so: %.o
+-	$(CC) $(CFLAGS) $(LDFLAGS) $(LDFLAGS_SL) -bundle $(BE_DLLLIBS) -o $@ $<
++	$(CC) $(CFLAGS) $(LDFLAGS) $(LDFLAGS_SL) -bundle $(BE_DLLLIBS) -undefined dynamic_lookup -o $@ $<

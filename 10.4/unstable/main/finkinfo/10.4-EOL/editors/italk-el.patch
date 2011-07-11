@@ -1,0 +1,460 @@
+diff -Naur italk.orig/fink/italk-el-install italk/fink/italk-el-install
+--- italk.orig/fink/italk-el-install	Thu Jan  1 09:00:00 1970
++++ italk/fink/italk-el-install	Sat Mar 27 02:52:15 2004
+@@ -0,0 +1,52 @@
++#! /bin/sh -e
++#  @PREFIX@/lib/emacsen-common/packages/install/italk-el
++# [ This particular script hasn't been tested, so be careful. ]
++
++set -e
++
++FLAVOR=$1
++PACKAGE=italk-el
++
++if [ "X${FLAVOR}" = "X" ]; then
++    echo "Need argument to determin FLAVOR of emacs"
++    exit 1
++fi
++
++if [ "X${PACKAGE}" = "X" ]; then
++    echo "Internal error: need package name"
++    exit 1
++fi
++
++ELDIR=@PREFIX@/share/emacs/site-lisp/${PACKAGE}
++ELCDIR=@PREFIX@/share/${FLAVOR}/site-lisp/${PACKAGE}
++
++COMPILE="-batch -q -f batch-byte-compile"
++
++case "${FLAVOR}" in
++	emacs)
++	;;
++	emacs19)
++	echo "install/${PACKAGE}: Ignoring ${FLAVOR}."
++	;;
++	*)
++
++	/bin/echo "install/${PACKAGE}: Byte-compiling for ${FLAVOR} ...\c"
++
++	rm -rf ${ELCDIR}
++	install -m 755 -d ${ELCDIR}
++
++	# Copy the temp .el files (and Makefile or so)
++	cp ${ELDIR}/* ${ELCDIR}/
++
++	# Byte compile them
++	(cd ${ELCDIR}
++		${FLAVOR} ${COMPILE} italk.el > CompilationLog 2>&1
++		rm -f *.el )
++
++	gzip -9 ${ELCDIR}/CompilationLog
++
++	echo " done."
++	;;
++esac
++
++exit 0
+diff -Naur italk.orig/fink/italk-el-remove italk/fink/italk-el-remove
+--- italk.orig/fink/italk-el-remove	Thu Jan  1 09:00:00 1970
++++ italk/fink/italk-el-remove	Sat Mar 27 01:03:29 2004
+@@ -0,0 +1,36 @@
++#!/bin/sh
++# @PREFIX@/lib/emacsen-common/packages/remove/italk-el
++# [ This particular script hasn't been tested either, so be careful. ]
++set -e
++
++FLAVOR=$1
++PACKAGE=italk-el
++
++if [ "X${FLAVOR}" = "X" ]; then
++    echo "Need argument to determin FLAVOR of emacs"
++    exit 1
++fi
++
++if [ "X${PACKAGE}" = "X" ]; then
++    echo "Internal error: need package name"
++    exit 1
++fi
++
++ELDIR=@PREFIX@/share/emacs/site-lisp/${PACKAGE}
++ELCDIR=@PREFIX@/share/${FLAVOR}/site-lisp/${PACKAGE}
++
++case "${FLAVOR}" in
++	emacs)
++	;;
++	emacs19)
++	echo "remove/${PACKAGE}: Ignoring ${FLAVOR}."
++	;;
++	*)
++
++	/bin/echo "remove/${PACKAGE}: Handling removal of emacsen flavor ${FLAVOR} ...\c"
++	rm -rf ${ELCDIR}
++	echo " done."
++	;;
++esac
++
++exit 0
+diff -Naur italk.orig/fink/italk-el-startup italk/fink/italk-el-startup
+--- italk.orig/fink/italk-el-startup	Thu Jan  1 09:00:00 1970
++++ italk/fink/italk-el-startup	Sat Mar 27 02:52:57 2004
+@@ -0,0 +1,15 @@
++;; -*-emacs-lisp-*-
++;;
++;; Emacs startup file for the Fink italk-el package
++;;
++;; We have to add this to the load-path:
++(setq load-path 
++      (cons 
++       (concat "@PREFIX@/share/" (symbol-name fink-emacs-flavor)
++              "/site-lisp/italk-el")
++       load-path))
++
++(autoload 'italk "italk" "Inter talk" t nil)
++(autoload 'italk-other-frame "italk" "Inter talk" t nil)
++(setq italk-user-name user-login-name)
++;(setq italk-server "main.italk.ne.jp")
+diff -Naur italk.orig/italk.el italk/italk.el
+--- italk.orig/italk.el	2003-01-16 03:07:05.000000000 +0900
++++ italk/italk.el	2004-11-07 04:24:48.000000000 +0900
+@@ -1,5 +1,5 @@
+ ;;
+-;; italk.el version 1.05
++;; italk.el version 1.06
+ ;;   by HARADA Masanori <harada@ingrid.org>
+ ;;   modified by Tak. <tak@st.rim.or.jp>
+ ;;   supporting custom by GANA <gana@tsg.ne.jp>
+@@ -65,7 +65,7 @@
+ ;;      反映されるので、色の変更や kill-name の設定などは実際の italk 
+ ;;      の画面を見ながら設定することが可能である。
+ 
+-(defconst italk-version "italk.el 1.05")
++(defconst italk-version "italk.el 1.06p7")
+ 
+ ;;
+ ;; for custom ( http://www.dina.kvl.dk/~abraham/custom/ )
+@@ -164,6 +164,7 @@
+ 
+ (defvar italk-send-message-full-replace-alist
+   '(
++    ("^\\(/p[ \t　]+[0-9]+\\){[^]}]+}\\([ \t　]+.+\\)$" . "\\1\\2")  ; telegram
+     ("^hello\\(:-)\\)?$" . "hello, world\\1")  ; example
+   )
+   "*Alist of elements (REGEXP . REPLACE-STRING) for replacing sending texts.")
+@@ -238,7 +239,8 @@
+ (defvar italk-current-server nil)
+ (defvar italk-current-port nil)
+ (defvar italk-current-user-name nil)
+-(defvar italk-regexp-receive-telegram "^#< Message from (\\([0-9]+\\)) \\[")
++(defvar italk-regexp-receive-telegram
++  "^#< Message from (0*\\([0-9]+\\)) \\[\\([^]]+\\)\\]")
+ (defvar italk-regexp-receive-ping nil)
+ (defvar italk-pinged-string nil)
+ (defvar italk-time-last-send-message (current-time))
+@@ -503,16 +505,20 @@
+ ; /p            : (nil . nil)
+ ; /p ch         : (ch  . nil)
+ ; /p ch msg     : (ch  . t)
++; /p str        : (t   . nil)
++; /p str msg    : (t   . t)
+ ;
+   (if (and (>= (length str) 3) (string= (substring str 0 3) "/p "))
+     (let ((sc nil) (sv nil) (r (cons nil nil)))
+       (setq sv (italk-parse-string str))
+       (setq sc (car sv))  ; count of parsed strings
+       (setq sv (cdr sv))  ; value of parsed strings
+-      (if (and (>= sc 2)
+-               (string-match "^[0-9]+$" (car (cdr sv)) 0))
++      (if (>= sc 2)
+         (progn
+-          (setcar r (string-to-number (car (cdr sv))))
++          (if (string-match "^[0-9]+\\(,[0-9]+\\)*$" (car (cdr sv)) 0)
++            (setcar r (car (cdr sv)))
++            (setcar r t)
++          )
+           (if (>= sc 3)
+             (setcdr r t))
+         )
+@@ -534,19 +540,22 @@
+       (setq a (italk-telegram-parse-string (buffer-substring a (point))))
+       (end-of-line)
+       (insert "\n")
+-      (if (and a (car a) (not (cdr a)) (= (car a) italk-telegram-to))
+-        (if (/= (car a) italk-telegram-last-from)
+-          (setq italk-telegram-to italk-telegram-last-from)
++      (if (and a
++               (stringp (car a))
++               (not (cdr a))
++               (string= (car a) italk-telegram-to))
++        (if (string= (car a) italk-telegram-last-from)
+           (setq italk-telegram-flag nil)
++          (setq italk-telegram-to italk-telegram-last-from)
+         )
+       )
+     )
+   )
+   (if italk-telegram-flag 
+     (if italk-telegram-to
+-      (insert (concat "/p " (number-to-string italk-telegram-to) " "))
++      (insert (concat "/p " italk-telegram-to " "))
+       (if italk-telegram-last-from
+-        (insert (concat "/p " (number-to-string italk-telegram-last-from) " "))
++        (insert (concat "/p " italk-telegram-last-from " "))
+         (insert (concat "/p "))
+       )
+     )
+@@ -557,6 +566,27 @@
+   (if (not (string= (buffer-name) italk-input-buffer))
+     (message "italk.el: italk-send-message-full(ret) acts only on *italk INPUT*.")
+     ;else
++    (let ((p italk-send-message-full-replace-alist) a p1)
++      (end-of-line)
++      (setq a (point))
++      (while p
++        (setq p1 (car p))
++        (beginning-of-line)
++        (if (not (null (re-search-forward (car p1) a t)))
++          (progn
++            (if (consp (cdr p1))
++              (if (< (/ (random 65536) 65536.0) (cdr (cdr p1)))
++                (replace-match (car (cdr p1)) t)
++              )
++              (replace-match (cdr p1) t)
++            )
++            (end-of-line)
++            (setq a (point))
++          )
++        )
++        (setq p (cdr p))
++      )
++    )
+     (let ((sendskipf nil))
+       (if italk-telegram-flag
+         (let ((a nil))
+@@ -564,14 +594,18 @@
+           (setq a (point))
+           (end-of-line)
+           (setq a (italk-telegram-parse-string (buffer-substring a (point))))
+-          (if (or (not a) (not (car a)))
+-            (setq italk-telegram-flag nil)
++          (if (or (not a) (not (stringp (car a))))
+             (progn
+-              (setq italk-telegram-to (car a))
+-              (if (not (cdr a))
+-                (setq italk-telegram-flag nil)
++              (setq italk-telegram-flag nil)
++              (if (car a)
++                (setq italk-telegram-to nil)
+               )
+             )
++            ;else
++            (setq italk-telegram-to (car a))
++            (if (not (cdr a))
++              (setq italk-telegram-flag nil)
++            )
+           )
+           (if (and a (not (and (car a) (cdr a))))
+             (setq sendskipf t)
+@@ -599,27 +633,6 @@
+       (end-of-line)
+       (if (not sendskipf)
+         (progn
+-          (let ((p italk-send-message-full-replace-alist) a p1)
+-            (end-of-line)
+-            (setq a (point))
+-            (while p
+-              (setq p1 (car p))
+-              (beginning-of-line)
+-              (if (not (null (re-search-forward (car p1) a t)))
+-                (progn
+-                  (if (consp (cdr p1))
+-                    (if (< (/ (random 65536) 65536.0) (cdr (cdr p1)))
+-                      (replace-match (car (cdr p1)) t)
+-                    )
+-                    (replace-match (cdr p1) t)
+-                  )
+-                  (end-of-line)
+-                  (setq a (point))
+-                )
+-              )
+-              (setq p (cdr p))
+-            )
+-          )
+           (end-of-line)
+           (italk-send-message)
+         )
+@@ -632,7 +645,7 @@
+           (save-excursion (insert "\n"))
+         )
+         (if italk-telegram-to
+-          (insert (concat "/p " (number-to-string italk-telegram-to) " "))
++          (insert (concat "/p " italk-telegram-to " "))
+           (insert (concat "/p "))
+         )
+         (setq italk-current-thread nil)
+@@ -805,10 +818,38 @@
+       '("Describe Mode" . describe-mode))
+     (define-key italk-menu-map [showversion]
+       '("Show Version" . italk-version))
+-    (define-key italk-menu-map [null]
++    (define-key italk-menu-map [null2]
++      '("-" . nil))
++    (define-key italk-menu-map [toggletelegram]
++      '("show/hide telegrams" . italk-toggle-telegram-mask))
++    (define-key italk-menu-map [clearthread]
++      '("show all threads" . italk-clear-thread-mask))
++    (define-key italk-menu-map [showthread9]
++      '("show only thread 9:" . italk-toggle-thread-mask-9))
++    (define-key italk-menu-map [showthread8]
++      '("show only thread 8:" . italk-toggle-thread-mask-8))
++    (define-key italk-menu-map [showthread7]
++      '("show only thread 7:" . italk-toggle-thread-mask-7))
++    (define-key italk-menu-map [showthread6]
++      '("show only thread 6:" . italk-toggle-thread-mask-6))
++    (define-key italk-menu-map [showthread5]
++      '("show only thread 5:" . italk-toggle-thread-mask-5))
++    (define-key italk-menu-map [showthread4]
++      '("show only thread 4:" . italk-toggle-thread-mask-4))
++    (define-key italk-menu-map [showthread3]
++      '("show only thread 3:" . italk-toggle-thread-mask-3))
++    (define-key italk-menu-map [showthread2]
++      '("show only thread 2:" . italk-toggle-thread-mask-2))
++    (define-key italk-menu-map [showthread1]
++      '("show only thread 1:" . italk-toggle-thread-mask-1))
++    (define-key italk-menu-map [showthread0]
++      '("show only thread 0:" . italk-toggle-thread-mask-0))
++    (define-key italk-menu-map [null1]
+       '("-" . nil))
+     (define-key italk-menu-map [togglekillname]
+       '("Toggle kill name" . italk-toggle-kill-name))
++    (define-key italk-menu-map [searchlogout]
++      '("Search last logout" . italk-search-last-logout))
+     (define-key italk-menu-map [telegram]
+       '("Telegram mode" . italk-telegram-mode))
+     (define-key italk-menu-map [sendrregion]
+@@ -973,12 +1014,13 @@
+       (setq italk-time-last-send-message (current-time))
+     )
+   )
++  (message "italk: pinged!")
+ )
+ (defun italk-search-last-logout ()
+   "Search your last logout message in the LOG buffer."
+   (interactive)
+   (let (
+-      (re (concat "(\\[" italk-current-user-name "[^ ]* logged out @ "))
++      (re (concat "^\\((\\[" italk-current-user-name ".* \\(logged out @ \\|status to <off\\)\\|#<\\)"))
+       p
+       w
+     )
+@@ -1021,7 +1063,10 @@
+           mstart
+           mpath)
+       (setq mpath path)
+-      (switch-to-buffer (get-buffer-create italk-log-buffer))
++      (if (> emacs-major-version 20)
++        (set-buffer (get-buffer-create italk-log-buffer))
++        (switch-to-buffer (get-buffer-create italk-log-buffer))
++      )
+       (if (eq mode 'telegram)
+         (save-excursion
+           (beginning-of-buffer)
+@@ -1053,7 +1098,10 @@
+         ;
+         (setq contents (buffer-substring start (point-max)))
+         (setq buf (get-buffer-create italk-temporary-buffer))
+-        (switch-to-buffer buf)
++        (if (> emacs-major-version 20)
++          (set-buffer buf)
++          (switch-to-buffer buf)
++        )
+         (insert contents)
+         ;(setq contents nil)
+         (if (eq mode 'telegram)
+@@ -1100,7 +1148,10 @@
+         nil
+         ;else
+         (setq buf (get-buffer-create italk-temporary-buffer))
+-        (switch-to-buffer buf)
++        (if (> emacs-major-version 20)
++          (set-buffer buf)
++          (switch-to-buffer buf)
++        )
+         (insert contents)
+         (setq contents nil)
+         (beginning-of-buffer)
+@@ -1123,7 +1174,10 @@
+       ;
+       (setq contents nil)
+       ;
+-      (switch-to-buffer (get-buffer-create italk-log-buffer))
++      (if (> emacs-major-version 20)
++        (set-buffer (get-buffer-create italk-log-buffer))
++        (switch-to-buffer (get-buffer-create italk-log-buffer))
++      )
+       (set-buffer-modified-p nil)
+     )
+   )
+@@ -1179,6 +1233,7 @@
+         ))
+         (goto-char (point-min))
+         (replace-regexp "^" quotes)
++        (end-of-buffer)
+         (beginning-of-line)
+         (process-send-string italk-process
+           (buffer-substring (point-min) (point)))
+@@ -1308,16 +1363,26 @@
+   (setq italk-current-user-name who)
+   (setq italk-kill-name-flag (and italk-regexp-kill-name))
+   (run-hooks 'italk-startup-hook)
+-  (let ((w who) (p (string-match "\C-j" who)))
+-    (if p
+-      (setq w (substring who 0 p))
++  (let (p (w who))
++    (setq p (string-match "\C-j" w))
++    (while p
++      (if (string= (substring w 0 1) "/")
++        (progn
++          (setq w (substring w (1+ p)))
++          (setq p (string-match "\C-j" w))
++          (setq italk-current-user-name w)
++        )
++        ;else
++        (setq italk-current-user-name (substring w 0 p))
++        (setq p nil)
++      )
+     )
+-    (setq italk-regexp-receive-ping (concat
+-      "^\\(([0-9][0-9]:[0-9][0-9]:[0-9][0-9])\\[.*\\]\\|#<\\) \\(\\[[^]]+\\] \\)?\\([0-9][0-9]*: ?\\)?ping "
+-      w
+-      "$"
+-    ))
+   )
++  (setq italk-regexp-receive-ping (concat
++    "^\\(([0-9][0-9]:[0-9][0-9]:[0-9][0-9])\\[.*\\]\\|#<\\) \\(\\[[^]]+\\] \\)?\\([0-9][0-9]*: ?\\)?ping "
++    italk-current-user-name 
++    "$"
++  ))
+   (setq italk-time-last-send-message (current-time))
+ ;
+   (erase-buffer)
+@@ -1400,12 +1465,14 @@
+                     (setq italk-log-backlog-p t))
+                   (if (string-match italk-regexp-receive-telegram
+                                     italk-pushd-string)
+-                    (setq italk-telegram-last-from
+-                      (string-to-number
+-                        (substring italk-pushd-string
+-                                   (match-beginning 1) (match-end 1))
+-                      )
+-                    )
++                    (setq italk-telegram-last-from (concat
++                      (substring italk-pushd-string
++                                 (match-beginning 1) (match-end 1))
++                      "{"
++                      (substring italk-pushd-string
++                                 (match-beginning 2) (match-end 2))
++                      "}"
++                    ))
+                   )
+                   (if (and italk-ping-hook (null italk-log-backlog-p))
+                     (if (string-match italk-regexp-receive-ping

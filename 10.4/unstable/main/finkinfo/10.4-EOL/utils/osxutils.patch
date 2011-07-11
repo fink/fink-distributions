@@ -1,0 +1,1681 @@
+diff -Naur osxutils/cpath/cpath osxutils-new/cpath/cpath
+--- osxutils/cpath/cpath	2005-06-12 10:37:41.000000000 -0400
++++ osxutils-new/cpath/cpath	2010-10-23 19:46:12.000000000 -0400
+@@ -1,3 +1,3 @@
+ #!/bin/sh
+ 
+-echo -n $PWD | pbcopy
+\ No newline at end of file
++/bin/echo -n $PWD | pbcopy
+\ No newline at end of file
+diff -Naur osxutils/fileinfo/fileinfo.c osxutils-new/fileinfo/fileinfo.c
+--- osxutils/fileinfo/fileinfo.c	2005-06-12 10:37:41.000000000 -0400
++++ osxutils-new/fileinfo/fileinfo.c	2010-10-23 19:44:41.000000000 -0400
+@@ -131,6 +131,15 @@
+ static int UnixIsFolder (char *path);
+ static OSErr GetForkSizes (const FSRef *fileRef,  UInt64 *totalLogicalForkSize, UInt64 *totalPhysicalForkSize, short fork);
+ 
++OSErr RetrieveStatData (FileInfoStruct *file);
++OSErr RetrieveFileInfo (FileInfoStruct *file);
++OSErr ProcessFinderInfo (FileInfoStruct *file);
++char* GetFileNameFromPath (char *name);
++static OSStatus FSMakePath(FSRef fileRef, UInt8 *path, UInt32 maxPathSize);
++static char* GetSizeString( UInt64 size, short sizeFormat);
++OSErr GetDateTimeStringFromUTCDateTime (UTCDateTime *utcDateTime, char *dateTimeString);
++static short GetLabelNumber (short flags);
++
+ 
+ /*//////////////////////////////////////
+ // Main program function
+@@ -353,8 +362,8 @@
+     }
+ 	
+ 		//finder info
+-		BlockMove(&cinfo.finderInfo, &file->finderInfo, sizeof(FInfo));
+-		BlockMove(&cinfo.extFinderInfo, &file->finderXInfo, sizeof(FXInfo));
++    file->finderInfo = *(FInfo*)cinfo.finderInfo;
++    file->finderXInfo = *(FXInfo*)cinfo.extFinderInfo;
+ 		
+ 		//file size
+ 		file->rsrcPhysicalSize = cinfo.rsrcPhysicalSize;
+@@ -408,7 +417,8 @@
+ 
+ 	/* Is Stationery */
+ 	file->finderFlags[5] = (file->finderInfo.fdFlags & kIsStationery) ? 1 : 0;
+-
++	
++    return noErr;
+ }
+ 
+ 
+@@ -610,23 +620,18 @@
+ OSErr GetDateTimeStringFromUTCDateTime (UTCDateTime *utcDateTime, char *dateTimeString)
+ {
+ 	CFAbsoluteTime  cfTime;
+-	LongDateTime	ldTime;
+-	Str255			pDateStr, pTimeStr;
+-	char			dateStr[128], timeStr[128];
+-	OSErr			err = noErr;
+-
+-	err = UCConvertUTCDateTimeToCFAbsoluteTime (utcDateTime, &cfTime);
+-	err = UCConvertCFAbsoluteTimeToLongDateTime (cfTime, &ldTime);
+-	
+-	LongDateString (&ldTime, shortDate, pDateStr, NULL);
+-	LongTimeString (&ldTime, TRUE, pTimeStr, NULL);
+-	
+-	CopyPascalStringToC (pDateStr, &dateStr);
+-	CopyPascalStringToC (pTimeStr, &timeStr);
+-	
+-	strcpy(dateTimeString, &timeStr);
+-	strcat(dateTimeString, &" ");
+-	strcat(dateTimeString, &dateStr);
++	OSErr err = UCConvertUTCDateTimeToCFAbsoluteTime (utcDateTime, &cfTime);
++    
++    CFLocaleRef locale = CFLocaleCopyCurrent();
++    CFDateRef date = CFDateCreate(NULL, cfTime);
++    CFDateFormatterRef formatter = CFDateFormatterCreate(NULL, locale,
++        kCFDateFormatterLongStyle, kCFDateFormatterLongStyle);
++    CFRelease(locale);
++    CFStringRef dstr = CFDateFormatterCreateStringWithDate(NULL, formatter, date);
++    CFRelease(date);
++    CFRelease(formatter);
++    CFStringGetCString(dstr, dateTimeString, 256, kCFStringEncodingUTF8);
++    CFRelease(dstr);
+ 	
+ 	return err;
+ }
+diff -Naur osxutils/getfcomment/main.c osxutils-new/getfcomment/main.c
+--- osxutils/getfcomment/main.c	2005-11-26 21:54:09.000000000 -0500
++++ osxutils-new/getfcomment/main.c	2010-10-23 19:44:42.000000000 -0400
+@@ -78,10 +78,9 @@
+     static void PrintHelp (void);
+ 	
+ 	//AE functions from MoreAppleEvents.c, Apple's sample code
+-	pascal OSErr MoreFEGetComment(const FSSpecPtr pFSSpecPtr,Str255 pCommentStr,const AEIdleUPP pIdleProcUPP);
++    pascal OSErr MoreFEGetComment(const FSRef *pFSRefPtr, const FSSpecPtr pFSSpecPtr,Str255 pCommentStr,const AEIdleUPP pIdleProcUPP);
+ 	pascal void MoreAEDisposeDesc(AEDesc* desc);
+ 	pascal void MoreAENullDesc(AEDesc* desc);
+-	pascal OSStatus MoreAEOCreateObjSpecifierFromFSSpec(const FSSpecPtr pFSSpecPtr,AEDesc *pObjSpecifier);
+ 	pascal OSStatus MoreAEOCreateObjSpecifierFromFSRef(const FSRefPtr pFSRefPtr,AEDesc *pObjSpecifier);
+ 	pascal OSStatus MoreAEOCreateObjSpecifierFromCFURLRef(const CFURLRef pCFURLRef,AEDesc *pObjSpecifier);
+ 	pascal OSStatus MoreAESendEventReturnAEDesc(const AEIdleUPP    pIdleProcUPP, const AppleEvent  *pAppleEvent,const DescType    pDescType, AEDesc        *pAEDesc);
+@@ -116,9 +115,11 @@
+ 			case 'p':
+ 				printFileName = true;
+ 				break;
++#if !__LP64__
+ 			case 'c':
+ 				os9comment = true;
+ 				break;
++#endif
+             default: // '?'
+                 rc = 1;
+                 PrintHelp();
+@@ -176,7 +177,7 @@
+ 
+ 	// call the apple event routine. I'm not going to pretend I understand what's going on
+ 	// in all those horribly kludgy functions, but at least it works.
+-	err = MoreFEGetComment(&fileSpec, comment, inIdleProc);
++	err = MoreFEGetComment(&fileRef, &fileSpec, comment, inIdleProc);
+ 	if (err)
+ 	{
+ 		fprintf(stderr, "Error %d getting comment for '%s'\n", err, path);
+@@ -201,6 +202,7 @@
+ 
+ static void PrintFileComment (char *path)
+ {
++#if !__LP64__
+ 	OSErr	err = noErr;
+     FSRef	fileRef;
+     FSSpec	fileSpec;
+@@ -236,6 +238,11 @@
+ 	dt.ioVRefNum = fileSpec.vRefNum;
+         
+     err = PBDTGetPath(&dt);
++	if (err != noErr)
++	{
++		fprintf(stderr, "Can't get OS 9 comments for %s\n", path);
++		return;
++	}
+     
+     //fill in the relevant fields (using parameters)
+     dt.ioNamePtr = fileSpec.name;
+@@ -253,6 +260,7 @@
+ 			printf("Comment for '%s':\n%s\n", path, (char *)&comment);
+ 	}
+ 	return;
++#endif
+ }
+ 
+ 
+@@ -286,7 +294,7 @@
+ 	return 0;
+ }
+ 
+-pascal OSErr MoreFEGetComment(const FSSpecPtr pFSSpecPtr,Str255 pCommentStr,const AEIdleUPP pIdleProcUPP)
++pascal OSErr MoreFEGetComment(const FSRef *pFSRefPtr, const FSSpecPtr pFSSpecPtr,Str255 pCommentStr,const AEIdleUPP pIdleProcUPP)
+ {
+   AppleEvent tAppleEvent = {typeNull,NULL};  //  If you always init AEDescs, it's always safe to dispose of them.
+   AEDesc tAEDesc = {typeNull,NULL};
+@@ -297,7 +305,7 @@
+ 	fprintf(stderr, "No proc pointer\n");
+     return paramErr;
+   }
+-  anErr = MoreAEOCreateObjSpecifierFromFSSpec(pFSSpecPtr,&tAEDesc);
++  anErr = MoreAEOCreateObjSpecifierFromFSRef(pFSRefPtr,&tAEDesc);
+   if (anErr)
+   {
+ 	fprintf(stderr, "Error creating objspecifier from fsspec\n");
+@@ -427,26 +435,6 @@
+ 	desc->dataHandle     = nil;
+ }//end MoreAENullDesc
+ 
+-//********************************************************************************
+-// A simple wrapper around CreateObjSpecifier which creates
+-// an object specifier from a FSSpec using formName.
+-pascal OSStatus MoreAEOCreateObjSpecifierFromFSSpec(const FSSpecPtr pFSSpecPtr,AEDesc *pObjSpecifier)
+-{
+-	OSErr 		anErr = paramErr;
+-
+-	if (nil != pFSSpecPtr)
+-	{
+-		FSRef tFSRef;
+-
+-		anErr = FSpMakeFSRef(pFSSpecPtr,&tFSRef);
+-		if (noErr == anErr)
+-		{
+-			anErr = MoreAEOCreateObjSpecifierFromFSRef(&tFSRef,pObjSpecifier);
+-		}
+-	}
+-	return anErr;
+-}//end MoreAEOCreateObjSpecifierFromFSSpec
+-
+ 
+ 
+ //********************************************************************************
+@@ -585,7 +573,7 @@
+   {
+     OSErr  getErrErr = noErr;
+     
+-    getErrErr = AEGetParamPtr( pAEReply, keyErrorNumber, typeShortInteger, &actualType,
++    getErrErr = AEGetParamPtr( pAEReply, keyErrorNumber, typeSInt16, &actualType,
+                   &handlerErr, sizeof( OSErr ), &actualSize );
+     
+     if ( getErrErr != errAEDescNotFound )  // found an errorNumber parameter
+diff -Naur osxutils/geticon/IconFamily.m osxutils-new/geticon/IconFamily.m
+--- osxutils/geticon/IconFamily.m	2005-06-12 10:37:41.000000000 -0400
++++ osxutils-new/geticon/IconFamily.m	2010-10-23 19:44:42.000000000 -0400
+@@ -16,6 +16,21 @@
+ #import "IconFamily.h"
+ #import "NSString+CarbonFSSpecCreation.h"
+ 
++static OSErr GetFSRefFInfo(const FSRef *ref, FInfo *finfo) {
++	FSCatalogInfo cinfo;
++	OSErr err = FSGetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo, NULL, NULL, NULL);
++	if (err != noErr)
++		return err;
++	*finfo = *(FInfo*)cinfo.finderInfo;
++}
++
++static OSErr SetFSRefFInfo(const FSRef *ref, const FInfo *finfo) {
++	FSCatalogInfo cinfo;
++	*(FInfo*)cinfo.finderInfo = *finfo;
++	OSErr err = FSSetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo);
++	return err;
++}
++
+ @interface IconFamily (Internals)
+ 
+ + (NSImage*) resampleImage:(NSImage*)image toIconWidth:(int)width usingImageInterpolation:(NSImageInterpolation)imageInterpolation;
+@@ -87,7 +102,7 @@
+ 
+ - initWithContentsOfFile:(NSString*)path
+ {
+-    FSSpec fsSpec;
++    FSRef fsRef;
+     OSErr result;
+     
+     self = [self init];
+@@ -96,11 +111,11 @@
+             DisposeHandle( (Handle)hIconFamily );
+             hIconFamily = NULL;
+         }
+-		if (![path getFSSpec:&fsSpec createFileIfNecessary:NO]) {
++		if (![path getFSRef:&fsRef createFileIfNecessary:NO]) {
+ 			[self autorelease];
+ 			return nil;
+ 		}
+-		result = ReadIconFile( &fsSpec, &hIconFamily );
++		result = ReadIconFromFSRef( &fsRef, &hIconFamily );
+ 		if (result != noErr) {
+ 			[self autorelease];
+ 			return nil;
+@@ -129,7 +144,7 @@
+     IconRef	iconRef;
+     OSErr	result;
+     SInt16	label;
+-    FSSpec	fileSpec;
++    FSRef	fileRef;
+ 
+     self = [self init];
+     if (self)
+@@ -140,14 +155,15 @@
+             hIconFamily = NULL;
+         }
+ 
+-        if( ![path getFSSpec:&fileSpec createFileIfNecessary:NO] )
++        if( ![path getFSRef:&fileRef createFileIfNecessary:NO] )
+         {
+             [self autorelease];
+             return nil;
+         }
+ 
+-        result = GetIconRefFromFile(
+-                                    &fileSpec,
++        result = GetIconRefFromFileInfo(
++                                    &fileRef, 0, NULL, 0, NULL,
++									kIconServicesNormalUsageFlag,
+                                     &iconRef,
+                                     &label );
+ 
+@@ -518,7 +534,6 @@
+     Handle hExistingCustomIcon;
+     Handle hIconFamilyCopy;
+ 	NSDictionary *fileAttributes;
+-	OSType existingType = '????', existingCreator = '????';
+         
+     // Get an FSRef and an FSSpec for the target file, and an FSRef for its parent directory that we can use in the FNNotify() call below.
+     if (![path getFSRef:&targetFileFSRef createFileIfNecessary:NO])
+@@ -527,27 +542,15 @@
+     if (result != noErr)
+         return NO;
+ 	
+-    // Get the file's type and creator codes.
+-	fileAttributes = [[NSFileManager defaultManager] fileAttributesAtPath:path traverseLink:NO];
+-	if (fileAttributes)
+-	{
+-		existingType = [fileAttributes fileHFSTypeCode];
+-		existingCreator = [fileAttributes fileHFSCreatorCode];
+-    }
+-	
+-    // Make sure the file has a resource fork that we can open.  (Although
+-    // this sounds like it would clobber an existing resource fork, the Carbon
+-    // Resource Manager docs for this function say that's not the case.  If
+-    // the file already has a resource fork, we receive a result code of
+-    // dupFNErr, which is not really an error per se, but just a notification
+-    // to us that creating a new resource fork for the file was not necessary.)
+-    FSpCreateResFile( &targetFileFSSpec, existingCreator, existingType, smRoman );
+-    result = ResError();
+-    if (!(result == noErr || result == dupFNErr))
++    // Make sure the file has a resource fork that we can open.
++	HFSUniStr255 rname;
++	FSGetResourceForkName(&rname);
++	result = FSCreateResourceFork(&targetFileFSRef, rname.length, rname.unicode, 0);
++    if (!(result == noErr || result == errFSForkExists))
+ 		return NO;
+     
+     // Open the file's resource fork.
+-    file = FSpOpenResFile( &targetFileFSSpec, fsRdWrPerm );
++    file = FSOpenResFile( &targetFileFSRef, fsRdWrPerm );
+     if (file == -1)
+ 		return NO;
+         
+@@ -593,7 +596,7 @@
+ 	
+     // Now we need to set the file's Finder info so the Finder will know that
+     // it has a custom icon.  Start by getting the file's current finder info:
+-    result = FSpGetFInfo( &targetFileFSSpec, &finderInfo );
++    result = GetFSRefFInfo( &targetFileFSRef, &finderInfo );
+     if (result != noErr)
+ 		return NO;
+     
+@@ -606,7 +609,7 @@
+     finderInfo.fdFlags = (finderInfo.fdFlags | kHasCustomIcon ) & ~kHasBeenInited;
+ 	
+     // Now write the Finder info back.
+-    result = FSpSetFInfo( &targetFileFSSpec, &finderInfo );
++    result = SetFSRefFInfo( &targetFileFSRef, &finderInfo );
+     if (result != noErr)
+ 		return NO;
+         
+@@ -636,7 +639,7 @@
+         return NO;
+ 	
+     // Open the file's resource fork, if it has one.
+-    file = FSpOpenResFile( &targetFileFSSpec, fsRdWrPerm );
++    file = FSOpenResFile( &targetFileFSRef, fsRdWrPerm );
+     if (file == -1)
+         return NO;
+ 
+@@ -653,7 +656,7 @@
+ 
+     // Now we need to set the file's Finder info so the Finder will know that
+     // it has no custom icon.  Start by getting the file's current finder info:
+-    result = FSpGetFInfo( &targetFileFSSpec, &finderInfo );
++    result = GetFSRefFInfo( &targetFileFSRef, &finderInfo );
+     if (result != noErr)
+         return NO;
+ 
+@@ -661,7 +664,7 @@
+     finderInfo.fdFlags = finderInfo.fdFlags & ~(kHasCustomIcon | kHasBeenInited);
+ 
+     // Now write the Finder info back.
+-    result = FSpSetFInfo( &targetFileFSSpec, &finderInfo );
++    result = SetFSRefFInfo( &targetFileFSRef, &finderInfo );
+     if (result != noErr)
+         return NO;
+ 
+@@ -713,15 +716,15 @@
+     if( ![path getFSRef:&targetFolderFSRef createFileIfNecessary:NO] )
+         return NO;
+ 
+-    // Make sure the file has a resource fork that we can open.  (Although
+-    // this sounds like it would clobber an existing resource fork, the Carbon
+-    // Resource Manager docs for this function say that's not the case.)
+-    FSpCreateResFile( &targetFileFSSpec, '????', '????', smRoman );
+-    if (ResError() != noErr)
+-        return NO;
++    // Make sure the file has a resource fork that we can open.
++	HFSUniStr255 rname;
++	FSGetResourceForkName(&rname);
++	result = FSCreateResourceFork(&targetFolderFSRef, rname.length, rname.unicode, 0);
++    if (!(result == noErr || result == errFSForkExists))
++		return NO;
+ 
+     // Open the file's resource fork.
+-    file = FSpOpenResFile( &targetFileFSSpec, fsRdWrPerm );
++    file = FSOpenResFile( &targetFolderFSRef, fsRdWrPerm );
+     if (file == -1)
+         return NO;
+ 
+@@ -767,12 +770,12 @@
+         return NO;
+ 
+     // Make folder icon file invisible
+-    result = FSpGetFInfo( &targetFileFSSpec, &finderInfo );
++    result = GetFSRefFInfo( &targetFolderFSRef, &finderInfo );
+     if (result != noErr)
+         return NO;
+     finderInfo.fdFlags = (finderInfo.fdFlags | kIsInvisible ) & ~kHasBeenInited;
+     // And write info back
+-    result = FSpSetFInfo( &targetFileFSSpec, &finderInfo );
++    result = SetFSRefFInfo( &targetFolderFSRef, &finderInfo );
+     if (result != noErr)
+         return NO;
+ 
+diff -Naur osxutils/hfsdata/main.c osxutils-new/hfsdata/main.c
+--- osxutils/hfsdata/main.c	2005-11-26 22:12:47.000000000 -0500
++++ osxutils-new/hfsdata/main.c	2010-10-23 19:44:42.000000000 -0400
+@@ -120,7 +120,8 @@
+ 	static Boolean IsFolder (FSRef *fileRef);
+ 	static void HFSUniPStrToCString (HFSUniStr255 *uniStr, char *cstr);
+ 	static OSStatus FSMakePath(FSRef fileRef, UInt8 *path, UInt32 maxPathSize);
+-	static OSErr FSpGetDInfo(const FSSpec* fileSpec, DInfo *dInfo);
++	static OSErr FSGetDInfo(const FSRef* ref, DInfo *dInfo);
++	static OSErr FSGetFInfo(const FSRef* ref, FInfo *fInfo);
+ 	static short GetLabelNumber (short flags);
+ 	static OSErr GetDateTimeStringFromUTCDateTime (UTCDateTime *utcDateTime, char *dateTimeString);
+ 	
+@@ -129,13 +130,13 @@
+ 	static void PrintHelp (void);
+ 	
+ 	static OSErr PrintOSXComment (FSRef	*fileRef);
++#if !__LP64__
+ 	static OSErr PrintOS9Comment (FSRef *fileRef);
+-	
++#endif
+ 	//AE functions from MoreAppleEvents.c, Apple's sample code
+-	pascal OSErr MoreFEGetComment(const FSSpecPtr pFSSpecPtr,Str255 pCommentStr,const AEIdleUPP pIdleProcUPP);
++	pascal OSErr MoreFEGetComment(const FSRef *pFSRefPtr, const FSSpecPtr pFSSpecPtr,Str255 pCommentStr,const AEIdleUPP pIdleProcUPP);
+ 	pascal void MoreAEDisposeDesc(AEDesc* desc);
+ 	pascal void MoreAENullDesc(AEDesc* desc);
+-	pascal OSStatus MoreAEOCreateObjSpecifierFromFSSpec(const FSSpecPtr pFSSpecPtr,AEDesc *pObjSpecifier);
+ 	pascal OSStatus MoreAEOCreateObjSpecifierFromFSRef(const FSRefPtr pFSRefPtr,AEDesc *pObjSpecifier);
+ 	pascal OSStatus MoreAEOCreateObjSpecifierFromCFURLRef(const CFURLRef pCFURLRef,AEDesc *pObjSpecifier);
+ 	pascal OSStatus MoreAESendEventReturnAEDesc(const AEIdleUPP    pIdleProcUPP, const AppleEvent  *pAppleEvent,const DescType    pDescType, AEDesc        *pAEDesc);
+@@ -159,7 +160,11 @@
+ #define		PROGRAM_STRING  	"hfsdata"
+ #define		VERSION_STRING		"0.1"
+ #define		AUTHOR_STRING 		"Sveinbjorn Thordarson"
++#if __LP64__
++#define     USAGE_STRING        "hfsdata [-x|A|c|m|a|t|r|R|s|S|d|D|T|C|k|l|L|o|e] file\nor\nhfsdata [-hv]\n"
++#else
+ #define     USAGE_STRING        "hfsdata [-x|A|c|m|a|t|r|R|s|S|d|D|T|C|k|l|L|o|O|e] file\nor\nhfsdata [-hv]\n"
++#endif
+ 
+ // The Mac Four-Character Application Signature for the Finder
+ static const OSType gFinderSignature = 'MACS';
+@@ -240,9 +245,11 @@
+ 			case 'o':
+ 				type = kMacOSXComment;
+ 				break;
++#if !__LP64__
+ 			case 'O':
+ 				type = kMacOS9Comment;
+ 				break;
++#endif
+ 			case 'e':
+ 				type = kAliasOriginal;
+ 				break;
+@@ -333,9 +340,11 @@
+ 		case kMacOSXComment:
+ 			err = PrintOSXComment(&fileRef);
+ 			break;
++#if !__LP64__
+ 		case kMacOS9Comment:
+ 			err = PrintOS9Comment(&fileRef);
+ 			break;
++#endif
+ 		case kAliasOriginal:
+ 			err = PrintAliasSource(&fileRef);
+ 			break;
+@@ -652,7 +661,7 @@
+         return err;
+     }
+ 	// get Finder File Info
+-	err = FSpGetFInfo (&fileSpec, &finderInfo);
++	err = FSGetFInfo (fileRef, &finderInfo);
+ 	if (err != noErr)
+ 	{
+ 		fprintf(stderr, "FSpGetFInfo(): Error %d getting file Finder File Info from file spec\n", err);
+@@ -692,7 +701,7 @@
+         return err;
+     }
+ 	// get Finder File Info
+-	err = FSpGetFInfo (&fileSpec, &finderInfo);
++	err = FSGetFInfo (fileRef, &finderInfo);
+ 	if (err != noErr)
+ 	{
+ 		fprintf(stderr, "FSpGetFInfo(): Error %d getting file Finder File Info from file spec\n", err);
+@@ -788,7 +797,7 @@
+ 	
+ 	if (IsFolder(fileRef))
+ 	{
+-		err = FSpGetDInfo (&fileSpec, &dInfo);
++		err = FSGetDInfo (fileRef, &dInfo);
+ 		if (err != noErr)
+ 		{
+ 			fprintf(stderr, "FSpGetFInfo(): Error %d getting file Finder Directory Info from file spec\n", err);
+@@ -798,7 +807,7 @@
+ 	}
+ 	else
+ 	{
+-		err = FSpGetFInfo (&fileSpec, &finderInfo);
++		err = FSGetFInfo (fileRef, &finderInfo);
+ 		if (err != noErr)
+ 		{
+ 			fprintf(stderr, "FSpGetFInfo(): Error %d getting file Finder File Info from file spec\n", err);
+@@ -830,7 +839,7 @@
+ 	
+ 	if (IsFolder(fileRef))
+ 	{
+-		err = FSpGetDInfo (&fileSpec, &dInfo);
++		err = FSGetDInfo (fileRef, &dInfo);
+ 		if (err != noErr)
+ 		{
+ 			fprintf(stderr, "FSpGetFInfo(): Error %d getting file Finder Directory Info from file spec\n", err);
+@@ -840,7 +849,7 @@
+ 	}
+ 	else
+ 	{
+-		err = FSpGetFInfo (&fileSpec, &finderInfo);
++		err = FSGetFInfo (fileRef, &finderInfo);
+ 		if (err != noErr)
+ 		{
+ 			fprintf(stderr, "FSpGetFInfo(): Error %d getting file Finder File Info from file spec\n", err);
+@@ -933,20 +942,22 @@
+ // Returns directory info structure of 
+ // file spec
+ /////////////////////////////////////*/
+-static OSErr FSpGetDInfo(const FSSpec* fileSpec, DInfo *dInfo)
++static OSErr FSGetDInfo(const FSRef* ref, DInfo *dInfo)
+ {
+-	CInfoPBRec	infoRec = {0};
+-	OSErr		err = noErr;
+-
+-	infoRec.hFileInfo.ioNamePtr = (unsigned char *)fileSpec->name;
+-	infoRec.hFileInfo.ioVRefNum = fileSpec->vRefNum;
+-	infoRec.hFileInfo.ioDirID = fileSpec->parID;
+-	err = PBGetCatInfoSync(&infoRec);
+-	if (err == noErr) 
+-        {
+-                *dInfo = infoRec.dirInfo.ioDrUsrWds;
+-	}
+-
++    FSCatalogInfo cinfo;
++    OSErr err = FSGetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo, NULL, NULL, NULL);
++    if (err != noErr)
++        return err;
++    *dInfo = *(DInfo*)cinfo.finderInfo;
++	return err;
++}
++static OSErr FSGetFInfo(const FSRef* ref, FInfo *fInfo)
++{
++    FSCatalogInfo cinfo;
++    OSErr err = FSGetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo, NULL, NULL, NULL);
++    if (err != noErr)
++        return err;
++    *fInfo = *(FInfo*)cinfo.finderInfo;
+ 	return err;
+ }
+ 
+@@ -989,26 +1000,21 @@
+ }
+ 
+ 
+-static OSErr GetDateTimeStringFromUTCDateTime (UTCDateTime *utcDateTime, char *dateTimeString)
++OSErr GetDateTimeStringFromUTCDateTime (UTCDateTime *utcDateTime, char *dateTimeString)
+ {
+ 	CFAbsoluteTime  cfTime;
+-	LongDateTime	ldTime;
+-	Str255			pDateStr, pTimeStr;
+-	char			dateStr[128], timeStr[128];
+-	OSErr			err = noErr;
+-
+-	err = UCConvertUTCDateTimeToCFAbsoluteTime (utcDateTime, &cfTime);
+-	err = UCConvertCFAbsoluteTimeToLongDateTime (cfTime, &ldTime);
+-	
+-	LongDateString (&ldTime, shortDate, pDateStr, NULL);
+-	LongTimeString (&ldTime, TRUE, pTimeStr, NULL);
+-	
+-	CopyPascalStringToC (pDateStr, (char *)&dateStr);
+-	CopyPascalStringToC (pTimeStr, (char *)&timeStr);
+-	
+-	strcpy(dateTimeString, (char *)&timeStr);
+-	strcat(dateTimeString, (char *)&" ");
+-	strcat(dateTimeString, (char *)&dateStr);
++	OSErr err = UCConvertUTCDateTimeToCFAbsoluteTime (utcDateTime, &cfTime);
++    
++    CFLocaleRef locale = CFLocaleCopyCurrent();
++    CFDateRef date = CFDateCreate(NULL, cfTime);
++    CFDateFormatterRef formatter = CFDateFormatterCreate(NULL, locale,
++        kCFDateFormatterLongStyle, kCFDateFormatterLongStyle);
++    CFRelease(locale);
++    CFStringRef dstr = CFDateFormatterCreateStringWithDate(NULL, formatter, date);
++    CFRelease(date);
++    CFRelease(formatter);
++    CFStringGetCString(dstr, dateTimeString, 256, kCFStringEncodingUTF8);
++    CFRelease(dstr);
+ 	
+ 	return err;
+ }
+@@ -1067,7 +1073,9 @@
+ 	puts("\t-L  Prints the file's label as a name (e.g. Green)");
+ 	puts("");
+ 	puts("\t-o  Prints the file's Mac OS X Finder comment");
++#if !__LP64__
+ 	puts("\t-O  Prints the file's Mac OS 9 Desktop Database comment");
++#endif
+ 	puts("");
+ 	
+ }
+@@ -1094,7 +1102,7 @@
+ 
+ 	// call the apple event routine. I'm not going to pretend I understand what's going on
+ 	// in all those horribly kludgy functions, but at least it works.
+-	err = MoreFEGetComment(&fileSpec, comment, inIdleProc);
++	err = MoreFEGetComment(fileRef, &fileSpec, comment, inIdleProc);
+ 	if (err)
+ 	{
+ 		fprintf(stderr, "Error %d getting comment\n", err);
+@@ -1113,7 +1121,7 @@
+ }
+ 
+ 
+-
++#if !__LP64__
+ static OSErr PrintOS9Comment (FSRef *fileRef)
+ {
+ 	OSErr	err = noErr;
+@@ -1137,7 +1145,7 @@
+     err = PBDTGetPath(&dt);
+ 	if (err != noErr)
+ 	{
+-		fprintf(stderr, "PBDTGetPath(): Error %d getting OS9 comment\n", err);
++		fprintf(stderr, "Can't get OS 9 comments\n");
+ 		return err;
+ 	}
+     
+@@ -1155,7 +1163,7 @@
+ 	}
+ 	return noErr;
+ }
+-
++#endif
+ 
+ 
+ 
+@@ -1170,7 +1178,7 @@
+ 	return 0;
+ }
+ 
+-pascal OSErr MoreFEGetComment(const FSSpecPtr pFSSpecPtr,Str255 pCommentStr,const AEIdleUPP pIdleProcUPP)
++pascal OSErr MoreFEGetComment(const FSRef *pFSRefPtr, const FSSpecPtr pFSSpecPtr,Str255 pCommentStr,const AEIdleUPP pIdleProcUPP)
+ {
+   AppleEvent tAppleEvent = {typeNull,NULL};  //  If you always init AEDescs, it's always safe to dispose of them.
+   AEDesc tAEDesc = {typeNull,NULL};
+@@ -1181,7 +1189,7 @@
+ 	fprintf(stderr, "No proc pointer\n");
+     return paramErr;
+   }
+-  anErr = MoreAEOCreateObjSpecifierFromFSSpec(pFSSpecPtr,&tAEDesc);
++  anErr = MoreAEOCreateObjSpecifierFromFSRef(pFSRefPtr,&tAEDesc);
+   if (anErr)
+   {
+ 	fprintf(stderr, "Error creating objspecifier from fsspec\n");
+@@ -1313,28 +1321,6 @@
+ 
+ //********************************************************************************
+ // A simple wrapper around CreateObjSpecifier which creates
+-// an object specifier from a FSSpec using formName.
+-pascal OSStatus MoreAEOCreateObjSpecifierFromFSSpec(const FSSpecPtr pFSSpecPtr,AEDesc *pObjSpecifier)
+-{
+-	OSErr 		anErr = paramErr;
+-
+-	if (nil != pFSSpecPtr)
+-	{
+-		FSRef tFSRef;
+-
+-		anErr = FSpMakeFSRef(pFSSpecPtr,&tFSRef);
+-		if (noErr == anErr)
+-		{
+-			anErr = MoreAEOCreateObjSpecifierFromFSRef(&tFSRef,pObjSpecifier);
+-		}
+-	}
+-	return anErr;
+-}//end MoreAEOCreateObjSpecifierFromFSSpec
+-
+-
+-
+-//********************************************************************************
+-// A simple wrapper around CreateObjSpecifier which creates
+ // an object specifier from a FSRef and using formName.
+ pascal OSStatus MoreAEOCreateObjSpecifierFromFSRef(const FSRefPtr pFSRefPtr,AEDesc *pObjSpecifier)
+ {
+@@ -1469,7 +1455,7 @@
+   {
+     OSErr  getErrErr = noErr;
+     
+-    getErrErr = AEGetParamPtr( pAEReply, keyErrorNumber, typeShortInteger, &actualType,
++    getErrErr = AEGetParamPtr( pAEReply, keyErrorNumber, typeSInt16, &actualType,
+                   &handlerErr, sizeof( OSErr ), &actualSize );
+     
+     if ( getErrErr != errAEDescNotFound )  // found an errorNumber parameter
+diff -Naur osxutils/lsmac/lsmac.c osxutils-new/lsmac/lsmac.c
+--- osxutils/lsmac/lsmac.c	2005-11-25 03:58:26.000000000 -0500
++++ osxutils-new/lsmac/lsmac.c	2010-10-23 19:44:42.000000000 -0400
+@@ -121,7 +121,7 @@
+ 
+ static char* GetPathOfAliasSource (char *path);
+ static OSStatus FSMakePath(FSRef fileRef, UInt8 *path, UInt32 maxPathSize);
+-static OSErr FSpGetDInfo(const FSSpec* fileSpec, DInfo *dInfo);
++static OSErr GetDInfo(const FSRef *ref, DInfo *dInfo);
+ static short GetLabelNumber (SInt16 flags);
+ 
+ static OSErr MyFSPathMakeRef( const unsigned char *path, FSRef *ref );  // path to the link itself
+@@ -446,7 +446,6 @@
+ static void ListFile(char *name, char *path, FSRef fileRef)
+ {
+     /* File manager structures */
+-    FSSpec		fileSpec;
+     FInfo 		finderInfo;
+ 
+     char		fileType[5];
+@@ -466,21 +465,16 @@
+     OSErr		err = noErr;
+ 
+     /* retrieve filespec from file ref */
+-    err = FSGetCatalogInfo (&fileRef, NULL, NULL, NULL, &fileSpec, NULL);
++    FSCatalogInfo cinfo;
++    err = FSGetCatalogInfo (&fileRef, kFSCatInfoFinderInfo, &cinfo, NULL, NULL, NULL);
+     if (err != noErr) 
+     {
+-        fprintf(stderr, "FSGetCatalogInfo(): Error %d getting file spec from file reference", err);
++        fprintf(stderr, "FSGetCatalogInfo(): Error %d getting finder info from file reference", err);
+         exit(EX_IOERR);
+     }
+ 
+     /* get the finder info */
+-    err = FSpGetFInfo (&fileSpec, &finderInfo);
+-    if (err != noErr) 
+-    {
+-        fprintf(stderr, "FSpGetFInfo(): Error %d getting file Finder info from file spec", err);
+-        fprintf(stderr, "%s\n", path);
+-        exit(EX_IOERR);
+-    }
++    finderInfo = *(FInfo*)cinfo.finderInfo;
+ 
+     /* ///// Finder flags////// */
+     
+@@ -568,9 +562,8 @@
+     char        fflagstr[7];
+     short       labelNum;
+     const char	*sizeStr;
+-    const char	*humanSizeStr = "    -   ";
++    const char	*humanSizeStr = "     -   ";
+     const char	*byteSizeStr  = "           -  ";
+-    FSSpec      fileSpec;
+     DInfo       dInfo;//directory information
+ 
+     /*
+@@ -599,8 +592,7 @@
+ 
+ 	quote = useQuotes ? '"' : ' ';
+ 
+-        FSGetCatalogInfo (&fileRef, NULL, NULL, NULL, &fileSpec, NULL);
+-        FSpGetDInfo(&fileSpec, &dInfo);
++        GetDInfo(&fileRef, &dInfo);
+ 
+                 
+         /* Is Invisible */
+@@ -742,26 +734,26 @@
+ 
+ static char* GetHumanSizeString (UInt64 size)
+ {
+-    static char	humanSizeStr[11];
++    static char	humanSizeStr[13];
+ 
+     if (size < 1024) 
+     {
+                 /* bytes */
+-        sprintf(humanSizeStr, "   %5d  B", (int)size);
++        sprintf(humanSizeStr, "   %6d  B", (int)size);
+     } 
+     else if (size < 1048576) {
+             /* kbytes */
+-        sprintf(humanSizeStr, "   %5.1f KB", size / 1024.0);
++        sprintf(humanSizeStr, "   %6.1f KB", size / 1024.0);
+     } 
+     else if (size < 1073741824) 
+     {
+             /* megabytes */
+-        sprintf(humanSizeStr, "   %5.1f MB", size / 1048576.0);
++        sprintf(humanSizeStr, "   %6.1f MB", size / 1048576.0);
+     } 
+     else 
+     {
+ 		/* gigabytes */
+-		sprintf(humanSizeStr, "   %5.1f GB", size / 1073741824.0);
++		sprintf(humanSizeStr, "   %6.1f GB", size / 1073741824.0);
+     }
+ 
+     return (humanSizeStr);
+@@ -1090,20 +1082,15 @@
+ // Returns directory info structure of 
+ // file spec
+ /////////////////////////////////////*/
+-static OSErr FSpGetDInfo(const FSSpec* fileSpec, DInfo *dInfo)
++static OSErr GetDInfo(const FSRef *ref, DInfo *dInfo)
+ {
+-	CInfoPBRec	infoRec = {0};
+ 	OSErr		err = noErr;
+-
+-	infoRec.hFileInfo.ioNamePtr = (unsigned char *)fileSpec->name;
+-	infoRec.hFileInfo.ioVRefNum = fileSpec->vRefNum;
+-	infoRec.hFileInfo.ioDirID = fileSpec->parID;
+-	err = PBGetCatInfoSync(&infoRec);
+-	if (err == noErr) 
+-        {
+-                *dInfo = infoRec.dirInfo.ioDrUsrWds;
+-	}
+-
++	
++    FSCatalogInfo cinfo;
++    err = FSGetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo, NULL, NULL, NULL);
++    if (err == noErr) {
++        *dInfo = *(DInfo*)cinfo.finderInfo;
++    }
+ 	return err;
+ }
+ 
+diff -Naur osxutils/mkalias/mkalias.c osxutils-new/mkalias/mkalias.c
+--- osxutils/mkalias/mkalias.c	2005-11-25 03:37:09.000000000 -0500
++++ osxutils-new/mkalias/mkalias.c	2010-10-23 19:44:42.000000000 -0400
+@@ -156,6 +156,55 @@
+ 
+ #pragma mark -
+ 
++static OSErr FSGetFInfo(const FSRef* ref, FInfo *fInfo) {
++    FSCatalogInfo cinfo;
++    OSErr err = FSGetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo, NULL, NULL, NULL);
++    if (err != noErr)
++        return err;
++    *fInfo = *(FInfo*)cinfo.finderInfo;
++	return err;
++}
++
++static OSErr FSSetFInfo(const FSRef* ref, FInfo *fInfo) {
++    FSCatalogInfo cinfo;
++    *(FInfo*)cinfo.finderInfo = *fInfo;
++    OSErr err = FSSetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo);
++	return err;
++}
++
++static OSErr myFSCreateResFile(const char *path, OSType creator, OSType fileType, FSRef *outRef) {
++    int fd = open(path, O_CREAT | O_WRONLY, 0666);
++    if (fd == -1) {
++        perror("opening destination:");
++        return bdNamErr;
++    }
++    close(fd);
++    
++    FSRef ref;
++    OSErr err = FSPathMakeRef((const UInt8*)path, &ref, NULL);
++    if (err != noErr)
++        return err;
++    
++	HFSUniStr255 rname;
++	FSGetResourceForkName(&rname);
++    err = FSCreateResourceFork(&ref, rname.length, rname.unicode, 0);
++    if (err != noErr)
++        return err;
++    
++    FInfo finfo;
++    err = FSGetFInfo(&ref, &finfo);
++    if (err != noErr)
++        return err;
++    finfo.fdCreator = creator;
++    finfo.fdType = fileType;
++    err = FSSetFInfo(&ref, &finfo);
++    if (err != noErr)
++        return err;
++    
++    *outRef = ref;
++    return noErr;
++}
++
+ //////////////////////////////////////////////////////////////////////////////////////////////////
+ //
+ //  Given two path strings, srcPath and destPath, creates a MacOS Finder alias from file in srcPath
+@@ -167,7 +216,7 @@
+ {
+     OSErr		err;
+     
+-    FSSpec		sourceFSSpec, destFSSpec;
++    FSSpec		sourceFSSpec;
+     FSRef		srcRef, destRef;
+     OSType		srcFileType = (OSType)NULL;
+ 	OSType		srcCreatorType = (OSType)NULL;
+@@ -203,26 +252,6 @@
+                     exit(EX_IOERR);
+             }
+             
+-            //Apple's function to get FSRef from path refuses to create for nonexistent files, so
+-            //we just create a temporary file and the remove it to get FSRef for destination
+-            fd = open(destPath, O_CREAT | O_TRUNC | O_WRONLY);
+-            
+-            //file creation fails
+-            if (fd == -1)//this can't happen, but just to be sure...
+-            {
+-                fprintf(stderr, "open(2): Error %d creating %s\n", errno, destPath);
+-                exit(EX_CANTCREAT);
+-            }
+-            close(fd);
+-            
+-            //get file ref to dest
+-            err = FSPathMakeRef(destPath, &destRef, NULL);
+-            if (err != noErr)
+-            {
+-                    fprintf(stderr, "FSPathMakeRef: Error %d getting file ref for dest \"%s\"\n", err, destPath);
+-                    exit(EX_IOERR);
+-            }
+-            
+             //retrieve source filespec from source file ref
+             err = FSGetCatalogInfo (&srcRef, NULL, NULL, NULL, &sourceFSSpec, NULL);
+             if (err != noErr)
+@@ -230,21 +259,11 @@
+                 fprintf(stderr, "FSGetCatalogInfo(): Error %d getting file spec from source FSRef\n", err);
+                 exit(EX_IOERR);
+             }
+-			
+-            //retrieve dest filespec from dest file ref
+-            err = FSGetCatalogInfo (&destRef, NULL, NULL, NULL, &destFSSpec, NULL);
+-            if (err != noErr)
+-            {
+-                printf("FSGetCatalogInfo(): Error %d getting file spec from dest FSRef\n", err);
+-                exit(EX_IOERR);
+-            }
+-            
+-            unlink(destPath);//temp file removed
+-    
++			    
+             //get the finder info for the source if it's a folder
+             if (!isSrcFolder)
+             {
+-                    err = FSpGetFInfo (&sourceFSSpec, &srcFinderInfo);
++                    err = FSGetFInfo (&srcRef, &srcFinderInfo);
+                     if (err != noErr)
+                     {
+                         fprintf(stderr, "FSpGetFInfo(): Error %d getting Finder info for source \"%s\"\n", err, srcPath);
+@@ -258,7 +277,8 @@
+     
+         if (!noCustomIconCopy)
+         {
+-            err = GetIconRefFromFile (&sourceFSSpec, &srcIconRef, &theLabel);
++            err = GetIconRefFromFileInfo(&srcRef, 0, NULL, 0, NULL,
++                kIconServicesNormalUsageFlag, &srcIconRef, &theLabel);
+             if (err != noErr)
+             {
+                 fprintf(stderr, "GetIconRefFromFile(): Error getting source file's icon.\n");
+@@ -276,15 +296,15 @@
+ 		//
+ 		
+ 		// create the new file
+-		FSpCreateResFile(&destFSSpec, 'TEMP', 'TEMP', smSystemScript);
+-		if ((err = ResError()) != noErr)
++		err = myFSCreateResFile(destPath, 'TEMP', 'TEMP', &destRef);
++		if (err != noErr)
+ 		{
+ 			fprintf(stderr, "FSpCreateResFile(): Error %d while creating file\n", err);
+ 			exit(EX_CANTCREAT);
+ 		}
+ 
+ 		//create the alias record, relative to the new alias file
+-		err = NewAlias(&destFSSpec, &sourceFSSpec, &alias);
++		err = FSNewAlias(&destRef, &srcRef, &alias);
+ 		if (err != noErr)
+ 		{
+ 			fprintf(stderr, "NewAlias(): Error %d while creating relative alias\n", err);
+@@ -292,7 +312,7 @@
+ 		}
+     	
+ 		// save the resource
+-		rsrcRefNum = FSpOpenResFile(&destFSSpec, fsRdWrPerm);
++		rsrcRefNum = FSOpenResFile(&destRef, fsRdWrPerm);
+ 		if (rsrcRefNum == -1) 
+ 		{ 
+ 			err = ResError(); 
+@@ -300,7 +320,8 @@
+ 			exit(EX_IOERR);
+ 		}
+ 		UseResFile(rsrcRefNum);
+-		AddResource((Handle) alias, rAliasType, 0, destFSSpec.name);
++        Str255 rname;
++		AddResource((Handle) alias, rAliasType, 0, NULL);
+ 		if ((err = ResError()) != noErr)
+ 		{
+ 			fprintf(stderr, "Error %d while adding alias resource for %s", err, (char *)&destPath);
+@@ -320,7 +341,7 @@
+             FSNewAliasMinimal (&srcRef, &alias);
+             if (alias == NULL)
+             {
+-                fprintf(stderr, "NewAliasMinimal(): Null handle Alias returned from FSRef for file %s\n", sourceFSSpec.name);
++                fprintf(stderr, "NewAliasMinimal(): Null handle Alias returned from FSRef for file %s\n", srcPath);
+                 exit(EX_IOERR);
+             }
+ 			
+@@ -329,12 +350,17 @@
+             // Otherwise, we use the same File/Creator as source file
+             
+             if (isSrcFolder)
+-                FSpCreateResFile(&destFSSpec, 'MACS', 'fdrp', -1);
++                err = myFSCreateResFile(destPath, 'MACS', 'fdrp', &destRef);
+             else
+-                FSpCreateResFile(&destFSSpec, '    ', '    ', -1);
++                err = myFSCreateResFile(destPath, '    ', '    ', &destRef);
++    		if (err != noErr)
++    		{
++    			fprintf(stderr, "Error %d while creating alias file\n", err);
++    			exit(EX_CANTCREAT);
++    		}
+             
+             //open resource file and write the relevant resources
+-            rsrcRefNum = FSpOpenResFile (&destFSSpec, 3);
++            rsrcRefNum = FSOpenResFile (&destRef, 3);
+             
+                 //write the alias resource
+                 AddResource ((Handle)alias, 'alis', 0, NULL);
+@@ -353,10 +379,10 @@
+     
+     
+             //get finder info on newly created alias
+-            err = FSpGetFInfo (&destFSSpec, &destFinderInfo);
++            err = FSGetFInfo (&destRef, &destFinderInfo);
+             if (err != noErr)
+             {
+-                printf("FSpGetFInfo(): Error %d getting Finder info for target alias \"%s\"\n", err, srcPath);
++                printf("FSpGetFInfo(): Error %d getting Finder info for target alias \"%s\"\n", err, destPath);
+                 exit(EX_IOERR);
+             }
+             
+@@ -375,7 +401,7 @@
+      	        destFinderInfo.fdCreator = srcCreatorType;
+      	    }
+             
+-            err = FSpSetFInfo (&destFSSpec, &destFinderInfo);
++            err = FSSetFInfo (&destRef, &destFinderInfo);
+             if (err != noErr)
+             {
+                 printf("FSpSetFInfo(): Error %d setting Finder Alias flag (0x8000).\n", err);
+diff -Naur osxutils/rcmac/rcmac osxutils-new/rcmac/rcmac
+--- osxutils/rcmac/rcmac	2005-11-25 03:27:50.000000000 -0500
++++ osxutils-new/rcmac/rcmac	2010-10-23 19:46:12.000000000 -0400
+@@ -4,4 +4,4 @@
+ #
+ #
+ 
+-find "$1" -type d -exec \/usr/local/bin/lsmac -o '{}' \;
++find "$1" -type d -exec lsmac -o '{}' \;
+diff -Naur osxutils/setfcomment/setfcomment.c osxutils-new/setfcomment/setfcomment.c
+--- osxutils/setfcomment/setfcomment.c	2005-11-25 03:20:37.000000000 -0500
++++ osxutils-new/setfcomment/setfcomment.c	2010-10-23 19:44:42.000000000 -0400
+@@ -70,16 +70,15 @@
+ 
+     static char *GetCommentParameter (char *arg);
+     static void SetFileComment (char *path, char *comment);
+-    static OSErr OSX_SetComment (FSSpec *fileSpec, char *comment);
+-    static OSErr OS9_SetComment (FSSpec *fileSpec, char *comment);
++    static OSErr OSX_SetComment (FSRef *fileRef, FSSpec *fileSpec, char *comment);
++    static OSErr OS9_SetComment (FSSpec *fileSpec, char *comment, bool *unsupported);
+     static void PrintVersion (void);
+     static void PrintHelp (void);
+     
+     // the stuff I ripped from MoreAppleEvents sample code
+ 
+-    pascal OSErr MoreFESetComment(const FSSpecPtr pFSSpecPtr, const Str255 pCommentStr, const AEIdleUPP pIdleProcUPP);
++    pascal OSErr MoreFESetComment(const FSRef *pFSRefPtr, const FSSpecPtr pFSSpecPtr, const Str255 pCommentStr, const AEIdleUPP pIdleProcUPP);
+     //pascal OSErr MoreFEGetComment(const FSSpecPtr pFSSpecPtr,Str255 pCommentStr,const AEIdleUPP pIdleProcUPP);
+-    pascal OSStatus MoreAEOCreateObjSpecifierFromFSSpec(const FSSpecPtr pFSSpecPtr,AEDesc *pObjSpecifier);
+     pascal OSStatus MoreAEOCreateObjSpecifierFromFSRef(const FSRefPtr pFSRefPtr,AEDesc *pObjSpecifier);
+     pascal OSStatus MoreAEOCreateObjSpecifierFromCFURLRef(const CFURLRef pCFURLRef,AEDesc *pObjSpecifier);
+     pascal OSErr MoreAESendEventNoReturnValue (const AEIdleUPP pIdleProcUPP, const AppleEvent* pAppleEvent );
+@@ -128,6 +127,9 @@
+                 return EX_USAGE;
+         }
+     }
++#if __LP64__
++    setOS9comment = 0;
++#endif
+     
+     if (comment == NULL)
+     {
+@@ -206,7 +208,7 @@
+     
+     
+             //being by setting MacOS X Finder Comment
+-            err = OSX_SetComment (&fileSpec, comment);
++            err = OSX_SetComment (&fileRef, &fileSpec, comment);
+             if (err != noErr)
+             {
+                 fprintf(stderr, "OSX_SetComment(): Error %d setting Finder comment for %s\n", err, path);
+@@ -222,16 +224,19 @@
+                 return;
+     
+             //set MacOS 9 Comment
+-            err = OS9_SetComment (&fileSpec, comment);
+-            if (err != noErr)
+-            {
+-                fprintf(stderr, "OS9_SetComment(): Error %d setting MacOS 9 comment for %s\n", err, path);
+-                return;
+-            }
+-            else if (!silentMode)
+-			{
+-                printf("MacOS 9 Comment set for %s\n", path);
+-			}
++            bool unsupported = 0;
++            err = OS9_SetComment (&fileSpec, comment, &unsupported);
++            if (!unsupported) {
++                if (err != noErr)
++                {
++                    fprintf(stderr, "OS9_SetComment(): Error %d setting MacOS 9 comment for %s\n", err, path);
++                    return;
++                }
++                else if (!silentMode)
++    			{
++                    printf("MacOS 9 Comment set for %s\n", path);
++    			}
++    		}
+ }
+ 
+ 
+@@ -246,7 +251,7 @@
+ // the Finder.  As far as I know, there is no other way.
+ // This will fail if the Finder isn't running....:(
+ ///////////////////////////////////////////////////////////////////
+-static OSErr OSX_SetComment (FSSpec *fileSpec, char *comment)
++static OSErr OSX_SetComment (FSRef *fileRef, FSSpec *fileSpec, char *comment)
+ {
+     OSErr	err = noErr;
+     Str255	pCommentStr;
+@@ -254,9 +259,14 @@
+     if (strlen(comment) > MAX_COMMENT_LENGTH)
+         return true;
+ 
+-    CopyCStringToPascal(comment,pCommentStr);
++    // make a pascal string
++    strncpy((char*)pCommentStr + 1, comment, 255);
++    int len = strlen(comment);
++    if (len > 255)
++        len = 255;
++    pCommentStr[0] = len;
+ 
+-    err = MoreFESetComment(fileSpec, pCommentStr, NULL);
++    err = MoreFESetComment(fileRef, fileSpec, pCommentStr, NULL);
+     
+     return(err);
+ }
+@@ -266,15 +276,19 @@
+ // We set the MacOS 9 Finder comment using the File Manager API's
+ // Desktop Database functions.
+ ///////////////////////////////////////////////////////////////////
+-static OSErr OS9_SetComment (FSSpec *fileSpec, char *comment)
++static OSErr OS9_SetComment (FSSpec *fileSpec, char *comment, bool *unsupported)
+ {
++#if !__LP64__    
+     OSErr	err = noErr;
+-    
+     DTPBRec dt;
+         
+     dt.ioVRefNum = (*fileSpec).vRefNum;
+         
+     err = PBDTGetPath(&dt);
++    if (err != noErr) {
++        *unsupported = true;
++        return err;
++    }
+     
+     //fill in the relevant fields (using parameters)
+     dt.ioNamePtr = (*fileSpec).name;
+@@ -290,7 +304,7 @@
+         return err; 
+         
+     err = PBDTFlushSync (&dt);
+-        
++#endif        
+     return (noErr);
+ }
+ 
+@@ -349,19 +363,18 @@
+ 	
+ 	See note about idle functions above.
+ */
+-pascal OSErr MoreFESetComment(const FSSpecPtr pFSSpecPtr, const Str255 pCommentStr, const AEIdleUPP pIdleProcUPP)
++pascal OSErr MoreFESetComment(const FSRef *pFSRefPtr, const FSSpecPtr pFSSpecPtr, const Str255 pCommentStr, const AEIdleUPP pIdleProcUPP)
+ {
+ 	AppleEvent tAppleEvent = {typeNull,nil};	//	If you always init AEDescs, it's always safe to dispose of them.
+ 	AEBuildError	tAEBuildError;
+ 	AEDesc 			tAEDesc = {typeNull,nil};
+ 	OSErr anErr = noErr;
+ 
+-	anErr = MoreAEOCreateObjSpecifierFromFSSpec(pFSSpecPtr,&tAEDesc);
++	anErr = MoreAEOCreateObjSpecifierFromFSRef(pFSRefPtr,&tAEDesc);
+ 	if (noErr == anErr)
+ 	{
+-		char* dataPtr = NewPtr(pCommentStr[0]);
+-
+-		CopyPascalStringToC(pCommentStr,dataPtr);
++		char* dataPtr = NewPtr(pCommentStr[0] + 1);
++        strncpy(dataPtr, (char*)pCommentStr + 1, pCommentStr[0]);
+ 		anErr = AEBuildAppleEvent(
+ 			        kAECoreSuite,kAESetData,
+ 					typeApplSignature,&gFinderSignature,sizeof(OSType),
+@@ -426,25 +439,6 @@
+ 	return anErr;
+ }	// end MoreFEGetComment
+ */
+-//********************************************************************************
+-// A simple wrapper around CreateObjSpecifier which creates
+-// an object specifier from a FSSpec using formName.
+-pascal OSStatus MoreAEOCreateObjSpecifierFromFSSpec(const FSSpecPtr pFSSpecPtr,AEDesc *pObjSpecifier)
+-{
+-	OSErr 		anErr = paramErr;
+-
+-	if (nil != pFSSpecPtr)
+-	{
+-		FSRef tFSRef;
+-
+-		anErr = FSpMakeFSRef(pFSSpecPtr,&tFSRef);
+-		if (noErr == anErr)
+-		{
+-			anErr = MoreAEOCreateObjSpecifierFromFSRef(&tFSRef,pObjSpecifier);
+-		}
+-	}
+-	return anErr;
+-}//end MoreAEOCreateObjSpecifierFromFSSpec
+ 
+ 
+ 
+@@ -576,7 +570,7 @@
+ 	{
+ 		OSErr	getErrErr = noErr;
+ 		
+-		getErrErr = AEGetParamPtr( pAEReply, keyErrorNumber, typeShortInteger, &actualType,
++		getErrErr = AEGetParamPtr( pAEReply, keyErrorNumber, typeSInt16, &actualType,
+ 									&handlerErr, sizeof( OSErr ), &actualSize );
+ 		
+ 		if ( getErrErr != errAEDescNotFound )	// found an errorNumber parameter
+diff -Naur osxutils/setfctypes/setfctypes.c osxutils-new/setfctypes/setfctypes.c
+--- osxutils/setfctypes/setfctypes.c	2005-11-25 02:52:15.000000000 -0500
++++ osxutils-new/setfctypes/setfctypes.c	2010-10-23 19:44:42.000000000 -0400
+@@ -142,7 +142,6 @@
+ {
+     OSErr	err = noErr;
+     FSRef	fileRef;
+-    FSSpec	fileSpec;
+     FInfo 	finderInfo;
+     short	c = 0;
+ 
+@@ -180,22 +179,15 @@
+     }
+     
+     //retrieve filespec from file ref
+-    err = FSGetCatalogInfo (&fileRef, NULL, NULL, NULL, &fileSpec, NULL);
++    FSCatalogInfo cinfo;
++    err = FSGetCatalogInfo (&fileRef, kFSCatInfoFinderInfo, &cinfo, NULL, NULL, NULL);
+     if (err != noErr)
+     {
+         if (!silentMode)
+-            fprintf(stderr, "FSGetCatalogInfo(): Error %d getting file spec for %s", err, fileStr);
+-        return;
+-    }
+-    
+-    //get the finder info   
+-    err = FSpGetFInfo (&fileSpec, &finderInfo);
+-    if (err != noErr)
+-    {
+-        if (!silentMode)
+-            fprintf(stderr, "FSpGetFInfo(): Error %d getting Finder info for %s", err, fileStr);
++            fprintf(stderr, "FSGetCatalogInfo(): Error %d getting Finder info for %s", err, fileStr);
+         return;
+     }
++    finderInfo = *(FInfo*)cinfo.finderInfo;
+     
+     c = false;
+     
+@@ -216,11 +208,12 @@
+     if (!c)
+         return;
+     
+-    err = FSpSetFInfo (&fileSpec, &finderInfo);
++    *(FInfo*)cinfo.finderInfo = finderInfo;
++    err = FSSetCatalogInfo(&fileRef, kFSCatInfoFinderInfo, &cinfo);
+     if (err != noErr)
+     {
+         if (!silentMode)
+-            fprintf(stderr, "FSpSetFInfo(): Error %d setting Finder info for %s", err, fileStr);
++            fprintf(stderr, "FSSetCatalogInfo(): Error %d setting Finder info for %s", err, fileStr);
+         return;
+     }
+ }
+diff -Naur osxutils/seticon/IconFamily.m osxutils-new/seticon/IconFamily.m
+--- osxutils/seticon/IconFamily.m	2004-03-05 16:44:20.000000000 -0500
++++ osxutils-new/seticon/IconFamily.m	2010-10-23 19:44:42.000000000 -0400
+@@ -16,6 +16,21 @@
+ #import "IconFamily.h"
+ #import "NSString+CarbonFSSpecCreation.h"
+ 
++static OSErr GetFSRefFInfo(const FSRef *ref, FInfo *finfo) {
++	FSCatalogInfo cinfo;
++	OSErr err = FSGetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo, NULL, NULL, NULL);
++	if (err != noErr)
++		return err;
++	*finfo = *(FInfo*)cinfo.finderInfo;
++}
++
++static OSErr SetFSRefFInfo(const FSRef *ref, const FInfo *finfo) {
++	FSCatalogInfo cinfo;
++	*(FInfo*)cinfo.finderInfo = *finfo;
++	OSErr err = FSSetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo);
++	return err;
++}
++
+ @interface IconFamily (Internals)
+ 
+ + (NSImage*) resampleImage:(NSImage*)image toIconWidth:(int)width usingImageInterpolation:(NSImageInterpolation)imageInterpolation;
+@@ -87,7 +102,7 @@
+ 
+ - initWithContentsOfFile:(NSString*)path
+ {
+-    FSSpec fsSpec;
++    FSRef fsRef;
+     OSErr result;
+     
+     self = [self init];
+@@ -96,11 +111,11 @@
+             DisposeHandle( (Handle)hIconFamily );
+             hIconFamily = NULL;
+         }
+-		if (![path getFSSpec:&fsSpec createFileIfNecessary:NO]) {
++		if (![path getFSRef:&fsRef createFileIfNecessary:NO]) {
+ 			[self autorelease];
+ 			return nil;
+ 		}
+-		result = ReadIconFile( &fsSpec, &hIconFamily );
++		result = ReadIconFromFSRef( &fsRef, &hIconFamily );
+ 		if (result != noErr) {
+ 			[self autorelease];
+ 			return nil;
+@@ -129,7 +144,7 @@
+     IconRef	iconRef;
+     OSErr	result;
+     SInt16	label;
+-    FSSpec	fileSpec;
++    FSRef	fileRef;
+ 
+     self = [self init];
+     if (self)
+@@ -140,14 +155,15 @@
+             hIconFamily = NULL;
+         }
+ 
+-        if( ![path getFSSpec:&fileSpec createFileIfNecessary:NO] )
++        if( ![path getFSRef:&fileRef createFileIfNecessary:NO] )
+         {
+             [self autorelease];
+             return nil;
+         }
+ 
+-        result = GetIconRefFromFile(
+-                                    &fileSpec,
++        result = GetIconRefFromFileInfo(
++                                    &fileRef, 0, NULL, 0, NULL,
++									kIconServicesNormalUsageFlag,
+                                     &iconRef,
+                                     &label );
+ 
+@@ -531,27 +547,15 @@
+     if (result != noErr)
+         return NO;
+ 	
+-    // Get the file's type and creator codes.
+-	fileAttributes = [[NSFileManager defaultManager] fileAttributesAtPath:path traverseLink:NO];
+-	if (fileAttributes)
+-	{
+-		existingType = [fileAttributes fileHFSTypeCode];
+-		existingCreator = [fileAttributes fileHFSCreatorCode];
+-    }
+-	
+-    // Make sure the file has a resource fork that we can open.  (Although
+-    // this sounds like it would clobber an existing resource fork, the Carbon
+-    // Resource Manager docs for this function say that's not the case.  If
+-    // the file already has a resource fork, we receive a result code of
+-    // dupFNErr, which is not really an error per se, but just a notification
+-    // to us that creating a new resource fork for the file was not necessary.)
+-    FSpCreateResFile( &targetFileFSSpec, existingCreator, existingType, smRoman );
+-    result = ResError();
+-    if (!(result == noErr || result == dupFNErr))
++    // Make sure the file has a resource fork that we can open.
++	HFSUniStr255 rname;
++	FSGetResourceForkName(&rname);
++	result = FSCreateResourceFork(&targetFileFSRef, rname.length, rname.unicode, 0);
++    if (!(result == noErr || result == errFSForkExists))
+ 		return NO;
+     
+     // Open the file's resource fork.
+-    file = FSpOpenResFile( &targetFileFSSpec, fsRdWrPerm );
++    file = FSOpenResFile( &targetFileFSRef, fsRdWrPerm );
+     if (file == -1)
+ 		return NO;
+         
+@@ -597,7 +601,7 @@
+ 	
+     // Now we need to set the file's Finder info so the Finder will know that
+     // it has a custom icon.  Start by getting the file's current finder info:
+-    result = FSpGetFInfo( &targetFileFSSpec, &finderInfo );
++    result = GetFSRefFInfo( &targetFileFSRef, &finderInfo );
+     if (result != noErr)
+ 		return NO;
+     
+@@ -610,7 +614,7 @@
+     finderInfo.fdFlags = (finderInfo.fdFlags | kHasCustomIcon ) & ~kHasBeenInited;
+ 	
+     // Now write the Finder info back.
+-    result = FSpSetFInfo( &targetFileFSSpec, &finderInfo );
++    result = SetFSRefFInfo( &targetFileFSRef, &finderInfo );
+     if (result != noErr)
+ 		return NO;
+         
+@@ -640,7 +644,7 @@
+         return NO;
+ 	
+     // Open the file's resource fork, if it has one.
+-    file = FSpOpenResFile( &targetFileFSSpec, fsRdWrPerm );
++    file = FSOpenResFile( &targetFileFSRef, fsRdWrPerm );
+     if (file == -1)
+         return NO;
+ 
+@@ -657,7 +661,7 @@
+ 
+     // Now we need to set the file's Finder info so the Finder will know that
+     // it has no custom icon.  Start by getting the file's current finder info:
+-    result = FSpGetFInfo( &targetFileFSSpec, &finderInfo );
++    result = GetFSRefFInfo( &targetFileFSRef, &finderInfo );
+     if (result != noErr)
+         return NO;
+ 
+@@ -665,7 +669,7 @@
+     finderInfo.fdFlags = finderInfo.fdFlags & ~(kHasCustomIcon | kHasBeenInited);
+ 
+     // Now write the Finder info back.
+-    result = FSpSetFInfo( &targetFileFSSpec, &finderInfo );
++    result = SetFSRefFInfo( &targetFileFSRef, &finderInfo );
+     if (result != noErr)
+         return NO;
+ 
+@@ -717,15 +721,15 @@
+     if( ![path getFSRef:&targetFolderFSRef createFileIfNecessary:NO] )
+         return NO;
+ 
+-    // Make sure the file has a resource fork that we can open.  (Although
+-    // this sounds like it would clobber an existing resource fork, the Carbon
+-    // Resource Manager docs for this function say that's not the case.)
+-    FSpCreateResFile( &targetFileFSSpec, kUnknownType, kUnknownType, smRoman );
+-    if (ResError() != noErr)
+-        return NO;
++    // Make sure the file has a resource fork that we can open.
++	HFSUniStr255 rname;
++	FSGetResourceForkName(&rname);
++	result = FSCreateResourceFork(&targetFolderFSRef, rname.length, rname.unicode, 0);
++    if (!(result == noErr || result == errFSForkExists))
++		return NO;
+ 
+-    // Open the file's resource fork.
+-    file = FSpOpenResFile( &targetFileFSSpec, fsRdWrPerm );
++    // Open the file's resource fork, if it has one.
++    file = FSOpenResFile( &targetFolderFSRef, fsRdWrPerm );
+     if (file == -1)
+         return NO;
+ 
+@@ -771,12 +775,12 @@
+         return NO;
+ 
+     // Make folder icon file invisible
+-    result = FSpGetFInfo( &targetFileFSSpec, &finderInfo );
++    result = GetFSRefFInfo( &targetFolderFSRef, &finderInfo );
+     if (result != noErr)
+         return NO;
+     finderInfo.fdFlags = (finderInfo.fdFlags | kIsInvisible ) & ~kHasBeenInited;
+     // And write info back
+-    result = FSpSetFInfo( &targetFileFSSpec, &finderInfo );
++    result = SetFSRefFInfo( &targetFolderFSRef, &finderInfo );
+     if (result != noErr)
+         return NO;
+ 
+@@ -1347,6 +1351,7 @@
+ // Methods for interfacing with the Carbon Scrap Manager (analogous to and
+ // interoperable with the Cocoa Pasteboard).
+ 
++/*
+ @implementation IconFamily (ScrapAdditions)
+ 
+ + (BOOL) canInitWithScrap
+@@ -1417,5 +1422,5 @@
+ }
+ 
+ @end
+-
++*/
+ 
+diff -Naur osxutils/setlabel/main.c osxutils-new/setlabel/main.c
+--- osxutils/setlabel/main.c	2005-11-24 20:53:21.000000000 -0500
++++ osxutils-new/setlabel/main.c	2010-10-23 19:44:42.000000000 -0400
+@@ -67,13 +67,44 @@
+     static void PrintHelp (void);
+     static int UnixIsFolder (char *path);
+     static void SetLabelInFlags (short *flags, short labelNum);
+-    static OSErr FSpGetPBRec(const FSSpec* fileSpec, CInfoPBRec *infoRec);
+-    
++
+ /////////////// Globals  /////////////////
+ 
+ const char	labelNames[8][7] = { "None", "Red", "Orange", "Yellow", "Green", "Blue", "Purple", "Gray" };
+ short		silentMode = 0;
+ 
++
++static OSErr FSGetDInfo(const FSRef* ref, DInfo *dInfo)
++{
++    FSCatalogInfo cinfo;
++    OSErr err = FSGetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo, NULL, NULL, NULL);
++    if (err != noErr)
++        return err;
++    *dInfo = *(DInfo*)cinfo.finderInfo;
++	return err;
++}
++static OSErr FSGetFInfo(const FSRef* ref, FInfo *fInfo)
++{
++    FSCatalogInfo cinfo;
++    OSErr err = FSGetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo, NULL, NULL, NULL);
++    if (err != noErr)
++        return err;
++    *fInfo = *(FInfo*)cinfo.finderInfo;
++	return err;
++}
++static OSErr FSSetFInfo(const FSRef *ref, const FInfo *finfo) {
++	FSCatalogInfo cinfo;
++	*(FInfo*)cinfo.finderInfo = *finfo;
++	OSErr err = FSSetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo);
++	return err;
++}
++static OSErr FSSetDInfo(const FSRef *ref, const DInfo *dinfo) {
++	FSCatalogInfo cinfo;
++	*(DInfo*)cinfo.finderInfo = *dinfo;
++	OSErr err = FSSetCatalogInfo(ref, kFSCatInfoFinderInfo, &cinfo);
++	return err;
++}
++
+ int main (int argc, const char * argv[]) 
+ {
+     int			rc;
+@@ -143,7 +174,6 @@
+     short       isFldr;
+     short       currentLabel;
+     FInfo       finderInfo;
+-    CInfoPBRec  infoRec;
+ 
+ 	//see if the file in question exists and we can write it
+ 	if (access(path, R_OK|W_OK|F_OK) == -1)
+@@ -180,22 +210,24 @@
+ 	
+     if (isFldr)
+     {
+-        //Get HFS record
+-        FSpGetPBRec(&fileSpec, &infoRec);
++        DInfo dInfo;
++		err = FSGetDInfo (&fileRef, &dInfo);
++		if (err != noErr) {
++			fprintf(stderr, "Error %d getting file Finder Directory Info\n", err);
++			return;
++		}
+         
+         //get current label
+-        currentLabel = GetLabelNumber(infoRec.dirInfo.ioDrUsrWds.frFlags);
++        currentLabel = GetLabelNumber(dInfo.frFlags);
+         
+         //set new label into record
+-        SetLabelInFlags(&infoRec.dirInfo.ioDrUsrWds.frFlags, labelNum);
++        SetLabelInFlags(&dInfo.frFlags, labelNum);
+         
+-        //fill in the requisite fields
+-        infoRec.hFileInfo.ioNamePtr = (unsigned char *)fileSpec.name;
+-		infoRec.hFileInfo.ioVRefNum = fileSpec.vRefNum;
+-		infoRec.hFileInfo.ioDirID = fileSpec.parID;
+-        
+-        //set the record
+-        PBSetCatInfoSync(&infoRec);
++        err = FSSetDInfo(&fileRef, &dInfo);
++		if (err != noErr) {
++			fprintf(stderr, "Error %d setting file Finder Directory Info\n", err);
++			return;
++		}
+     }
+     
+     ///////////////////////// IF SPECIFIED FILE IS A REGULAR FILE /////////////////////////
+@@ -203,7 +235,7 @@
+     else
+     {
+         /* get the finder info */
+-        err = FSpGetFInfo (&fileSpec, &finderInfo);
++        err = FSGetFInfo (&fileRef, &finderInfo);
+         if (err != noErr) 
+         {
+             if (!silentMode)
+@@ -221,7 +253,7 @@
+         SetLabelInFlags(&finderInfo.fdFlags, labelNum);
+         
+         //apply the settings to the file
+-        err = FSpSetFInfo (&fileSpec, &finderInfo);
++        err = FSSetFInfo (&fileRef, &finderInfo);
+         if (err != noErr)
+         {
+             if (!silentMode)
+@@ -423,26 +455,6 @@
+ // Returns directory info structure of 
+ // file spec
+ /////////////////////////////////////*/
+-static OSErr FSpGetPBRec(const FSSpec* fileSpec, CInfoPBRec *infoRec)
+-{
+-	CInfoPBRec                  myInfoRec = {0};
+-	OSErr                       err = noErr;
+-
+-	myInfoRec.hFileInfo.ioNamePtr = (unsigned char *)fileSpec->name;
+-	myInfoRec.hFileInfo.ioVRefNum = fileSpec->vRefNum;
+-	myInfoRec.hFileInfo.ioDirID = fileSpec->parID;
+-	
+-	err = PBGetCatInfoSync(&myInfoRec);
+-    if (err == noErr)
+-		*infoRec = myInfoRec;
+-		
+-	return err;
+-}
+-
+-/*//////////////////////////////////////
+-// Returns directory info structure of 
+-// file spec
+-/////////////////////////////////////*/
+ /*static OSErr FSpSetDInfo(const FSSpec* fileSpec, DInfo *dInfo)
+ {
+ 	CInfoPBRec	infoRec = {0};
+diff -Naur osxutils/trash/trash osxutils-new/trash/trash
+--- osxutils/trash/trash	2005-06-12 10:37:44.000000000 -0400
++++ osxutils-new/trash/trash	2010-10-23 19:46:12.000000000 -0400
+@@ -3,15 +3,20 @@
+ # ©2003 Sveinbjorn Thordarson <sveinbt@hi.is>
+ # Move files to trash
+ #
+-use Shell;
++use warnings;
++use strict;
++use File::Basename;
++use File::Spec::Functions;
++use File::Copy qw(move);
+ 
+-foreach $argnum ($cnt .. $#ARGV)
+-{
+-   $cnt = 1;
+-   @path_segs = split(/\//, $ARGV[$argnum]);
+-   while (-e "$ENV{HOME}/.Trash/$path_segs[$#path_segs]")
+-   {
+-        $path_segs[$#path_segs] .= " copy $cnt";
++my $trash = catfile($ENV{HOME}, '.Trash');
++foreach my $arg (@ARGV) {
++   my $cnt = 1;
++   my $base = basename($arg);
++   my $tname = catfile($trash, $base);
++   while (-e $tname) {
++       $tname = catfile($trash, "$base copy $cnt");
++       ++$cnt;
+    }
+-   system("mv '$ARGV[$argnum]' '$ENV{HOME}/.Trash/$path_segs[$#path_segs]'");
++   move($arg, $tname);
+ }
+\ No newline at end of file

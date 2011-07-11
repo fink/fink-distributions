@@ -1,0 +1,191 @@
+Info2: <<
+Package: python%type_pkg[python]
+Version: 2.6.6
+Revision: 2
+Epoch: 1
+Type: python 2.6
+Maintainer: Daniel Macks <dmacks@netspace.org>
+Depends: <<
+	%N-shlibs (= %e:%v-%r),
+	blt-shlibs,
+	bzip2-shlibs,
+	db48-aes-shlibs | db48-shlibs,
+	gdbm3-shlibs,
+	libgettext8-shlibs,
+	libncursesw5-shlibs,
+	readline5-shlibs,
+	sqlite3-shlibs  (>= 3.2.8-1001),
+	tcltk (>= 8.4.1-1),
+	x11
+<<
+BuildConflicts: libquicktime0
+BuildDepends: <<
+	blt-dev (>= 2.4z-15),
+	bzip2-dev,
+	db48-aes | db48,
+	fink (>= 0.24.12-1), 
+	gdbm3,
+	gettext-bin,
+	gettext-tools,
+	libgettext8-dev,
+	libncursesw5,
+	readline5,
+	sqlite3-dev (>= 3.2.8-1001),
+	system-openssl-dev,
+	tcltk-dev (>= 8.4.1-1),
+	x11-dev
+<<
+Source: http://python.org/ftp/python/%v/Python-%v.tgz
+Source-MD5: b2f209df270a33315e62c1ffac1937f0
+Source2: http://www.python.org/ftp/python/doc/%v/python-%v-docs-html.tar.bz2
+Source2-MD5: d963121537cd6e295ef91301b660633a
+PatchFile: %n-%v.patch
+PatchFile-MD5: c38f81ac18263570e038255839db24f3
+PatchScript: <<
+	sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
+<<
+SetLDFLAGS: -L%p/lib/system-openssl/lib
+ConfigureParams: --enable-shared
+CompileScript: <<
+#!/bin/sh -ex
+	darwin_vers=`uname -r | cut -d. -f1`
+	if [ "$darwin_vers" = 11 ]; then
+		perl -pi -e 's/ -lSystemStubs//' ./configure
+		perl -pi -e 's/-O3/-fwrapv -O3/' ./configure
+	fi
+	if [ "%m" = "x86_64" ]; then
+		perl -pi -e 's|num_missing != 5:|num_missing != 7:|g; s|have 5 missing|have 7 missing|' ./setup.py
+		# Architecture:x86_64 has tcltk-8.5.x, other arch have 8.4.x
+		perl -pi -e "s/8.4\'/8.5\'/" ./setup.py
+		# Architecture:x86_64 can't build with toolbox-glue
+		./configure %c --disable-toolbox-glue
+	else
+		./configure %c
+	fi
+	make
+<<
+InstallScript: <<
+#!/bin/sh -ex
+	make install DESTDIR=%d
+
+	# don't propagate our hackery
+	perl -pi -e 's|-L%p/lib/system-openssl/lib||' %i/lib/python%type_raw[python]/config/Makefile
+
+	# fix all main things to be python-versioned filenames with
+	# unversioned symlinks to them
+	pushd %i/bin
+		for f in 2to3 idle pydoc smtpd.py; do
+			mv ${f} ${f}%type_raw[python]
+			ln -s ${f}%type_raw[python] %i/bin/${f}
+		done
+	popd
+	/bin/mv %i/share/man/man1/python.1 %i/share/man/man1/python%type_raw[python].1
+	ln -s python%type_raw[python].1 %i/share/man/man1/python.1
+
+	# install some docs and other useful tidbits
+	rm -rf Misc/RPM
+	/bin/cp -R Misc Tools %i/lib/python%type_raw[python]
+	mkdir -p %i/share/doc/%n
+	/bin/cp -R Demo Doc %i/share/doc/%n
+	mkdir -p %i/share/doc/%n/html
+	/bin/cp -R ../python-%v-docs-html/ %i/share/doc/%n/html
+<<
+SplitOff: <<
+ Package: %N-shlibs
+ Files: lib/python%type_raw[python]/config/libpython%type_raw[python].dylib
+ Shlibs: %p/lib/python2.6/config/libpython2.6.dylib 2.6.0 %n (>= 1:2.6-1)
+ DocFiles: README LICENSE 
+<<
+SplitOff2: <<
+ Package: python
+ Depends: %N (>= %e:%v-%r)
+ Conflicts: python-nox
+ Replaces: python-nox, python25 (<< 1:2.5.1-3)
+ Files: <<
+		bin/2to3
+		bin/idle
+		bin/pydoc
+		bin/python
+		bin/python-config
+		bin/smtpd.py
+		share/man/man1/python.1
+	<<
+ DocFiles: README LICENSE
+ Description: Generic "python" command that invokes python%type_pkg[python]
+<<
+DocFiles: README LICENSE 
+Description: Interpreted, object-oriented language
+DescDetail: <<
+ Python is often compared to Tcl, Perl, Scheme or Java. 
+ This package installs unix python - not the OSX Framework version.
+ Builds a two-level namespace dynamic libpython (needed for koffice).
+
+ The interpretter is installed as "python%type_raw[python]", and all associated
+ commands are similarly named with the python-version in them. To get
+ the simple "python" command, install the fink package "python" (note:
+ the "python" command there is not guaranteed to be python%type_raw[python]!).
+<<
+DescUsage: <<
+	python%type_raw[python] changes the compiler options used to compile
+	third-party python modules. Please do not add %type_raw[python] variants
+	to them without actually testing that they build cleanly.
+<<
+
+DescPackaging: <<
+	Patch a lot of things to impliment shared-lib support for
+	non-Framework build on Darwin.
+
+	Static libpython is installed in lib/pythonX.X/config/ but
+	shared goes in %p/lib by default. Fink's packaging has always
+	placed manually-built shared lib in config/ along side static,
+	This gives consistency regardless of -search_paths_first.
+	Continue this practice so that -pyXX varianted packages don't
+	need special-casing for certain variants.
+
+	Make sure all compiled modules link against libpython%type_raw[python] (and
+	propagate this to third-party compiled modules) to ensure that
+	all symbols resolved at compile-time to avoid packager
+	mistakes and user runtime surprises.
+
+	Should use --with-pth (fink's pth package)?
+
+	Play lots of games to make sure we get expected support
+	libraries. Also make sure -L/sw/lib/system-openssl is passed
+	before -L/sw (build system seems to confuse standard meanings
+	and uses of CFLAGS vs CPPFLAGS vs LDFLAGS) but avoid
+	propagating into modules that compile using distutils.
+
+	Adjust "python" unversioned link to be a symlink not a hard link.
+
+	Must remain Epoch'ed so that this "python" pkg to be newer
+	than the one from lower %v pkgs.
+
+	Shared lib is buried next to static one instead of being in
+	%p/lib because that's where it's always been in the fink
+	package series. Why would they be in different places? Patch
+	-config script to continue this tradition (bug in previous
+	versions accidentally did the Right Thing here).
+
+	Upstream patch to allow using higher than db47. See:
+	http://bugs.python.org/issue6949
+	http://bugs.python.org/file16549/python-support_bdb-4.8-v2.patch
+<<
+DescPort: <<
+	libpython needs to link to CF because that lib has the parent
+	thread that load modules that need to have CF available. See:
+	http://bugs.python.org/issue7085
+	But make sure framework flag is propagated as a single word.
+
+	Patch setup.py to find ncursesw headers and drop libncurses5 dep.
+
+	platform.mac_ver fails on 64bit (returns blanks) because it
+	requires uses the MacOS module when reading gestalt and MacOS
+	is not available on 64bit. Add fallback implementation using
+	posix.uname.
+
+	Fix language-encoding bug for japanese locale. See:
+	https://trac.macports.org/attachment/ticket/21517/patch-locale-from-apple-darwinsource.diff
+<<
+License: OSI-Approved
+Homepage: http://www.python.org
+<<

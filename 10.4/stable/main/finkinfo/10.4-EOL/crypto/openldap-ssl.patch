@@ -1,0 +1,241 @@
+diff -Naur openldap-2.1.22-old/build/ltmain.sh openldap-2.1.22/build/ltmain.sh
+--- openldap-2.1.22-old/build/ltmain.sh	2004-05-20 11:22:11.000000000 -0400
++++ openldap-2.1.22/build/ltmain.sh	2004-05-20 11:25:54.000000000 -0400
+@@ -1763,7 +1763,7 @@
+ 
+ 	  if test "$installed" = no; then
+ 	    notinst_deplibs="$notinst_deplibs $lib"
+-	    need_relink=yes
++	    need_relink=no
+ 	  fi
+ 
+ 	  if test -n "$old_archive_from_expsyms_cmds"; then
+diff -Naur openldap-2.1.22-old/build/top.mk openldap-2.1.22/build/top.mk
+--- openldap-2.1.22-old/build/top.mk	2004-05-20 11:22:11.000000000 -0400
++++ openldap-2.1.22/build/top.mk	2004-05-20 11:25:54.000000000 -0400
+@@ -197,7 +197,7 @@
+ DEFS = $(LDAP_INCPATH) $(XINCPATH) $(XDEFS) $(AC_DEFS) $(DEFINES)
+ CFLAGS = $(AC_CFLAGS) $(DEFS)
+ LDFLAGS = $(LDAP_LIBPATH) $(AC_LDFLAGS) $(XLDFLAGS)
+-LIBS = $(XLIBS) $(XXLIBS) $(AC_LIBS) $(XXXLIBS)
++LIBS = $(XLIBS) $(XXLIBS) $(XXXLIBS) $(AC_LIBS)
+ 
+ LT_CFLAGS = $(AC_CFLAGS)
+ LT_CPPFLAGS = $(DEFS)
+diff -Naur openldap-2.1.22-old/include/ldap.h openldap-2.1.22/include/ldap.h
+--- openldap-2.1.22-old/include/ldap.h	2004-05-20 11:22:12.000000000 -0400
++++ openldap-2.1.22/include/ldap.h	2004-05-20 11:24:14.000000000 -0400
+@@ -1645,5 +1645,26 @@
+ 	LDAPControl **sctrls,
+ 	LDAPControl **cctrls ));
+ 
++/*
++ * hacks for NTLM
++ */
++#define LDAP_AUTH_NTLM_REQUEST	((ber_tag_t) 0x8aU)
++#define LDAP_AUTH_NTLM_RESPONSE	((ber_tag_t) 0x8bU)
++LDAP_F( int )
++ldap_ntlm_bind LDAP_P((
++	LDAP		*ld,
++	LDAP_CONST char	*dn,
++	ber_tag_t	tag,
++	struct berval	*cred,
++	LDAPControl	**sctrls,
++	LDAPControl	**cctrls,
++	int		*msgidp ));
++LDAP_F( int )
++ldap_parse_ntlm_bind_result LDAP_P((
++	LDAP		*ld,
++	LDAPMessage	*res,
++	struct berval	*challenge));
++
++
+ LDAP_END_DECL
+ #endif /* _LDAP_H */
+diff -Naur openldap-2.1.22-old/libraries/libldap/Makefile.in openldap-2.1.22/libraries/libldap/Makefile.in
+--- openldap-2.1.22-old/libraries/libldap/Makefile.in	2004-05-20 11:22:12.000000000 -0400
++++ openldap-2.1.22/libraries/libldap/Makefile.in	2004-05-20 11:25:54.000000000 -0400
+@@ -11,7 +11,7 @@
+ SRCS	= bind.c open.c result.c error.c compare.c search.c \
+ 	controls.c messages.c references.c extended.c cyrus.c \
+ 	modify.c add.c modrdn.c delete.c abandon.c \
+-	sasl.c sbind.c kbind.c unbind.c cancel.c cache.c \
++	sasl.c sbind.c kbind.c ntlm.c unbind.c cancel.c cache.c \
+ 	filter.c free.c sort.c passwd.c whoami.c \
+ 	getdn.c getentry.c getattr.c getvalues.c addentry.c \
+ 	request.c os-ip.c url.c sortctrl.c vlvctrl.c \
+@@ -20,7 +20,7 @@
+ OBJS	= bind.lo open.lo result.lo error.lo compare.lo search.lo \
+ 	controls.lo messages.lo references.lo extended.lo cyrus.lo \
+ 	modify.lo add.lo modrdn.lo delete.lo abandon.lo \
+-	sasl.lo sbind.lo kbind.lo unbind.lo cancel.lo cache.lo \
++	sasl.lo sbind.lo kbind.lo ntlm.lo unbind.lo cancel.lo cache.lo \
+ 	filter.lo free.lo sort.lo passwd.lo whoami.lo \
+ 	getdn.lo getentry.lo getattr.lo getvalues.lo addentry.lo \
+ 	request.lo os-ip.lo url.lo sortctrl.lo vlvctrl.lo \
+@@ -35,7 +35,7 @@
+ XLIBS = $(LIBRARY) $(LDAP_LIBLBER_LA) $(LDAP_LIBLUTIL_A)
+ XXLIBS = $(SECURITY_LIBS) $(LUTIL_LIBS)
+ NT_LINK_LIBS = $(LDAP_LIBLBER_LA) $(AC_LIBS) $(SECURITY_LIBS)
+-UNIX_LINK_LIBS = $(LDAP_LIBLBER_LA) $(AC_LIBS) $(SECURITY_LIBS)
++UNIX_LINK_LIBS = $(LDAP_LIBLBER_LA) $(SECURITY_LIBS) $(AC_LIBS)
+ 
+ apitest:	$(XLIBS) apitest.o
+ 	$(LTLINK) -o $@ apitest.o $(LIBS)
+diff -Naur openldap-2.1.22-old/libraries/libldap/ntlm.c openldap-2.1.22/libraries/libldap/ntlm.c
+--- openldap-2.1.22-old/libraries/libldap/ntlm.c	1969-12-31 19:00:00.000000000 -0500
++++ openldap-2.1.22/libraries/libldap/ntlm.c	2004-05-20 11:24:14.000000000 -0400
+@@ -0,0 +1,141 @@
++/* $OpenLDAP: pkg/ldap/libraries/libldap/ntlm.c,v 1.1.4.10 2002/01/04 20:38:21 kurt Exp $ */
++/*
++ * Copyright 1998-2002 The OpenLDAP Foundation, All Rights Reserved.
++ * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
++ */
++
++/* Mostly copied from sasl.c */
++
++#include "portable.h"
++
++#include <stdlib.h>
++#include <stdio.h>
++
++#include <ac/socket.h>
++#include <ac/string.h>
++#include <ac/time.h>
++#include <ac/errno.h>
++
++#include "ldap-int.h"
++
++int
++ldap_ntlm_bind(
++	LDAP		*ld,
++	LDAP_CONST char	*dn,
++	ber_tag_t	tag,
++	struct berval	*cred,
++	LDAPControl	**sctrls,
++	LDAPControl	**cctrls,
++	int		*msgidp )
++{
++	BerElement	*ber;
++	int rc;
++
++	Debug( LDAP_DEBUG_TRACE, "ldap_ntlm_bind\n", 0, 0, 0 );
++
++	assert( ld != NULL );
++	assert( LDAP_VALID( ld ) );
++	assert( msgidp != NULL );
++
++	if( msgidp == NULL ) {
++		ld->ld_errno = LDAP_PARAM_ERROR;
++		return ld->ld_errno;
++	}
++
++	/* create a message to send */
++	if ( (ber = ldap_alloc_ber_with_options( ld )) == NULL ) {
++		ld->ld_errno = LDAP_NO_MEMORY;
++		return ld->ld_errno;
++	}
++
++	assert( LBER_VALID( ber ) );
++
++	rc = ber_printf( ber, "{it{istON}" /*}*/,
++			 ++ld->ld_msgid, LDAP_REQ_BIND,
++			 ld->ld_version, dn, tag,
++			 cred );
++
++	/* Put Server Controls */
++	if( ldap_int_put_controls( ld, sctrls, ber ) != LDAP_SUCCESS ) {
++		ber_free( ber, 1 );
++		return ld->ld_errno;
++	}
++
++	if ( ber_printf( ber, /*{*/ "N}" ) == -1 ) {
++		ld->ld_errno = LDAP_ENCODING_ERROR;
++		ber_free( ber, 1 );
++		return ld->ld_errno;
++	}
++
++#ifndef LDAP_NOCACHE
++	if ( ld->ld_cache != NULL ) {
++		ldap_flush_cache( ld );
++	}
++#endif /* !LDAP_NOCACHE */
++
++	/* send the message */
++	*msgidp = ldap_send_initial_request( ld, LDAP_REQ_BIND, dn, ber );
++
++	if(*msgidp < 0)
++		return ld->ld_errno;
++
++	return LDAP_SUCCESS;
++}
++
++int
++ldap_parse_ntlm_bind_result(
++	LDAP		*ld,
++	LDAPMessage	*res,
++	struct berval	*challenge)
++{
++	ber_int_t	errcode;
++	ber_tag_t	tag;
++	BerElement	*ber;
++	ber_len_t	len;
++
++	Debug( LDAP_DEBUG_TRACE, "ldap_parse_ntlm_bind_result\n", 0, 0, 0 );
++
++	assert( ld != NULL );
++	assert( LDAP_VALID( ld ) );
++	assert( res != NULL );
++
++	if ( ld == NULL || res == NULL ) {
++		return LDAP_PARAM_ERROR;
++	}
++
++	if( res->lm_msgtype != LDAP_RES_BIND ) {
++		ld->ld_errno = LDAP_PARAM_ERROR;
++		return ld->ld_errno;
++	}
++
++	if ( ld->ld_error ) {
++		LDAP_FREE( ld->ld_error );
++		ld->ld_error = NULL;
++	}
++	if ( ld->ld_matched ) {
++		LDAP_FREE( ld->ld_matched );
++		ld->ld_matched = NULL;
++	}
++
++	/* parse results */
++
++	ber = ber_dup( res->lm_ber );
++
++	if( ber == NULL ) {
++		ld->ld_errno = LDAP_NO_MEMORY;
++		return ld->ld_errno;
++	}
++
++	tag = ber_scanf( ber, "{ioa" /*}*/,
++			 &errcode, challenge, &ld->ld_error );
++	ber_free( ber, 0 );
++
++	if( tag == LBER_ERROR ) {
++		ld->ld_errno = LDAP_DECODING_ERROR;
++		return ld->ld_errno;
++	}
++
++	ld->ld_errno = errcode;
++
++	return( ld->ld_errno );
++}
+diff -Naur openldap-2.1.22-old/libraries/libldap_r/Makefile.in openldap-2.1.22/libraries/libldap_r/Makefile.in
+--- openldap-2.1.22-old/libraries/libldap_r/Makefile.in	2004-05-20 11:22:12.000000000 -0400
++++ openldap-2.1.22/libraries/libldap_r/Makefile.in	2004-05-20 11:25:54.000000000 -0400
+@@ -45,7 +45,7 @@
+ XXLIBS = $(SECURITY_LIBS) $(LUTIL_LIBS)
+ XXXLIBS = $(LTHREAD_LIBS)
+ NT_LINK_LIBS = $(LDAP_LIBLBER_LA) $(AC_LIBS) $(SECURITY_LIBS)
+-UNIX_LINK_LIBS = $(LDAP_LIBLBER_LA) $(AC_LIBS) $(SECURITY_LIBS)
++UNIX_LINK_LIBS = $(LDAP_LIBLBER_LA) $(SECURITY_LIBS) $(AC_LIBS)
+ 
+ .links : Makefile
+ 	@for i in $(XXSRCS); do \

@@ -1,0 +1,364 @@
+*** foo/mp/mp_fget.c.orig	25 Sep 2003 02:15:16 -0000	11.81
+--- foo/mp/mp_fget.c	9 Dec 2003 19:06:28 -0000	11.82
+***************
+*** 440,446 ****
+  		c_mp->stat.st_pages--;
+  		alloc_bhp = NULL;
+  		R_UNLOCK(dbenv, &dbmp->reginfo[n_cache]);
+- 		MUTEX_LOCK(dbenv, &hp->hash_mutex);
+  
+  		/*
+  		 * We can't use the page we found in the pool if DB_MPOOL_NEW
+--- 440,445 ----
+***************
+*** 455,460 ****
+--- 454,462 ----
+  			b_incr = 0;
+  			goto alloc;
+  		}
++ 
++ 		/* We can use the page -- get the bucket lock. */
++ 		MUTEX_LOCK(dbenv, &hp->hash_mutex);
+  		break;
+  	case SECOND_MISS:
+  		/*
+*** foo/mp/mp_fput.c.orig	30 Sep 2003 17:12:00 -0000	11.48
+--- foo/mp/mp_fput.c	13 Dec 2003 00:08:29 -0000	11.49
+***************
+*** 285,290 ****
+--- 285,291 ----
+  		    bhp != NULL; bhp = SH_TAILQ_NEXT(bhp, hq, __bh))
+  			if (bhp->priority != UINT32_T_MAX &&
+  			    bhp->priority > MPOOL_BASE_DECREMENT)
++ 				bhp->priority -= MPOOL_BASE_DECREMENT;
+  		MUTEX_UNLOCK(dbenv, &hp->hash_mutex);
+  	}
+  }
+*** foo/lock/lock.c.save	2004-01-30 10:48:33.000000000 -0800
+--- foo/lock/lock.c	2004-01-30 10:55:58.000000000 -0800
+***************
+*** 2216,2226 ****
+  					dp = (u_int8_t *)dp +		\
+  					    sizeof(db_pgno_t);		\
+  				} while (0)
+! #define COPY_OBJ(dp, obj)	do {					   \
+! 					memcpy(dp, obj->data, obj->size);  \
+! 					dp = (u_int8_t *)dp +		   \
+! 					     ALIGN(obj->size,		   \
+! 					     sizeof(u_int32_t)); 	   \
+  				} while (0)
+  
+  #define GET_COUNT(dp, count)	do {					\
+--- 2216,2227 ----
+  					dp = (u_int8_t *)dp +		\
+  					    sizeof(db_pgno_t);		\
+  				} while (0)
+! #define COPY_OBJ(dp, obj)	do {					\
+! 					memcpy(dp,			\
+! 					    (obj)->data, (obj)->size);  \
+! 					dp = (u_int8_t *)dp +		\
+! 					     ALIGN((obj)->size,		\
+! 					    sizeof(u_int32_t)); 	\
+  				} while (0)
+  
+  #define GET_COUNT(dp, count)	do {					\
+***************
+*** 2339,2345 ****
+  		for (i = 0; i < nlocks; i = j) {
+  			PUT_PCOUNT(dp, obj[i].ulen);
+  			PUT_SIZE(dp, obj[i].size);
+! 			COPY_OBJ(dp, obj);
+  			lock = (DB_LOCK_ILOCK *)obj[i].data;
+  			for (j = i + 1; j <= i + obj[i].ulen; j++) {
+  				lock = (DB_LOCK_ILOCK *)obj[j].data;
+--- 2340,2346 ----
+  		for (i = 0; i < nlocks; i = j) {
+  			PUT_PCOUNT(dp, obj[i].ulen);
+  			PUT_SIZE(dp, obj[i].size);
+! 			COPY_OBJ(dp, &obj[i]);
+  			lock = (DB_LOCK_ILOCK *)obj[i].data;
+  			for (j = i + 1; j <= i + obj[i].ulen; j++) {
+  				lock = (DB_LOCK_ILOCK *)obj[j].data;
+--- foo/java/src/com/sleepycat/db/DbEnv.java	2003-12-03 16:26:27.000000000 -0500
++++ foo/java/src/com/sleepycat/db/DbEnv.java	2004-03-18 15:15:42.000000000 -0500
+@@ -61,7 +61,7 @@
+     // Internally, the JNI layer creates a global reference to each DbEnv,
+     // which can potentially be different to this.  We keep a copy here so
+     // we can clean up after destructors.
+-    private Object dbenv_ref;
++    private long dbenv_ref;
+     private DbAppDispatch app_dispatch_handler;
+     private DbEnvFeedbackHandler env_feedback_handler;
+     private DbErrorHandler error_handler;
+@@ -94,7 +94,7 @@
+     void cleanup() {
+         swigCPtr = 0;
+         db_java.deleteRef0(dbenv_ref);
+-        dbenv_ref = null;
++        dbenv_ref = 0L;
+     }
+ 
+ 
+--- foo/java/src/com/sleepycat/db/Db.java	2003-12-03 16:26:25.000000000 -0500
++++ foo/java/src/com/sleepycat/db/Db.java	2004-03-18 15:15:55.000000000 -0500
+@@ -57,7 +57,7 @@
+     // Internally, the JNI layer creates a global reference to each Db,
+     // which can potentially be different to this.  We keep a copy here so
+     // we can clean up after destructors.
+-    private Object db_ref;
++    private long db_ref;
+     private DbEnv dbenv;
+     private boolean private_dbenv;
+     private DbAppendRecno append_recno_handler;
+@@ -84,7 +84,7 @@
+     private void cleanup() {
+         swigCPtr = 0;
+         db_java.deleteRef0(db_ref);
+-        db_ref = null;
++        db_ref = 0L;
+         if (private_dbenv) {
+             dbenv.cleanup();
+         }
+--- foo/java/src/com/sleepycat/db/db_java.java	2003-12-03 16:10:54.000000000 -0500
++++ foo/java/src/com/sleepycat/db/db_java.java	2004-03-18 15:17:24.000000000 -0500
+@@ -14,15 +14,15 @@
+     db_javaJNI.DbEnv_lock_vec(DbEnv.getCPtr(dbenv), locker, flags, list, offset, nlist);
+   }
+ 
+-   static Object initDbEnvRef0(DbEnv self, Object handle) {
++   static long initDbEnvRef0(DbEnv self, Object handle) {
+     return db_javaJNI.initDbEnvRef0(DbEnv.getCPtr(self), handle);
+   }
+ 
+-   static Object initDbRef0(Db self, Object handle) {
++   static long initDbRef0(Db self, Object handle) {
+     return db_javaJNI.initDbRef0(Db.getCPtr(self), handle);
+   }
+ 
+-   static void deleteRef0(Object ref) {
++   static void deleteRef0(long ref) {
+     db_javaJNI.deleteRef0(ref);
+   }
+ 
+--- foo/java/src/com/sleepycat/db/db_javaJNI.java	2003-12-03 16:10:55.000000000 -0500
++++ foo/java/src/com/sleepycat/db/db_javaJNI.java	2004-03-18 15:16:18.000000000 -0500
+@@ -45,9 +45,9 @@
+ 	static native final void initialize();
+ 
+   public final static native void DbEnv_lock_vec(long jarg1, int jarg2, int jarg3, DbLockRequest[] jarg4, int jarg5, int jarg6) throws DbException;
+-   final static native Object initDbEnvRef0(long jarg1, Object jarg2);
+-   final static native Object initDbRef0(long jarg1, Object jarg2);
+-   final static native void deleteRef0(Object jarg1);
++   final static native long initDbEnvRef0(long jarg1, Object jarg2);
++   final static native long initDbRef0(long jarg1, Object jarg2);
++   final static native void deleteRef0(long jarg1);
+    final static native long getDbEnv0(long jarg1);
+   public final static native long new_Db(long jarg1, int jarg2) throws DbException;
+   public final static native void Db_associate(long jarg1, long jarg2, long jarg3, DbSecondaryKeyCreate jarg4, int jarg5) throws DbException;
+--- foo/libdb_java/db_java.i	2003-11-17 15:00:52.000000000 -0500
++++ foo/libdb_java/db_java.i	2004-03-18 09:21:14.000000000 -0500
+@@ -53,7 +53,7 @@
+ 	// Internally, the JNI layer creates a global reference to each DbEnv,
+ 	// which can potentially be different to this.  We keep a copy here so
+ 	// we can clean up after destructors.
+-	private Object dbenv_ref;
++	private long dbenv_ref;
+ 	private DbAppDispatch app_dispatch_handler;
+ 	private DbEnvFeedbackHandler env_feedback_handler;
+ 	private DbErrorHandler error_handler;
+@@ -76,7 +76,7 @@
+ 	void cleanup() {
+ 		swigCPtr = 0;
+ 		db_java.deleteRef0(dbenv_ref);
+-		dbenv_ref = null;
++		dbenv_ref = 0L;
+ 	}
+ 
+ 	public synchronized void close(int flags) throws DbException {
+@@ -220,7 +220,7 @@
+ 	// Internally, the JNI layer creates a global reference to each Db,
+ 	// which can potentially be different to this.  We keep a copy here so
+ 	// we can clean up after destructors.
+-	private Object db_ref;
++	private long db_ref;
+ 	private DbEnv dbenv;
+ 	private boolean private_dbenv;
+ 	private DbAppendRecno append_recno_handler;
+@@ -245,7 +245,7 @@
+ 	private void cleanup() {
+ 		swigCPtr = 0;
+ 		db_java.deleteRef0(db_ref);
+-		db_ref = null;
++		db_ref = 0L;
+ 		if (private_dbenv)
+ 			dbenv.cleanup();
+ 		dbenv = null;
+@@ -503,46 +503,42 @@
+ 	}
+ %}
+ 
+-%native(initDbEnvRef0) jobject initDbEnvRef0(DB_ENV *self, void *handle);
+-%native(initDbRef0) jobject initDbRef0(DB *self, void *handle);
+-%native(deleteRef0) void deleteRef0(jobject ref);
++%native(initDbEnvRef0) jlong initDbEnvRef0(DB_ENV *self, void *handle);
++%native(initDbRef0) jlong initDbRef0(DB *self, void *handle);
++%native(deleteRef0) void deleteRef0(jlong ref);
+ %native(getDbEnv0) DB_ENV *getDbEnv0(DB *self);
+ 
+ %{
+-JNIEXPORT jobject JNICALL Java_com_sleepycat_db_db_1javaJNI_initDbEnvRef0(
++JNIEXPORT jlong JNICALL Java_com_sleepycat_db_db_1javaJNI_initDbEnvRef0(
+     JNIEnv *jenv, jclass jcls, jlong jarg1, jobject jarg2) {
+ 	DB_ENV *self = *(DB_ENV **)&jarg1;
++	jlong ret;
+ 	COMPQUIET(jcls, NULL);
+ 
+ 	DB_ENV_INTERNAL(self) = (void *)(*jenv)->NewGlobalRef(jenv, jarg2);
+ 	self->set_errpfx(self, (const char*)self);
+-	return (jobject)DB_ENV_INTERNAL(self);
++	*(jobject *)&ret = (jobject)DB_ENV_INTERNAL(self);
++	return (ret);
+ }
+ 
+-JNIEXPORT jobject JNICALL Java_com_sleepycat_db_db_1javaJNI_initDbRef0(
++JNIEXPORT jlong JNICALL Java_com_sleepycat_db_db_1javaJNI_initDbRef0(
+     JNIEnv *jenv, jclass jcls, jlong jarg1, jobject jarg2) {
+ 	DB *self = *(DB **)&jarg1;
++	jlong ret;
+ 	COMPQUIET(jcls, NULL);
+ 
+ 	DB_INTERNAL(self) = (void *)(*jenv)->NewGlobalRef(jenv, jarg2);
+-	return (jobject)DB_INTERNAL(self);
++	*(jobject *)&ret = (jobject)DB_INTERNAL(self);
++	return (ret);
+ }
+ 
+ JNIEXPORT void JNICALL Java_com_sleepycat_db_db_1javaJNI_deleteRef0(
+-    JNIEnv *jenv, jclass jcls, jobject jref) {
+-	COMPQUIET(jcls, NULL);
+-
+-	if (jref != NULL)
+-		(*jenv)->DeleteGlobalRef(jenv, jref);
+-}
+-
+-JNIEXPORT jobject JNICALL Java_com_sleepycat_db_db_1javaJNI_getDbRef0(
+     JNIEnv *jenv, jclass jcls, jlong jarg1) {
+-	DB *self = *(DB **)&jarg1;
++	jobject jref = *(jobject *)&jarg1;
+ 	COMPQUIET(jcls, NULL);
+-	COMPQUIET(jenv, NULL);
+ 
+-	return (jobject)DB_INTERNAL(self);
++	if (jref != 0L)
++		(*jenv)->DeleteGlobalRef(jenv, jref);
+ }
+ 
+ JNIEXPORT jlong JNICALL Java_com_sleepycat_db_db_1javaJNI_getDbEnv0(
+@@ -554,7 +550,7 @@
+ 	COMPQUIET(jcls, NULL);
+ 
+ 	*(DB_ENV **)&env_cptr = self->dbenv;
+-	return env_cptr;
++	return (env_cptr);
+ }
+ 
+ JNIEXPORT jboolean JNICALL
+--- foo/libdb_java/db_java_wrap.c	2003-12-03 16:10:36.000000000 -0500
++++ foo/libdb_java/db_java_wrap.c	2004-03-18 12:18:58.000000000 -0500
+@@ -1192,40 +1192,36 @@
+ }
+ 
+ 
+-JNIEXPORT jobject JNICALL Java_com_sleepycat_db_db_1javaJNI_initDbEnvRef0(
++JNIEXPORT jlong JNICALL Java_com_sleepycat_db_db_1javaJNI_initDbEnvRef0(
+     JNIEnv *jenv, jclass jcls, jlong jarg1, jobject jarg2) {
+ 	DB_ENV *self = *(DB_ENV **)&jarg1;
++	jlong ret;
+ 	COMPQUIET(jcls, NULL);
+ 
+ 	DB_ENV_INTERNAL(self) = (void *)(*jenv)->NewGlobalRef(jenv, jarg2);
+ 	self->set_errpfx(self, (const char*)self);
+-	return (jobject)DB_ENV_INTERNAL(self);
++	*(jobject *)&ret = (jobject)DB_ENV_INTERNAL(self);
++	return (ret);
+ }
+ 
+-JNIEXPORT jobject JNICALL Java_com_sleepycat_db_db_1javaJNI_initDbRef0(
++JNIEXPORT jlong JNICALL Java_com_sleepycat_db_db_1javaJNI_initDbRef0(
+     JNIEnv *jenv, jclass jcls, jlong jarg1, jobject jarg2) {
+ 	DB *self = *(DB **)&jarg1;
++	jlong ret;
+ 	COMPQUIET(jcls, NULL);
+ 
+ 	DB_INTERNAL(self) = (void *)(*jenv)->NewGlobalRef(jenv, jarg2);
+-	return (jobject)DB_INTERNAL(self);
++	*(jobject *)&ret = (jobject)DB_INTERNAL(self);
++	return (ret);
+ }
+ 
+ JNIEXPORT void JNICALL Java_com_sleepycat_db_db_1javaJNI_deleteRef0(
+-    JNIEnv *jenv, jclass jcls, jobject jref) {
+-	COMPQUIET(jcls, NULL);
+-
+-	if (jref != NULL)
+-		(*jenv)->DeleteGlobalRef(jenv, jref);
+-}
+-
+-JNIEXPORT jobject JNICALL Java_com_sleepycat_db_db_1javaJNI_getDbRef0(
+     JNIEnv *jenv, jclass jcls, jlong jarg1) {
+-	DB *self = *(DB **)&jarg1;
++	jobject jref = *(jobject *)&jarg1;
+ 	COMPQUIET(jcls, NULL);
+-	COMPQUIET(jenv, NULL);
+ 
+-	return (jobject)DB_INTERNAL(self);
++	if (jref != 0L)
++		(*jenv)->DeleteGlobalRef(jenv, jref);
+ }
+ 
+ JNIEXPORT jlong JNICALL Java_com_sleepycat_db_db_1javaJNI_getDbEnv0(
+@@ -1237,7 +1233,7 @@
+ 	COMPQUIET(jcls, NULL);
+ 
+ 	*(DB_ENV **)&env_cptr = self->dbenv;
+-	return env_cptr;
++	return (env_cptr);
+ }
+ 
+ JNIEXPORT jboolean JNICALL
+*** foo/btree/bt_rec.c.orig	Tue Mar 22 09:41:49 2005
+--- foo/btree/bt_rec.c	Tue Mar 22 09:42:11 2005
+***************
+*** 222,228 ****
+  		 * previous-page pointer updated to our new page.  The next
+  		 * page must exist because we're redoing the operation.
+  		 */
+! 		if (!rootsplit && !IS_ZERO_LSN(argp->nlsn)) {
+  			if ((ret =
+  			    __memp_fget(mpf, &argp->npgno, 0, &np)) != 0) {
+  				ret = __db_pgerr(file_dbp, argp->npgno, ret);
+--- 222,228 ----
+  		 * previous-page pointer updated to our new page.  The next
+  		 * page must exist because we're redoing the operation.
+  		 */
+! 		if (!rootsplit && argp->npgno != PGNO_INVALID) {
+  			if ((ret =
+  			    __memp_fget(mpf, &argp->npgno, 0, &np)) != 0) {
+  				ret = __db_pgerr(file_dbp, argp->npgno, ret);
+***************
+*** 294,300 ****
+  		 * possible that the next-page never existed, we ignore it as
+  		 * if there's nothing to undo.
+  		 */
+! 		if (!rootsplit && !IS_ZERO_LSN(argp->nlsn)) {
+  			if ((ret =
+  			    __memp_fget(mpf, &argp->npgno, 0, &np)) != 0) {
+  				np = NULL;
+--- 294,300 ----
+  		 * possible that the next-page never existed, we ignore it as
+  		 * if there's nothing to undo.
+  		 */
+! 		if (!rootsplit && argp->npgno != PGNO_INVALID) {
+  			if ((ret =
+  			    __memp_fget(mpf, &argp->npgno, 0, &np)) != 0) {
+  				np = NULL;

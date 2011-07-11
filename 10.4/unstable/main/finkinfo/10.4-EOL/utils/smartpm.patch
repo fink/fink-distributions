@@ -1,0 +1,243 @@
+=== modified file 'Makefile'
+--- Makefile	2009-06-29 16:53:20 +0000
++++ Makefile	2009-09-28 18:17:36 +0000
+@@ -5,7 +5,7 @@
+ DESTDIR=/
+ PYTHON?=python
+ 
+-prefix=/usr
++prefix=@PREFIX@
+ bindir=$(prefix)/bin
+ 
+ all:
+
+=== modified file 'smart/channels/deb_sys.py'
+--- smart/channels/deb_sys.py	2004-12-02 21:35:17 +0000
++++ smart/channels/deb_sys.py	2009-09-29 06:22:37 +0000
+@@ -32,7 +32,7 @@
+ 
+     def fetch(self, fetcher, progress):
+         path = os.path.join(sysconf.get("deb-root", "/"),
+-                            "var/lib/dpkg/status")
++                            "@PREFIX@/var/lib/dpkg/status")
+         digest = os.path.getmtime(path)
+         if digest == self._digest:
+             return True
+
+=== modified file 'smart/const.py'
+--- smart/const.py	2009-03-04 22:08:02 +0000
++++ smart/const.py	2009-09-28 18:17:12 +0000
+@@ -64,9 +64,9 @@
+ 
+ BLOCKSIZE = 16384
+ 
+-DISTROFILE  = "/usr/lib/smart/distro.py"
+-PLUGINSDIR  = "/usr/lib/smart/plugins/"
+-DATADIR     = "/var/lib/smart/"
++DISTROFILE  = "@PREFIX@/lib/smart/distro.py"
++PLUGINSDIR  = "@PREFIX@/lib/smart/plugins/"
++DATADIR     = "@PREFIX@/var/lib/smart/"
+ USERDATADIR = "~/.smart/"
+ CONFFILE    = "config"
+ 
+
+=== modified file 'smart/plugins/aptchannelsync.py'
+--- smart/plugins/aptchannelsync.py	2008-12-12 07:17:44 +0000
++++ smart/plugins/aptchannelsync.py	2009-09-28 18:20:34 +0000
+@@ -35,13 +35,13 @@
+ from smart import *
+ 
+ 
+-APT_SOURCES_DIR = "/etc/apt/sources.list.d/"
+-APT_SOURCES = "/etc/apt/sources.list"
++APT_SOURCES_DIR = "@PREFIX@/etc/apt/sources.list.d/"
++APT_SOURCES = "@PREFIX@/etc/apt/sources.list"
+ 
+ 
+ def _loadSourcesList(filename):
+ 
+-    keyring_path = sysconf.get("sync-apt-keyring", "/etc/apt/trusted.gpg")
++    keyring_path = sysconf.get("sync-apt-keyring", "@PREFIX@/etc/apt/trusted.gpg")
+     if not os.path.isfile(keyring_path):
+         keyring_path = None
+ 
+
+=== modified file 'smart/plugins/channelsync.py'
+--- smart/plugins/channelsync.py	2007-10-08 01:54:50 +0000
++++ smart/plugins/channelsync.py	2009-09-28 18:18:46 +0000
+@@ -23,7 +23,7 @@
+ from smart import *
+ import os
+ 
+-CHANNELSDIR = "/etc/smart/channels/"
++CHANNELSDIR = "@PREFIX@/etc/smart/channels/"
+ 
+ def syncChannels(channelsdir, force=None):
+ 
+
+=== modified file 'smart/plugins/detectsys.py'
+--- smart/plugins/detectsys.py	2009-09-28 16:40:58 +0000
++++ smart/plugins/detectsys.py	2009-09-29 06:23:04 +0000
+@@ -28,7 +28,7 @@
+     rpm = None
+ 
+ def detectRPMSystem():
+-    dir = os.path.join(sysconf.get("rpm-root", "/"), "var/lib/rpm")
++    dir = os.path.join(sysconf.get("rpm-root", "/"), "@PREFIX@/var/lib/rpm")
+     if os.path.isdir(dir):
+         if not rpm:
+             iface.debug("detectRPMSystem: rpm-python not available")
+@@ -43,7 +43,7 @@
+                         })
+ 
+ def detectDEBSystem():
+-    dir = os.path.join(sysconf.get("deb-root", "/"), "var/lib/dpkg")
++    dir = os.path.join(sysconf.get("deb-root", "/"), "@PREFIX@/var/lib/dpkg")
+     if os.path.isdir(dir):
+         for alias in sysconf.keys("channels"):
+             if sysconf.get(("channels", alias, "type")) == "deb-sys":
+
+=== modified file 'smart/backends/deb/base.py'
+--- smart/backends/deb/base.py	2009-03-04 19:35:56 +0000
++++ smart/backends/deb/base.py	2009-09-28 21:59:42 +0000
+@@ -33,7 +33,7 @@
+ 
+ __all__ = ["DebPackage", "DebProvides", "DebNameProvides", "DebPreRequires",
+            "DebRequires", "DebUpgrades", "DebConflicts", "DebBreaks",
+-           "DebOrRequires", "DebOrPreRequires", "DEBARCH"]
++           "DebOrRequires", "DebOrPreRequires", "DEBARCH", "system_provides"]
+ 
+ def getArchitecture():
+     arch = sysconf.get("deb-arch")
+@@ -176,6 +176,54 @@
+ class DebConflicts(DebDepends,Conflicts): __slots__ = ()
+ class DebBreaks(DebDepends,Conflicts): __slots__ = ()
+ 
++class NullSystemProvides(object):
++
++    def matches(self, requires):
++        return False
++
++class FinkVirtualPkgs(object):
++
++    def __init__(self, path):
++        self._provides = {}
++
++        pkgs = []
++        info = {}
++
++        output = os.popen(path).readlines()
++        for line in output:
++            line = string.rstrip(line)
++            keyval = string.split(line, ':', 1)
++            if len(keyval) > 1:
++               val = string.lstrip(keyval[1])
++               info[keyval[0]] = val
++            else:
++               pkgs.append(info)
++               info = {}
++
++        for info in pkgs:
++            if info["Status"].endswith("not-installed"):
++                continue
++            name = info["Package"]
++            version = info["Version"]
++            self._provides.setdefault(name, DebNameProvides(name, version))
++            provides = string.split(info.get("provides", ""), ', ')
++            for provide in provides:
++               if provide:
++                   self._provides.setdefault(provide, DebProvides(provide, None))
++
++    def matches(self, requires):
++        for name in requires.getMatchNames():
++            if name in self._provides:
++                prv = self._provides.get(name)
++                if requires.matches(prv):
++                    return True
++        return False
++
++system_provides = NullSystemProvides()
++fink = sysconf.get("fink-virtual-pkgs", "@PREFIX@/bin/fink-virtual-pkgs")
++if os.path.exists(fink):
++    system_provides = FinkVirtualPkgs(fink)
++
+ def enablePsyco(psyco):
+     psyco.bind(DebPackage.coexists)
+     psyco.bind(DebPackage.matches)
+
+=== modified file 'smart/backends/deb/loader.py'
+--- smart/backends/deb/loader.py	2008-08-12 00:42:38 +0000
++++ smart/backends/deb/loader.py	2009-09-28 21:24:58 +0000
+@@ -86,6 +86,13 @@
+             return decode(description.split("\n", 1)[0])
+         return u""
+ 
++    def getReferenceURLs(self):
++        description = self._dict.get("description")
++        for line in description.splitlines():
++            if line.startswith("Web site:"):
++                return [line[9:].strip()]
++        return []
++
+     def getGroup(self):
+         return decode(self._loader.getSection(self._package))
+ 
+@@ -192,6 +199,13 @@
+                     n, r, v = relation
+                     cnfargs.append((Brk, n, r, v))
+ 
++            newargs = []
++            for args in reqargs:
++                req = args[0](*args[1:])
++                if not system_provides.matches(req):
++                    newargs.append(args)
++            reqargs = newargs
++
+             pkg = self.buildPackage((Pkg, name, version),
+                                     prvargs, reqargs, upgargs, cnfargs)
+             pkg.loaders[self] = offset
+
+=== added file 'tests/data/aptdeb/fink-virtual-pkgs'
+--- tests/data/aptdeb/fink-virtual-pkgs	1970-01-01 00:00:00 +0000
++++ tests/data/aptdeb/fink-virtual-pkgs	2009-09-28 18:25:35 +0000
+@@ -0,0 +1,17 @@
++#!/bin/sh
++
++cat <<__EOF__
++Package: darwin
++Status: install ok installed
++Version: 8.11.1-1
++description: [virtual package representing the kernel]
++homepage: http://www.finkproject.org/faq/usage-general.php#virtpackage
++provides: kernel
++
++Package: macosx
++Status: install ok installed
++Version: 10.4.11-1
++homepage: http://www.finkproject.org/faq/usage-general.php#virtpackage
++description: [virtual package representing the system]
++
++__EOF__
+
+=== added file 'tests/fink.txt'
+--- tests/fink.txt	1970-01-01 00:00:00 +0000
++++ tests/fink.txt	2009-09-28 18:27:00 +0000
+@@ -0,0 +1,17 @@
++
++Set up the system provides.
++
++  >>> from tests import *
++  >>> from smart.backends.deb.base import FinkVirtualPkgs, DebRequires
++  >>> localpath = "%s/aptdeb/fink-virtual-pkgs" % TESTDATADIR
++  >>> pkgs = FinkVirtualPkgs(localpath)
++  
++Check for virtual package.
++
++  >>> depends = DebRequires("macosx", None, None)
++  >>> pkgs.matches(depends)
++  True
++  >>> depends = DebRequires("darwin", ">=" , "8-1")
++  >>> pkgs.matches(depends)
++  True
++
+

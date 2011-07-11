@@ -1,0 +1,567 @@
+diff -ru jpeg-6b/jpeglib.h jpeg-6b-patched/jpeglib.h
+--- jpeg-6b/jpeglib.h	Sat Feb 21 14:48:14 1998
++++ jpeg-6b-patched/jpeglib.h	Tue Feb 25 16:49:36 2003
+@@ -13,6 +13,10 @@
+ #ifndef JPEGLIB_H
+ #define JPEGLIB_H
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
++
+ /*
+  * First we include the configuration files that record how this
+  * installation of the JPEG library is set up.  jconfig.h can be
+@@ -1091,6 +1095,10 @@
+ #ifdef JPEG_INTERNALS
+ #include "jpegint.h"		/* fetch private declarations */
+ #include "jerror.h"		/* fetch error codes too */
++#endif
++
++#ifdef __cplusplus
++}
+ #endif
+ 
+ #endif /* JPEGLIB_H */
+diff -urN jpeg-6b/transupp.c jpeg-6b-exif/transupp.c
+--- jpeg-6b/transupp.c	1997-08-10 02:15:26.000000000 +0200
++++ jpeg-6b-exif/transupp.c	2001-01-08 00:25:36.000000000 +0100
+@@ -717,6 +717,162 @@
+ }
+ 
+ 
++/* Adjust Exif image parameters.
++ *
++ * We try to adjust the Tags ExifImageWidth and ExifImageHeight if possible.
++ */
++
++LOCAL(void)
++adjust_exif_parameters (JOCTET FAR * data, unsigned int length,
++			JDIMENSION new_width, JDIMENSION new_height)
++{
++  boolean is_motorola; /* Flag for byte order */
++  unsigned int number_of_tags, tagnum;
++  unsigned int firstoffset, offset;
++  JDIMENSION new_value;
++
++  if (length < 12) return; /* Length of an IFD entry */
++
++  /* Discover byte order */
++  if (GETJOCTET(data[0]) == 0x49 && GETJOCTET(data[1]) == 0x49)
++    is_motorola = FALSE;
++  else if (GETJOCTET(data[0]) == 0x4D && GETJOCTET(data[1]) == 0x4D)
++    is_motorola = TRUE;
++  else
++    return;
++
++  /* Check Tag Mark */
++  if (is_motorola) {
++    if (GETJOCTET(data[2]) != 0) return;
++    if (GETJOCTET(data[3]) != 0x2A) return;
++  } else {
++    if (GETJOCTET(data[3]) != 0) return;
++    if (GETJOCTET(data[2]) != 0x2A) return;
++  }
++
++  /* Get first IFD offset (offset to IFD0) */
++  if (is_motorola) {
++    if (GETJOCTET(data[4]) != 0) return;
++    if (GETJOCTET(data[5]) != 0) return;
++    firstoffset = GETJOCTET(data[6]);
++    firstoffset <<= 8;
++    firstoffset += GETJOCTET(data[7]);
++  } else {
++    if (GETJOCTET(data[7]) != 0) return;
++    if (GETJOCTET(data[6]) != 0) return;
++    firstoffset = GETJOCTET(data[5]);
++    firstoffset <<= 8;
++    firstoffset += GETJOCTET(data[4]);
++  }
++  if (firstoffset > length - 2) return; /* check end of data segment */
++
++  /* Get the number of directory entries contained in this IFD */
++  if (is_motorola) {
++    number_of_tags = GETJOCTET(data[firstoffset]);
++    number_of_tags <<= 8;
++    number_of_tags += GETJOCTET(data[firstoffset+1]);
++  } else {
++    number_of_tags = GETJOCTET(data[firstoffset+1]);
++    number_of_tags <<= 8;
++    number_of_tags += GETJOCTET(data[firstoffset]);
++  }
++  if (number_of_tags == 0) return;
++  firstoffset += 2;
++
++  /* Search for ExifSubIFD offset Tag in IFD0 */
++  for (;;) {
++    if (firstoffset > length - 12) return; /* check end of data segment */
++    /* Get Tag number */
++    if (is_motorola) {
++      tagnum = GETJOCTET(data[firstoffset]);
++      tagnum <<= 8;
++      tagnum += GETJOCTET(data[firstoffset+1]);
++    } else {
++      tagnum = GETJOCTET(data[firstoffset+1]);
++      tagnum <<= 8;
++      tagnum += GETJOCTET(data[firstoffset]);
++    }
++    if (tagnum == 0x8769) break; /* found ExifSubIFD offset Tag */
++    if (--number_of_tags == 0) return;
++    firstoffset += 12;
++  }
++
++  /* Get the ExifSubIFD offset */
++  if (is_motorola) {
++    if (GETJOCTET(data[firstoffset+8]) != 0) return;
++    if (GETJOCTET(data[firstoffset+9]) != 0) return;
++    offset = GETJOCTET(data[firstoffset+10]);
++    offset <<= 8;
++    offset += GETJOCTET(data[firstoffset+11]);
++  } else {
++    if (GETJOCTET(data[firstoffset+11]) != 0) return;
++    if (GETJOCTET(data[firstoffset+10]) != 0) return;
++    offset = GETJOCTET(data[firstoffset+9]);
++    offset <<= 8;
++    offset += GETJOCTET(data[firstoffset+8]);
++  }
++  if (offset > length - 2) return; /* check end of data segment */
++
++  /* Get the number of directory entries contained in this SubIFD */
++  if (is_motorola) {
++    number_of_tags = GETJOCTET(data[offset]);
++    number_of_tags <<= 8;
++    number_of_tags += GETJOCTET(data[offset+1]);
++  } else {
++    number_of_tags = GETJOCTET(data[offset+1]);
++    number_of_tags <<= 8;
++    number_of_tags += GETJOCTET(data[offset]);
++  }
++  if (number_of_tags < 2) return;
++  offset += 2;
++
++  /* Search for ExifImageWidth and ExifImageHeight Tags in this SubIFD */
++  do {
++    if (offset > length - 12) return; /* check end of data segment */
++    /* Get Tag number */
++    if (is_motorola) {
++      tagnum = GETJOCTET(data[offset]);
++      tagnum <<= 8;
++      tagnum += GETJOCTET(data[offset+1]);
++    } else {
++      tagnum = GETJOCTET(data[offset+1]);
++      tagnum <<= 8;
++      tagnum += GETJOCTET(data[offset]);
++    }
++    if (tagnum == 0xA002 || tagnum == 0xA003) {
++      if (tagnum == 0xA002)
++	new_value = new_width; /* ExifImageWidth Tag */
++      else
++	new_value = new_height; /* ExifImageHeight Tag */
++      if (is_motorola) {
++	data[offset+2] = 0; /* Format = unsigned long (4 octets) */
++	data[offset+3] = 4;
++	data[offset+4] = 0; /* Number Of Components = 1 */
++	data[offset+5] = 0;
++	data[offset+6] = 0;
++	data[offset+7] = 1;
++	data[offset+8] = 0;
++	data[offset+9] = 0;
++	data[offset+10] = (JOCTET)((new_value >> 8) & 0xFF);
++	data[offset+11] = (JOCTET)(new_value & 0xFF);
++      } else {
++	data[offset+2] = 4; /* Format = unsigned long (4 octets) */
++	data[offset+3] = 0;
++	data[offset+4] = 1; /* Number Of Components = 1 */
++	data[offset+5] = 0;
++	data[offset+6] = 0;
++	data[offset+7] = 0;
++	data[offset+8] = (JOCTET)(new_value & 0xFF);
++	data[offset+9] = (JOCTET)((new_value >> 8) & 0xFF);
++	data[offset+10] = 0;
++	data[offset+11] = 0;
++      }
++    }
++    offset += 12;
++  } while (--number_of_tags);
++}
++
++
+ /* Adjust output image parameters as needed.
+  *
+  * This must be called after jpeg_copy_critical_parameters()
+@@ -799,6 +955,27 @@
+     break;
+   }
+ 
++  /* Adjust Exif properties */
++  if (srcinfo->marker_list != NULL &&
++      srcinfo->marker_list->marker == JPEG_APP0+1 &&
++      srcinfo->marker_list->data_length >= 6 &&
++      GETJOCTET(srcinfo->marker_list->data[0]) == 0x45 &&
++      GETJOCTET(srcinfo->marker_list->data[1]) == 0x78 &&
++      GETJOCTET(srcinfo->marker_list->data[2]) == 0x69 &&
++      GETJOCTET(srcinfo->marker_list->data[3]) == 0x66 &&
++      GETJOCTET(srcinfo->marker_list->data[4]) == 0 &&
++      GETJOCTET(srcinfo->marker_list->data[5]) == 0) {
++    /* Suppress output of JFIF marker */
++    dstinfo->write_JFIF_header = FALSE;
++    /* Adjust Exif image parameters */
++    if (dstinfo->image_width != srcinfo->image_width ||
++	dstinfo->image_height != srcinfo->image_height)
++      /* Align data segment to start of TIFF structure for parsing */
++      adjust_exif_parameters(srcinfo->marker_list->data + 6,
++	srcinfo->marker_list->data_length - 6,
++	dstinfo->image_width, dstinfo->image_height);
++  }
++
+   /* Return the appropriate output data set */
+   if (info->workspace_coef_arrays != NULL)
+     return info->workspace_coef_arrays;
+diff -urN jpeg-6b/jpegexiforient.c jpeg-6b-exif/jpegexiforient.c
+--- jpeg-6b/jpegexiforient.c	Thu Jan  1 01:00:00 1970
++++ jpeg-6b-exif/jpegexiforient.c	Fri Jan 16 10:05:57 2004
+@@ -0,0 +1,292 @@
++/*
++ * jpegexiforient.c
++ *
++ * This is a utility program to get and set the Exif Orientation Tag.
++ * It can be used together with jpegtran in scripts for automatic
++ * orientation correction of digital camera pictures.
++ *
++ * The Exif orientation value gives the orientation of the camera
++ * relative to the scene when the image was captured.  The relation
++ * of the '0th row' and '0th column' to visual position is shown as
++ * below.
++ *
++ * Value | 0th Row     | 0th Column
++ * ------+-------------+-----------
++ *   1   | top         | left side
++ *   2   | top         | rigth side
++ *   3   | bottom      | rigth side
++ *   4   | bottom      | left side
++ *   5   | left side   | top
++ *   6   | right side  | top
++ *   7   | right side  | bottom
++ *   8   | left side   | bottom
++ *
++ * For convenience, here is what the letter F would look like if it were
++ * tagged correctly and displayed by a program that ignores the orientation
++ * tag:
++ *
++ *   1        2       3      4         5            6           7          8
++ *
++ * 888888  888888      88  88      8888888888  88                  88  8888888888
++ * 88          88      88  88      88  88      88  88          88  88      88  88
++ * 8888      8888    8888  8888    88          8888888888  8888888888          88
++ * 88          88      88  88
++ * 88          88  888888  888888
++ *
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++
++static FILE * myfile;		/* My JPEG file */
++
++static unsigned char exif_data[65536L];
++
++/* Return next input byte, or EOF if no more */
++#define NEXTBYTE()  getc(myfile)
++
++/* Error exit handler */
++#define ERREXIT(msg)  (exit(0))
++
++/* Read one byte, testing for EOF */
++static int
++read_1_byte (void)
++{
++  int c;
++
++  c = NEXTBYTE();
++  if (c == EOF)
++    ERREXIT("Premature EOF in JPEG file");
++  return c;
++}
++
++/* Read 2 bytes, convert to unsigned int */
++/* All 2-byte quantities in JPEG markers are MSB first */
++static unsigned int
++read_2_bytes (void)
++{
++  int c1, c2;
++
++  c1 = NEXTBYTE();
++  if (c1 == EOF)
++    ERREXIT("Premature EOF in JPEG file");
++  c2 = NEXTBYTE();
++  if (c2 == EOF)
++    ERREXIT("Premature EOF in JPEG file");
++  return (((unsigned int) c1) << 8) + ((unsigned int) c2);
++}
++
++static const char * progname;	/* program name for error messages */
++
++static void
++usage (void)
++/* complain about bad command line */
++{
++  fprintf(stderr, "jpegexiforient reads or writes the Exif Orientation Tag ");
++  fprintf(stderr, "in a JPEG Exif file.\n");
++
++  fprintf(stderr, "Usage: %s [switches] jpegfile\n", progname);
++
++  fprintf(stderr, "Switches:\n");
++  fprintf(stderr, "  -n         Do not output the trailing newline\n");
++  fprintf(stderr, "  -1 .. -8   Set orientation value 1 .. 8\n");
++}
++
++/*
++ * The main program.
++ */
++
++int
++main (int argc, char **argv)
++{
++  int n_flag, set_flag;
++  unsigned int length, i;
++  int is_motorola; /* Flag for byte order */
++  unsigned int offset, number_of_tags, tagnum;
++
++  progname = argv[0];
++  if (progname == NULL || progname[0] == 0)
++    progname = "jpegexiforient";	/* in case C library doesn't provide it */
++
++  if (argc < 2) { usage(); return 0; }
++
++  n_flag = 0; set_flag = 0;
++
++  i = 1;
++  while (argv[i][0] == '-') {
++    switch (argv[i][1]) {
++    case 'n':
++      n_flag = 1;
++      break;
++    case '1':
++    case '2':
++    case '3':
++    case '4':
++    case '5':
++    case '6':
++    case '7':
++    case '8':
++      set_flag = argv[i][1] - '0';
++      break;
++    default:
++      usage(); return 0;
++    }
++    if (++i >= argc) { usage(); return 0; }
++  }
++
++  if (set_flag) {
++    if ((myfile = fopen(argv[i], "rb+")) == NULL) {
++      fprintf(stderr, "%s: can't open %s\n", progname, argv[i]);
++      return 0;
++    }
++  } else {
++    if ((myfile = fopen(argv[i], "rb")) == NULL) {
++      fprintf(stderr, "%s: can't open %s\n", progname, argv[i]);
++      return 0;
++    }
++  }
++
++  /* Read File head, check for JPEG SOI + Exif APP1 */
++  for (i = 0; i < 4; i++)
++    exif_data[i] = (unsigned char) read_1_byte();
++  if (exif_data[0] != 0xFF ||
++      exif_data[1] != 0xD8 ||
++      exif_data[2] != 0xFF ||
++      exif_data[3] != 0xE1)
++    return 0;
++
++  /* Get the marker parameter length count */
++  length = read_2_bytes();
++  /* Length includes itself, so must be at least 2 */
++  /* Following Exif data length must be at least 6 */
++  if (length < 8)
++    return 0;
++  length -= 8;
++  /* Read Exif head, check for "Exif" */
++  for (i = 0; i < 6; i++)
++    exif_data[i] = (unsigned char) read_1_byte();
++  if (exif_data[0] != 0x45 ||
++      exif_data[1] != 0x78 ||
++      exif_data[2] != 0x69 ||
++      exif_data[3] != 0x66 ||
++      exif_data[4] != 0 ||
++      exif_data[5] != 0)
++    return 0;
++  /* Read Exif body */
++  for (i = 0; i < length; i++)
++    exif_data[i] = (unsigned char) read_1_byte();
++
++  if (length < 12) return 0; /* Length of an IFD entry */
++
++  /* Discover byte order */
++  if (exif_data[0] == 0x49 && exif_data[1] == 0x49)
++    is_motorola = 0;
++  else if (exif_data[0] == 0x4D && exif_data[1] == 0x4D)
++    is_motorola = 1;
++  else
++    return 0;
++
++  /* Check Tag Mark */
++  if (is_motorola) {
++    if (exif_data[2] != 0) return 0;
++    if (exif_data[3] != 0x2A) return 0;
++  } else {
++    if (exif_data[3] != 0) return 0;
++    if (exif_data[2] != 0x2A) return 0;
++  }
++
++  /* Get first IFD offset (offset to IFD0) */
++  if (is_motorola) {
++    if (exif_data[4] != 0) return 0;
++    if (exif_data[5] != 0) return 0;
++    offset = exif_data[6];
++    offset <<= 8;
++    offset += exif_data[7];
++  } else {
++    if (exif_data[7] != 0) return 0;
++    if (exif_data[6] != 0) return 0;
++    offset = exif_data[5];
++    offset <<= 8;
++    offset += exif_data[4];
++  }
++  if (offset > length - 2) return 0; /* check end of data segment */
++
++  /* Get the number of directory entries contained in this IFD */
++  if (is_motorola) {
++    number_of_tags = exif_data[offset];
++    number_of_tags <<= 8;
++    number_of_tags += exif_data[offset+1];
++  } else {
++    number_of_tags = exif_data[offset+1];
++    number_of_tags <<= 8;
++    number_of_tags += exif_data[offset];
++  }
++  if (number_of_tags == 0) return 0;
++  offset += 2;
++
++  /* Search for Orientation Tag in IFD0 */
++  for (;;) {
++    if (offset > length - 12) return 0; /* check end of data segment */
++    /* Get Tag number */
++    if (is_motorola) {
++      tagnum = exif_data[offset];
++      tagnum <<= 8;
++      tagnum += exif_data[offset+1];
++    } else {
++      tagnum = exif_data[offset+1];
++      tagnum <<= 8;
++      tagnum += exif_data[offset];
++    }
++    if (tagnum == 0x0112) break; /* found Orientation Tag */
++    if (--number_of_tags == 0) return 0;
++    offset += 12;
++  }
++
++  if (set_flag) {
++    /* Set the Orientation value */
++    if (is_motorola) {
++      exif_data[offset+2] = 0; /* Format = unsigned short (2 octets) */
++      exif_data[offset+3] = 3;
++      exif_data[offset+4] = 0; /* Number Of Components = 1 */
++      exif_data[offset+5] = 0;
++      exif_data[offset+6] = 0;
++      exif_data[offset+7] = 1;
++      exif_data[offset+8] = 0;
++      exif_data[offset+9] = (unsigned char)set_flag;
++      exif_data[offset+10] = 0;
++      exif_data[offset+11] = 0;
++    } else {
++      exif_data[offset+2] = 3; /* Format = unsigned short (2 octets) */
++      exif_data[offset+3] = 0;
++      exif_data[offset+4] = 1; /* Number Of Components = 1 */
++      exif_data[offset+5] = 0;
++      exif_data[offset+6] = 0;
++      exif_data[offset+7] = 0;
++      exif_data[offset+8] = (unsigned char)set_flag;
++      exif_data[offset+9] = 0;
++      exif_data[offset+10] = 0;
++      exif_data[offset+11] = 0;
++    }
++    fseek(myfile, (4 + 2 + 6 + 2) + offset, SEEK_SET);
++    fwrite(exif_data + 2 + offset, 1, 10, myfile);
++  } else {
++    /* Get the Orientation value */
++    if (is_motorola) {
++      if (exif_data[offset+8] != 0) return 0;
++      set_flag = exif_data[offset+9];
++    } else {
++      if (exif_data[offset+9] != 0) return 0;
++      set_flag = exif_data[offset+8];
++    }
++    if (set_flag > 8) return 0;
++  }
++
++  /* Write out Orientation value */
++  if (n_flag)
++    printf("%c", '0' + set_flag);
++  else
++    printf("%c\n", '0' + set_flag);
++
++  /* All done. */
++  return 0;
++}
+diff -urN jpeg-6b/makefile.cfg jpeg-6b-exif/makefile.cfg
+--- jpeg-6b/makefile.cfg	Sat Mar 21 20:08:57 1998
++++ jpeg-6b-exif/makefile.cfg	Fri Jan 16 17:38:12 2004
+@@ -86,7 +86,7 @@
+ # source files: cjpeg/djpeg/jpegtran applications, also rdjpgcom/wrjpgcom
+ APPSOURCES= cjpeg.c djpeg.c jpegtran.c rdjpgcom.c wrjpgcom.c cdjpeg.c \
+         rdcolmap.c rdswitch.c transupp.c rdppm.c wrppm.c rdgif.c wrgif.c \
+-        rdtarga.c wrtarga.c rdbmp.c wrbmp.c rdrle.c wrrle.c
++        rdtarga.c wrtarga.c rdbmp.c wrbmp.c rdrle.c wrrle.c jpegexiforient.c
+ SOURCES= $(LIBSOURCES) $(SYSDEPSOURCES) $(APPSOURCES)
+ # files included by source files
+ INCLUDES= jchuff.h jdhuff.h jdct.h jerror.h jinclude.h jmemsys.h jmorecfg.h \
+@@ -133,7 +133,7 @@
+ TROBJECTS= jpegtran.$(O) rdswitch.$(O) cdjpeg.$(O) transupp.$(O)
+ 
+ 
+-all: @A2K_DEPS@ libjpeg.$(A) cjpeg djpeg jpegtran rdjpgcom wrjpgcom
++all: @A2K_DEPS@ libjpeg.$(A) cjpeg djpeg jpegtran rdjpgcom wrjpgcom jpegexiforient
+ 
+ # Special compilation rules to support ansi2knr and libtool.
+ .SUFFIXES: .lo .la
+@@ -188,14 +188,18 @@
+ wrjpgcom: wrjpgcom.$(O)
+ 	$(LN) $(LDFLAGS) -o wrjpgcom wrjpgcom.$(O) $(LDLIBS)
+ 
++jpegexiforient: jpegexiforient.$(O)
++	$(LN) $(LDFLAGS) -o jpegexiforient jpegexiforient.$(O) $(LDLIBS)
++
+ # Installation rules:
+ 
+-install: cjpeg djpeg jpegtran rdjpgcom wrjpgcom @FORCE_INSTALL_LIB@
++install: cjpeg djpeg jpegtran rdjpgcom wrjpgcom jpegexiforient @FORCE_INSTALL_LIB@
+ 	$(INSTALL_PROGRAM) cjpeg $(bindir)/$(binprefix)cjpeg
+ 	$(INSTALL_PROGRAM) djpeg $(bindir)/$(binprefix)djpeg
+ 	$(INSTALL_PROGRAM) jpegtran $(bindir)/$(binprefix)jpegtran
+ 	$(INSTALL_PROGRAM) rdjpgcom $(bindir)/$(binprefix)rdjpgcom
+ 	$(INSTALL_PROGRAM) wrjpgcom $(bindir)/$(binprefix)wrjpgcom
++	$(INSTALL_PROGRAM) jpegexiforient $(bindir)/$(binprefix)jpegexiforient
+ 	$(INSTALL_DATA) $(srcdir)/cjpeg.1 $(mandir)/$(manprefix)cjpeg.$(manext)
+ 	$(INSTALL_DATA) $(srcdir)/djpeg.1 $(mandir)/$(manprefix)djpeg.$(manext)
+ 	$(INSTALL_DATA) $(srcdir)/jpegtran.1 $(mandir)/$(manprefix)jpegtran.$(manext)
+@@ -213,7 +217,7 @@
+ 
+ clean:
+ 	$(RM) *.o *.lo libjpeg.a libjpeg.la
+-	$(RM) cjpeg djpeg jpegtran rdjpgcom wrjpgcom
++	$(RM) cjpeg djpeg jpegtran rdjpgcom wrjpgcom jpegexiforient
+ 	$(RM) ansi2knr core testout* config.log config.status
+ 	$(RM) -r knr .libs _libs
+ 
+
+ 	  	 

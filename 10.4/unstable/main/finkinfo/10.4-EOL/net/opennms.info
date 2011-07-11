@@ -1,0 +1,455 @@
+Package: opennms
+Version: 1.8.4
+Revision: 1
+Description: Network Management System
+Type: java(1.5)
+License: GPL
+Maintainer: Benjamin Reed <opennms@fink.raccoonfink.com>
+
+Depends: <<
+	daemonic,
+	fink (>= 0.29.7-1),
+	jicmp,
+	opennms-pgsql,
+	passwd (>= 20030202-1),
+	postgresql-server,
+	rrdtool (>= 1.2.0-1),
+	rrdtool-java
+<<
+BuildDepends: <<
+	fink (>= 0.29.7-1),
+	passwd (>= 20030202-1)
+<<
+Recommends: mib2opennms
+
+Source: http://sourceforge.net/projects/%n/files/OpenNMS-Source/stable-%v/%n-source-%v-1.tar.gz
+Source-MD5: f82ba49377114b97f42e690474be6d20
+Source2: http://sourceforge.net/projects/%n/files/miscellaneous/%n-maven/%n-maven-dependencies-1.8.1.tar.bz2
+Source2-MD5: 56e21520b197e04f55d2c56199e1899f
+Source3: http://sourceforge.net/projects/%n/files/miscellaneous/%n-maven/%n-maven-dependencies-1.8.1-to-1.8.3-2.tar.bz2
+Source3-MD5: 8d2250305383ab99e2d153439ad9ad63
+SourceDirectory: %n-%v-1/source
+PatchScript: <<
+#!/bin/sh -ev
+	sed -e 's,@FINKPREFIX@,%p,g' %{PatchFile} | patch -p2
+	sed -e 's,@PREFIX@,%p,g' tools/packages/fink/README.Darwin > README.Darwin
+	cat <<END >settings.xml
+<settings xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <localRepository>`pwd`/../../repository</localRepository>
+  <offline>true</offline>
+</settings>
+END
+<<
+PatchFile: %n.patch
+PatchFile-MD5: f2b7a45973ef70db4d50d4df5cdb0284
+
+UseMaxBuildJobs: true
+CompileScript: echo "none needed"
+
+InstallScript: <<
+#!/bin/sh -ev
+
+	case `sw_vers -productVersion` in
+		10.[012345]*)
+			;;
+		*)
+			ARCH_ARGS="-d32"
+			if [ "%m" = "x86_64" ]; then
+				ARCH_ARGS="-d64"
+			fi
+			;;
+	esac
+
+	# main install
+	export MAVEN_OPTS="-Xmx1g $ARCH_ARGS"
+	sh ./build.sh -e -s `pwd`/settings.xml -Djava.awt.headless=true -Ddist.name=opennms -Ddist.dir=%i/var -Dopennms.home=%p/var/opennms install assembly:directory-inline
+
+	# some convenience symlinks
+	/usr/bin/install -d -m 755 %i/bin %i/etc %i/var/log
+	/bin/ln -sf %p/var/opennms/etc %i/etc/opennms
+	/bin/ln -sf %p/var/opennms/bin/opennms %i/bin/
+	/bin/ln -sf %p/var/opennms/logs %i/var/log/opennms
+
+	rm -rf %i/var/opennms/webapps/opennms
+
+	/usr/bin/install -d -m 755 %i/var/opennms/share/reports
+	touch %i/var/opennms/share/reports/.turd
+
+	/usr/bin/install -d -m 755 "%i/var/run"
+	perl -pi -e 's,/var/lock/subsys/opennms,%p/var/run/opennms.lock,g' %i/var/opennms/bin/opennms
+
+	# the path to the JVM
+	which java > %i/var/opennms/etc/java.conf 2>/dev/null
+
+	cat <<END >%i/var/opennms/etc/opennms.conf
+ADDITIONAL_MANAGER_OPTIONS="$ARCH_ARGS"
+END
+
+	for file in %i/var/opennms/etc/*.xml; do
+		/usr/bin/xmllint --format "$file" >xmllint-out.$$
+		mv xmllint-out.$$ "$file"
+	done
+
+	# contrib directory
+	install -d -m 755 %i/share/doc/%N
+	mv %i/var/opennms/contrib %i/share/doc/%N/
+
+	/bin/chmod 755 "%i/var/opennms/bin"/*
+	/bin/chmod -R g+w "%i/var/opennms/etc" "%i/var/opennms/logs"
+	/bin/chmod g+s "%i/var/opennms/logs" "%i/var/opennms/etc"
+	/usr/bin/install -d -m 755 "%i/etc/profile.d"
+<<
+DocFiles: README*
+RuntimeVars: OPENNMS_HOME: %p/var/opennms
+
+PreInstScript: <<
+if [ -d "%p/var/opennms/etc" ]; then
+	for file in %p/var/opennms/etc/*.xml; do
+		/usr/bin/xmllint --format "$file" >xmllint-out.$$
+		mv xmllint-out.$$ "$file"
+	done
+fi
+<<
+PostInstScript: <<
+# set ownership
+/usr/sbin/chown -R opennms:opennms "%p/var/opennms"
+
+# update daemonic init script if necessary
+daemonic install opennms
+
+%p/var/opennms/bin/runjava -q -s
+
+cat <<END
+*** NOTE ***
+
+This package will not work until you follow the post-installation
+instructions in %p/share/doc/%n/README.Darwin
+END
+<<
+PreRmScript: <<
+# clean up
+if [ $1 != "upgrade" ]; then
+	daemonic remove opennms
+	rm -rf %p/var/log/opennms/*
+fi
+<<
+ConfFiles: <<
+	%p/var/opennms/etc/ackd-configuration.xml
+	%p/var/opennms/etc/actiond-configuration.xml
+	%p/var/opennms/etc/ami-config.xml
+	%p/var/opennms/etc/asterisk-configuration.properties
+	%p/var/opennms/etc/availability-reports.xml
+	%p/var/opennms/etc/c3p0.properties
+	%p/var/opennms/etc/capsd-configuration.xml
+	%p/var/opennms/etc/categories.xml
+	%p/var/opennms/etc/chart-configuration.xml
+	%p/var/opennms/etc/collectd-configuration.xml
+	%p/var/opennms/etc/create.sql
+	%p/var/opennms/etc/database-reports.xml
+	%p/var/opennms/etc/database-schema.xml
+	%p/var/opennms/etc/datacollection-config.xml
+	%p/var/opennms/etc/destinationPaths.xml
+	%p/var/opennms/etc/dhcpd-configuration.xml
+	%p/var/opennms/etc/discovery-configuration.xml
+	%p/var/opennms/etc/eventconf.xml
+	%p/var/opennms/etc/eventd-configuration.xml
+	%p/var/opennms/etc/events-archiver-configuration.xml
+	%p/var/opennms/etc/events.archiver.properties
+	%p/var/opennms/etc/events/3Com.events.xml
+	%p/var/opennms/etc/events/ADIC-v2.events.xml
+	%p/var/opennms/etc/events/AIX.events.xml
+	%p/var/opennms/etc/events/APC.Best.events.xml
+	%p/var/opennms/etc/events/APC.Exide.events.xml
+	%p/var/opennms/etc/events/APC.events.xml
+	%p/var/opennms/etc/events/ATMForum.events.xml
+	%p/var/opennms/etc/events/AdaptecRaid.events.xml
+	%p/var/opennms/etc/events/Adtran.Atlas.events.xml
+	%p/var/opennms/etc/events/Adtran.events.xml
+	%p/var/opennms/etc/events/Aedilis.events.xml
+	%p/var/opennms/etc/events/AirDefense.events.xml
+	%p/var/opennms/etc/events/AlcatelLucent.OmniSwitch.events.xml
+	%p/var/opennms/etc/events/AlcatelLucent.SMSBrick.events.xml
+	%p/var/opennms/etc/events/Allot.NetXplorer.events.xml
+	%p/var/opennms/etc/events/Allot.SM.events.xml
+	%p/var/opennms/etc/events/Alteon.events.xml
+	%p/var/opennms/etc/events/Altiga.events.xml
+	%p/var/opennms/etc/events/Aruba.AP.events.xml
+	%p/var/opennms/etc/events/Aruba.Switch.events.xml
+	%p/var/opennms/etc/events/Aruba.events.xml
+	%p/var/opennms/etc/events/Ascend.events.xml
+	%p/var/opennms/etc/events/Audiocodes.events.xml
+	%p/var/opennms/etc/events/Avocent.ACS.events.xml
+	%p/var/opennms/etc/events/Avocent.ACS5000.events.xml
+	%p/var/opennms/etc/events/Avocent.AMX5000.events.xml
+	%p/var/opennms/etc/events/Avocent.AMX5010.events.xml
+	%p/var/opennms/etc/events/Avocent.AMX5020.events.xml
+	%p/var/opennms/etc/events/Avocent.AMX5030.events.xml
+	%p/var/opennms/etc/events/Avocent.CCM.events.xml
+	%p/var/opennms/etc/events/Avocent.DSR.events.xml
+	%p/var/opennms/etc/events/Avocent.DSR1021.events.xml
+	%p/var/opennms/etc/events/Avocent.DSR2010.events.xml
+	%p/var/opennms/etc/events/Avocent.Mergepoint.events.xml
+	%p/var/opennms/etc/events/Avocent.PMTrap.events.xml
+	%p/var/opennms/etc/events/BEA.events.xml
+	%p/var/opennms/etc/events/BGP4.events.xml
+	%p/var/opennms/etc/events/BackupExec.events.xml
+	%p/var/opennms/etc/events/BlackBerryServer-SMIv2.events.xml
+	%p/var/opennms/etc/events/BlackBerryServer.events.xml
+	%p/var/opennms/etc/events/BlueCoat.events.xml
+	%p/var/opennms/etc/events/Bluecat.events.xml
+	%p/var/opennms/etc/events/Brocade.events.xml
+	%p/var/opennms/etc/events/CA.ArcServe.events.xml
+	%p/var/opennms/etc/events/CPQHPIM.README.txt
+	%p/var/opennms/etc/events/CPQHPIM.events.xml
+	%p/var/opennms/etc/events/CRITAPP.events.xml
+	%p/var/opennms/etc/events/Cisco.5300dchan.events.xml
+	%p/var/opennms/etc/events/Cisco.CIDS.events.xml
+	%p/var/opennms/etc/events/Cisco.SCE.events.xml
+	%p/var/opennms/etc/events/Cisco.airespace.xml
+	%p/var/opennms/etc/events/Cisco.events.xml
+	%p/var/opennms/etc/events/Cisco.mcast.events.xml
+	%p/var/opennms/etc/events/Cisco2.events.xml
+	%p/var/opennms/etc/events/Clarent.events.xml
+	%p/var/opennms/etc/events/Clarinet.events.xml
+	%p/var/opennms/etc/events/Colubris.events.xml
+	%p/var/opennms/etc/events/Covergence.events.xml
+	%p/var/opennms/etc/events/Cricket.events.xml
+	%p/var/opennms/etc/events/Crossbeam.events.xml
+	%p/var/opennms/etc/events/DISMAN-PING.events.xml
+	%p/var/opennms/etc/events/DISMAN.events.xml
+	%p/var/opennms/etc/events/DMTF.events.xml
+	%p/var/opennms/etc/events/DPS.events.xml
+	%p/var/opennms/etc/events/DS1.events.xml
+	%p/var/opennms/etc/events/Dell-DRAC2.events.xml
+	%p/var/opennms/etc/events/Dell.events.xml
+	%p/var/opennms/etc/events/DellArrayManager.events.xml
+	%p/var/opennms/etc/events/DellOpenManage.events.xml
+	%p/var/opennms/etc/events/DellRacHost.events.xml
+	%p/var/opennms/etc/events/DellStorageManagement.events.xml
+	%p/var/opennms/etc/events/EMC-Celerra.events.xml
+	%p/var/opennms/etc/events/EMC-Clariion.events.xml
+	%p/var/opennms/etc/events/EMC.events.xml
+	%p/var/opennms/etc/events/Extreme.events.xml
+	%p/var/opennms/etc/events/F5.events.xml
+	%p/var/opennms/etc/events/Fore.events.xml
+	%p/var/opennms/etc/events/Fortinet.events.xml
+	%p/var/opennms/etc/events/FoundryNetworks.events.xml
+	%p/var/opennms/etc/events/FujitsuSiemens.events.xml
+	%p/var/opennms/etc/events/GGSN.events.xml
+	%p/var/opennms/etc/events/Groupwise.events.xml
+	%p/var/opennms/etc/events/HP.events.xml
+	%p/var/opennms/etc/events/Hyperic.events.xml
+	%p/var/opennms/etc/events/IBM-UMS.events.xml
+	%p/var/opennms/etc/events/IBM.events.xml
+	%p/var/opennms/etc/events/IBMRSA2.events.xml
+	%p/var/opennms/etc/events/IEEE802dot11.events.xml
+	%p/var/opennms/etc/events/IPUnity-SES-MIB.events.xml
+	%p/var/opennms/etc/events/IPV6.events.xml
+	%p/var/opennms/etc/events/ISS.events.xml
+	%p/var/opennms/etc/events/Intel.events.xml
+	%p/var/opennms/etc/events/InteractiveIntelligence.events.xml
+	%p/var/opennms/etc/events/IronPort.events.xml
+	%p/var/opennms/etc/events/Juniper.events.xml
+	%p/var/opennms/etc/events/Juniper.mcast.events.xml
+	%p/var/opennms/etc/events/Junos.events.xml
+	%p/var/opennms/etc/events/JunosV1.events.xml
+	%p/var/opennms/etc/events/K5Systems.events.xml
+	%p/var/opennms/etc/events/Liebert.600SM.events.xml
+	%p/var/opennms/etc/events/Liebert.events.xml
+	%p/var/opennms/etc/events/Linksys.events.xml
+	%p/var/opennms/etc/events/Lucent.events.xml
+	%p/var/opennms/etc/events/MGE-UPS.events.xml
+	%p/var/opennms/etc/events/MPLS.events.xml
+	%p/var/opennms/etc/events/MRV.events.xml
+	%p/var/opennms/etc/events/MSDP.events.xml
+	%p/var/opennms/etc/events/MadgeNetworks.events.xml
+	%p/var/opennms/etc/events/McAfee.events.xml
+	%p/var/opennms/etc/events/Microsoft.events.xml
+	%p/var/opennms/etc/events/Multicast.standard.events.xml
+	%p/var/opennms/etc/events/Mylex.events.xml
+	%p/var/opennms/etc/events/NORTEL.Contivity.events.xml
+	%p/var/opennms/etc/events/NetApp.events.xml
+	%p/var/opennms/etc/events/NetSNMP.events.xml
+	%p/var/opennms/etc/events/Netbotz.events.xml
+	%p/var/opennms/etc/events/Netgear.events.xml
+	%p/var/opennms/etc/events/Netscalar.events.xml
+	%p/var/opennms/etc/events/Netscreen.events.xml
+	%p/var/opennms/etc/events/Nokia.events.xml
+	%p/var/opennms/etc/events/Novell.events.xml
+	%p/var/opennms/etc/events/OSPF.events.xml
+	%p/var/opennms/etc/events/Oracle.events.xml
+	%p/var/opennms/etc/events/Overland.events.xml
+	%p/var/opennms/etc/events/Overture.events.xml
+	%p/var/opennms/etc/events/PCube.events.xml
+	%p/var/opennms/etc/events/Packeteer.events.xml
+	%p/var/opennms/etc/events/Patrol.events.xml
+	%p/var/opennms/etc/events/Pixelmetrix.events.xml
+	%p/var/opennms/etc/events/Polycom.events.xml
+	%p/var/opennms/etc/events/Powerware.events.xml
+	%p/var/opennms/etc/events/Primecluster.events.xml
+	%p/var/opennms/etc/events/Quintum.events.xml
+	%p/var/opennms/etc/events/RADLAN-MIB.events.xml
+	%p/var/opennms/etc/events/RAPID-CITY.events.xml
+	%p/var/opennms/etc/events/RFC1382.events.xml
+	%p/var/opennms/etc/events/RFC1628.events.xml
+	%p/var/opennms/etc/events/RMON.events.xml
+	%p/var/opennms/etc/events/Rancid.events.xml
+	%p/var/opennms/etc/events/Redline.events.xml
+	%p/var/opennms/etc/events/Rightfax.events.xml
+	%p/var/opennms/etc/events/RiverbedSteelhead.events.xml
+	%p/var/opennms/etc/events/SNA-NAU.events.xml
+	%p/var/opennms/etc/events/SNMP-REPEATER.events.xml
+	%p/var/opennms/etc/events/Sensaphone.events.xml
+	%p/var/opennms/etc/events/Sentry.events.xml
+	%p/var/opennms/etc/events/Snort.events.xml
+	%p/var/opennms/etc/events/SonicWall.events.xml
+	%p/var/opennms/etc/events/Sonus.events.xml
+	%p/var/opennms/etc/events/Standard.events.xml
+	%p/var/opennms/etc/events/SwissQual.events.xml
+	%p/var/opennms/etc/events/Symbol.events.xml
+	%p/var/opennms/etc/events/Syslogd.events.xml
+	%p/var/opennms/etc/events/SystemEdge.events.xml
+	%p/var/opennms/etc/events/TUT.events.xml
+	%p/var/opennms/etc/events/TransPath.events.xml
+	%p/var/opennms/etc/events/Translator.default.events.xml
+	%p/var/opennms/etc/events/TrippLite.events.xml
+	%p/var/opennms/etc/events/UPS-MIB.events.xml
+	%p/var/opennms/etc/events/Uptime.events.xml
+	%p/var/opennms/etc/events/VMWare.events.xml
+	%p/var/opennms/etc/events/Veraz.events.xml
+	%p/var/opennms/etc/events/Waverider.3000.events.xml
+	%p/var/opennms/etc/events/Xerox-V2.events.xml
+	%p/var/opennms/etc/events/Xerox.events.xml
+	%p/var/opennms/etc/events/default.events.xml
+	%p/var/opennms/etc/events/fcmgmt.events.xml
+	%p/var/opennms/etc/exclude-ueis.properties
+	%p/var/opennms/etc/getManagePercentAvailIntfWindow.sql
+	%p/var/opennms/etc/getManagePercentAvailNodeWindow.sql
+	%p/var/opennms/etc/getManagedOutageForIntfInWindow.sql
+	%p/var/opennms/etc/getManagedOutageForNodeInWindow.sql
+	%p/var/opennms/etc/getManagedServiceCountForIntf.sql
+	%p/var/opennms/etc/getManagedServiceCountForNode.sql
+	%p/var/opennms/etc/getOutageTimeInWindow.sql
+	%p/var/opennms/etc/getPercentAvailabilityInWindow.sql
+	%p/var/opennms/etc/groups.xml
+	%p/var/opennms/etc/http-datacollection-config.xml
+	%p/var/opennms/etc/jasper-reports.xml
+	%p/var/opennms/etc/java.conf
+	%p/var/opennms/etc/javamail-configuration.properties
+	%p/var/opennms/etc/javamail-configuration.xml
+	%p/var/opennms/etc/jcifs.properties
+	%p/var/opennms/etc/jdbc-datacollection-config.xml
+	%p/var/opennms/etc/jmx-datacollection-config.xml
+	%p/var/opennms/etc/ksc-performance-reports.xml
+	%p/var/opennms/etc/linkd-configuration.xml
+	%p/var/opennms/etc/log4j-controller.properties
+	%p/var/opennms/etc/log4j.properties
+	%p/var/opennms/etc/magic-users.properties
+	%p/var/opennms/etc/map.enable
+	%p/var/opennms/etc/map.properties
+	%p/var/opennms/etc/mapsadapter-configuration.xml
+	%p/var/opennms/etc/microblog-configuration.xml
+	%p/var/opennms/etc/model-importer.properties
+	%p/var/opennms/etc/modemConfig.properties
+	%p/var/opennms/etc/monitoring-locations.xml
+	%p/var/opennms/etc/notifd-configuration.xml
+	%p/var/opennms/etc/notificationCommands.xml
+	%p/var/opennms/etc/notifications.xml
+	%p/var/opennms/etc/nsclient-config.xml
+	%p/var/opennms/etc/nsclient-datacollection-config.xml
+	%p/var/opennms/etc/opennms-datasources.xml
+	%p/var/opennms/etc/opennms-server.xml
+	%p/var/opennms/etc/opennms.conf
+	%p/var/opennms/etc/opennms.properties
+	%p/var/opennms/etc/otrs.properties
+	%p/var/opennms/etc/poll-outages.xml
+	%p/var/opennms/etc/poller-config.properties
+	%p/var/opennms/etc/poller-configuration.xml
+	%p/var/opennms/etc/provisiond-configuration.xml
+	%p/var/opennms/etc/rancid-configuration.xml
+	%p/var/opennms/etc/report-templates/Early-Morning-Report.jrxml
+	%p/var/opennms/etc/report-templates/leaf_banner_green.png
+	%p/var/opennms/etc/report-templates/opennms-logo.png
+	%p/var/opennms/etc/report-templates/sample-report.jrxml
+	%p/var/opennms/etc/report-templates/trivial-report.jrxml
+	%p/var/opennms/etc/reportd-configuration.xml
+	%p/var/opennms/etc/reports/HTMLAvailReport.xsl
+	%p/var/opennms/etc/reports/PDFAvailReport.xsl
+	%p/var/opennms/etc/reports/SVGAvailReport.xsl
+	%p/var/opennms/etc/reports/logo.gif
+	%p/var/opennms/etc/response-adhoc-graph.properties
+	%p/var/opennms/etc/response-graph.properties
+	%p/var/opennms/etc/rrd-configuration.properties
+	%p/var/opennms/etc/rt.properties
+	%p/var/opennms/etc/rtc-configuration.xml
+	%p/var/opennms/etc/rws-configuration.xml
+	%p/var/opennms/etc/rws-nbinventoryreport.xsl
+	%p/var/opennms/etc/rws-rancidlistreport.xsl
+	%p/var/opennms/etc/scriptd-configuration.xml
+	%p/var/opennms/etc/service-configuration.xml
+	%p/var/opennms/etc/setIfServiceKeysOnInsertTrigger.sql
+	%p/var/opennms/etc/setIfServiceKeysOnUpdateTrigger.sql
+	%p/var/opennms/etc/setIpInterfaceKeysOnInsertTrigger.sql
+	%p/var/opennms/etc/setIpInterfaceKeysOnUpdateTrigger.sql
+	%p/var/opennms/etc/setSnmpInterfaceKeysOnInsertTrigger.sql
+	%p/var/opennms/etc/setSnmpInterfaceKeysOnUpdateTrigger.sql
+	%p/var/opennms/etc/site-status-views.xml
+	%p/var/opennms/etc/smsPhonebook.properties
+	%p/var/opennms/etc/snmp-adhoc-graph.properties
+	%p/var/opennms/etc/snmp-asset-adapter-configuration.xml
+	%p/var/opennms/etc/snmp-config.xml
+	%p/var/opennms/etc/snmp-graph.properties
+	%p/var/opennms/etc/snmp-interface-poller-configuration.xml
+	%p/var/opennms/etc/statsd-configuration.xml
+	%p/var/opennms/etc/surveillance-views.xml
+	%p/var/opennms/etc/syslogd-configuration.xml
+	%p/var/opennms/etc/threshd-configuration.xml
+	%p/var/opennms/etc/thresholds.xml
+	%p/var/opennms/etc/tl1d-configuration.xml
+	%p/var/opennms/etc/translator-configuration.xml
+	%p/var/opennms/etc/trapd-configuration.xml
+	%p/var/opennms/etc/users.xml
+	%p/var/opennms/etc/vacuumd-configuration.xml
+	%p/var/opennms/etc/viewsdisplay.xml
+	%p/var/opennms/etc/vulnscand-configuration.xml
+	%p/var/opennms/etc/wmi-config.xml
+	%p/var/opennms/etc/wmi-datacollection-config.xml
+	%p/var/opennms/etc/xmlrpcd-configuration.xml
+	%p/var/opennms/etc/xmp-config.xml
+	%p/var/opennms/etc/xmp-datacollection-config.xml
+	%p/var/opennms/etc/xmpp-configuration.properties
+<<
+DaemonicFile: <<
+<service>
+	<description>OpenNMS</description>
+	<message>OpenNMS Network Management</message>
+	<daemon name="opennms">
+		<executable background="no">/usr/bin/sudo</executable>
+		<parameters>%p/bin/opennms start</parameters>
+	</daemon>
+</service>
+<<
+
+Homepage: http://www.opennms.org/
+DescDetail: <<
+OpenNMS is an open-source, enterprise-level network management system
+along the lines of HP's OpenView line of network management tools, or
+IBM's Tivoli.
+
+*** NOTE ***
+
+This package will not work until you follow the post-installation
+instructions in /sw/share/doc/opennms/README.Darwin
+<<
+DescUsage: <<
+To start, stop, or restart OpenNMS, do:
+
+  sudo %p/bin/opennms <command>
+
+To enable OpenNMS to start upon bootup, issue the command:
+
+  sudo daemonic enable opennms
+
+Note that for this to work properly, you must also enable PostgreSQL.
+<<
+

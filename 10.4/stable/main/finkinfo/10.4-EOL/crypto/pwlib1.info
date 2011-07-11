@@ -1,0 +1,157 @@
+Package: pwlib1
+Version: 1.10.10
+Revision: 8
+Distribution: 10.4, 10.5
+Maintainer: The Gnome Core Team <fink-gnome-core@lists.sourceforge.net>
+GCC: 4.0
+BuildDepends: <<
+	audiofile,
+	cyrus-sasl2-dev (>= 2.1.22-1006), 
+	doxygen,
+	esound (>= 0.2.38-1),
+	expat1,
+	fink (>= 0.27.2),
+	libdv4,
+	openldap24-dev (>= 2.4.15-1),
+	openssl098-dev,
+	sdl (>= 1.2.13-1),
+	sed
+<<
+# libdv4 for 1 configure test..
+# none of the plugins seem to get built yet
+# sed : because of the patchscript
+# bison ? (is used)
+BuildDependsOnly: true
+Depends: %N-shlibs (= %v-%r)
+# Depends: just in order not to have to duplicate the docfiles...
+Conflicts: pwlib, ptlib2.6.0
+Replaces: pwlib, ptlib2.6.0
+Source: mirror:gnome:sources/pwlib/1.10/pwlib-%v.tar.bz2
+Source-MD5: 2c3bf7e8236a96659728ad139ce30b33
+PatchScript: <<
+#!/bin/sh -ev
+  find . \( -name CVS -o -name '.cvsignore' -o -name '*.bak' \) -exec rm -fR \{\} \+ || true
+   sed -ri.bak -e '/P_MACOSX/,+45{/socklen_t/d ; s,setpgrp,setpgid, }' include/ptlib/unix/ptlib/pmachdep.h
+# the def of SEM_FAILED changed between 10.4 and 10.5.  We coerce it anyway to sem_t *
+  sed -ri.bak -e 's,\(int\)sem != SEM_FAILED,sem != (sem_t *)SEM_FAILED,' src/ptlib/unix/tlibthrd.cxx
+#  perl -pi.bak -e 's,^LDAP_SOURCE,CFLAGS += -DLDAP_DEPRECATED\n$&,' src/ptlib/unix/Makefile
+  perl -pi.bak -e 's,sys/soundcard\.h,liboss/soundcard.h,' {,plugins/}configure*
+  sed -ri.bak -e '/NETBSD/,+5{ /#endif/a\
+\
+#ifdef P_MACOSX\
+#include <liboss/soundcard.h>\
+#endif
+}' plugins/sound_{esd,oss}/sound_*.h src/ptlib/unix/ossaix.cxx
+  sed -ri -e 's,^\#include <sys/socket\.h>,#include <stddef.h>,' configure
+  sed -ri.bak -e 's,libesd.a,libesd.dylib,' -e 's, \-I\$\(ESDDIR\)/include,,' make/unix.mak
+  sed -ri.bak -e 's,-shared,-bundle,' make/plugins.mak
+## relying on Apple's version of the MIN macro too system-dependent, rely instead on PMIN in ptlib/object.h :
+  sed -ri.bak -e 's, MIN\(, PMIN\(,' src/ptlib/unix/maccoreaudio{.cxx,/circular_buffer.inl}
+## for the build of dependent pkgs (SYSLIBDIR is only defined for a couple of OS's, and not necessarily where pwlib is installed):
+  sed -ri.bak -e 's,SYSLIBDIR,shell ptlib-config --libdir,' make/common.mak
+## for vers. 1.11.1 :
+#  sed -i.bak -e 's, || defined(__APPLE__),,' src/ptclib/pssl.cxx
+<<
+NoSetLDFLAGS: true
+SetLIBRARY_PATH: %p/lib
+NoSetCPPFLAGS: true
+SetCFLAGS: -O3
+ConfigureParams: <<
+  --exec-prefix=%p --libdir=%p/lib --enable-alsa --enable-avc --enable-bsdvideo --enable-dc --disable-oss \
+  --enable-plugins --enable-v4l --enable-v4l2 --enable-asn --enable-audio --enable-configfile --enable-dtmf \
+  --enable-expat --enable-ftp --enable-http --enable-httpsvc --enable-ipv6 --enable-jabber --enable-openldap \
+  --enable-openssl --enable-pipechan --enable-pop3smtp --enable-qos --enable-remconn --enable-resolver \
+  --enable-sasl --enable-sdl --enable-serial --enable-snmp --enable-soap --enable-socks --enable-stun \
+  --enable-telnet --enable-tts --enable-video --enable-vxml --enable-wavfile --enable-xmlrpc
+<<
+## Rmvd  --enable-shm-video :
+# make[2]: *** No rule to make target `/sw/.bld/pwlib1-1.10.1-1/pwlib-1.10.1/lib/obj_Darwin_x86_r/shmvideo.o', needed by `/sw/.bld/pwlib1-1.10.1-1/pwlib-1.10.1/lib/libpt_Darwin_x86_r_s.a'.  Stop.
+## liboss1 is broken -> Replaced  --enable-oss by  --disable-oss :
+# c++ -fno-common -dynamic -Wno-long-double -D_REENTRANT -Wall  -D__MACOSX__ -m486 -I/sw/include -DUSE_ESD=1 -I/sw/.bld/pwlib1-1.10.1-1/pwlib-1.10.1/include \
+# -I. -bundle sound_oss.cxx -o ../pwlib/device/sound/oss_pwplugin.dylib
+# /sw/include/liboss/soundcard.h: In function 'int ioctl(int, long unsigned int, ...)':
+# /sw/include/liboss/soundcard.h:341: error: 'int ioctl(int, long unsigned int, ...)' was declared 'extern' and later 'static'
+# /usr/include/sys/ioctl.h:91: error: previous declaration of 'int ioctl(int, long unsigned int, ...)'
+# etc..
+## Rmvd  --enable-sunaudio :
+# checking for Sun audio sound support... yes	(God knows what's this test... Should look at it, by curiosity)
+# but still :
+## c++ -fno-common -dynamic -Wno-long-double -D_REENTRANT -Wall  -D__MACOSX__ -m486 -I/sw/include -DUSE_ESD=1 -I/sw/.bld/pwlib1-1.10.1-1/pwlib-1.10.1/include \
+## -I. -L../../lib -lpt_Darwin_x86_r  -bundle sound_sunaudio.cxx -o ../pwlib/device/sound/sunaudio_pwplugin.dylib
+## sound_sunaudio.cxx:48:21: error: stropts.h: No such file or directory
+## sound_sunaudio.cxx:50:23: error: sys/mixer.h: No such file or directory
+## In file included from sound_sunaudio.cxx:55:
+## sound_sunaudio.h:8:23: error: sys/audio.h: No such file or directory
+# I see :
+#  /sw/include/gstreamer-0.10/gst/interfaces/mixer.h
+#  /sw/include/gstreamer-0.8/gst/mixer/mixer.h
+# and :
+#  /sw/include/cdio/audio.h
+#  /sw/include/gstreamer-0.10/gst/audio/audio.h
+#  /sw/include/gstreamer-0.8/gst/audio/audio.h
+# (and /sw/.bld/pwlib1-1.10.1-1/pwlib-1.10.1/samples/audio/audio.h)
+# but no  stropts.h
+# so even trying to add eg gstreamer-0.10 say to the CPATH would still probably not cure the problem...
+CompileScript: <<
+#!/bin/sh -ev
+# the next line also adds -fno-exceptions to the CXXFLAGS for opal2 and openh323-1, through make/ptbuildopts.mak
+# (CXXFLAGS is not obeyed by those pkgs)  (and -fno-rtti should not be used: "typeid" used in %p/include/ptlib/pfactory.h)
+  export CPATH=%p/include; export ESDDIR=%p; export STDCXXFLAGS="-fno-exceptions"
+  if [ %m = i386 ] ; then abbr=x86 ; else abbr=ppc ; fi
+  ./configure %c
+  mv=`sed -r -e 's,\.[^.]*$,,' <<<"%v"`
+  Mv=`sed -r -e 's,\.[^.]*$,,' <<<"$mv"`
+  make  PWLIBDIR=%b \
+	LDSOOPTS="-dynamiclib -single_module -Wl,-x -dead_strip -compatibility_version $mv -current_version %v -install_name %p/lib/libpt_Darwin_${abbr}_r.${Mv}.dylib" \
+	optshared docs
+<<
+InstallScript: <<
+#  make install DESTDIR=%d # is broken..
+  mkdir -p -m755 %i/share/pwlib/make
+  mkdir -p -m755 %i/lib
+  mkdir -p -m755 %i/bin
+  cp -pPR include %i
+  find %i/include \( -name '*.h.*' -o -name '*.bak' \) -exec rm \{\} \+ || true
+  cp -pPR make/{*.mak,ptlib-config} %i/share/pwlib/make
+  ln -s ../share/pwlib/make/ptlib-config %i/bin
+  cp -pPR lib/lib* %i/lib
+  cd %i/lib; ln -s libpt_Darwin_*_r.dylib libpt.dylib; ranlib libpt_Darwin_*.a; cd -
+  mkdir -p -m755 %i/share/doc/%n
+  cp -pPR samples html plugins version.h %i/share/doc/%n
+  chmod a-x %i/include/ptclib/* %i/lib/* %i/share/doc/%n/samples/ldaptest/*
+  ln -s ../%N-shlibs/{mpl-1.0.htm,ReadMe.txt,History.txt} %i/share/doc/%n
+<<
+SplitOff: <<
+  Package: %N-shlibs
+  Depends: <<
+		cyrus-sasl2-shlibs (>= 2.1.22-1006),
+		esound-shlibs (>= 0.2.38-1),
+		expat1-shlibs,
+		openldap24-shlibs (>= 2.4.15-1),
+		openssl098-shlibs,
+		sdl-shlibs (>= 1.2.13-1)
+  <<
+  Conflicts: pwlib-shlibs
+  Replaces: pwlib-shlibs
+  Provides: pwlib-shlibs
+  Description: Shared libraries for pwlib
+  Files: lib/libpt_Darwin_*.*.*dylib
+  Shlibs: <<
+	( %m = powerpc	) %p/lib/libpt_Darwin_ppc_r.1.dylib 1.10.0 %n (>= 1.10.1-1)
+	( %m = i386	) %p/lib/libpt_Darwin_x86_r.1.dylib 1.10.0 %n (>= 1.10.1-1)
+  <<
+  DocFiles: mpl-1.0.htm ReadMe.txt History.txt
+<<
+Description: Portable Windows library for OpenH323
+DescPort: <<
+Try to keep at latest version compatible _ according to http://www.ekiga.org/ _
+with current version of ekiga, or else go first back for pwlib to the format
+infofile_name = %N-%v.info, so older versions can stay in fink (versioning of those
+pkgs seems completely erratic)
+<<
+DescPackaging: <<
+Original version by Shawn Hsiao <shawn@users.sourceforge.net>; version 1.5.2-10 by James Gibbs <jimgibbs@mac.com>
+Installs now in policy-conformant dirs.
+<<
+License: OSI-Approved
+Homepage: http://openh323.sourceforge.net/

@@ -1,0 +1,148 @@
+diff -urN sleepwatcher_2.0.5_src/Makefile sleepwatcher_2.0.5_src.new/Makefile
+--- sleepwatcher_2.0.5_src/Makefile	2007-11-02 08:40:21.000000000 -0500
++++ sleepwatcher_2.0.5_src.new/Makefile	2008-02-06 20:23:03.000000000 -0600
+@@ -8,22 +8,20 @@
+ 
+ CFLAGS_PPC= -O3 -prebind -mmacosx-version-min=10.3 -mtune=G4 -arch ppc
+ CFLAGS_X86= -O3 -prebind -mmacosx-version-min=10.3 -mtune=pentium -arch i386
++CFLAGS_X86_64 = -O3 -prebind -mmacosx-version-min=10.4 -arch x86_64
+ LIBS= -framework IOKit -framework CoreFoundation
+ 
+-BINDIR=/usr/local/sbin
+-MANDIR=/usr/local/man
++BINDIR=@PREFIX@/sbin
++MANDIR=@PREFIX@/share/man
+ 
+ sleepwatcher: sleepwatcher.c
+-	$(CC) $(CFLAGS_PPC) -o sleepwatcher.ppc sleepwatcher.c $(LIBS)
+-	$(CC) $(CFLAGS_X86) -o sleepwatcher.x86 sleepwatcher.c $(LIBS)
+-	lipo -create sleepwatcher.ppc sleepwatcher.x86 -output sleepwatcher
+-	rm -f sleepwatcher.ppc sleepwatcher.x86
++	$(CC) $(CFLAGS_@ARCH@) -o sleepwatcher sleepwatcher.c $(LIBS)
+ 
+ install: sleepwatcher sleepwatcher.8
+ 	mkdir -p $(BINDIR)
+-	install -o root -g wheel -m 755 sleepwatcher $(BINDIR)
++	install -m 755 sleepwatcher $(BINDIR)
+ 	mkdir -p $(MANDIR)/man8
+-	install -o root -g wheel -m 644 sleepwatcher.8 $(MANDIR)/man8
++	install -m 644 sleepwatcher.8 $(MANDIR)/man8
+ 
+ clean:
+ 	rm -f sleepwatcher
+diff -urN sleepwatcher_2.0.5_src/rc.sleep sleepwatcher_2.0.5_src.new/rc.sleep
+--- sleepwatcher_2.0.5_src/rc.sleep	1969-12-31 18:00:00.000000000 -0600
++++ sleepwatcher_2.0.5_src.new/rc.sleep	2007-11-02 07:44:50.000000000 -0500
+@@ -0,0 +1,54 @@
++#!/bin/sh
++#
++#	rc.sleep
++#
++#	script to be executed on sleep by the sleepwatcher daemon
++#
++#	17.11.2002 bb	created
++#	22.11.2002 bb	added .sleep script handling
++#	22.12.2002 bb	quoted $home (might contain space)
++#	22.06.2003 adb  use nidump to detect home directories
++#	22.05.2005 bb	use nigrep (old method missed last account in
++#			the nidump output), check for interactive users
++#			(users with a /etc/shells shell), log .sleep
++#			execution to the syslog
++#	15.08.2005 bb	added >/dev/null to grep command because of
++#			file descriptor problems with Mac OS X 10.3.9
++#	31.12.2005 bb	execute the sleep script only for users currently
++#			logged in
++#	07.01.2006 bb	replaced "who -q" with "users" (Mac OS X 10.3 who
++#			does not support the -q option)
++#       20.04.2006 bb   ${name:0:8} instead of $name: users returns short
++#                       user names (8 chars), but the NI database can have
++#                       longer names
++#	26.06.2006 bb   modified "eval $var=$val" to use awk to get only
++#			the first word of $val for compatibility with user
++#			accounts from Active Directory
++#	20.08.2007 bb	rewritten using scutil (thanks to a hint of
++#			Nicholas Riley)
++#	04.10.2007 bb	in su: $name -> $user
++#
++
++for user in `echo 'show State:/Users/ConsoleUser' | scutil | awk '/kCGSSessionUserNameKey/ { print $3 }'`; do
++	home=`eval echo ~$user`
++	if [ -x "$home/.sleep" ]; then
++		logger -t $0 "executing .sleep of user $user"
++		su - $user -c "$home/.sleep"
++	fi
++done
++
++#unset name shell home
++#
++#nigrep '^(name|home|shell)$' / /users | while read id node var val; do
++#	eval $var=`echo $val | awk '{ print $1 }'`
++#	[ "$name" -a "$shell" -a "$home" ] || continue
++#	if grep -q $shell /etc/shells >/dev/null; then
++#		if users | grep -q "\<${name:0:8}\>" >/dev/null; then
++#			if [ -x "$home/.sleep" ]; then
++#				logger -t $0 "executing .sleep of user $name"
++#				su - $name -c "$home/.sleep"
++#			fi
++#		fi
++#	fi		
++#	unset name shell home
++#done
+diff -urN sleepwatcher_2.0.5_src/rc.wakeup sleepwatcher_2.0.5_src.new/rc.wakeup
+--- sleepwatcher_2.0.5_src/rc.wakeup	1969-12-31 18:00:00.000000000 -0600
++++ sleepwatcher_2.0.5_src.new/rc.wakeup	2007-10-04 11:52:39.000000000 -0500
+@@ -0,0 +1,54 @@
++#!/bin/sh
++#
++#	rc.wakeup
++#
++#	script to be executed on wakeup by the sleepwatcher daemon
++#
++#	17.11.2002 bb	created
++#	22.11.2002 bb	added .wakeup script handling
++#	22.12.2002 bb	quoted $home (might contain space)
++#	22.06.2003 adb  use nidump to detect home directories
++#	22.05.2005 bb	use nigrep (old method missed last account in
++#			the nidump output), check for interactive users
++#			(users with a /etc/shells shell), log .wakeup
++#			execution to the syslog
++#	15.08.2005 bb   added >/dev/null to grep command because of
++#			file descriptor problems with Mac OS X 10.3.9
++#	31.12.2005 bb	execute the wakeup script only for users currently
++#			logged in
++#	07.01.2006 bb   replaced "who -q" with "users" (Mac OS X 10.3 who
++#			does not support the -q option)
++#       20.04.2006 bb   ${name:0:8} instead of $name: users returns short
++#                       user names (8 chars), but the NI database can have
++#                       longer names
++#	26.06.2006 bb	modified "eval $var=$val" to use awk to get only
++#			the first word of $val for compatibility with user
++#			accounts from Active Directory
++#	20.08.2006 bb	rewritten using scutil (thanks to a hint of
++#			Nicholas Riley)
++#	04.10.2007 bb	in su: $name -> $user
++#
++
++for user in `echo 'show State:/Users/ConsoleUser' | scutil | awk '/kCGSSessionUserNameKey/ { print $3 }'`; do
++	home=`eval echo ~$user`
++	if [ -x "$home/.wakeup" ]; then
++		logger -t $0 "executing .wakeup of user $user"
++		su - $user -c "$home/.wakeup"
++	fi
++done
++
++#unset name shell home
++#
++#nigrep '^(name|home|shell)$' / /users | while read id node var val; do
++#	eval $var=`echo $val | awk '{ print $1 }'`
++#	[ "$name" -a "$shell" -a "$home" ] || continue
++#	if grep -q $shell /etc/shells >/dev/null; then
++#		if users | grep -q "\<${name:0:8}\>" >/dev/null; then
++#			if [ -x "$home/.wakeup" ]; then
++#				logger -t $0 "executing .wakeup of user $name"
++#				su - $name -c "$home/.wakeup"
++#			fi
++#		fi
++#	fi		
++#	unset name shell home
++#done

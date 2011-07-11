@@ -1,0 +1,287 @@
+Package: libapache2-mod-svn
+Version: 1.6.16
+Revision: 1
+Description: Subversion - mod_svn
+License: BSD
+Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
+
+Distribution: 10.4
+
+# Dependencies:
+Depends: <<
+	apache2 (>= 2.2.9-5),
+	apache2-common (>= 2.2.9-5),
+	libapr.0-shlibs,
+	libaprutil.0-shlibs (>= 1.3.4-8),
+	svn15-shlibs (>= %v)
+<<
+BuildDepends: <<
+	apache2-dev (>= 2.2.9-5),
+	libapr.0-dev,
+	libaprutil.0-dev (>= 1.3.4-8),
+	cyrus-sasl2-dev (>= 2.1.22-1006),
+	db51-aes | db51,
+	fink (>= 0.24.12-1),
+	gettext-bin,
+	gettext-tools,
+	libgettext8-dev,
+	libiconv-dev (>= 1.9.1-11),
+	libserf0 (>= 0.7.0-1),
+	neon27,
+	python,
+	python27,
+	sqlite3-dev,
+	svn15-dev (>= %v),
+	system-openssl-dev
+<<
+Conflicts: svn-client (<= 0.26.0-2), apache2 (<< 2.0.47-1)
+Replaces: libapache2-ssl-mod-svn
+
+# Unpack Phase:
+Source: http://subversion.tigris.org/downloads/subversion-%v.tar.bz2
+Source-MD5: 32f25a6724559fe8691d1f57a63f636e
+
+# Patch Phase:
+PatchFile: svn.patch
+PatchFile-MD5: 0b46b5ba6bca6f8e271010f558bc29ea
+PatchScript: <<
+ sed 's|@FINKPREFIX@|%p|g' < %{PatchFile} | patch -p1
+<<
+
+# Compile Phase:
+NoSetLDFLAGS: true
+NoSetLIBS: true
+SetLDFLAGS: -L%p/lib/system-openssl/lib -L%p/lib
+
+ConfigureParams: <<
+	--libexecdir='${prefix}/lib/svn15' \
+	--libdir='${prefix}/lib/svn15' \
+	--enable-shared \
+	--disable-static \
+	--with-neon=%p \
+	--with-serf=%p \
+	--with-apr=%p/bin/apr-1-config \
+	--with-apr-util=%p/bin/apu-1-config \
+	--with-apxs=%p/bin/apxs2 \
+	--disable-mod-activation \
+	--without-jdk \
+	--disable-javahl \
+	--with-jikes=no \
+	--without-swig \
+	--with-berkeley-db='db.h:%p/include/db5:%p/lib:db-5.1' \
+	--with-sasl=%p \
+	--with-sqlite=%p \
+	--without-gnome-keyring \
+	--without-kwallet \
+	--without-ctypesgen \
+	--disable-neon-version-check \
+	PYTHON=%p/bin/python2.7
+<<
+GCC: 4.0
+CompileScript: <<
+#! /bin/sh -ev
+ ### Recreate build-outputs.mk to not include already installed libs
+ ./gen-make.py --installed-libs libsvn_client,libsvn_delta,libsvn_diff,libsvn_fs,libsvn_fs_base,libsvn_fs_fs,libsvn_fs_util,libsvn_ra,libsvn_ra_neon,libsvn_ra_local,libsvn_ra_serf,libsvn_ra_svn,libsvn_repos,libsvn_subr,libsvn_wc
+ ### Configure shared
+ export F77=no
+ export RUBY=/usr/bin/false
+ export PERL=/usr/bin/false
+ ./configure %c
+
+ ### make mod_svn shared
+ make apache-mod CPPFLAGS='-I$(top_srcdir)/subversion/include -I$(top_builddir)/subversion -I%p/include/neon -I%p/include/serf-0 -I%p/include/apache2 -I%p/lib/system-openssl/include -I%p/include/db5 -I%p/include  -DDARWIN -DSIGPROCMASK_SETS_THREAD_MASK' INCLUDES=''
+<<
+
+# Install Phase:
+DocFiles: <<
+ COPYING HACKING INSTALL
+<<
+InstallScript: <<
+ make install-mods-shared DESTDIR=%d
+
+ # Install default directory for repositories
+ /usr/bin/install -d %i/var
+ /usr/bin/install -m 770 -d %i/var/svn
+
+ # Install apache2 load file
+ mkdir -p %i/etc/apache2/mods-available
+ /usr/bin/install -m 644 fink/dav_svn.load %i/etc/apache2/mods-available
+ /usr/bin/install -m 644 fink/dav_svn.conf %i/etc/apache2/mods-available
+<<
+ConfFiles: <<
+ %p/etc/apache2/mods-available/dav_svn.load
+ %p/etc/apache2/mods-available/dav_svn.conf
+<<
+PreInstScript: <<
+ if [ "$1" = upgrade ]; then
+   if dpkg --compare-versions "$2" lt "1.2.0"; then
+     /bin/echo ""
+     /bin/echo "WARNING: Subversion (svn) 1.2.3 or later uses Berkeley DB4.4 (db44)."
+     /bin/echo "If you are upgrading from an earlier version and you are using"
+     /bin/echo "BDB repositories please read"
+     /bin/echo ""
+     /bin/echo "  http://subversion.tigris.org/faq.html#bdb43-upgrade"
+     /bin/echo ""
+     /bin/echo "and"
+     /bin/echo ""
+     /bin/echo "  http://subversion.tigris.org/faq.html#dumpload"
+     /bin/echo ""
+     /bin/echo "To install svnadmin binary linked to an older Berkeley DB version"
+     /bin/echo "please install the fink package 'svnadmin-dbXX', e.g. by typing"
+     /bin/echo ""
+     /bin/echo "  fink install svnadmin-db43"
+     /bin/echo ""
+     /bin/echo "and following the documentation of svnadmin-dbXX, e.g.:"
+     /bin/echo ""
+     /bin/echo "  fink info svnadmin-db43"
+     /bin/echo ""
+     /bin/echo "Do you want to continue [Y/n] ?\c";
+     if read -t 3600 CONTINUECHOICE; then
+       case $CONTINUECHOICE in
+         y|Y|'' ) ;;
+         * ) exit 1 ;;
+       esac
+     else
+       echo "Time-out."
+     fi
+   fi
+ fi
+ exit 0
+<<
+PostInstScript: <<
+ chown www:admin %p/var/svn
+
+ # Enable svn modules
+ echo "Enabling dav module..."
+ %p/sbin/a2enmod dav
+ echo "Enabling dav_svn module..."
+ %p/sbin/a2enmod dav_svn
+# echo "Enabling authz_svn module..."
+# %p/sbin/a2enmod authz_svn
+
+ if [ -f /Library/StartupItems/daemonic-apache2/daemonic-apache2 ]
+ then
+   echo "Restarting apache2..."
+   %p/sbin/apache2ctl restart
+ fi
+ 
+ exit 0
+<<
+PreRmScript: <<
+ if [ "$1" != "remove" -a "$1" != "purge" ]; then
+   exit 0
+ fi
+
+ # Disable svn modules
+# echo "Disabling authz_svn module..."
+# %p/sbin/a2dismod authz_svn
+ echo "Disabling dav_svn module..."
+ %p/sbin/a2dismod dav_svn
+
+ if %p/sbin/apache2ctl configtest > /dev/null 2>&1; then
+   # dav_svn.conf is correct, e.g. doesn't contain any DAV provider
+   if [ -f /Library/StartupItems/daemonic-apache2/daemonic-apache2 ]
+   then
+     echo "Restarting apache2..."
+     %p/sbin/apache2ctl restart
+   fi
+ else
+   # dav_svn.conf has syntax errors, e.g. remaining DAV providers
+   echo "#####################################################################"
+   echo "The subversion apache modules are now disabled and will be removed."
+   echo "Please make sure that you haven't any svn repositories still enabled"
+   echo "in your %p/etc/apache2/mods-available/dav_svn.conf file. You then"
+   echo "should restart apache by typing '%p/sbin/apache2ctl graceful'."
+   echo "#####################################################################"
+ fi
+<<
+
+# Additional Info
+DescDetail: <<
+ WebDAV server (Apache 2 module) for Subversion.
+<<
+DescUsage: <<
+ This installs the subversion network server for apache2.
+ Please read section III C in the file 
+ %p/share/doc/%n/INSTALL
+ for informations on how to run a subversion server via apache2.
+ 
+ You could install the repositories under the preconfigured directory
+ %p/var/svn
+ which should have the correct permissions. Make sure that all files
+ in the new repository have the correct permissions for apache (and svnserve)
+ to read and write. E.g. run 'chown -R www %p/var/svn/yourrepos' and 
+ 'chmod -R go-rwx %p/var/svn/yourrepos'.
+ 
+ You then need to add the following lines to your
+ %p/etc/apache2/mods-available/dav_svn.conf
+ file:
+
+ <Location /svn/yourrepos>
+   DAV svn
+   SVNPath %p/var/svn/yourrepos
+ 
+   # The following allows for basic http authentication.  Basic 
+   # authentication should not be considered secure for any particularly 
+   # rigorous definition of secure.
+ 
+   # to create a passwd file
+   # # rm -f %p/etc/apache2/dav_svn.passwd 
+   # # htpasswd2 -c %p/etc/apache2/dav_svn.passwd newuser
+   # New password: 
+   # Re-type new password: 
+   # Adding password for user newuser
+   # #
+ 
+   # Uncomment the following 3 lines to enable Basic Authentication
+   # AuthType Basic
+   # AuthName "Subversion Repository"
+   # AuthUserFile %p/etc/apache2/dav_svn.passwd
+ 
+   # Uncomment the following line to enable Authz Authentication
+   # AuthzSVNAccessFile %p/etc/apache2/dav_svn.authz
+ 
+   # The following three lines allow anonymous read, but make
+   # committers authenticate themselves.
+   # <LimitExcept GET PROPFIND OPTIONS REPORT>
+   #   Require valid-user
+   # </LimitExcept> 
+ </Location>
+ 
+ Your repository should show up at <http://localhost/svn/yourrepos>. 
+ If it does not check your apache2 logs at %p/var/log/apache2/error.log
+ 
+ If you need the examples or the tools (e.g. svnadmin) install the 
+ 'svn' package.
+
+ WARNING:
+ 
+ Subversion (svn) 1.2.3 or later uses Berkeley DB 4.4 (db44).
+ If you are upgrading from an earlier version and you are using
+ BDB repositories please read
+
+  http://subversion.tigris.org/faq.html#bdb43-upgrade
+
+ and
+
+  http://subversion.tigris.org/faq.html#dumpload
+
+ To install svnadmin binary linked to an older Berkeley DB version
+ please install the fink package 'svnadmin-dbXX', e.g. by typing
+
+   fink install svnadmin-db43
+ 
+ and following the documentation of svnadmin-dbXX, e.g.:
+ 
+   fink info svnadmin-db43
+<<
+DescPort: <<
+ Added 'export F77=no;' to configure in order not to fail if the 
+ fort77 package is installed.
+ 
+ Combined dav_svn.load and authz_svn.load since it was the only way to ensure
+ that dav_svn was loaded before authz_svn. Otherwise apache would fail to start.
+ 
+ Previously maintained by Christian Schaffner <chris01@users.sourceforge.net>
+<<
+Homepage: http://subversion.apache.org/

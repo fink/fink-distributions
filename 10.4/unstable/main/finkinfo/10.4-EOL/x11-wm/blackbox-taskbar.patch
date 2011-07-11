@@ -1,0 +1,958 @@
+diff -Naur blackbox-0.62.1.orig/src/BaseDisplay.cc blackbox-0.62.1/src/BaseDisplay.cc
+--- blackbox-0.62.1.orig/src/BaseDisplay.cc	Mon Jan 21 02:07:58 2002
++++ blackbox-0.62.1/src/BaseDisplay.cc	Fri Feb  1 15:19:10 2002
+@@ -286,6 +286,8 @@
+ 
+   blackbox_change_workspace =
+     XInternAtom(display, "_BLACKBOX_CHANGE_WORKSPACE", False);
++  blackbox_select_icon = 
++    XInternAtom(display, "_BLACKBOX_SELECT_ICON", False);
+   blackbox_change_window_focus =
+     XInternAtom(display, "_BLACKBOX_CHANGE_WINDOW_FOCUS", False);
+   blackbox_cycle_window_focus =
+diff -Naur blackbox-0.62.1.orig/src/BaseDisplay.hh blackbox-0.62.1/src/BaseDisplay.hh
+--- blackbox-0.62.1.orig/src/BaseDisplay.hh	Mon Jan 21 01:58:37 2002
++++ blackbox-0.62.1/src/BaseDisplay.hh	Fri Feb  1 15:18:51 2002
+@@ -99,7 +99,8 @@
+ 
+   // message_types for client -> wm messages
+   Atom blackbox_change_workspace, blackbox_change_window_focus,
+-    blackbox_cycle_window_focus;
++    blackbox_cycle_window_focus, blackbox_select_icon;
++
+ 
+ #ifdef    NEWWMSPEC
+ 
+@@ -200,6 +201,8 @@
+   // client window id is not included in the ClientMessage event...
+   inline const Atom &getBlackboxChangeWorkspaceAtom(void) const
+     { return blackbox_change_workspace; }
++  inline const Atom &getBlackboxSelectIconAtom(void) const
++    { return blackbox_select_icon; }
+   inline const Atom &getBlackboxChangeWindowFocusAtom(void) const
+     { return blackbox_change_window_focus; }
+   inline const Atom &getBlackboxCycleWindowFocusAtom(void) const
+diff -Naur blackbox-0.62.1.orig/src/Screen.cc blackbox-0.62.1/src/Screen.cc
+--- blackbox-0.62.1.orig/src/Screen.cc	Sat Jan 12 06:13:09 2002
++++ blackbox-0.62.1/src/Screen.cc	Fri Feb  1 13:35:39 2002
+@@ -313,6 +313,21 @@
+   resource.tstyle.l_text_gc =
+     XCreateGC(getBaseDisplay()->getXDisplay(), getRootWindow(),
+ 	      gc_value_mask, &gcv);
++  
++  gcv.foreground = resource.tstyle.icon_text.getPixel();
++  if (resource.tstyle.font)
++    gcv.font = resource.tstyle.font->fid;
++  resource.tstyle.icon_text_gc = 
++    XCreateGC(getBaseDisplay()->getXDisplay(), getRootWindow(),
++	      gc_value_mask, &gcv);
++  
++  gcv.foreground = resource.tstyle.iconPressed_text.getPixel();
++  if (resource.tstyle.font)
++    gcv.font = resource.tstyle.font->fid;
++  resource.tstyle.iconPressed_text_gc = 
++    XCreateGC(getBaseDisplay()->getXDisplay(), getRootWindow(),
++	      gc_value_mask, &gcv);
++  
+ 
+   gcv.foreground = resource.tstyle.w_text.getPixel();
+   resource.tstyle.w_text_gc =
+@@ -573,6 +588,10 @@
+   XFreeGC(getBaseDisplay()->getXDisplay(),
+ 	  resource.tstyle.l_text_gc);
+   XFreeGC(getBaseDisplay()->getXDisplay(),
++	  resource.tstyle.icon_text_gc);
++  XFreeGC(getBaseDisplay()->getXDisplay(),
++	  resource.tstyle.iconPressed_text_gc);
++  XFreeGC(getBaseDisplay()->getXDisplay(),
+ 	  resource.tstyle.w_text_gc);
+   XFreeGC(getBaseDisplay()->getXDisplay(),
+ 	  resource.tstyle.c_text_gc);
+@@ -888,6 +907,18 @@
+   XChangeGC(getBaseDisplay()->getXDisplay(), resource.tstyle.l_text_gc,
+ 	    gc_value_mask, &gcv);
+ 
++  gcv.foreground = resource.tstyle.icon_text.getPixel();
++  if (resource.tstyle.font)
++    gcv.font = resource.tstyle.font->fid;
++  XChangeGC(getBaseDisplay()->getXDisplay(), resource.tstyle.icon_text_gc,
++	    gc_value_mask, &gcv);
++
++  gcv.foreground = resource.tstyle.iconPressed_text.getPixel();
++  if (resource.tstyle.font)
++    gcv.font = resource.tstyle.font->fid;
++  XChangeGC(getBaseDisplay()->getXDisplay(), resource.tstyle.iconPressed_text_gc,
++	    gc_value_mask, &gcv);
++
+   gcv.foreground = resource.tstyle.w_text.getPixel();
+   XChangeGC(getBaseDisplay()->getXDisplay(), resource.tstyle.w_text_gc,
+ 	    gc_value_mask, &gcv);
+@@ -1134,6 +1165,22 @@
+ 		      &resource.tstyle.label,
+ 		      BlackPixel(getBaseDisplay()->getXDisplay(),
+ 				 getScreenNumber()));
++  readDatabaseTexture("toolbar.icon", "Toolbar.Icon",
++		      &resource.tstyle.icon,
++		      BlackPixel(getBaseDisplay()->getXDisplay(),
++				 getScreenNumber()));
++  readDatabaseColor("toolbar.icon.textColor", "Toolbar.Icon.TextColor",
++		      &resource.tstyle.icon_text,
++		      WhitePixel(getBaseDisplay()->getXDisplay(),
++				 getScreenNumber()));
++  readDatabaseTexture("toolbar.icon.pressed", "Toolbar.Icon.Pressed", 
++		      &resource.tstyle.iconPressed,
++		      BlackPixel(getBaseDisplay()->getXDisplay(),
++				 getScreenNumber()));
++  readDatabaseColor("toolbar.icon.pressed.textColor", "Toolbar.Icon.Pressed.TextColor",
++		    &resource.tstyle.iconPressed_text,
++		    WhitePixel(getBaseDisplay()->getXDisplay(),
++			       getScreenNumber()));
+   readDatabaseTexture("toolbar.windowLabel", "Toolbar.WindowLabel",
+ 		      &resource.tstyle.window,
+ 		      BlackPixel(getBaseDisplay()->getXDisplay(),
+@@ -1318,7 +1365,16 @@
+   w->setWorkspace(-1);
+   w->setWindowNumber(iconList->count());
+ 
+-  iconList->insert(w);
++  if (!iconsForAll()) { // only add a new icon when iconifying if we dont have icons for all windows
++    Window newicon = toolbar->createNewIcon(w);
++    blackbox->saveToolbarSearch(newicon, toolbar);
++    
++    XMapWindow(getBaseDisplay()->getXDisplay(), newicon); 
++
++    iconList->insert(w);
++  }
++
++  toolbar->recalculateIcons();
+ 
+   iconmenu->insert((const char **) w->getIconTitle());
+   iconmenu->update();
+@@ -1328,15 +1384,33 @@
+ void BScreen::removeIcon(BlackboxWindow *w) {
+   if (! w) return;
+ 
++  bool found=False;
++  IconifiedWindow *toBeRemoved;
++  LinkedListIterator<Workspace> wcounter(workspacesList);
++  for (;wcounter.current() && !found;wcounter++) {
++    LinkedListIterator<IconifiedWindow> iconcounter(wcounter.current()->iconifiedList);
++    for (;iconcounter.current();iconcounter++) {
++      if (iconcounter.current()->getBlackboxWindow()==w) {
++	toBeRemoved = iconcounter.current();
++	toolbar->destroyIcon(toBeRemoved);
++	wcounter.current()->iconifiedList->remove(iconcounter.current());
++	delete toBeRemoved;
++	toolbar->recalculateIcons();
++	found = True;
++	break;
++      }
++    } /* end for all icons in workspace iterator*/
++  } /* end for all workspaces */
++  
+   iconList->remove(w->getWindowNumber());
+ 
+-  iconmenu->remove(w->getWindowNumber());
+-  iconmenu->update();
+-
+   LinkedListIterator<BlackboxWindow> it(iconList);
+   BlackboxWindow *bw = it.current();
+   for (int i = 0; bw; it++, bw = it.current())
+     bw->setWindowNumber(i++);
++
++  iconmenu->remove(w->getWindowNumber());
++  iconmenu->update();
+ }
+ 
+ 
+@@ -1411,6 +1485,7 @@
+ 				   True);
+     toolbar->redrawWorkspaceLabel(True);
+ 
++    toolbar->recalculateIcons();
+     current_workspace->showAll();
+ 
+     if (resource.focus_last && current_workspace->getLastFocusedWindow()) {
+diff -Naur blackbox-0.62.1.orig/src/Screen.hh blackbox-0.62.1/src/Screen.hh
+--- blackbox-0.62.1.orig/src/Screen.hh	Tue Jan  8 23:51:02 2002
++++ blackbox-0.62.1/src/Screen.hh	Fri Feb  1 13:37:36 2002
+@@ -70,9 +70,10 @@
+ };
+ 
+ struct ToolbarStyle {
+-  BColor l_text, w_text, c_text, b_pic;
+-  BTexture toolbar, label, window, button, pressed, clock;
+-  GC l_text_gc, w_text_gc, c_text_gc, b_pic_gc;
++  BColor l_text, w_text, c_text, b_pic, icon_text, iconPressed_text;
++  BTexture toolbar, label, window, button, pressed, clock, icon, iconPressed;
++  GC l_text_gc, w_text_gc, c_text_gc, b_pic_gc, icon_text_gc, iconPressed_text_gc;
++
+ 
+   XFontSet fontset;
+   XFontSetExtents *fontset_extents;
+@@ -109,7 +110,6 @@
+ 
+   LinkedList<Rootmenu> *rootmenuList;
+   LinkedList<Netizen> *netizenList;
+-  LinkedList<BlackboxWindow> *iconList;
+ 
+ #ifdef    SLIT
+   Slit *slit;
+@@ -132,7 +132,7 @@
+ 
+     Bool toolbar_on_top, toolbar_auto_hide, sloppy_focus, auto_raise,
+       auto_edge_balance, image_dither, ordered_dither, opaque_move, full_max,
+-      focus_new, focus_last;
++      focus_new, focus_last, icons_for_all;
+     BColor border_color;
+     XrmDatabase stylerc;
+ 
+@@ -174,6 +174,8 @@
+   BScreen(Blackbox *, int);
+   ~BScreen(void);
+ 
++  LinkedList<BlackboxWindow> *iconList;
++
+   inline const Bool &isToolbarOnTop(void) const
+   { return resource.toolbar_on_top; }
+   inline const Bool &doToolbarAutoHide(void) const
+@@ -189,6 +191,7 @@
+   inline const Bool &doOrderedDither(void) const
+   { return resource.ordered_dither; }
+   inline const Bool &doOpaqueMove(void) const { return resource.opaque_move; }
++  inline const Bool &iconsForAll(void) const { return resource.icons_for_all; }
+   inline const Bool &doFullMax(void) const { return resource.full_max; }
+   inline const Bool &doFocusNew(void) const { return resource.focus_new; }
+   inline const Bool &doFocusLast(void) const { return resource.focus_last; }
+@@ -266,6 +269,7 @@
+   { resource.edge_snap_threshold = t; }
+   inline void saveImageDither(Bool d) { resource.image_dither = d; }
+   inline void saveOpaqueMove(Bool o) { resource.opaque_move = o; }
++  inline void saveIconsForAll(Bool i) { resource.icons_for_all = i; }
+   inline void saveFullMax(Bool f) { resource.full_max = f; }
+   inline void saveFocusNew(Bool f) { resource.focus_new = f; }
+   inline void saveFocusLast(Bool f) { resource.focus_last = f; }
+diff -Naur blackbox-0.62.1.orig/src/Toolbar.cc blackbox-0.62.1/src/Toolbar.cc
+--- blackbox-0.62.1.orig/src/Toolbar.cc	Sat Jan 19 11:03:54 2002
++++ blackbox-0.62.1/src/Toolbar.cc	Fri Feb  1 15:00:55 2002
+@@ -462,6 +462,8 @@
+   XClearWindow(display, frame.pwbutton);
+   XClearWindow(display, frame.nwbutton);
+ 
++  recalculateIcons();
++
+   redrawWindowLabel();
+   redrawWorkspaceLabel();
+   redrawPrevWorkspaceButton();
+@@ -580,8 +582,189 @@
+   }
+ }
+ 
++ void Toolbar::redrawIcon(IconifiedWindow *icon, Bool pressed) {
++   
++   if (pressed) { 
++     /* pressed */
++     if (icon->bgPressed == None) // flat or solid
++       XSetWindowBackground(display, icon->getIcon(), icon->bgPressedPixel);
++     else // pressed pixmap
++       XSetWindowBackgroundPixmap(display, icon->getIcon(), icon->bgPressed);
++   } else {
++     /* normal button */
++     if (icon->bg == None) // flat or solid
++       XSetWindowBackground(display, icon->getIcon(), icon->bgPixel);
++     else // normal pixmap
++       XSetWindowBackgroundPixmap(display, icon->getIcon(), icon->bg);
++   }
++
++   XClearWindow(display, icon->getIcon());
++   /* now we draw the title */
++   if (icon->iconText) {
++     int dx = (frame.bevel_w * 2), dlen = strlen(icon->iconText);
++     if (i18n->multibyte()) {
++       if (pressed) { 
++	 XmbDrawString(display, icon->getIcon(), 
++		       screen->getToolbarStyle()->fontset, 
++		       screen->getToolbarStyle()->iconPressed_text_gc, dx+(icon->iconWidth-icon->textWidth)/2, 0 -
++		       //		   screen->getToolbarStyle()->w_text_gc, dx, 0 -
++		       screen->getToolbarStyle()->fontset_extents->max_ink_extent.y,
++		       icon->iconText, dlen);
++       } else { // else if not pressed
++	 XmbDrawString(display, icon->getIcon(), 
++		       screen->getToolbarStyle()->fontset, 
++		       screen->getToolbarStyle()->icon_text_gc, dx+(icon->iconWidth-icon->textWidth)/2, 0 -
++		       //		   screen->getToolbarStyle()->w_text_gc, dx, 0 -
++		       screen->getToolbarStyle()->fontset_extents->max_ink_extent.y,
++		       icon->iconText, dlen);
++       } // end if not pressed
++     } else { // else if not i18n multibyte
++       if (pressed) {
++       XDrawString(display, icon->getIcon(),
++		   screen->getToolbarStyle()->iconPressed_text_gc, dx+(icon->iconWidth-icon->textWidth)/2,
++		   //		 screen->getToolbarStyle()->w_text_gc, dx,
++		   screen->getToolbarStyle()->font->ascent,
++		   icon->iconText, dlen);
++       } else { // else if not pressed
++	 XDrawString(display, icon->getIcon(),
++		     screen->getToolbarStyle()->icon_text_gc, dx+(icon->iconWidth-icon->textWidth)/2,
++		     //		 screen->getToolbarStyle()->w_text_gc, dx,
++		     screen->getToolbarStyle()->font->ascent,
++		     icon->iconText, dlen);
++       } // end if not pressed
++     } // end if not i18n multibyte
++       
++   } // end if we have some text to draw
++
++ } /* end redrawIcon */
++
++ void Toolbar::recalculateIcons() {
++
++   int count=0;
++   if (screen->getCurrentWorkspace()) {
++     count=screen->getCurrentWorkspace()->iconifiedList->count();
++   } 
++   
++   if (!count)
++     return;
++   
++   LinkedListIterator<IconifiedWindow> it(screen->getCurrentWorkspace()->iconifiedList);
++
++   int padding = 2;
++   int startX = (frame.bevel_w * 4) +
++    (frame.button_w * 2) + frame.workspace_label_w + 3 + padding;
++   int startY = frame.bevel_w + 1;
++   int iconWidth = ((frame.window_label_w-padding)/count)-padding;
++   int iconHeight = frame.label_h - 2;
++   int iconsMapped = 0;
++
++   if (iconWidth<0) {
++     iconWidth = iconWidth+padding;
++     padding = 0;
++   }
++
++   
++   for (;it.current();it++) {
++     BlackboxWindow *bbwin = it.current()->getBlackboxWindow();
++     Window iconWindow = it.current()->getIcon();
++     
++     it.current()->iconX = startX + (iconsMapped*(iconWidth+padding));
++     it.current()->iconY = startY;
++     if (iconsMapped==count-1) { // make sure end lines up flush
++       it.current()->iconWidth = frame.window_label_w-(2*padding)-(iconsMapped*(iconWidth+padding));
++     } else {
++       it.current()->iconWidth = iconWidth;
++     }
++     it.current()->iconHeight = iconHeight;
++
++     BTexture *texture;
++
++     if (it.current()->bg) 
++       image_ctrl->removeImage(it.current()->bg);
++     if (it.current()->bgPressed)
++       image_ctrl->removeImage(it.current()->bgPressed);
++
++     /* for the regular icon */
++     texture = &(screen->getToolbarStyle()->icon);
++     if (texture->getTexture() == (BImage_Flat | BImage_Solid)) {
++       it.current()->bg = None;
++       it.current()->bgPixel = texture->getColor()->getPixel();
++     } else {
++       it.current()->bg = image_ctrl->renderImage(it.current()->iconWidth, it.current()->iconHeight, texture);
++     }
++     /* now for pressed button */
++     texture = &(screen->getToolbarStyle()->iconPressed);
++     if (texture->getTexture() == (BImage_Flat | BImage_Solid)) {
++       it.current()->bgPressed = None;
++       it.current()->bgPressedPixel = texture->getColor()->getPixel();
++     } else {
++       it.current()->bgPressed = image_ctrl->renderImage(it.current()->iconWidth, it.current()->iconHeight, texture);
++     }
++     /* done doing pixmaps */
++     
++     XMoveResizeWindow(display, iconWindow, it.current()->iconX, 
++		       it.current()->iconY, it.current()->iconWidth, it.current()->iconHeight);
++     /* figure out size for title */
++     int dx = (frame.bevel_w * 2), dlen = strlen(*bbwin->getIconTitle());
++     
++     unsigned int l;
++     if (i18n->multibyte()) {
++       XRectangle ink, logical;
++       XmbTextExtents(screen->getToolbarStyle()->fontset, *bbwin->getIconTitle(), dlen, &ink, &logical);
++       l = logical.width;
++     } else {
++       l = XTextWidth(screen->getToolbarStyle()->font, *bbwin->getIconTitle(), dlen);
++     }
++     l += (frame.bevel_w * 4);
++      
++     if (l > it.current()->iconWidth ) {
++       for (; dlen >= 0; dlen--) {
++	 if (i18n->multibyte()) { 
++	   XRectangle ink, logical; 
++	   XmbTextExtents(screen->getToolbarStyle()->fontset,
++			  *bbwin->getIconTitle(), dlen, &ink, &logical);
++	   l = logical.width;
++	 } else {
++	   l = XTextWidth(screen->getToolbarStyle()->font, *bbwin->getIconTitle(), dlen);
++	 }
++	 l += (frame.bevel_w * 4);
++	 
++	 if (l < it.current()->iconWidth) break; 
++       } /* while length is too long */
++     } /* if length is too long */
++     
++     /* now that length is right, copy into iconText */
++     if (it.current()->iconText) {
++       delete [] it.current()->iconText;
++     } 
++     if (dlen <= 0) { 
++       dlen = 0;
++       it.current()->iconText = NULL;
++       it.current()->textWidth = 0;
++     } else {
++       it.current()->iconText = new char[dlen+1];
++       it.current()->iconText[dlen] = 0;  
++       memcpy(it.current()->iconText, *bbwin->getIconTitle(), dlen);
++
++       it.current()->textWidth = l;
++     }
++     iconsMapped++;
++   } /* end for loop - iterator over all iconified windows in this workspace */
++
++   
++ } /* end recalculate icons */
+ 
+ void Toolbar::redrawWindowLabel(Bool redraw) {
++
++  if (screen->iconsForAll()) return; // if we have icons for all windows, dont bother
++  
++  int count=screen->getCurrentWorkspace()->iconifiedList->count();
++
++  if (count) { // window label is obscured
++    XClearWindow(display, frame.window_label);
++    return;
++  }
++
+   if (screen->getBlackbox()->getFocusedWindow()) {
+     if (redraw)
+       XClearWindow(display, frame.window_label);
+@@ -861,13 +1044,61 @@
+       checkClock(True, True);
+     }
+ #endif // HAVE_STRFTIME
+-    else if (! on_top) {
++    else if ((be->window == frame.window_label) && (! on_top)) {
+       Window w[1] = { frame.window };
+       screen->raiseWindows(w, 1);
+-    }
++    } else {
++      LinkedListIterator<IconifiedWindow> it(screen->getCurrentWorkspace()->iconifiedList);
++
++      for (;it.current();it++) {
++	if (it.current()->getIcon()==be->window) {
++	  Windowmenu *wmenu = it.current()->getBlackboxWindow()->getWindowmenu();
++	  if (wmenu && wmenu->isVisible()) wmenu->hide();
++	  redrawIcon(it.current(), True);
++  	  break;
++	}
++      }
++    } /* end else - must be an icon */
++    /* end if buttton 1 */
++
+   } else if (be->button == 2 && (! on_top)) {
+     XLowerWindow(display, frame.window);
+   } else if (be->button == 3) {
++
++
++    /* first check to see if button is being clicked on an icon */
++    
++    LinkedListIterator<IconifiedWindow> it(screen->getCurrentWorkspace()->iconifiedList);
++    
++    for (;it.current();it++) {
++      if (it.current()->getIcon()==be->window) {
++	Windowmenu *wmenu = it.current()->getBlackboxWindow()->getWindowmenu();
++	if (wmenu && (!wmenu->isVisible())) {
++	  int x,y;
++	  x = be->x_root - (wmenu->getWidth()/2);
++	  y = be->y_root - (wmenu->getHeight()/2);
++	  
++	  if (x < 0) 
++	    x =0;
++	  else if (x + wmenu->getWidth() > screen->getWidth())
++	    x = screen->getWidth() - wmenu->getWidth();
++	  
++	  if (y < 0)
++	    y = getHeight();
++	  else if (y + wmenu->getHeight() > (screen->getHeight() - getHeight()))
++	    y = screen->getHeight() - wmenu->getHeight() - getHeight() - 2*frame.bevel_w;
++	  
++	  wmenu->move(x,y);
++	  wmenu->show();
++	  XRaiseWindow(display, wmenu->getWindowID());
++	  XRaiseWindow(display, wmenu->getSendToMenu()->getWindowID());
++	} else if (wmenu)
++	  wmenu->hide();
++	
++	return;
++      } // clicked on icon
++    } // end iterate, checking for all in iconifiedlist
++
+     if (! toolbarmenu->isVisible()) {
+       int x, y;
+ 
+@@ -936,7 +1167,27 @@
+       checkClock(True);
+     }
+ #endif // HAVE_STRFTIME
+-  }
++    else {
++      LinkedListIterator<IconifiedWindow> it(screen->getCurrentWorkspace()->iconifiedList);
++      BlackboxWindow *bbwin;
++      for (;it.current();it++) {
++	if (it.current()->getIcon()==re->window) {
++	  /* check the mouse position */
++	  if ((re->x >= 0) && (re->x < (signed) it.current()->iconWidth) &&
++	      (re->y >= 0) && (re->y < (signed) it.current()->iconHeight)) {
++	    bbwin = it.current()->getBlackboxWindow(); // it.current() no longer valid after this point 
++	    bbwin->deiconify();
++	    bbwin->setInputFocus();
++	    if (screen->iconsForAll()) redrawIcon(it.current(), False); // this icon wont be disappearing if we have icons for all windows, so redraw it unpressed.
++	  } else {
++	    redrawIcon(it.current(), False); // only if released outside ubtton
++	  }
++	  
++	  break;
++	} /* end if its this icon */
++      } /* for all iconifiedwindows in this workspace */
++    } /* end else - must be an icon */
++  } /* end button 1 */
+ }
+ 
+ 
+@@ -951,6 +1202,43 @@
+   }
+ }
+ 
++ 
++ void Toolbar::destroyIcon(IconifiedWindow *icon) {
++   if (icon->bg)
++     image_ctrl->removeImage(icon->bg);
++   if (icon->bgPressed)
++     image_ctrl->removeImage(icon->bgPressed);
++   if (icon->iconText) 
++     delete [] icon->iconText;
++   blackbox->removeToolbarSearch(icon->getIcon());
++   XDestroyWindow(display, icon->getIcon());
++   
++
++ }
++ 
++ Window Toolbar::createNewIcon(BlackboxWindow *w, int workspace_id) {
++   Window newicon;
++   XSetWindowAttributes attrib;
++   
++   attrib.background_pixmap = None;
++   attrib.background_pixel = attrib.border_pixel =
++     screen->getBorderColor()->getPixel();
++   attrib.colormap = screen->getColormap();
++   attrib.override_redirect = True;
++   attrib.event_mask = ButtonPressMask | ButtonReleaseMask | ExposureMask |
++                      KeyPressMask | EnterWindowMask;
++   newicon = XCreateWindow(display, frame.window, 0,0,1,1,0, screen->getDepth(), InputOutput, screen->getVisual(),  CWBackPixmap | CWBackPixel | CWBorderPixel | CWColormap | CWOverrideRedirect | CWEventMask, &attrib);
++   
++   if (workspace_id==-1) {
++     screen->getCurrentWorkspace()->iconifiedList->insert(new IconifiedWindow(w, newicon));
++   } else {
++     screen->getWorkspace(workspace_id)->iconifiedList->insert(new IconifiedWindow(w, newicon));
++   }
++
++   return newicon;   
++
++ } /* end createnew icon */
++
+ void Toolbar::leaveNotifyEvent(XCrossingEvent *) {
+   if (! do_auto_hide)
+     return;
+@@ -967,11 +1255,26 @@
+   if (ee->window == frame.clock) checkClock(True);
+   else if (ee->window == frame.workspace_label && (! editing))
+     redrawWorkspaceLabel();
+-  else if (ee->window == frame.window_label) redrawWindowLabel();
++  else if ((ee->window == frame.window_label) && (ee->count==0)) redrawWindowLabel();
+   else if (ee->window == frame.psbutton) redrawPrevWorkspaceButton();
+   else if (ee->window == frame.nsbutton) redrawNextWorkspaceButton();
+   else if (ee->window == frame.pwbutton) redrawPrevWindowButton();
+   else if (ee->window == frame.nwbutton) redrawNextWindowButton();
++  else {
++    if (ee->count==0) {
++      LinkedListIterator<IconifiedWindow> it(screen->getCurrentWorkspace()->iconifiedList);
++      for (;it.current();it++) {
++	if (it.current()->getIcon()==ee->window) {
++	  if (it.current()->getIgnoreExpose()) {
++	    it.current()->setIgnoreExpose(False);
++	  } else {
++	    redrawIcon(it.current());
++	  }
++	  break;
++	}
++      }
++    } /* if this is the last expose event */
++  } /* end else - if it wasnt anything else on the toolbar, must have been an icon */
+ }
+ 
+ 
+diff -Naur blackbox-0.62.1.orig/src/Toolbar.hh blackbox-0.62.1/src/Toolbar.hh
+--- blackbox-0.62.1.orig/src/Toolbar.hh	Sat Jan 19 11:05:56 2002
++++ blackbox-0.62.1/src/Toolbar.hh	Fri Feb  1 15:30:03 2002
+@@ -27,7 +27,7 @@
+ 
+ #include "Basemenu.hh"
+ #include "Timer.hh"
+-
++#include "Workspace.hh"
+ // forward declaration
+ class Toolbar;
+ 
+@@ -130,6 +130,11 @@
+   void leaveNotifyEvent(XCrossingEvent *);
+   void exposeEvent(XExposeEvent *);
+   void keyPressEvent(XKeyEvent *);
++
++  void redrawIcon(IconifiedWindow *, Bool pressed = False);
++  void recalculateIcons();
++  Window createNewIcon(BlackboxWindow *w,int workspace_id=-1);
++  void destroyIcon(IconifiedWindow *);
+ 
+   void redrawWindowLabel(Bool = False);
+   void redrawWorkspaceLabel(Bool = False);
+diff -Naur blackbox-0.62.1.orig/src/Window.cc blackbox-0.62.1/src/Window.cc
+--- blackbox-0.62.1.orig/src/Window.cc	Sat Jan 19 11:06:30 2002
++++ blackbox-0.62.1/src/Window.cc	Fri Feb  1 15:04:39 2002
+@@ -1404,13 +1404,13 @@
+   flags.visible = False;
+   flags.iconic = True;
+ 
+-  screen->getWorkspace(workspace_number)->removeWindow(this);
++  if (!screen->iconsForAll()) screen->getWorkspace(workspace_number)->removeWindow(this);
+ 
+   if (flags.transient && client.transient_for &&
+       !client.transient_for->flags.iconic) {
+     client.transient_for->iconify();
+   }
+-  screen->addIcon(this);
++  if (!screen->iconsForAll()) screen->addIcon(this);
+ 
+   if (client.transient && !client.transient->flags.iconic) {
+     client.transient->iconify();
+@@ -1465,6 +1465,9 @@
+ void BlackboxWindow::withdraw(void) {
+   flags.visible = False;
+   flags.iconic = False;
++  if (!screen->iconsForAll()) // only change the iconic state when withdrawing if we dont have icons for all windows
++    flags.iconic = False;
++
+ 
+   XUnmapWindow(display, frame.window);
+ 
+@@ -2339,7 +2342,23 @@
+ 
+   case XA_WM_ICON_NAME:
+     getWMIconName();
+-    if (flags.iconic) screen->iconUpdate();
++    if (flags.iconic) {
++      screen->iconUpdate();
++
++      // check to see if this window is iconified on this workspace.
++      // if so, we have to recompute the icon name and redraw the icon.
++      // if its on another workspace, this will be taken care of by the workspace change
++      LinkedListIterator<IconifiedWindow> it(screen->getCurrentWorkspace()->iconifiedList);
++
++      for (;it.current();it++) {
++	if (it.current()->getBlackboxWindow()==this) {
++	  screen->getToolbar()->recalculateIcons();
++	  screen->getToolbar()->redrawIcon(it.current());
++
++	  break;
++	}
++      } // end for
++    }
+     break;
+ 
+   case XA_WM_NAME:
+diff -Naur blackbox-0.62.1.orig/src/Windowmenu.cc blackbox-0.62.1/src/Windowmenu.cc
+--- blackbox-0.62.1.orig/src/Windowmenu.cc	Fri Dec 28 17:40:55 2001
++++ blackbox-0.62.1/src/Windowmenu.cc	Fri Feb  1 15:07:46 2002
+@@ -99,6 +99,7 @@
+   hide();
+   switch (item->function()) {
+   case BScreen::WindowShade:
++    if (window->isIconic()) window->deiconify();
+     window->shade();
+     break;
+ 
+@@ -107,18 +108,22 @@
+     break;
+ 
+   case BScreen::WindowMaximize:
++    if (window->isIconic()) window->deiconify();
+     window->maximize((unsigned int) button);
+     break;
+ 
+   case BScreen::WindowClose:
++    if (window->isIconic()) window->deiconify(); // better in the case that the client needs to ask something b4 closing
+     window->close();
+     break;
+ 
+   case BScreen::WindowRaise:
++    if (window->isIconic()) window->deiconify();
+     screen->getWorkspace(window->getWorkspaceNumber())->raiseWindow(window);
+     break;
+ 
+   case BScreen::WindowLower:
++    if (window->isIconic()) window->deiconify();
+     screen->getWorkspace(window->getWorkspaceNumber())->lowerWindow(window);
+     break;
+ 
+@@ -164,7 +169,7 @@
+     if (index == windowmenu->screen->getCurrentWorkspaceID()) return;
+     if (windowmenu->window->isStuck()) windowmenu->window->stick();
+ 
+-    if (button == 1) windowmenu->window->withdraw();
++    if (button == 1 && !windowmenu->window->isIconic()) windowmenu->window->withdraw();
+     windowmenu->screen->reassociateWindow(windowmenu->window, index, True);
+     if (button == 2) windowmenu->screen->changeWorkspaceID(index);
+   }
+diff -Naur blackbox-0.62.1.orig/src/Workspace.cc blackbox-0.62.1/src/Workspace.cc
+--- blackbox-0.62.1.orig/src/Workspace.cc	Wed Jan 16 02:37:47 2002
++++ blackbox-0.62.1/src/Workspace.cc	Fri Feb  1 15:14:24 2002
+@@ -62,6 +62,7 @@
+   windowList = new LinkedList<BlackboxWindow>;
+   clientmenu = new Clientmenu(this);
+ 
++  iconifiedList = new LinkedList<IconifiedWindow>;
+   lastfocus = (BlackboxWindow *) 0;
+ 
+   name = (char *) 0;
+@@ -75,6 +76,12 @@
+   delete windowList;
+   delete clientmenu;
+ 
++  while (iconifiedList->count()) {
++    IconifiedWindow *toBeRemoved = iconifiedList->find(0);
++    screen->getToolbar()->destroyIcon(toBeRemoved);
++    delete iconifiedList->remove(0);
++  }
++
+   if (name)
+     delete [] name;
+ }
+@@ -98,6 +105,18 @@
+ 
+   raiseWindow(w);
+ 
++  if (screen->iconsForAll()) {
++    // if we have icons for all windows (not just iconified ones), 
++    // add an icon for this window
++    Window newicon = screen->getToolbar()->createNewIcon(w, getWorkspaceID());
++    screen->getBlackbox()->saveToolbarSearch(newicon, screen->getToolbar());
++    
++    XMapWindow(screen->getBaseDisplay()->getXDisplay(), newicon);
++    
++    //    screen->iconList->insert(w);
++    screen->getToolbar()->recalculateIcons();
++  }
++    
+   return w->getWindowNumber();
+ }
+ 
+@@ -133,6 +152,27 @@
+ 
+   screen->updateNetizenWindowDel(w->getClientWindow());
+ 
++  if (screen->iconsForAll()) { // if every window has an icon, remove this one's
++    // go through all icons in this workspace, and remove mine
++    bool found = False;
++    IconifiedWindow *toBeRemoved;
++    LinkedListIterator<IconifiedWindow> iconcounter(iconifiedList);
++    for (;iconcounter.current();iconcounter++) {
++      if (iconcounter.current()->getBlackboxWindow()==w) {
++	toBeRemoved = iconcounter.current();
++	screen->getToolbar()->destroyIcon(toBeRemoved);
++	iconifiedList->remove(iconcounter.current());
++	delete toBeRemoved;
++	screen->getToolbar()->recalculateIcons();
++	found = True;
++	break;
++      }
++    } /* end for all icons in workspace iterator*/
++    
++    screen->iconList->remove(w->getWindowNumber());
++    
++  } // end if we have icons for all windows
++
+   LinkedListIterator<BlackboxWindow> it(windowList);
+   BlackboxWindow *bw = it.current();
+   for (int i = 0; bw; it++, i++, bw = it.current())
+@@ -144,8 +184,20 @@
+ 
+ void Workspace::showAll(void) {
+   LinkedListIterator<BlackboxWindow> it(stackingList);
+-  for (BlackboxWindow *bw = it.current(); bw; it++, bw = it.current())
+-    bw->deiconify(False, False);
++  for (; it.current(); it++) {
++    if (screen->iconsForAll()) {
++      if (!it.current()->isIconic()) {
++	it.current()->deiconify(False, False);
++      }
++    } else {
++      it.current()->deiconify(False, False);
++    }
++  }
++  
++  LinkedListIterator<IconifiedWindow> iconcounter(iconifiedList);
++  for (;iconcounter.current();iconcounter++) {
++    XMapWindow(screen->getBaseDisplay()->getXDisplay(), iconcounter.current()->getIcon());
++  }
+ }
+ 
+ 
+@@ -160,6 +212,13 @@
+   for (BlackboxWindow *bw = it2.current(); bw; it2++, bw = it2.current())
+     if (! bw->isStuck())
+       bw->withdraw();
++  LinkedListIterator<IconifiedWindow> iconcounter(iconifiedList);
++  for (;iconcounter.current();iconcounter++) {
++    Windowmenu *wmenu = iconcounter.current()->getBlackboxWindow()->getWindowmenu();
++    if (wmenu && wmenu->isVisible()) 
++      wmenu->hide();
++    XUnmapWindow(screen->getBaseDisplay()->getXDisplay(), iconcounter.current()->getIcon());
++  }
+ }
+ 
+ 
+@@ -262,6 +321,10 @@
+     if (bw->validateClient())
+       bw->reconfigure();
+   }
++
++  LinkedListIterator<IconifiedWindow> itt(iconifiedList);
++  for (; itt.current();itt++)
++    screen->getToolbar()->redrawIcon(itt.current());
+ }
+ 
+ 
+diff -Naur blackbox-0.62.1.orig/src/Workspace.hh blackbox-0.62.1/src/Workspace.hh
+--- blackbox-0.62.1.orig/src/Workspace.hh	Sun Dec 30 02:01:26 2001
++++ blackbox-0.62.1/src/Workspace.hh	Fri Feb  1 15:15:12 2002
+@@ -32,6 +32,27 @@
+ class Workspace;
+ class BlackboxWindow;
+ 
++class IconifiedWindow {
++private:
++  BlackboxWindow *bbwin;
++  Window icon;
++  bool IgnoreExpose;
++public:
++  IconifiedWindow(BlackboxWindow *w, Window ic) { bbwin = w; icon = ic; iconX = iconY = textWidth = 0; iconWidth = iconHeight = 1; iconText = NULL; IgnoreExpose = False; iconText = NULL; bg = bgPressed = None; bgPixel = bgPressedPixel = 0; }
++
++  inline BlackboxWindow *getBlackboxWindow() const { return bbwin; }
++  
++  inline const Window getIcon() const { return icon; }
++  inline const bool &getIgnoreExpose() const { return IgnoreExpose; }
++  inline void setIgnoreExpose(bool b) { IgnoreExpose = b; }
++
++  int iconX, iconY, iconWidth, iconHeight, textWidth;
++  char *iconText;
++  Pixmap bg, bgPressed;
++  unsigned long bgPixel, bgPressedPixel;
++  
++};
++
+ class Workspace {
+ private:
+   BScreen *screen;
+@@ -51,6 +72,8 @@
+ public:
+   Workspace(BScreen *, int = 0);
+   ~Workspace(void);
++
++  LinkedList<IconifiedWindow> *iconifiedList;
+ 
+   inline BScreen *getScreen(void) { return screen; }
+ 
+diff -Naur blackbox-0.62.1.orig/src/blackbox.cc blackbox-0.62.1/src/blackbox.cc
+--- blackbox-0.62.1.orig/src/blackbox.cc	Sat Jan 12 06:17:26 2002
++++ blackbox-0.62.1/src/blackbox.cc	Fri Feb  1 15:17:22 2002
+@@ -110,6 +110,8 @@
+ #  include <libgen.h>
+ #endif // HAVE_LIBGEN_H
+ 
++#include <iostream.h>
++
+ #ifndef   HAVE_BASENAME
+ static inline char *basename (char *s) {
+   char *save = s;
+@@ -660,6 +662,34 @@
+ 	if (screen && e->xclient.data.l[0] >= 0 &&
+ 	    e->xclient.data.l[0] < screen->getCount())
+ 	  screen->changeWorkspaceID(e->xclient.data.l[0]);
++	} else if (e->xclient.message_type == getBlackboxSelectIconAtom()) {
++	  BScreen *screen = searchScreen(e->xclient.window);
++	  
++	  if (screen) { 
++	    Workspace *cW = screen->getCurrentWorkspace();
++	    if (cW && cW->iconifiedList) {
++	      int iconCount = cW->iconifiedList->count();
++	      int desiredIcon = e->xclient.data.l[0]; // note its signed now
++	      if ( (desiredIcon > 0 && desiredIcon <= iconCount) ||
++		   (desiredIcon < 0 && desiredIcon >= -iconCount) ) {
++
++		BlackboxWindow *alive=NULL;
++
++		if (desiredIcon > 0) {
++		  // count forwards 
++		  alive = cW->iconifiedList->find(desiredIcon-1)->getBlackboxWindow();
++		} else {
++		  // count backwards
++		  alive = cW->iconifiedList->find(iconCount-(-desiredIcon))->getBlackboxWindow();
++		}
++		if (alive) { // should be a valid window
++		  alive->deiconify();
++		  cW->raiseWindow(alive);
++		  alive->setInputFocus();
++		}
++	      } // if its a valid icon number
++	    } // if current workspace and iconifiedLIst
++	  } // if the screen is valid
+       } else if (e->xclient.message_type == getBlackboxChangeWindowFocusAtom()) {
+ 	BlackboxWindow *win = searchWindow(e->xclient.window);
+ 
+@@ -1580,6 +1610,18 @@
+   } else {
+     screen->saveImageDither(True);
+   }
++
++  if (XrmGetResource(database, "session.onlyIconifiedWindowsOnToolbar", "Session.OnlyIconifiedWindowsOnToolbar",
++		     &value_type, &value)) {
++    if (! strncasecmp("true", value.addr, value.size)) {
++      cerr << "found a value of true for iconsforall " << endl;
++      screen->saveIconsForAll(False);
++    } else {
++      cout << "found a value of false" << endl;
++      screen->saveIconsForAll(True); 
++    }
++  } else 
++    screen->saveIconsForAll(False);
+ 
+   if (XrmGetResource(database, "session.opaqueMove", "Session.OpaqueMove",
+                      &value_type, &value)) {
+diff -Naur blackbox-0.62.1.orig/src/i18n.hh blackbox-0.62.1/src/i18n.hh
+--- blackbox-0.62.1.orig/src/i18n.hh	Mon Jan  7 19:55:43 2002
++++ blackbox-0.62.1/src/i18n.hh	Fri Feb  1 15:23:07 2002
+@@ -38,6 +38,7 @@
+ }
+ #endif // HAVE_NL_TYPES_H
+ 
++typedef void *nl_catd;
+ 
+ class I18n {
+ private:

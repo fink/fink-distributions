@@ -1,0 +1,369 @@
+Info4: <<
+Package: postgresql84
+Version: 8.4.6
+Revision: 1
+Description: PostgreSQL open-source database
+License: BSD
+Maintainer: Benjamin Reed <postgresql84@fink.raccoonfink.com>
+
+Depends: <<
+	daemonic (>= 20010902-1),
+	libxml2-shlibs,
+	libxslt-shlibs,
+	passwd (>= 20030906-1),
+	readline5-shlibs,
+	%N-shlibs (>= %v-%r)
+<<
+BuildDepends: <<
+	bison,
+	fink (>= 0.29.7-1),
+	fink-mirrors (>= 0.28.7.1-2),
+	libxml2,
+	libxslt,
+	passwd (>= 20030906-1),
+	readline5,
+	system-openssl-dev,
+	system-perl,
+	tcltk,
+	tcltk-dev
+<<
+Provides: postgresql-server
+GCC: 4.0
+
+Source: mirror:postgresql:source/v%v/postgresql-%v.tar.bz2
+Source-MD5: fcc3daaf2292fa6bf1185ec45e512db6
+PatchScript: sed -e 's|@BUILDDIR@|%b|g' -e 's|@INSTPREFIX@|%p|g' < %{PatchFile} | patch -p1
+PatchFile: %n.patch
+PatchFile-MD5: e42fbdad63059b801b016b33742f1512
+
+SetCPPFLAGS: -I%p/lib/system-openssl/include -DHAVE_OPTRESET -fno-common
+SetLDFLAGS: -L%p/lib/system-openssl/lib -F/System/Library/Frameworks
+UseMaxBuildJobs: true
+CompileScript: <<
+	#!/bin/sh -xe
+	
+	if [ -x /usr/bin/gcc-4.2 ]; then
+	export CC=gcc-4.2
+	export CXX=g++-4.2
+	export CPP=cpp-4.2
+	fi
+	
+	export PERL=/usr/bin/perl
+	export PYTHON=/usr/bin/python
+	
+	./configure \
+	--prefix='%p/opt/postgresql-8.4' \
+	--docdir='%p/share/doc/%N' \
+	--mandir='${prefix}/share/man' \
+	--infodir='${prefix}/share/info' \
+	--with-libraries=%p/lib \
+	--with-includes=%p/include \
+	\
+	--with-perl \
+	--with-python \
+	--with-tcl \
+	--with-tclconfig=%p/lib \
+	--with-tkconfig=%p/lib \
+	\
+	--enable-thread-safety \
+	--with-openssl \
+	--with-pam \
+	--with-bonjour \
+	--with-krb5 \
+	--with-gssapi \
+	\
+	--enable-odbc \
+	--with-libxml \
+	--with-libxslt
+	
+	perl -pi -e 's,-arch x86_64,,g; s,-arch i386,,g; s,-arch ppc,,g' src/Makefile.global
+	make
+	make -C contrib
+<<
+
+InstallScript: <<
+#!/bin/sh -xe
+
+	# postgresql
+	make -j1 install DESTDIR="%d" BE_DLLLIBS=%p/opt/postgresql-8.4/bin/postgres
+	make -j1 -C contrib install DESTDIR="%d" BE_DLLLIBS=%p/opt/postgresql-8.4/bin/postgres
+
+	ranlib %i/opt/postgresql-8.4/lib/*.a
+
+	install -d -m 755 %i/share/doc/%N
+	find contrib -name README.\* -exec cp {} %i/share/doc/%N/ \;
+
+	install -d -m 755 %i/bin
+	install -c -m 755 pgsql.sh %i/bin/pgsql.sh-8.4
+
+	install -d -m 755 %i/var/postgresql-8.4
+	echo "be sure to back up this database before any upgrades!" >> %i/var/postgresql-8.4/README
+
+	install -d -m 755 %i/var/log
+	ln -sf %p/var/postgresql-8.4/pgsql.log %i/var/log/pgsql-8.4.log
+
+	for file in `ls -1 %i/opt/postgresql-8.4/bin/`; do
+		echo "${file}" >> %i/var/postgresql-8.4/binary.list
+	done
+
+	for file in `ls -1 %i/opt/postgresql-8.4/share/man/man1/`; do
+		echo "${file}" >> %i/var/postgresql-8.4/man1.list
+	done
+
+	for file in `ls -1 %i/opt/postgresql-8.4/share/man/man7/`; do
+		echo "${file}" >> %i/var/postgresql-8.4/man7.list
+	done
+
+	cat <<END > %i/var/postgresql-8.4/remove-alternatives.sh
+#!/bin/sh
+
+for arg in "\$@"; do
+	case \$arg in
+		-h|--h|--he|--hel|--help)
+			echo "usage: \$0 [-h]"
+			echo ""
+			echo "  -h, --help          this help"
+			echo ""
+			exit 0;
+			;;
+		*)
+			echo "\$0: unknown argument '\$arg'"
+			exit 1;
+			;;
+	esac
+done
+
+update-alternatives --remove "pgsql.sh" "%p/bin/pgsql.sh-8.4"
+
+for tuple in %p/opt/postgresql-8.4/bin:binary.list %p/opt/postgresql-8.4/share/man/man1:man1.list %p/opt/postgresql-8.4/share/man/man7:man7.list; do
+	TUPLE_PATH=\`echo \$tuple | cut -d: -f1\`
+	TUPLE_FILE=\`echo \$tuple | cut -d: -f2\`
+
+	for file in \`cat %p/var/postgresql-8.4/\${TUPLE_FILE}\`; do
+		update-alternatives --remove "\${file}" "\${TUPLE_PATH}/\${file}"
+	done
+done
+
+END
+
+	cat <<END > %i/var/postgresql-8.4/update-alternatives.sh
+#!/bin/sh
+
+FORCE=0
+
+for arg in "\$@"; do
+	case \$arg in
+		-h|--h|--he|--hel|--help)
+			echo "usage: \$0 [-h] [-f]"
+			echo ""
+			echo "  -h, --help          this help"
+#			echo "  -f, --force         force this version of PostgreSQL, even if there is a newer one"
+			echo ""
+			exit 0;
+			;;
+#		-f|--f|--fo|--for|--forc|--force)
+#			FORCE=1
+#			;;
+		*)
+			echo "\$0: unknown argument '\$arg'"
+			exit 1;
+			;;
+	esac
+done
+
+update-alternatives --install "%p/bin/pgsql.sh" "pgsql.sh" "%p/bin/pgsql.sh-8.4" 84
+
+for tuple in bin:binary.list share/man/man1:man1.list share/man/man7:man7.list; do
+	TUPLE_PATH=\`echo \$tuple | cut -d: -f1\`
+	TUPLE_FILE=\`echo \$tuple | cut -d: -f2\`
+
+	for file in \`cat %p/var/postgresql-8.4/\${TUPLE_FILE}\`; do
+		if [ -e "%p/opt/postgresql-8.4/\${TUPLE_PATH}/\${file}" ]; then
+			#echo update-alternatives --install "%p/\${TUPLE_PATH}/\${file}" "\${file}" "%p/opt/postgresql-8.4/\${TUPLE_PATH}/\${file}" 84
+			update-alternatives --install "%p/\${TUPLE_PATH}/\${file}" "\${file}" "%p/opt/postgresql-8.4/\${TUPLE_PATH}/\${file}" 84
+		fi
+	done
+done
+
+END
+
+	chmod 755 %i/var/postgresql-8.4/*.sh
+	perl -pi -e 's,^%d,,' %i/bin/pg_config*
+<<
+DocFiles: COPYRIGHT HISTORY INSTALL README
+SplitOff: <<
+	Package: %N-dev
+	Description: PostgreSQL development headers and libraries
+	Depends: %N (>= %v-%r)
+	BuildDependsOnly: true
+	Files: <<
+		opt/postgresql-8.4/bin/pg_config*
+		opt/postgresql-8.4/include
+		opt/postgresql-8.4/lib/*.a
+		opt/postgresql-8.4/lib/libecpg_compat.dylib
+		opt/postgresql-8.4/lib/libecpg.dylib
+		opt/postgresql-8.4/lib/libpgtypes.dylib
+		opt/postgresql-8.4/lib/libpq.dylib
+		opt/postgresql-8.4/share/man/man1/pg_config*
+	<<
+	PreInstScript: <<
+PG_ID=`id -u postgres 2>/dev/null || true`
+if [ -z "$PG_ID" ]; then
+	echo "Whoa there!  You must have a postgres user to install this package."
+	echo "Please do a 'fink reinstall passwd' and make sure you hit 'y' when it"
+	echo "asks if you want to update your users."
+	exit 1
+fi
+	<<
+	PostInstScript: [ -x %p/var/postgresql-8.4/update-alternatives.sh ] && %p/var/postgresql-8.4/update-alternatives.sh
+	PreRmScript: [ -x %p/var/postgresql-8.4/remove-alternatives.sh ] && %p/var/postgresql-8.4/remove-alternatives.sh
+	PostRmScript: [ -x %p/var/postgresql-8.4/update-alternatives.sh ] && %p/var/postgresql-8.4/update-alternatives.sh
+<<
+SplitOff2: <<
+	Package: %N-shlibs
+	Description: PostgreSQL shared libraries
+	Files: <<
+		opt/postgresql-8.4/lib/lib*.*.dylib
+		var/postgresql-8.4/*.sh
+		var/postgresql-8.4/*.list
+	<<
+	Shlibs: <<
+		%p/opt/postgresql-8.4/lib/libecpg.6.dylib        6.0.0 postgresql84-shlibs (>= 8.4.0-1)
+		%p/opt/postgresql-8.4/lib/libecpg_compat.3.dylib 3.0.0 postgresql84-shlibs (>= 8.4.0-1)
+		%p/opt/postgresql-8.4/lib/libpgtypes.3.dylib     3.0.0 postgresql84-shlibs (>= 8.4.0-1)
+		%p/opt/postgresql-8.4/lib/libpq.5.dylib          5.0.0 postgresql84-shlibs (>= 8.4.0-1)
+	<<
+	PostInstScript: [ -x %p/var/postgresql-8.4/update-alternatives.sh ] && %p/var/postgresql-8.4/update-alternatives.sh
+	PreRmScript: [ -x %p/var/postgresql-8.4/remove-alternatives.sh ] && %p/var/postgresql-8.4/remove-alternatives.sh
+<<
+
+PreInstScript: <<
+PG_ID=`id -u postgres 2>/dev/null || true`
+if [ -z "$PG_ID" ]; then
+	echo "Whoa there!  You must have a postgres user to install this package."
+	echo "Please do a 'fink reinstall passwd' and make sure you hit 'y' when it"
+	echo "asks if you want to update your users."
+	exit 1
+fi
+<<
+PostInstScript: <<
+INSTALL_PHASE="$1"
+
+[ -x %p/var/postgresql-8.4/update-alternatives.sh ] && %p/var/postgresql-8.4/update-alternatives.sh
+
+# remove the old "pgsql" entries from netinfo; the username was switched to
+# "postgres" but the old ones hang around because of the way niload works
+niutil -destroy . /users/pgsql  >/dev/null 2>&1 || true
+niutil -destroy . /groups/pgsql >/dev/null 2>&1 || true
+
+die () {
+	echo "failed"
+	echo ""
+	echo "*** bailing because an error ocurred:"
+	echo ""
+	echo "$*"
+	exit 1
+}
+
+# update daemonic init script if necessary
+daemonic install %N >/dev/null 2>&1 || :
+
+# get a nice port to run on
+while true; do
+	PGPORT=$RANDOM;
+	if [ "$PGPORT" -gt 10000 ] && [ "$PGPORT" -lt 20000 ]; then
+		break
+	fi
+done
+export PGPORT
+echo "- starting PostgreSQL on port $PGPORT"
+if %p/bin/pgsql.sh-8.4 start >/tmp/pgstart-8.4.log 2>&1; then
+
+	sleep 5
+
+	ERROR=0
+	# install the plpgsql language if possible
+	printf -- "- attempting to install the plpgsql language in the template1 database... "
+	%p/opt/postgresql-8.4/bin/createlang -U postgres -p $PGPORT plpgsql template1 >/tmp/createlang-8.4.log 2>&1 || ERROR="$?"
+	if [ $ERROR -eq 0 ]; then
+		echo "done"
+	elif [ $ERROR -gt 0 ] && [ $ERROR -ne 2 ]; then
+		echo "WARNING: an unknown error occurred inserting the plpgsql language"
+	else
+		:
+	fi
+
+	sleep 5
+
+	%p/bin/pgsql.sh-8.4 stop >/dev/null 2>&1 || echo "WARNING: unable to stop postgresql: run 'PGPORT=$PGPORT sudo %p/bin/pgsql.sh-8.4 stop' to try again"
+
+else
+
+	cat <<END
+WARNING: unable to start postgresql on an alternate port, not installing plpgsql!
+
+	If you wish to install it manually, run:
+
+		sudo %p/bin/pgsql.sh-8.4 start
+		sudo -u postgres %p/opt/postgresql-8.4/bin/createlang plpgsql template1
+	
+END
+
+fi
+<<
+PreRmScript: <<
+[ -x %p/var/postgresql-8.4/remove-alternatives.sh ] && %p/var/postgresql-8.4/remove-alternatives.sh
+
+# clean up
+if [ $1 != "upgrade" ]; then
+	daemonic remove %N >/dev/null 2>&1 || :
+fi
+<<
+PostRmScript: [ -x %p/var/postgresql-8.4/update-alternatives.sh ] && %p/var/postgresql-8.4/update-alternatives.sh
+DaemonicFile: <<
+<service>
+<description>PostgreSQL database server</description>
+<message> PostgreSQL database server</message>
+
+<daemon name="%N">
+	<executable background="no">%p/bin/pgsql.sh-8.4</executable>
+	<parameters>start</parameters>
+</daemon>
+
+</service>
+<<
+
+Homepage: http://www.postgresql.org/
+DescUsage: <<
+The package runs initdb on installation as the user 'postgres'.
+
+The best way to run it is using the supplied pgsql.sh script, i.e.
+'sudo pgsql.sh start'.  Or, you can run
+'sudo daemonic enable %N' as root to create a
+StartupItem for it.
+
+Unless you set up admin users in the database, the easiest way to
+run psql commands with administrator access is to prefix them with
+the command "sudo -u postgres".  This will ask you your administrator
+password, and then run the command as the postgres user.
+
+For example, to create a new database, you would run:
+
+  sudo -u postgres %p/opt/postgresql-8.4/bin/createdb mydb
+<<
+DescPackaging: <<
+IMPORTANT: The location of the data files has changed from early
+revisions of this package. If you're upgrading from an earlier
+revision, note that this one expects the data files to be installed
+at <prefix>/var/postgresql-8.4/data.
+
+When run from the startup script, logs output to 
+<prefix>/var/postgresql-8.4/pgsql.log
+<<
+DescPort: <<
+Rearranged a lot of the PostgreSQL build to be more "correct" on
+Darwin, including making proper dylibs (instead of bundles, which
+ended up creating static binaries).
+<<
+<<
+

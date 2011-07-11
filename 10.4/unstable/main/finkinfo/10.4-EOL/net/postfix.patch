@@ -1,0 +1,205 @@
+diff -Nur postfix-2.7.1.orig/conf/main.cf postfix-2.7.1/conf/main.cf
+--- postfix-2.7.1.orig/conf/main.cf	2007-12-18 08:50:25.000000000 -0500
++++ postfix-2.7.1/conf/main.cf	2010-06-15 21:27:27.000000000 -0400
+@@ -649,3 +649,18 @@
+ # readme_directory: The location of the Postfix README files.
+ #
+ readme_directory =
++
++# THE FOLLOWING DEFAULTS ARE SET BY APPLE
++#
++# bind to localhost only
++#
++inet_interfaces = localhost
++
++# turn off relaying for local subnet
++#
++mynetworks_style = host
++
++# mydomain_fallback: optional domain to use if mydomain is not set and
++# myhostname is not fully qualified.  It is ignored if neither are true.
++#
++mydomain_fallback = localhost
+diff -Nur postfix-2.7.1.orig/conf/post-install postfix-2.7.1/conf/post-install
+--- postfix-2.7.1.orig/conf/post-install	2010-02-03 16:06:53.000000000 -0500
++++ postfix-2.7.1/conf/post-install	2010-06-15 21:27:27.000000000 -0400
+@@ -188,7 +188,7 @@
+ 
+ umask 022
+ 
+-PATH=/bin:/usr/bin:/usr/sbin:/usr/etc:/sbin:/etc:/usr/contrib/bin:/usr/gnu/bin:/usr/ucb:/usr/bsd
++PATH=@FINKPREFIX@/bin:@FINKPREFIX@/sbin:/bin:/usr/bin:/usr/sbin:/usr/etc:/sbin:/etc:/usr/contrib/bin:/usr/gnu/bin:/usr/ucb:/usr/bsd
+ SHELL=/bin/sh
+ IFS=" 	
+ "
+diff -Nur postfix-2.7.1.orig/makedefs postfix-2.7.1/makedefs
+--- postfix-2.7.1.orig/makedefs	2010-06-03 09:00:02.000000000 -0400
++++ postfix-2.7.1/makedefs	2010-06-15 21:27:27.000000000 -0400
+@@ -414,7 +414,7 @@
+ 		case $RELEASE in
+ 		 1.[0-3]) AWK=gawk;;
+ 		       *) AWK=awk
+-			  SYSLIBS=-flat_namespace;;
++			  #SYSLIBS=-flat_namespace;;
+ 		esac
+ 		# Darwin 7 adds IPv6 support, BIND_8_COMPAT, NO_NETINFO
+ 		case $RELEASE in
+diff -Nur postfix-2.7.1.orig/mta-switch postfix-2.7.1/mta-switch
+--- postfix-2.7.1.orig/mta-switch	1969-12-31 19:00:00.000000000 -0500
++++ postfix-2.7.1/mta-switch	2010-06-15 21:27:27.000000000 -0400
+@@ -0,0 +1,140 @@
++#!/bin/sh
++
++# Moves /usr/sbin/sendmail out of the way for Fink Postfix install
++
++PREFIX="@FINKPREFIX@"
++
++function sendmailPointsToPostfix () {
++	if [ -L /usr/sbin/sendmail -a "`/bin/ls -l /usr/sbin/sendmail | sed -e 's|.* -> \(.*\)$|\1|'`x" == "${PREFIX}/sbin/sendmailx" ] ; then
++		return 0
++	else
++		return 1
++	fi
++}
++
++case "$1" in 
++	install|setup|enable|activate|start|postfix|fink)
++		/bin/echo 'Checking if we need to move /usr/sbin/sendmail out of the way... \c'
++		
++		if sendmailPointsToPostfix ; then
++			echo 'no.'
++			echo 'Fink Postfix is already in place.'
++		else
++			echo 'yes.'
++			
++			if [ -f /usr/sbin/sendmail.old ] ; then
++				/bin/echo '/usr/sbin/sendmail.old already exists. Would you like to overwrite it [yN]? \c'
++				
++				read ANS
++				case "$ANS" in
++					y*|Y*)	rm -f /usr/sbin/sendmail.old || exit 1 ;;
++					*)		echo '/usr/sbin/sendmail.old in the way. Failed.' ; exit 1 ;;
++				esac
++			fi
++			
++			echo
++			echo 'Backing up the old sendmail to /usr/sbin/sendmail.old.'
++			mv /usr/sbin/sendmail /usr/sbin/sendmail.old || exit 1
++			echo "Putting a link to Fink Postfix's sendmail in its place."
++			ln -s "${PREFIX}/sbin/sendmail" /usr/sbin/sendmail || exit 1
++			echo 'Succeeded.'
++			echo
++			
++			if [ "x$2" == "x-n" ] ; then
++				echo "Won't try to disable Apple's postfix."
++				exit;
++			fi
++			
++			if [ -x /bin/launchctl ] ; then # For 10.4 and later
++				echo 'Disabling postfix LaunchDaemon.'
++				/bin/launchctl unload -w /System/Library/LaunchDaemons/org.postfix.master.plist
++				echo 'Succeeded.'
++			else # For 10.3 and earlier
++				echo 'Now we will take a crack at /etc/hostconfig.'
++				if grep '^[[:space:]]*MAILSERVER=-\(YES\|AUTOMATIC\)-' /etc/hostconfig > /dev/null ; then
++					echo "Backing up /etc/hostconfig to /etc/hostconfig.old."
++					echo 'Turning off the mail server in /etc/hosconfig.'
++					perl -pi.old -e's,MAILSERVER=-(YES|AUTOMATIC)-,MAILSERVER=-NO-,' /etc/hostconfig || exit 1
++					echo 'Succeeded.'
++				else
++					echo '/etc/hostconfig already has the mail server disabled.'
++				fi
++			fi
++		fi
++		;;
++	
++	stop|remove|uninstall|delete|rm|disable|sendmail|apple)
++		/bin/echo 'Checking if /usr/sbin/sendmail points to Fink Postfix... \c'
++		
++		if sendmailPointsToPostfix ; then
++			echo 'yes.'
++			
++			if [ ! -f /usr/sbin/sendmail.old ] ; then
++				echo '/usr/sbin/sendmail.old does not exist; cannot restore sendmail.'
++				exit 1;
++			fi
++			
++			echo
++			echo 'Replacing /usr/sbin/sendmail with sendmail.old'
++			mv /usr/sbin/sendmail.old /usr/sbin/sendmail || exit 1
++			echo 'Succeeded.'
++			echo
++			
++			if [ "x$2" == "x-n" ] ; then
++				echo "Won't try to disable Apple's postfix."
++				exit;
++			fi
++			
++			if [ -x /bin/launchctl ] ; then # For 10.4 and later
++				echo 'Enabling postfix LaunchDaemon.'
++				/bin/launchctl load -w /System/Library/LaunchDaemons/org.postfix.master.plist
++				echo 'Succeeded.'
++			else # For 10.3 and earlier
++				echo 'Now we will take a crack at /etc/hostconfig.'
++				if grep '^[[:space:]]*MAILSERVER=-\(YES\|AUTOMATIC\)-' /etc/hostconfig > /dev/null ; then
++					echo 'Mail server is already enabled in /etc/hostconfig.'
++				else
++					echo "Backing up /etc/hostconfig to /etc/hostconfig.old."
++					cp -p /etc/hostconfig /etc/hostconfig.old || exit 1
++					
++					if ! grep '^[[:space:]]*MAILSERVER=' /etc/hostconfig > /dev/null ; then
++						echo '/etc/hostconfig does not include a MAILSERVER= line.'
++						/bin/echo 'Would you like to add one[Yn]? \c'
++						
++						ANS='?';
++						while [ $ANS == '?' ] ; do
++							read ANS
++							case "$ANS" in
++								y*|Y*)
++									echo 'MAILSERVER=-YES-' >> /etc/hostconfig || exit 1
++								;;
++								
++								n*|N*)
++									echo 'Leaving /etc/hostconfig as it is, removing backup.'
++									rm /etc/hostconfig.old || exit 1
++								;;
++								
++								*)
++									ANS='?'
++								;;
++							esac
++						done
++					else
++						echo 'Turning on the mail server in /etc/hosconfig.'
++						perl -pi.old -e's,MAILSERVER=-NO-,MAILSERVER=-YES-,' /etc/hostconfig || exit 1
++						echo 'Succeeded.'
++					fi
++				fi
++			fi
++		else
++			echo 'no.'
++			echo 'Not making any changes.'
++		fi
++		;;
++	
++	*)	echo "mta-switch -- Switches between Fink's and Apple's Postfix."
++		echo 'usage: mta-switch {fink|apple} [-n]'
++		echo "    -n don't try to disable Apple's postfix"
++		exit 1
++		;;
++esac
+diff -Nur postfix-2.7.1.orig/src/util/sys_defs.h postfix-2.7.1/src/util/sys_defs.h
+--- postfix-2.7.1.orig/src/util/sys_defs.h	2010-06-01 19:56:57.000000000 -0400
++++ postfix-2.7.1/src/util/sys_defs.h	2010-06-15 21:27:14.000000000 -0400
+@@ -206,9 +206,9 @@
+ #define HAS_DB
+ #define HAS_SA_LEN
+ #define DEF_DB_TYPE	"hash"
+-#define ALIAS_DB_MAP	"hash:/etc/aliases"
++#define ALIAS_DB_MAP	"hash:@FINKPREFIX@/etc/postfix/aliases"
+ #define GETTIMEOFDAY(t) gettimeofday(t,(struct timezone *) 0)
+-#define ROOT_PATH	"/bin:/usr/bin:/sbin:/usr/sbin"
++#define ROOT_PATH	"@FINKPREFIX@/bin:@FINKPREFIX@/sbin:/bin:/usr/bin:/sbin:/usr/sbin"
+ #define USE_STATFS
+ #define STATFS_IN_SYS_MOUNT_H
+ #define HAS_POSIX_REGEXP

@@ -1,0 +1,166 @@
+Package: atlas
+Version: 3.9.11
+Revision: 1
+Description: Portably optimal linear algebra software
+DescDetail: <<
+The current version provides a complete BLAS and LAPACK API.
+For many operations, ATLAS achieves performance on par
+with machine-specific tuned libraries.
+Installs also LAPACK's docs and manpages.
+Headers: cblas.h clapack.h, plus the atlas headers
+Libraries installed:
+liblapack.a		: The LAPACK routines provided by ATLAS,
+			plus the rest of LAPACK from netlib.org.
+libcblas_unthreaded.a	: The ANSI C interface to the BLAS.
+libf77blas_unthreaded.a	: The Fortran77 interface to the BLAS.
+libatlas.a		: The main ATLAS library,
+			providing low-level routines for all interface libs.
+  Plus on multiprocessor machines the threaded variants libptcblas.a and
+libptf77blas.a.
+  libcblas.a and libf77blas.a are symlinks pointing to the threaded versions
+if available, else to the unthreaded versions.
+  The dylibs for latlas lcblas lf77bas and llapack are also installed
+<<
+DescPort: <<
+The optimized subset of LAPACK provided by ATLAS is merged
+with the full LAPACK from http://www.netlib.org/lapack.
+
+Still doesn't build on (some ?) G4's.
+<<
+DescUsage: <<
+Order is important when linking! Use:
+-L%p/lib -llapack -lcblas -lf77blas -latlas
+<<
+Source: mirror:sourceforge:math-atlas/%n%v.tar.bz2
+Source-MD5: fa95dfd4a69e5614db1061a740bc5265
+Source2: http://www.netlib.org/lapack/lapack-3.1.1.tgz
+Source2-MD5: 00b21551a899bcfbaa7b8443e1faeef9
+SourceDirectory: ATLAS
+License: BSD
+# since we're experimenting with building a dylib :
+BuildDependsOnly: true
+BuildDepends: gcc44
+PatchScript: <<
+#!/bin/sh -ev
+sed -i.bak -e '/PowerBook/,/RackMac/s,"c,"k,g' CONFIG/src/backend/archinfo_freebsd.c
+cd ..; ln -s lapack-3.1.1 LAPACK
+cd LAPACK
+sed -e 's,\.\./\.\./blas\$(PLAT)\.a,%b/../bld/lib/libf77blas.a %b/../bld/lib/libcblas.a %b/../bld/lib/libatlas.a,' \
+    -e 's|g77|gfortran|g' -e 's,^TIMER,\#TIMER,' -e '/INT_ETIME/s,^\# *,,' < INSTALL/make.inc.LINUX > make.inc
+<<
+CompileScript: <<
+#!/bin/sh -ev
+ cflags=''
+ if [ %m = 'i386' ]
+	then mflags="-mfpmath=sse -msse -msse2 -msse3 -m32"; iflags="-mfpmath=387"
+	else mflags=''; iflags=''
+		if [ `machine|sed -e 's,ppc,,' -e 's,\([0-9]\).*,\1,'` != 9 ]
+			then cflags='-Si cputhrchk 0 -D c -DATL_AVgcc'
+		fi
+ fi
+ lflags="-fPIC -O3 -fomit-frame-pointer -fgcse-sm -fgcse-las -ftree-loop-linear $mflags"
+ iflags="-fPIC -O3 -fomit-frame-pointer $iflags"
+ cd ../LAPACK
+ sed -i.bak -e "s;\(-funroll-all-loops\) -O3;\1 $lflags;" make.inc
+ make lapacklib
+# atlas 'forgets' scabs1 (not dcabs1 !), so we get it here..
+ cd BLAS/SRC; make scabs1.o; cd -
+ mkdir -p ../bld/lib
+ ar cr ../bld/lib/libf77blas.a BLAS/SRC/scabs1.o; ar cr ../bld/lib/libptf77blas.a BLAS/SRC/scabs1.o
+ cd ..
+ ln -s %p/bin/gcc-4 gcc
+ export PATH=`pwd`:$PATH
+ cd bld
+ if [ %m = 'x86_64' ] 
+ then ../ATLAS/configure -v 2 --prefix=%p --with-netlib-lapack=%b/../LAPACK/lapack_LINUX.a -b 64 -F ic "$iflags" -F if "$iflags" $cflags 
+ else ../ATLAS/configure -v 2 --prefix=%p --with-netlib-lapack=%b/../LAPACK/lapack_LINUX.a -b 32 -F ic "$iflags" -F if "$iflags" $cflags
+ fi
+ make
+ cd lib
+ # Apparently on some machines (=monoprocesors ?) the threaded libs are not made;
+ # we first make atlas 'look the same' to all other pkgs, independently of the machine
+ if test -f libptcblas.a
+	then for C in c f77; do
+		mv lib${C}blas.a lib${C}blas_unthreaded.a
+		ln -s libpt${C}blas.a lib${C}blas.a
+	     done
+	else rm libptf77blas.a		# This is then the embryo we created with scabs1 above
+	     for C in c f77; do ln -s lib${C}blas.a lib${C}blas_unthreaded.a; done
+ fi
+ # We now make shared libs (experimental); easier to just write the commands here than to fix lib/Makefile ...
+ # We link 'manually', with ld, to avoid having unnecessary libs like lgcc_s among the load commands.
+ # This way the libs can be safely used in linking with any compiler: they will not bring themselves
+ # the wrong lgcc_s in the search list.
+ ld="ld -dynamic -dylib -single_module -dead_strip -x -all_load -L. -L%p/lib/gcc4.4/lib -ldylib1.o -dylib_install_name"
+ $ld %p/lib/libatlas.dylib libatlas.a -o libatlas.dylib -lSystem
+ $ld %p/lib/libcblas.dylib libcblas.a -o libcblas.dylib -latlas -lSystem
+ $ld %p/lib/libf77blas.dylib libf77blas.a -o libf77blas.dylib -lgfortran -latlas -lSystem
+ $ld %p/lib/liblapack.dylib liblapack.a -o liblapack.dylib -lf77blas -lgfortran -lcblas -latlas -lgcc_s.1 -lSystem
+ ## the next 4 lines are optional _ no idea of a correct exported symbols list for libatlas...
+ ## probably to be removed for a commit _ it gains an enormous decrease in the # of symbols exported by the lib,
+ ## but size goes down only from ~ 2.8M to 2.3M
+ # nm -mfgu liblapack.dylib libcblas.dylib libf77blas.dylib|fgrep ' (from libatlas'|sed -e 's, (from .*,,' -e 's,.* ,,'|sort -u > lst
+ # install_name_tool -id %p/lib/libatlas_full.dylib libatlas.dylib
+ # mv libatlas.dylib libatlas_full.dylib
+ # $ld %p/lib/libatlas.dylib libatlas.a -o libatlas.dylib -ldylib1.o -lSystem -exported_symbols_list lst
+<<
+InfoTest: <<
+TestScript: <<
+#!/bin/sh -ev
+ cd ../LAPACK
+ mv lapack_LINUX.a lapack_LINUX.a~; ln -s ../bld/lib/liblapack.a lapack_LINUX.a
+ ## first getting around an internal compiler error with gcc4.3.1 :
+ mv make.inc make.inc~
+ sed 's, -ftree-loop-linear,,' < make.inc~ > make.inc
+ cd TESTING/EIG
+ make cget35.o zget35.o
+ cd -
+ mv make.inc~ make.inc
+ ##
+ make -k lapack_testing blas_testing || :
+ # to get timing uncluttered by compilation times, we'll repeat the tests at the end of the log:
+ rm {BLAS,TESTING}/*.out
+ cd ../bld
+ if test -f libptcblas.a
+	then make -k test pttest time
+	else make -k test time
+ fi
+ cd ../LAPACK
+ time { make -k blas_testing; cd TESTING; make -k ; } || :
+# here: real 3m10.903s; user 2m55.622s; sys 0m15.570s  (average of 3)
+<<
+<<
+InstallScript: <<
+#!/bin/sh -ev
+ mkdir -p %i/share/doc/%n/LAPACK
+ cp doc/* README %i/share/doc/%n
+ head -n29 bin/atlas_tee.c > %i/share/doc/%n/LICENSE
+ cp -pPR ../LAPACK/manpages/{blas/,}man %i/share
+ cp -pPR ../LAPACK/{html,COPYING,README} %i/share/doc/%n/LAPACK
+ ln -s html/index.html %i/share/doc/%n/LAPACK
+ cd ../bld
+ make install DESTDIR=%i
+ cp -pPR lib/*.{a,dylib} %i/lib
+ rm %i/lib/libtstatlas.a
+ find %i/lib -type f -name '*.a' -exec ranlib \{\} \;
+ chmod -R a+rX %i/share
+<<
+Splitoff: <<
+	Package: %N-shlibs
+	Depends: gcc44-shlibs
+	Files: lib/*.dylib
+	InstallScript: mkdir -p %i/share/doc; ln -s %N %i/share/doc/%n
+	Shlibs: <<
+	%p/lib/liblapack.dylib	0.0.0	%n	(>= 3.8.0-6)
+	%p/lib/libcblas.dylib	0.0.0	%n	(>= 3.8.0-6)
+	%p/lib/libf77blas.dylib	0.0.0	%n	(>= 3.8.0-6)
+	%p/lib/libatlas.dylib	0.0.0	%n	(>= 3.8.0-6)
+	<<
+<<
+SplitOff2: <<
+	Package: %N-doc
+	Files: share/man share/doc/%N/LAPACK
+	InstallScript: mkdir -p %i/share/doc; ln -s %N %i/share/doc/%n
+<<
+Homepage: http://math-atlas.sourceforge.net
+Maintainer: None <fink-devel@lists.sourceforge.net>

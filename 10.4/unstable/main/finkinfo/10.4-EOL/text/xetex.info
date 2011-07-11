@@ -1,0 +1,255 @@
+Info2: <<
+Package: xetex
+Version: 0.996
+Revision: 1001
+Source: http://scripts.sil.org/svn-view/xetex/TAGS/%n-%v.tar.gz
+Source-MD5: 2f1f09337e22e0fb42d9caed225d6052
+DocFiles: TODO debian/changelog debian/copyright texk/xdv2pdf/LICENSE.txt
+License: OSI-Approved
+Description: TeX typesetter using native Mac OS X fonts
+Homepage: http://scripts.sil.org/xetex
+Maintainer: Likai Liu <liulk@cs.bu.edu>
+
+DescDetail: <<
+XeTeX is a typesetting system based on a merger of Donald Knuth's TeX system
+with Unicode and Mac OS X font technologies. XeTeX is designed as a tool that
+works within the framework of a standard Unix TeX installation.
+
+This package contains the following software:
+
+* TECkit is written by Jonathan Kew, SIL International.
+* ICU is copyright (c) 1999-2005, International Business Machines Corporation
+  and others.
+* XeTeX is written by Jonathan Kew, SIL International.
+<<
+DescPort: <<
+The utility, xdv2pdf, uses some CoreGraphics functions that are not declared in
+earlier versions of Mac OS X. However, it contains code that auto-detects the
+presence of these functions in runtime; once compiled, xdv2pdf should run on
+Mac OS X versions as early as 10.2.
+
+The ability to use these CoreGraphics functions depends on the version of Mac
+OS X compiling xdv2pdf. See the patch that inserts MACOSX_DEPLOYMENT_TARGET
+conditionals throughout for how this works.
+<<
+DescPackaging: <<
+The patch inserts conditionals based on MACOSX_DEPLOYMENT_TARGET, which is
+required so xdv2pdf may be compiled without error on earlier Mac OS X versions
+than 10.4.
+<<
+
+BuildDepends: fink (>= 0.24.12), tetex-base
+Depends: tetex-base, tetex-texmf, macosx (>= 10.2.0)
+
+PatchFile: %n.patch
+PatchFile-MD5: 3aed451bb973566b17e9854ef747f649
+PatchScript: <<
+#!/bin/sh -ve
+	%{default_script}
+# adapted from build-xetex and runConfigure.sh
+
+	# do some cleanup if needed
+	test ! -f Makefile || make clean
+	rm -rf Work
+	find . -name config.cache -print -exec rm -f {} \;
+	find . -name configure -exec chmod +x {} \;
+
+	test -d Work || mkdir Work
+
+	# re-establish symbolic link
+	(cd libs; rm -f icu-xetex; ln -s icu-release-3-4-source ./icu-xetex) || exit 1
+<<
+GCC: 4.0
+NoSetCPPFLAGS: true
+NoSetLDFLAGS: true
+CompileScript: <<
+#!/bin/sh -ve
+# adapted from build-xetex and runConfigure.sh
+
+	pushd Work
+
+	# run the TeX Live configure script
+	echo "### running TeX Live configure script"
+
+	../configure --prefix=%p --datadir=%p/share --with-system-zlib || exit
+
+	if [ "`uname`" == "Darwin" ]; then
+		# hack the resulting ICU platform.h file to claim that nl_langinfo() is not available
+		# ....hoping for 10.2 compatibility :)
+		perl -pi.bak -e 's/(define\s+U_HAVE_NL_LANGINFO(?:_CODESET)?\s+)1/$10/;' libs/icu-xetex/common/unicode/platform.h
+	fi
+
+	popd
+
+	# this should make ICU and TECkit along the way, if xetex.mk works
+	# make libraries first (not handled by the xetex makefile)
+	if [ "`uname`" = "Darwin" ]; then
+		LIBS="teckit icu-xetex freetype2"
+	else
+		LIBS="teckit icu-xetex libpng xpdf freetype2"
+	fi
+	for f in ${LIBS}; do
+		(cd Work/libs/${f} && make) || exit 1
+	done
+
+	# make the xetex binary
+	(cd Work/texk/web2c && make web2cdir=`dirname \`kpsewhich texmf.cnf\`` xetex) || exit 1
+
+	# xdv2pdf is for Mac OS X only, don't try to build on Linux
+	if [ "`uname`" == "Darwin" ]; then
+		(cd Work/texk/xdv2pdf && make all) || exit 1
+	fi
+<<
+InstallScript: <<
+#!/bin/sh -ve
+# adapted from debian/rules#install
+
+        # install the binary...
+	mkdir -p %i/bin
+	for x in web2c/xetex xdv2pdf/xdv2pdf xdv2pdf/T1Wrap; do
+	    cp %b/Work/texk/$x %i/bin/`basename $x`
+	    strip %i/bin/`basename $x`                  # mn
+	done
+
+        # install xetex texmf tree
+	mkdir -p %i/etc
+        cp -pRf %b/texmf %i/etc/texmf.local
+
+        # add the pool file from xetex compilation
+        mkdir -p %i/etc/texmf.local/web2c
+        cp %b/Work/texk/web2c/xetex.pool %i/etc/texmf.local/web2c
+
+	# liulk: fix xdv2pdf_mergemarks permission
+	chmod a+x %i/etc/texmf.local/scripts/xetex/perl/xdv2pdf_mergemarks
+<<
+PostInstScript: <<
+# script borrowed from debian/postinst, added instructions from:
+# http://scripts.sil.org/cms/scripts/page.php?site_id=nrsi&item_id=xetex_fink
+
+	set -v
+
+	if [ ! -f %p/etc/texmf.local/web2c/xetex.pool ]; then
+	    # package is corrupted, likely a result from a tetex reinstall.
+	    # do not continue here.
+	    exit 1
+        fi
+
+        # ensure our entries are present in fmtutil.cnf
+        fmtutil_cnf=`kpsewhich --format="web2c files" fmtutil.cnf`
+        if [ "`fgrep -c xetex ${fmtutil_cnf}`" == "0" ]; then
+                cat >> ${fmtutil_cnf} <<'__EOT__'
+
+# XeTeX formats
+xetex		xetex		-		*xetex.ini
+xelatex		xetex		language.dat	*xelatex.ini
+
+__EOT__
+        fi
+
+        # use system-wide setup if available
+        fmtutil=`type -p fmtutil-sys` || fmtutil=`type -p fmtutil`
+
+cat > /dev/null <<'__COMMENT__'
+	# COMMENT: not needed for fink teTeX.
+
+	# it's OK for this patch to fail (only needed on older TeX systems)
+	patch -N -r /tmp/fmtutilpatch.rej -p0 `which fmtutil` <<'__EOT__' >/dev/null 2>&1 || true
+*** /usr/bin/fmtutil    2006-04-12 10:57:49.000000000 +0100
+--- fmtutil     2006-04-21 16:41:22.000000000 +0100
+***************
+*** 493,498 ****
+--- 493,499 ----
+    inifile=`echo $lastarg | sed 's,^\*,,'`
+
+    case "$engine" in
++     xetex)  fmtfile="$format.fmt"; kpsefmt=tex;;
+      *etex)  fmtfile="$format.efmt"; kpsefmt=tex;;
+      omega)  fmtfile="$format.oft";  kpsefmt=tex;;
+      eomega) fmtfile="$format.eoft"; kpsefmt=tex;;
+__EOT__
+__COMMENT__
+
+	# adjust default xelatex search path in texmf.cnf
+	cat <<'__EOT__' | uudecode -p | patch -N -r /tmp/texmfcnfpatch.rej -p0 `kpsewhich texmf.cnf` || true
+begin-base64 600 xetex-texmfcnf.patch
+LS0tIC9zdy9zaGFyZS90ZXhtZi93ZWIyYy90ZXhtZi5jbmYgICAgIFN1biBNYXkgMTQgMDk6MjA6
+MjEgMjAwNgorKysgdGV4bWYuY25mICAgU3VuIE1heSAxNCAwOToyMDowNCAyMDA2CkBAIC0yMjIs
+NyArMjIyLDcgQEAKIFRFWElOUFVUUy5wZGZ4dGV4ICAgPSAuOyRURVhNRi90ZXgve3BsYWluLGdl
+bmVyaWMsfS8vCiAKICUgWGVUZVgKLVRFWElOUFVUUy54ZWxhdGV4ID0gLjskVEVYTUYvdGV4L3ts
+YXRleCxnZW5lcmljLH0vLworVEVYSU5QVVRTLnhlbGF0ZXggPSAuOyRURVhNRi90ZXgve3hlbGF0
+ZXgsZ2VuZXJpYyx9Ly8KIFRFWElOUFVUUy54ZXRleCAgID0gLjskVEVYTUYvdGV4L3twbGFpbixn
+ZW5lcmljLH0vLwogCiAlIE9tZWdhIC8gQWxlcGgK
+====
+__EOT__
+
+	# create a new language.dat for xelatex by patching existing one.
+	# liulk, mn -- do not use `kpsewhich language.dat`
+	langdat=%p/share/texmf-dist/tex/generic/config/language.dat
+	xelangdat=%p/etc/texmf.local/tex/xelatex/config/language.dat
+	cat <<'__EOT__' | uudecode -p | patch -N -r /tmp/langdatpatch.rej -p0 $langdat -o $xelangdat || true
+begin-base64 600 xetex-langdat.patch
+LS0tIC9zdy9zaGFyZS90ZXhtZi1kaXN0L3RleC9nZW5lcmljL2NvbmZpZy9sYW5ndWFnZS5kYXQJ
+VGh1IEphbiAxMyAwOTo0MDowMiAyMDA1CisrKyBsYW5ndWFnZS5kYXQJU3VuIE1heSAxNCAxNzoy
+Mzo0MCAyMDA2CkBAIC02NiwxMyArNjYsMTMgQEAKIGlyaXNoCWdhaHlwaC50ZXgKIGl0YWxpYW4J
+aXRoeXBoLnRleAogbGF0aW4JbGFoeXBoLnRleAotbWFneWFyCWh1aHlwaG4udGV4CittYWd5YXIJ
+aHVoeXBoLnRleAklJSBYZVRlWCBjaGFuZ2UKIG5vcnNrCW5vaHlwaGJ4LnRleCAlIHNlZSBodHRw
+Oi8vaG9tZS5jMmkubmV0L29tc2VsYmVyZy9wdWIvbm9oeXBoYnhfaW50cm8uaHRtIChpbiBOb3J3
+ZWdpYW4pCiBwb2xpc2gJcGxoeXBoLnRleAogcG9ydHVnZXMJcHQ4aHlwaC50ZXgKIHJvbWFuaWFu
+CXJvaHlwaGVuLnRleAogcnVzc2lhbglydWh5cGhlbi50ZXgJJSBub3RlOiBlZGl0IHJ1aHlwaGVu
+LnRleCBmb3IgeW91ciBlbmNvZGluZyEKLXNlcmJpYW4Jc3JoeXBoYy50ZXggICAgICUgU2VyYmlh
+biBDeXJpbGxpYyBIeXBoZW5hdGlvbiBQYXR0ZXJucworJSEgc2VyYmlhbglzcmh5cGhjLnRleCAg
+ICAgJSBTZXJiaWFuIEN5cmlsbGljIEh5cGhlbmF0aW9uIFBhdHRlcm5zCSUlIFhlVGVYIGNoYW5n
+ZQogc2xvdmFrCXNraHlwaC50ZXggICAgICAlIGRlcGVuZHMgb24gY3NwbGFpbiBiZWluZyBpbnN0
+YWxsZWQKIHNsb3ZlbmUJc2loeXBoMjMudGV4CiBzcGFuaXNoCWVzaHlwaC50ZXgKQEAgLTgxLDcg
+KzgxLDcgQEAKIAogJSBGb3IgVWtyYWluaWFuLCBlaXRoZXIgdXNlIHVrcmh5cGgudGV4IChhbmQg
+ZWRpdCB0aGF0IGZpbGUgZm9yIHRoZSBlbmNvZGluZwogJSB0aGF0IHlvdSBuZWVkKSBvciB1c2Ug
+b25lIG9mIHRoZSB1a3JoeXBoLkVOQyBmaWxlcy4KLXVrcmFpbmlhbgl1a3JoeXBoLnRleAorJSEg
+dWtyYWluaWFuCXVrcmh5cGgudGV4CSUlIFhlVGVYIGNoYW5nZQogJSEgdWtyYWluaWFuCXVrcmh5
+cGgudDJhCiAlISB1a3JhaW5pYW4JdWtyaHlwaC5sY3kKICUhIHVrcmFpbmlhbgl1a3JoeXBoLm90
+Mgo=
+====
+__EOT__
+	chmod a+r $xelangdat
+
+	# put freshly generated xelatex language.dat in ls-R
+	texhash
+
+        formats="xetex xelatex"
+        for f in ${formats}; do
+        # enable our entries if necessary (in case of pre-existing disabled ones)
+                ${fmtutil} --enablefmt ${f}
+                ${fmtutil} --byfmt ${f}
+        done
+
+        # create symlinks for the newly-built formats
+        texlinks --silent
+<<
+PreRmScript: <<
+# script borrowed from debian/postrm (but here used as prerm)
+
+	set -v
+
+	if [ ! -f %p/etc/texmf.local/web2c/xetex.pool ]; then
+	    # allow recovery from new tetex installation, which breaks us.
+	    # luckily, simply doing nothing works great here.
+	    exit 0
+	fi
+
+        formats="xetex xelatex"
+        fmtutil=`type -p fmtutil-sys` || fmtutil=`type -p fmtutil` || fmtutil=""
+        kpsewhich=`type -p kpsewhich` || kpsewhich=""
+        for f in ${formats}; do
+                if [ "x${kpsewhich}" != "x" ]; then
+                        fmt=`${kpsewhich} --progname=xetex ${f}.fmt`
+                        if [ "x${fmt}" != "x" ]; then rm ${fmt}; fi
+                fi
+                if [ "x${fmtutil}" != "x" ]; then
+                        ${fmtutil} --disablefmt ${f} || true
+                fi
+        done
+
+	xelangdat=`dirname $(kpsewhich xelatex.ini)`/language.dat
+	if [ -f ${xelangdat} ]; then rm -f ${xelangdat}; fi
+<<
+PostRmScript: texhash
+<<

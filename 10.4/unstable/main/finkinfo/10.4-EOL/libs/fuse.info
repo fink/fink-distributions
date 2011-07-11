@@ -1,0 +1,117 @@
+Package: fuse
+Version: 2.0.3.2
+Revision: 1
+Source: http://dev.kublai.com/macfuse-%v.tar.bz2
+Source-MD5: 16ade07b11ac60d5f86fa2faf71d1322
+
+# Broken with xcode 2.2, reported working with 2.4.0
+BuildDepends: gcc4.0 (>= 4.0.1-5363)
+
+PatchScript: <<
+#!/bin/sh -ev
+MACOSVER=`/usr/bin/sw_vers | grep ProductVersion: | cut -f 2 | cut -d. -f1,2`
+if test $MACOSVER != 10.4; then
+  MACOSVER=10.5
+fi
+FUSEVER=2.7.3
+if test $MACOSVER = 10.4
+then
+  FSPFX=/System/Library/Filesystems/
+else
+  FSPFX=/Library/Filesystems/
+fi
+sed -i.bak -e "s,$FSPFX,%p/lib/%n/," core/$MACOSVER/fusefs/common/fuse_param.h
+tar xvzf core/$MACOSVER/libfuse/fuse-current.tar.gz
+cd fuse-$FUSEVER && patch -p1 < ../core/$MACOSVER/libfuse/fuse-current-macosx.patch
+<<
+CompileScript: <<
+#!/bin/sh -ev
+MACOSVER=`/usr/bin/sw_vers | grep ProductVersion: | cut -f 2 | cut -d. -f1,2`
+if test $MACOSVER != 10.4; then
+  MACOSVER=10.5
+fi
+FUSEVER=2.7.3
+# even on 64-bit, build kext as 32-bit. 64-bit kext is not yet ready
+if test "%m" = "powerpc"; then ARCHS=ppc; else ARCHS=i386; fi
+cd core/$MACOSVER/fusefs
+for target in fusefs mount_fusefs load_fusefs fusefs.fs
+do
+  xcodebuild -target $target SDKROOT= ARCHS=$ARCHS
+done
+cd %b/fuse-$FUSEVER
+CFLAGS="-D__FreeBSD__=10 -D_POSIX_C_SOURCE -O -g -I%b/core/$MACOSVER/fusefs/common" LDFLAGS="-framework CoreFoundation" ./configure --prefix=%p --disable-dependency-tracking
+make
+<<
+InstallScript: <<
+#!/bin/sh -ev
+# TODO: figure out how to install this in /System/Library/Filesystems
+MACOSVER=`/usr/bin/sw_vers | grep ProductVersion: | cut -f 2 | cut -d. -f1,2`
+if test $MACOSVER != 10.4; then
+  MACOSVER=10.5
+fi
+FUSEVER=2.7.3
+mkdir -p %i/lib/%n
+cp -R core/$MACOSVER/fusefs/build/Release/fusefs.fs %i/lib/%n
+mkdir %i/lib/%n/fusefs.fs/Support
+cp -R core/$MACOSVER/fusefs/build/Release/fusefs.kext %i/lib/%n/fusefs.fs/Support
+cp core/$MACOSVER/fusefs/build/Release/*_fusefs %i/lib/%n/fusefs.fs/Support
+cd %b/fuse-$FUSEVER && make install DESTDIR=%d
+# backward compatibility symlinks (requested by Daniel Johnson)
+ln -s libfuse.2.dylib %i/lib/libfuse.0.dylib
+ln -s libulockmgr.1.dylib %i/lib/libulockmgr.0.dylib
+<<
+PreRmScript: /sbin/kextunload -q %p/lib/fuse/fusefs.fs/Support/fusefs.kext || true
+PostInstScript: <<
+chown -R root:wheel %p/lib/%n/fusefs.fs/Support/fusefs.kext
+#chown -R root:wheel /System/Library/Filesystems/fusefs.fs
+chmod u+s %p/lib/%n/fusefs.fs/Support/load_fusefs
+<<
+DocFiles: ABOUT.txt COPYING.txt CHANGELOG.txt
+
+SplitOff: <<
+  Package: fuse-dev
+  Depends: fuse-shlibs (= %v-%r), pkgconfig
+  BuildDependsOnly: True
+  DocFiles: COPYING.txt
+  Files: <<
+    include 
+    lib/libfuse.dylib lib/libfuse.a lib/libfuse.la
+    lib/libulockmgr.dylib lib/libulockmgr.a lib/libulockmgr.la
+    lib/pkgconfig
+  <<
+  Description: Filesystem in Userspace (development resources)
+  DescDetail: <<
+    These are the header and library files required for building FUSE filesystems.
+  <<
+<<
+
+SplitOff2: <<
+  Package: fuse-shlibs
+  Depends: fuse (= %v-%r)
+  DocFiles: COPYING.txt
+  Files: <<
+    lib/libfuse.0.dylib
+    lib/libfuse.2.dylib
+    lib/libulockmgr.0.dylib
+    lib/libulockmgr.1.dylib
+  <<
+  Shlibs: <<
+    %p/lib/libfuse.2.dylib 10.0.0 fuse (>= 2.0-1)
+    %p/lib/libulockmgr.1.dylib 10.0.0 fuse (>= 2.0-1)
+  <<
+  DescDetail: <<
+    These are the shared libraries required by fuse applications.
+  <<
+<<
+
+Description: File System in User Space (MacFUSE)
+DescDetail: <<
+This is MacFUSE, a port of FUSE (filesystem in userspace) for OS X.
+FUSE makes it possible to add new file systems just by running a regular,
+unprivileged program. For example, the sshfs FUSE client allows you to
+mount a remote server's filesystem without any requirement other than
+SSH access (sshfs is packaged separately).
+<<
+License: BSD
+Homepage: http://code.google.com/p/macfuse/
+Maintainer: Brendan Cully <brendan@finkproject.org>

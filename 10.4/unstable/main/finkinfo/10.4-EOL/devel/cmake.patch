@@ -1,0 +1,200 @@
+diff -Nurd cmake-2.6.1/Modules/Platform/Darwin.cmake cmake-2.6.1-new/Modules/Platform/Darwin.cmake
+--- cmake-2.6.1/Modules/Platform/Darwin.cmake	2008-08-01 11:34:50.000000000 -0400
++++ cmake-2.6.1-new/Modules/Platform/Darwin.cmake	2008-08-27 11:38:44.000000000 -0400
+@@ -27,6 +27,11 @@
+ SET(CMAKE_MODULE_EXISTS 1)
+ SET(CMAKE_DL_LIBS "")
+ 
++SET(CMAKE_C_OSX_COMPATIBILITY_VERSION_FLAG -Wl,-compatibility_version,)
++SET(CMAKE_C_OSX_CURRENT_VERSION_FLAG -Wl,-current_version,)
++SET(CMAKE_CXX_OSX_COMPATIBILITY_VERSION_FLAG "${CMAKE_C_OSX_COMPATIBILITY_VERSION_FLAG}")
++SET(CMAKE_CXX_OSX_CURRENT_VERSION_FLAG "${CMAKE_C_OSX_CURRENT_VERSION_FLAG}")
++
+ SET(CMAKE_C_LINK_FLAGS "-headerpad_max_install_names")
+ SET(CMAKE_CXX_LINK_FLAGS "-headerpad_max_install_names")
+ 
+@@ -62,7 +67,7 @@
+   IF(NOT "$ENV{CMAKE_OSX_SYSROOT}" STREQUAL "") 
+     SET(_CMAKE_OSX_SDKS "$ENV{CMAKE_OSX_SYSROOT}")
+   ENDIF(NOT "$ENV{CMAKE_OSX_SYSROOT}" STREQUAL "") 
+-  SET(CMAKE_OSX_SYSROOT ${_CMAKE_OSX_SDKS} CACHE STRING
++  SET(CMAKE_OSX_SYSROOT ${_CMAKE_OSX_SDKS} CACHE PATH
+     "isysroot used for universal binary support")
+   # set _CMAKE_OSX_MACHINE to umame -m
+   EXEC_PROGRAM(uname ARGS -m OUTPUT_VARIABLE _CMAKE_OSX_MACHINE)
+diff -Nurd cmake-2.6.1/Source/cmGlobalXCodeGenerator.cxx cmake-2.6.1-new/Source/cmGlobalXCodeGenerator.cxx
+--- cmake-2.6.1/Source/cmGlobalXCodeGenerator.cxx	2008-08-01 11:34:52.000000000 -0400
++++ cmake-2.6.1-new/Source/cmGlobalXCodeGenerator.cxx	2008-08-27 11:38:44.000000000 -0400
+@@ -1455,10 +1455,6 @@
+ 
+     buildSettings->AddAttribute("LIBRARY_STYLE",
+                                 this->CreateString("DYNAMIC"));
+-    buildSettings->AddAttribute("DYLIB_COMPATIBILITY_VERSION",
+-                                this->CreateString("1"));
+-    buildSettings->AddAttribute("DYLIB_CURRENT_VERSION",
+-                                this->CreateString("1"));
+     break;
+     }
+     case cmTarget::EXECUTABLE:
+@@ -1676,6 +1672,38 @@
+                               this->CreateString(
+                                 "-Wmost -Wno-four-char-constants"
+                                 " -Wno-unknown-pragmas"));
++
++  // Runtime version information.
++  if(target.GetType() == cmTarget::SHARED_LIBRARY)
++    {
++    int major;
++    int minor;
++    int patch;
++
++    // VERSION -> current_version
++    target.GetTargetVersion(false, major, minor, patch);
++    if(major == 0 && minor == 0 && patch == 0)
++      {
++      // Xcode always wants at least 1.0.0
++      major = 1;
++      }
++    cmOStringStream v;
++    v << major << "." << minor << "." << patch;
++    buildSettings->AddAttribute("DYLIB_CURRENT_VERSION",
++                                this->CreateString(v.str().c_str()));
++
++    // SOVERSION -> compatibility_version
++    target.GetTargetVersion(true, major, minor, patch);
++    if(major == 0 && minor == 0 && patch == 0)
++      {
++      // Xcode always wants at least 1.0.0
++      major = 1;
++      }
++    cmOStringStream vso;
++    vso << major << "." << minor << "." << patch;
++    buildSettings->AddAttribute("DYLIB_COMPATIBILITY_VERSION",
++                                this->CreateString(vso.str().c_str()));
++    }
+ }
+ 
+ //----------------------------------------------------------------------------
+diff -Nurd cmake-2.6.1/Source/cmMakefileLibraryTargetGenerator.cxx cmake-2.6.1-new/Source/cmMakefileLibraryTargetGenerator.cxx
+--- cmake-2.6.1/Source/cmMakefileLibraryTargetGenerator.cxx	2008-08-01 11:34:53.000000000 -0400
++++ cmake-2.6.1-new/Source/cmMakefileLibraryTargetGenerator.cxx	2008-08-27 11:38:44.000000000 -0400
+@@ -364,6 +364,14 @@
+   std::string linkFlags;
+   this->LocalGenerator->AppendFlags(linkFlags, extraFlags);
+ 
++  // Add OSX version flags, if any.
++  if(this->Target->GetType() == cmTarget::SHARED_LIBRARY ||
++     this->Target->GetType() == cmTarget::MODULE_LIBRARY)
++    {
++    this->AppendOSXVerFlag(linkFlags, linkLanguage, "COMPATIBILITY", true);
++    this->AppendOSXVerFlag(linkFlags, linkLanguage, "CURRENT", false);
++    }
++
+   // Construct the name of the library.
+   std::string targetName;
+   std::string targetNameSO;
+@@ -905,3 +913,37 @@
+   this->CleanFiles.insert(this->CleanFiles.end(),
+                           libCleanFiles.begin(),libCleanFiles.end());
+ }
++
++//----------------------------------------------------------------------------
++void
++cmMakefileLibraryTargetGenerator
++::AppendOSXVerFlag(std::string& flags, const char* lang,
++                   const char* name, bool so)
++{
++  // Lookup the flag to specify the version.
++  std::string fvar = "CMAKE_";
++  fvar += lang;
++  fvar += "_OSX_";
++  fvar += name;
++  fvar += "_VERSION_FLAG";
++  const char* flag = this->Makefile->GetDefinition(fvar.c_str());
++
++  // Skip if no such flag.
++  if(!flag)
++    {
++    return;
++    }
++
++  // Lookup the target version information.
++  int major;
++  int minor;
++  int patch;
++  this->Target->GetTargetVersion(so, major, minor, patch);
++  if(major > 0 || minor > 0 || patch > 0)
++    {
++    // Append the flag since a non-zero version is specified.
++    cmOStringStream vflag;
++    vflag << flag << major << "." << minor << "." << patch;
++    this->LocalGenerator->AppendFlags(flags, vflag.str().c_str());
++    }
++}
+diff -Nurd cmake-2.6.1/Source/cmMakefileLibraryTargetGenerator.h cmake-2.6.1-new/Source/cmMakefileLibraryTargetGenerator.h
+--- cmake-2.6.1/Source/cmMakefileLibraryTargetGenerator.h	2008-08-01 11:34:53.000000000 -0400
++++ cmake-2.6.1-new/Source/cmMakefileLibraryTargetGenerator.h	2008-08-27 11:38:44.000000000 -0400
+@@ -41,6 +41,9 @@
+ 
+   // Store the computd framework version for OS X Frameworks.
+   std::string FrameworkVersion;
++
++  void AppendOSXVerFlag(std::string& flags, const char* lang,
++                        const char* name, bool so);
+ };
+ 
+ #endif
+diff -Nurd cmake-2.6.1/Source/cmTarget.cxx cmake-2.6.1-new/Source/cmTarget.cxx
+--- cmake-2.6.1/Source/cmTarget.cxx	2008-08-01 11:34:53.000000000 -0400
++++ cmake-2.6.1-new/Source/cmTarget.cxx	2008-08-27 11:38:53.000000000 -0400
+@@ -1759,19 +1759,32 @@
+ //----------------------------------------------------------------------------
+ void cmTarget::GetTargetVersion(int& major, int& minor)
+ {
++  int patch;
++  this->GetTargetVersion(false, major, minor, patch);
++}
++
++//----------------------------------------------------------------------------
++void cmTarget::GetTargetVersion(bool soversion,
++                                int& major, int& minor, int& patch)
++{
+   // Set the default values.
+   major = 0;
+   minor = 0;
++  patch = 0;
+ 
+-  // Look for a VERSION property.
+-  if(const char* version = this->GetProperty("VERSION"))
++  // Look for a VERSION or SOVERSION property.
++  const char* prop = soversion? "SOVERSION" : "VERSION";
++  if(const char* version = this->GetProperty(prop))
+     {
+     // Try to parse the version number and store the results that were
+     // successfully parsed.
+     int parsed_major;
+     int parsed_minor;
+-    switch(sscanf(version, "%d.%d", &parsed_major, &parsed_minor))
++    int parsed_patch;
++    switch(sscanf(version, "%d.%d.%d",
++                  &parsed_major, &parsed_minor, &parsed_patch))
+       {
++      case 3: patch = parsed_patch; // no break!
+       case 2: minor = parsed_minor; // no break!
+       case 1: major = parsed_major; // no break!
+       default: break;
+diff -Nurd cmake-2.6.1/Source/cmTarget.h cmake-2.6.1-new/Source/cmTarget.h
+--- cmake-2.6.1/Source/cmTarget.h	2008-08-01 11:34:53.000000000 -0400
++++ cmake-2.6.1-new/Source/cmTarget.h	2008-08-27 11:39:42.000000000 -0400
+@@ -269,6 +269,11 @@
+       not set or cannot be parsed.  */
+   void GetTargetVersion(int& major, int& minor);
+ 
++  /** Get the target major, minor, and patch version numbers
++      interpreted from the VERSION or SOVERSION property.  Version 0
++      is returned if the property is not set or cannot be parsed.  */
++  void GetTargetVersion(bool soversion, int& major, int& minor, int& patch);
++
+   /**
+    * Trace through the source files in this target and add al source files
+    * that they depend on, used by all generators

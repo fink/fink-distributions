@@ -1,0 +1,615 @@
+Package: libavcodec53-shlibs
+Version: 0.8
+Revision: 2
+###
+BuildDepends: <<
+	bzip2,
+	dirac-dev (>= 1.0.2-1),
+	fink (>= 0.28),
+	fink-package-precedence,
+	freetype219,
+	jack-dev,
+	lame-dev,
+	libcelt0.2-dev,
+	libgsm1-dev,
+	libogg,
+	libopencore-amr0,
+	libopenjpeg (>=1.3-2),
+	libschroedinger,
+	libspeex1 (>= 1.2-0.0rc1.1),
+	libtheora0,
+	libvorbis0,
+	libvpx (>= 0.9.0-20100604-1),
+	libx264-115-dev (>= 0.0.20110517-1),
+	make (>= 3.81-1),
+	pkgconfig,
+	sdl,
+	x11-dev,
+	xvidcore,
+	yasm
+<<
+Depends: <<
+	bzip2-shlibs,
+	dirac-shlibs (>= 1.0.2-1),
+	freetype219-shlibs,
+	jack-shlibs,
+	lame-shlibs,
+	libavutil51-shlibs (= %v-%r),
+	libcelt0.2-shlibs,
+	libgsm1-shlibs,
+	libogg-shlibs,
+	liboil-0.3-shlibs,
+	libopencore-amr0-shlibs,
+	libopenjpeg-shlibs (>=1.3-2),
+	libschroedinger-shlibs,
+	libspeex1-shlibs (>= 1.2-0.0rc1.1),
+	libtheoradec1-shlibs,
+	libtheoraenc1-shlibs,
+	libvorbis0-shlibs,
+	libx264-115-shlibs (>= 0.0.20110517-1),
+	sdl-shlibs,
+	xvidcore-shlibs
+<<
+###
+Source: http://ffmpeg.org/releases/ffmpeg-%v.tar.bz2
+Source-MD5: 7e9b8c8a6952de0c477027e48249f3ed
+###
+PatchScript: <<
+  #!/bin/sh -ev
+  %{default_script}
+  ### Give dylibs a versioned install_name
+  perl -pi -e 's;-install_name,\$\(SHLIBDIR\)/\$\(SLIBNAME\);-install_name,\$\(SHLIBDIR\)/\$\(SLIBNAME_WITH_MAJOR\);g' configure
+  ### enforce use of system texi2html which is newer than Fink's so it doesn't fail on --init-file
+  perl -pi -e 's,texi2html,/usr/bin/texi2html,g' Makefile
+  perl -pi -e 's,texi2html -version,/usr/bin/texi2html -version,g' configure
+  ### Fix for x264.h requiring stdint.h first
+  perl -pi -e 's,^enabled libx264.*$,enabled libx264 \&\& require2 x264 "stdint.h x264.h" x264_encoder_open -lx264,' configure
+  ### look for gsm.h in upstream's (and Fink's) declared <gsm.h> rather than Debian's <gsm/gsm.h>
+  perl -pi -e 's,gsm\/gsm.h,gsm.h,g' configure libavcodec/libgsm.c
+  ### use API from <mach/semaphore.h> instead of <sys/semaphore.h> -- fangism
+  ### this lets the jack indev build
+  perl -pi -e 's,sem_timedwait,semaphore_timedwait,g' configure
+  sed -i.orig -e '/semaphore.h/i \
+#include <mach/task.h>' \
+	-e '/#include/s|semaphore\.h|mach/&|' \
+	-e '/packet_count;/s|sem_t|semaphore_t|g' \
+	-e 's|struct timespec|mach_timespec_t|g' \
+	-e 's|sem_init(|semaphore_create(TASK_NULL, |g' \
+	-e '/sem_destroy/s|\&self|self|' \
+	-e 's|sem_destroy(|semaphore_destroy(TASK_NULL, |g' \
+	-e '/sem_post/s|\&self|self|' \
+	-e 's|sem_post|semaphore_signal|g' \
+	-e 's|sem_timedwait|semaphore_timedwait|g' \
+	-e '/timedwait/s|\&self|self|' \
+	-e '/timedwait/s|\&timeout|timeout|' \
+	libavdevice/jack_audio.c
+<<
+###
+Shlibs: <<
+	%p/lib/libavcodec.53.dylib 53.0.0 %n (>= 0.8-1)
+<<
+DocFiles: COPYING.LGPLv3
+###
+NoSetCFLAGS: true
+NoSetLDFLAGS: true
+SetCFLAGS: -I%p/lib/libspeex1/include -I%p/include -I/usr/X11R6/include -MD
+SetLDFLAGS: -L%p/lib/libspeex1/lib -L%p/lib -L/usr/X11R6/lib -lX11 -lXext
+UseMaxBuildJobs: true
+###
+ConfigureParams: <<
+	(%m = x86_64) --arch=x86_64 \
+	(%m = i386) --arch=x86 \
+	--mandir=%p/share/man \
+	--enable-shared \
+	--disable-static \
+	--enable-gpl \
+	--enable-version3 \
+	--enable-pthreads \
+	--enable-x11grab \
+	--enable-indev=jack \
+	--enable-bzlib \
+	--enable-libcelt \
+	--enable-libopencore-amrnb \
+	--enable-libopencore-amrwb \
+	--enable-libdirac \
+	--enable-libfreetype \
+	--enable-libgsm \
+	--enable-libmp3lame \
+	--enable-libopenjpeg \
+	--enable-libschroedinger \
+	--enable-libspeex \
+	--enable-libtheora \
+	--enable-libvorbis \
+	--enable-libvpx \
+	--enable-libx264 \
+	--enable-libxvid \
+	--enable-zlib
+<<
+GCC: 4.0
+###
+CompileScript: <<
+  #!/bin/sh -ev
+  ### Patch libswscale to have a temporary compat_version/install_name of 1 to make 10.4 happy
+  ### This will get returned to the final value later in the build
+  #/usr/bin/perl -pi -e 's,LIBSWSCALE_VERSION_MAJOR 0,LIBSWSCALE_VERSION_MAJOR 1,g' libswscale/swscale.h
+  mkdir build
+  cd build
+    ../configure %c
+    %p/bin/make -w V=1
+  ### The following set of commands are to fix the compat_version of libpostproc which 
+  ### was downgraded (from 51.1.0 to 51.0.0 for libpostproc)
+  ### by upstream between the ffmpeg-0.4 and ffmpeg-0.5+ releases, but kept the install_name the same.
+  ### Because only libpostproc has kept the reduced compat_version in 0.8+, we're first building all the ffmpeg libraries as normal,
+  ### then rebuilding libpostproc using a patched makefile that hardcodes 51.1.0 for compat_version.
+  ### This patch can be removed once upstream either increases libpostproc to compat_version greater 
+  ### than 51.x.y or higher, or bumps its install_name.
+  ### config.mak is used by ALL of ffmpeg's libraries, so we can't just do this part at the beginning of the build process
+  ### without affecting ALL the libraries.
+  ###
+  ### Up until version 0.7, libswscale had to use the same hack, but that has now bumped install_name, so the 
+  ### fix is no longer needed for it.
+  #
+  ### Patch config.mak to apply newer compat_version
+    /usr/bin/perl -pi -e 's|compatibility_version,\$\(LIBMAJOR\)|compatibility_version,51.1.0|g' config.mak
+  ### clean and redo libpostproc
+  ### clean and redo libswscale
+  # return LIBSWSCALE_VERSION_MAJOR to 0 so that install_name is not changed from official version
+    #/usr/bin/perl -pi -e 's,LIBSWSCALE_VERSION_MAJOR 1,LIBSWSCALE_VERSION_MAJOR 0,g' ../libswscale/swscale.h
+    #/usr/bin/perl -pi -e 's,libswscale_VERSION=1\.14\.1,libswscale_VERSION=0\.14\.1,g; s,libswscale_VERSION_MAJOR=1,libswscale_VERSION_MAJOR=0,g' config.mak
+    #/usr/bin/perl -pi -e 's,1\.14\.1,0\.14\.1,g' libswscale/libswscale.pc
+    rm libpostproc/*.dylib
+    #libswscale/*.dylib
+    %p/bin/make -w V=1
+  ### return config.mak to orig value and remake so that libavfilter.1.dylib doesn't get rebuilt 
+  ### with an incorrect compat_value during the install phase (it deps on libswscale which was just modified)
+    #/usr/bin/perl -pi -e 's|compatibility_version,51.1.0|compatibility_version,\$\(LIBMAJOR\)|g' config.mak
+    #rm libavfilter/*.dylib
+    #%p/bin/make -w V=1
+  
+  ### go back to %b so that f-p-p knows to ignore ffmpeg's own files
+    cd ..
+  %p/bin/fink-package-precedence --depfile-ext='\.d' .
+<<
+InfoTest: <<
+  TestScript: cd build ; DYLD_LIBRARY_PATH=libavdevice:libavfilter:libavformat:libavcodec:libpostproc:libswscale:libavutil %p/bin/make -w -j1 V=2 test || exit 2
+<<
+###
+InstallScript: <<
+  cd build && %p/bin/make -w install DESTDIR=%d V=1
+  install -d %i/etc
+  install -m 664 doc/ffserver.conf %i/etc
+<<
+###
+SplitOff: <<
+  Package: libavcodec53-dev
+  Depends: libavcodec53-shlibs (= %v-%r)
+  Conflicts: ffmpeg (<< 0.4.6-1), libavcodec-dev, libavcodec1-dev, libavcodec52-dev, libavcodec53-dev
+  Replaces: ffmpeg (<< 0.4.6-1), libavcodec-dev, libavcodec1-dev, libavcodec52-dev, libavcodec53-dev
+  BuildDependsOnly: true
+  Files: <<
+    include/libavcodec
+    lib/libavcodec.dylib
+    lib/pkgconfig/libavcodec.pc
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video encoders and decoders dev files
+<<
+SplitOff2: <<
+  Package: libavdevice53-shlibs
+  Replaces: ffmpeg (<< 0.4.20071217-6), ffmepg-dev (<< 0.4.20071217-6)
+  Depends: <<
+		bzip2-shlibs,
+		dirac-shlibs (>= 1.0.2-1),
+		freetype219-shlibs,
+		jack-shlibs,
+		lame-shlibs,
+		libavcodec53-shlibs (= %v-%r),
+		libavformat53-shlibs (= %v-%r),
+		libavutil51-shlibs (= %v-%r),
+		libcelt0.2-shlibs,
+		libgsm1-shlibs,
+		libogg-shlibs,
+		liboil-0.3-shlibs,
+		libopencore-amr0-shlibs,
+		libopenjpeg-shlibs (>=1.3-2),
+		libschroedinger-shlibs,
+		libspeex1-shlibs (>= 1.2-0.0rc1.1),
+		libtheoradec1-shlibs,
+		libtheoraenc1-shlibs,
+		libvorbis0-shlibs,
+		libx264-115-shlibs (>= 0.0.20110517-1),
+		sdl-shlibs,
+		x11-shlibs,
+		xvidcore-shlibs
+  <<
+  Files: <<
+    lib/libavdevice.*.dylib
+  <<
+  Shlibs: <<
+    %p/lib/libavdevice.53.dylib 53.0.0 %n (>= 0.8-1)
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video device libraries
+<<
+SplitOff3: <<
+  Package: libavdevice53-dev
+  Depends: libavdevice53-shlibs (= %v-%r)
+  Conflicts:  ffmpeg (<< 0.4.20071217-6), ffmpeg-dev (<< 0.4.20071217-6), libavdevice-dev, libavdevice52-dev, libavdevice53-dev
+  Replaces: ffmpeg (<< 0.4.20071217-6), ffmpeg-dev (<< 0.4.20071217-6), libavdevice-dev, libavdevice52-dev, libavdevice53-dev
+  BuildDependsOnly: true
+  Files: <<
+    include/libavdevice
+    lib/libavdevice.dylib
+    lib/pkgconfig/libavdevice.pc
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video device dev files
+<<
+SplitOff4: <<
+  Package: libavfilter2-shlibs
+  Depends: <<
+		bzip2-shlibs,
+		dirac-shlibs (>= 1.0.2-1),
+		freetype219-shlibs,
+		jack-shlibs,
+		lame-shlibs,
+		libavcodec53-shlibs (= %v-%r),
+		libavformat53-shlibs (= %v-%r),
+		libavutil51-shlibs (= %v-%r),
+		libcelt0.2-shlibs,
+		libgsm1-shlibs,
+		libogg-shlibs,
+		liboil-0.3-shlibs,
+		libopencore-amr0-shlibs,
+		libopenjpeg-shlibs (>=1.3-2),
+		libschroedinger-shlibs,
+		libspeex1-shlibs (>= 1.2-0.0rc1.1),
+		libswscale2-shlibs (= %v-%r),
+		libtheoradec1-shlibs,
+		libtheoraenc1-shlibs,
+		libvorbis0-shlibs,
+		libx264-115-shlibs (>= 0.0.20110517-1),
+		sdl-shlibs,
+		x11-shlibs,
+		xvidcore-shlibs
+  <<
+  Files: <<
+    lib/libavfilter.*.dylib
+  <<
+  Shlibs: <<
+    %p/lib/libavfilter.2.dylib 2.0.0 %n (>= 0.8-1)
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video filtering libraries
+<<
+SplitOff5: <<
+  Package: libavfilter2-dev
+  Depends: libavfilter2-shlibs (= %v-%r)
+  Conflicts: libavfilter1-dev, libavfilter2-dev
+  Replaces: libavfilter1-dev, libavfilter2-dev
+  BuildDependsOnly: true
+  Files: <<
+    include/libavfilter
+    lib/libavfilter.dylib
+    lib/pkgconfig/libavfilter.pc
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video filtering dev files
+<<
+SplitOff6: <<
+  Package: libavformat53-shlibs
+  Depends: <<
+		bzip2-shlibs,
+		dirac-shlibs (>= 1.0.2-1),
+		freetype219-shlibs,
+		jack-shlibs,
+		lame-shlibs,
+		libavcodec53-shlibs (= %v-%r),
+		libavutil51-shlibs (= %v-%r),
+		libcelt0.2-shlibs,
+		libgsm1-shlibs,
+		libogg-shlibs,
+		liboil-0.3-shlibs,
+		libopencore-amr0-shlibs,
+		libopenjpeg-shlibs (>=1.3-2),
+		libschroedinger-shlibs,
+		libspeex1-shlibs (>= 1.2-0.0rc1.1),
+		libtheoradec1-shlibs,
+		libtheoraenc1-shlibs,
+		libvorbis0-shlibs,
+		libx264-115-shlibs (>= 0.0.20110517-1),
+		sdl-shlibs,
+		xvidcore-shlibs
+  <<
+  Files: <<
+    lib/libavformat.*.dylib
+  <<
+  Shlibs: <<
+    %p/lib/libavformat.53.dylib 53.0.0 %n (>= 0.8-1)
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video parser and generator libraries
+<<
+SplitOff7: <<
+  Package: libavformat53-dev
+  Depends: libavformat53-shlibs (= %v-%r)
+  Conflicts: libavformat-dev, libavformat1-dev, libavformat52-dev, libavformat53-dev
+  Replaces: libavformat-dev, libavformat1-dev, libavformat52-dev, libavformat53-dev
+  BuildDependsOnly: true
+  Files: <<
+    include/libavformat
+    lib/libavformat.dylib
+    lib/pkgconfig/libavformat.pc
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video parser and generator dev files
+<<
+SplitOff8: <<
+  Package: libavutil51-shlibs
+  Depends: <<
+		bzip2-shlibs,
+		dirac-shlibs (>= 1.0.2-1),
+		freetype219-shlibs,
+		jack-shlibs,
+		lame-shlibs,
+		libcelt0.2-shlibs,
+		libgsm1-shlibs,
+		libogg-shlibs,
+		liboil-0.3-shlibs,
+		libopencore-amr0-shlibs,
+		libopenjpeg-shlibs (>=1.3-2),
+		libschroedinger-shlibs,
+		libspeex1-shlibs (>= 1.2-0.0rc1.1),
+		libtheoradec1-shlibs,
+		libtheoraenc1-shlibs,
+		libvorbis0-shlibs,
+		libx264-115-shlibs (>= 0.0.20110517-1),
+		sdl-shlibs,
+		xvidcore-shlibs
+  <<
+  Files: <<
+    lib/libavutil.*.dylib
+  <<
+  Shlibs: <<
+    %p/lib/libavutil.51.dylib 51.0.0 %n (>= 0.8-1)
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video utils libraries
+<<
+SplitOff9: <<
+  Package: libavutil51-dev
+  Depends: libavutil51-shlibs (= %v-%r)
+  Conflicts: libavutil-dev, libavutil50-dev, libavutil51-dev
+  Replaces: libavutil-dev, libavutil50-dev, libavutil51-dev
+  BuildDependsOnly: true
+  Files: <<
+    include/libavutil
+    lib/libavutil.dylib
+    lib/pkgconfig/libavutil.pc
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video utils dev files
+<<
+SplitOff10: <<
+  Package: libpostproc51-shlibs
+  Depends: <<
+		bzip2-shlibs,
+		dirac-shlibs (>= 1.0.2-1),
+		freetype219-shlibs,
+		jack-shlibs,
+		lame-shlibs,
+		libavutil51-shlibs (= %v-%r),
+		libcelt0.2-shlibs,
+		libgsm1-shlibs,
+		libogg-shlibs,
+		liboil-0.3-shlibs,
+		libopencore-amr0-shlibs,
+		libopenjpeg-shlibs (>=1.3-2),
+		libschroedinger-shlibs,
+		libspeex1-shlibs (>= 1.2-0.0rc1.1),
+		libtheoradec1-shlibs,
+		libtheoraenc1-shlibs,
+		libvorbis0-shlibs,
+		libx264-115-shlibs (>= 0.0.20110517-1),
+		sdl-shlibs,
+		xvidcore-shlibs
+  <<
+  Files: <<
+    lib/libpostproc.*.dylib
+  <<
+  Shlibs: <<
+    %p/lib/libpostproc.51.dylib 51.1.0 %n (>= 0.5-1)
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video post process libraries
+<<
+SplitOff11: <<
+  Package: libpostproc51-dev
+  Depends: libpostproc51-shlibs (= %v-%r)
+  Conflicts: libpostproc-dev, libpostproc1, libpostproc51-dev
+  Replaces: libpostproc-dev, libpostproc1, libpostproc51-dev
+  BuildDependsOnly: true
+  Files: <<
+    include/libpostproc
+    lib/libpostproc.dylib
+    lib/pkgconfig/libpostproc.pc
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video post process dev files
+<<
+SplitOff12: <<
+  Package: libswscale2-shlibs
+  Depends: <<
+		bzip2-shlibs,
+		dirac-shlibs (>= 1.0.2-1),
+		freetype219-shlibs,
+		jack-shlibs,
+		lame-shlibs,
+		libavutil51-shlibs (= %v-%r),
+		libcelt0.2-shlibs,
+		libgsm1-shlibs,
+		libogg-shlibs,
+		liboil-0.3-shlibs,
+		libopencore-amr0-shlibs,
+		libopenjpeg-shlibs (>=1.3-2),
+		libschroedinger-shlibs,
+		libspeex1-shlibs (>= 1.2-0.0rc1.1),
+		libtheoradec1-shlibs,
+		libtheoraenc1-shlibs,
+		libvorbis0-shlibs,
+		libx264-115-shlibs (>= 0.0.20110517-1),
+		sdl-shlibs,
+		xvidcore-shlibs
+  <<
+  Files: <<
+    lib/libswscale.*.dylib
+  <<
+  Shlibs: <<
+    %p/lib/libswscale.2.dylib 2.0.0 %n (>= 0.8-1)
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video scaling libraries
+<<
+SplitOff13: <<
+  Package: libswscale2-dev
+  Depends: libswscale2-shlibs (= %v-%r)
+  Conflicts: libswscale-dev, libswscale0-dev, libswscale2-dev
+  Replaces: libswscale-dev, libswscale0-dev, libswscale2-dev
+  BuildDependsOnly: true
+  Files: <<
+    include/libswscale
+    lib/libswscale.dylib
+    lib/pkgconfig/libswscale.pc
+  <<
+  DocFiles: COPYING.LGPLv3
+  Description: Audio/video scaling dev files
+<<
+SplitOff14: <<
+  Package: ffmpeg
+  Depends: <<
+		bzip2-shlibs,
+		dirac-shlibs (>= 1.0.2-1),
+		freetype219-shlibs,
+		jack-shlibs,
+		lame-shlibs,
+		libavcodec53-shlibs (= %v-%r),
+		libavdevice53-shlibs (= %v-%r),
+		libavfilter2-shlibs (= %v-%r),
+		libavformat53-shlibs (= %v-%r),
+		libavutil51-shlibs (= %v-%r),
+		libcelt0.2-shlibs,
+		libgsm1-shlibs,
+		libogg-shlibs,
+		liboil-0.3-shlibs,
+		libopencore-amr0-shlibs,
+		libopenjpeg-shlibs (>=1.3-2),
+		libpostproc51-shlibs (= %v-%r),
+		libschroedinger-shlibs,
+		libspeex1-shlibs (>= 1.2-0.0rc1.1),
+		libswscale2-shlibs (= %v-%r),
+		libtheoradec1-shlibs,
+		libtheoraenc1-shlibs,
+		libvorbis0-shlibs,
+		libx264-115-shlibs (>= 0.0.20110517-1),
+		sdl-shlibs,
+		x11-shlibs,
+		xvidcore-shlibs
+  <<
+  Files: <<
+    bin/ff{mpeg,play,probe}
+    share/man/man1/ff{mpeg,play,probe}.1
+    share/ffmpeg
+  <<
+  DocFiles: COPYING.GPLv3 COPYING.LGPLv3 CREDITS INSTALL README doc/TODO doc/*.txt build/doc/*.html
+  Description: Tool to convert video file formats
+<<
+SplitOff15: <<
+  Package: ffmpeg-server
+  Depends: <<
+		bzip2-shlibs,
+		ffmpeg,
+		daemonic,
+		dirac-shlibs (>= 1.0.2-1),
+		freetype219-shlibs,
+		jack-shlibs,
+		lame-shlibs,
+		libavcodec53-shlibs (= %v-%r),
+		libavdevice53-shlibs (= %v-%r),
+		libavfilter2-shlibs (= %v-%r),
+		libavformat53-shlibs (= %v-%r),
+		libavutil51-shlibs (= %v-%r),
+		libcelt0.2-shlibs,
+		libgsm1-shlibs,
+		libogg-shlibs,
+		liboil-0.3-shlibs,
+		libopencore-amr0-shlibs,
+		libopenjpeg-shlibs (>=1.3-2),
+		libpostproc51-shlibs (= %v-%r),
+		libschroedinger-shlibs,
+		libspeex1-shlibs (>= 1.2-0.0rc1.1),
+		libswscale2-shlibs (= %v-%r),
+		libtheoradec1-shlibs,
+		libtheoraenc1-shlibs,
+		libvorbis0-shlibs,
+		libx264-115-shlibs (>= 0.0.20110517-1),
+		sdl-shlibs,
+		x11-shlibs,
+		xvidcore-shlibs
+  <<
+  Conflicts: ffmpeg (<< 0.4.6-1)
+  Replaces: ffmpeg (<< 0.4.6-1)
+  ConfFiles: %p/etc/ffserver.conf
+  Files: <<
+    bin/ffserver
+    etc/ffserver.conf
+    share/man/man1/ffserver.1
+  <<
+  DocFiles: COPYING.GPLv3 COPYING.LGPLv3 CREDITS INSTALL README doc/TODO doc/*.txt
+  Description: Multimedia streaming server for live broadcasts
+  PostInstScript: <<
+    # update init script if necessary
+    daemonic update ffserver
+  <<
+  PreRmScript: <<
+    # clean up
+    [ -f %p/var/run/ffserver.pid ] && kill `cat %p/var/run/ffserver.pid`
+    if [ $1 != "upgrade" ]; then
+      daemonic remove ffserver
+    fi
+  <<
+  ###
+  DaemonicName: ffserver
+  DaemonicFile: <<
+  <service>
+   <description>FFmpeg Live Broadcast Streaming Server</description>
+   <message>FFmpeg Live Broadcast Streaming Server</message>
+
+   <daemon name="ffserver">
+    <executable background="yes">%p/bin/ffserver</executable>
+    <parameters> -f %p/etc/ffserver.conf</parameters>
+    <configfile>%p/etc/ffserver.conf</configfile>
+    <pidfile>%p/var/run/ffserver.pid</pidfile>
+   </daemon>
+  </service>
+  <<
+<<
+###
+Description: Audio/video encoders and decoders libraries
+DescDetail: <<
+  FFMpeg is a complete and free Internet live audio and video broadcasting
+  solution for Linux/Unix. It also includes a digital VCR. It can encode in
+  real time in many formats including MPEG1 audio and video, MPEG4, h263,
+  ac3, asf, avi, real, mjpeg, and flash.
+
+  sudo daemonic enable ffserver
+<<
+DescPackaging: <<
+Upstream changed the paradigm on how compat_version is entered into the dylibs.  This caused a decrease in compat_version for most libraries when first implemented, but by 0.6.1, most of the libraries had increased libfooN, so the problem didn't matter for them.  However, libpostproc.51.dylib still has this problem and so a workaround had to be created to increase its compat_version to match the current compat_version from Fink's ffmpeg-0.4.20071217.  That hack can be removed if/when libpostproc.51.dylib either actually increases its compat_version past the ffmpeg-0.4... value or increments the install_name.
+<<
+DescPort: <<
+Use Fink's make since 10.4 has an older system make (3.80) that doesn't like common.mak.  Can remove that dep once 10.4 is deprecated.
+<<
+###
+License: GPL
+Maintainer: Hanspeter Niederstrasser <nieder@users.sourceforge.net>
+Homepage: http://ffmpeg.org/

@@ -1,0 +1,174 @@
+--- Python-2.4/configure.orig	2006-10-17 18:03:36.000000000 +0200
++++ Python-2.4/configure	2008-09-06 11:17:57.000000000 +0200
+@@ -3907,7 +3907,7 @@
+ 	    ;;
+ 	# is there any other compiler on Darwin besides gcc?
+ 	Darwin*)
+-	    BASECFLAGS="$BASECFLAGS -Wno-long-double -no-cpp-precomp -mno-fused-madd"
++	    BASECFLAGS="$BASECFLAGS -fno-common -Wno-long-double -no-cpp-precomp -mno-fused-madd"
+ 	    if test "${enable_universalsdk}"; then
+ 		BASECFLAGS="-arch ppc -arch i386 -isysroot ${UNIVERSALSDK} ${BASECFLAGS}"
+ 	    fi
+@@ -10435,7 +10435,8 @@
+ 			LDSHARED="$LDSHARED "'$(PYTHONFRAMEWORKPREFIX)/$(PYTHONFRAMEWORKDIR)/Versions/$(VERSION)/$(PYTHONFRAMEWORK)'
+ 		else
+ 			# No framework. Ignore undefined symbols, assuming they come from Python
+-			LDSHARED="$LDSHARED -undefined suppress"
++#		LDSHARED="$LDSHARED -undefined suppress"
++ 			LDSHARED="$LDSHARED -flat_namespace -undefined suppress"
+ 		fi ;;
+ 	Darwin/1.4*|Darwin/5.*|Darwin/6.*)
+ 		LDSHARED='$(CC) $(LDFLAGS) -bundle'
+@@ -10445,8 +10446,10 @@
+ 			LDSHARED="$LDSHARED "'$(PYTHONFRAMEWORKPREFIX)/$(PYTHONFRAMEWORKDIR)/Versions/$(VERSION)/$(PYTHONFRAMEWORK)'
+ 		else
+ 			# No framework, use the Python app as bundle-loader
+-			BLDSHARED="$LDSHARED "'-bundle_loader $(BUILDPYTHON)'
+-			LDSHARED="$LDSHARED "'-bundle_loader $(BINDIR)/python$(VERSION)$(EXE)'
++#		BLDSHARED="$LDSHARED "'-bundle_loader $(BUILDPYTHON)'
++#		LDSHARED="$LDSHARED "'-bundle_loader $(BINDIR)/python$(VERSION)$(EXE)'
++ 			BLDSHARED="$LDSHARED -flat_namespace -undefined suppress"
++ 			LDSHARED="$LDSHARED -flat_namespace -undefined suppress"
+ 		fi ;;
+ 	Darwin/*)
+ 		# Use -undefined dynamic_lookup whenever possible (10.3 and later).
+--- Python-2.4//Makefile.pre.in.orig	Sat Dec 11 14:25:10 2004
++++ Python-2.4/Makefile.pre.in	Sat Dec 11 14:25:25 2004
+@@ -56,7 +56,7 @@
+ OPT=		@OPT@
+ BASECFLAGS=	@BASECFLAGS@
+ CFLAGS=		$(BASECFLAGS) $(OPT)
+-CPPFLAGS=	-I. -I$(srcdir)/Include
++CPPFLAGS=	-I. -I$(srcdir)/Include -I@PREFIX@/include
+ LDFLAGS=	@LDFLAGS@
+ LDLAST=		@LDLAST@
+ SGI_ABI=	@SGI_ABI@
+--- Python-2.4/Misc/setuid-prog.c.orig	Sat Dec 11 14:29:22 2004
++++ Python-2.4/Misc/setuid-prog.c	Sat Dec 11 14:30:13 2004
+@@ -70,6 +70,13 @@
+ #define environ _environ
+ #endif
+ 
++#if defined(__APPLE__)
++# include <sys/time.h>
++# include <crt_externs.h>
++# define environ (*_NSGetEnviron())
++#endif /* __APPLE__ */
++
++
+ /* don't change def_IFS */
+ char def_IFS[] = "IFS= \t\n";
+ /* you may want to change def_PATH, but you should really change it in */
+--- Python-2.4/Modules/posixmodule.c.orig	Sat Dec 11 14:27:52 2004
++++ Python-2.4/Modules/posixmodule.c	Sat Dec 11 14:28:17 2004
+@@ -298,7 +298,7 @@
+ #endif
+ 
+ /* Return a dictionary corresponding to the POSIX environment table */
+-#ifdef WITH_NEXT_FRAMEWORK
++#ifdef __APPLE__
+ /* On Darwin/MacOSX a shared library or framework has no access to
+ ** environ directly, we must obtain it with _NSGetEnviron().
+ */
+@@ -316,7 +316,7 @@
+ 	d = PyDict_New();
+ 	if (d == NULL)
+ 		return NULL;
+-#ifdef WITH_NEXT_FRAMEWORK
++#ifdef __APPLE__
+ 	if (environ == NULL)
+ 		environ = *_NSGetEnviron();
+ #endif
+--- Python-2.4/Lib/pydoc.py	Mon Dec 13 11:24:02 2004
++++ Python-2.4/Lib/pydoc.py.orig	Mon Dec 13 11:21:37 2004
+@@ -1615,19 +1615,7 @@
+     def __init__(self, input, output):
+         self.input = input
+         self.output = output
+-        self.docdir = None
+-        execdir = os.path.dirname(sys.executable)
+-        homedir = os.environ.get('PYTHONHOME')
+-        for dir in [os.environ.get('PYTHONDOCS'),
+-                    homedir and os.path.join(homedir, 'doc'),
+-                    os.path.join(execdir, 'doc'),
+-                    '/usr/doc/python-docs-' + split(sys.version)[0],
+-                    '/usr/doc/python-' + split(sys.version)[0],
+-                    '/usr/doc/python-docs-' + sys.version[:3],
+-                    '/usr/doc/python-' + sys.version[:3],
+-                    os.path.join(sys.prefix, 'Resources/English.lproj/Documentation')]:
+-            if dir and os.path.isdir(os.path.join(dir, 'lib')):
+-                self.docdir = dir
++        self.docdir = os.path.join(sys.prefix, 'share','doc','python'+sys.version[0]+sys.version[2],'html')
+ 
+     def __repr__(self):
+         if inspect.stack()[1][3] == '?':
+diff -Nurd -x'*~' Python-2.4.4.orig/setup.py Python-2.4.4/setup.py
+--- Python-2.4.4.orig/setup.py	2006-10-08 13:41:25.000000000 -0400
++++ Python-2.4.4/setup.py	2008-11-03 03:36:41.000000000 -0500
+@@ -246,8 +246,8 @@
+         # Add paths to popular package managers on OS X/darwin
+         if sys.platform == "darwin":
+             # Fink installs into /sw by default
+-            add_dir_to_list(self.compiler.library_dirs, '/sw/lib')
+-            add_dir_to_list(self.compiler.include_dirs, '/sw/include')
++            add_dir_to_list(self.compiler.library_dirs, '@PREFIX@/lib')
++            add_dir_to_list(self.compiler.include_dirs, '@PREFIX@/include')
+             # DarwinPorts installs into /opt/local by default
+             #add_dir_to_list(self.compiler.library_dirs, '/opt/local/lib')
+             #add_dir_to_list(self.compiler.include_dirs, '/opt/local/include')
+@@ -266,11 +266,11 @@
+         # lib_dirs and inc_dirs are used to search for files;
+         # if a file is found in one of those directories, it can
+         # be assumed that no additional -I,-L directives are needed.
+-        lib_dirs = self.compiler.library_dirs + [
++        lib_dirs = self.compiler.library_dirs + ['@PREFIX@/lib',
+             '/lib64', '/usr/lib64',
+             '/lib', '/usr/lib',
+             ]
+-        inc_dirs = self.compiler.include_dirs + ['/usr/include']
++        inc_dirs = self.compiler.include_dirs + ['@PREFIX@/include','/usr/include']
+         exts = []
+ 
+         platform = self.get_platform()
+@@ -489,6 +489,7 @@
+                               '/usr/contrib/ssl/include/'
+                              ]
+                              )
++	ssl_incs = None # suppress SSL support.
+         if ssl_incs is not None:
+             krb5_h = find_file('krb5.h', inc_dirs,
+                                ['/usr/kerberos/include'])
+@@ -532,11 +533,11 @@
+             '/usr/include/db4',
+             '/usr/local/include/db4',
+             '/opt/sfw/include/db4',
+-            '/sw/include/db4',
++            '@PREFIX@/include/db4',
+             '/usr/include/db3',
+             '/usr/local/include/db3',
+             '/opt/sfw/include/db3',
+-            '/sw/include/db3',
++            '@PREFIX@/include/db3',
+         ]
+         # 4.x minor number specific paths
+         for x in (0,1,2,3,4):
+@@ -1017,15 +1018,15 @@
+         # AquaTk is a separate method. Only one Tkinter will be built on
+         # Darwin - either AquaTk, if it is found, or X11 based Tk.
+         platform = self.get_platform()
+-        if platform == 'darwin' and \
+-           self.detect_tkinter_darwin(inc_dirs, lib_dirs):
+-            return
++#       if platform == 'darwin' and \
++#          self.detect_tkinter_darwin(inc_dirs, lib_dirs):
++#           return
+ 
+         # Assume we haven't found any of the libraries or include files
+         # The versions with dots are used on Unix, and the versions without
+         # dots on Windows, for detection by cygwin.
+         tcllib = tklib = tcl_includes = tk_includes = None
+-        for version in ['8.5', '85', '8.4', '84', '8.3', '83', '8.2',
++        for version in ['8.4', '84', '8.3', '83', '8.2',
+                         '82', '8.1', '81', '8.0', '80']:
+             tklib = self.compiler.find_library_file(lib_dirs, 'tk' + version)
+             tcllib = self.compiler.find_library_file(lib_dirs, 'tcl' + version)

@@ -1,0 +1,964 @@
+diff -Nurd -x'*~' libgda-3.1.5.orig/configure.in libgda-3.1.5/configure.in
+--- libgda-3.1.5.orig/configure.in	2008-07-22 09:59:34.000000000 -0400
++++ libgda-3.1.5/configure.in	2010-10-02 17:10:34.000000000 -0400
+@@ -32,8 +32,8 @@
+ # - If interfaces is the same as the previous version, set GDA_REVISION += 1
+ #
+ GDA_CURRENT=3
+-GDA_REVISION=0
+-GDA_AGE=1
++GDA_REVISION=1
++GDA_AGE=0
+ 
+ AC_SUBST(GDA_CURRENT)
+ AC_SUBST(GDA_REVISION)
+@@ -140,39 +140,6 @@
+ AC_SUBST(FAM_CFLAGS)
+ 
+ dnl ******************************
+-dnl Checks for libgcrypt
+-dnl ******************************
+-LIBGCRYPT_CFLAGS=""
+-LIBGCRYPT_LIBS=""
+-if test x$platform_win32 != xyes; then
+-        AC_DEFUN([VERSION_TO_NUMBER],[`$1 | awk 'BEGIN { FS = "."; } { printf "%d", ([$]1 * 1000 + [$]2) * 1000 + [$]3;}'`])
+-        AC_PATH_PROG(LIBGCRYPT_CONFIG, libgcrypt-config, no)
+-        if test "$LIBGCRYPT_CONFIG" != "no" ; then
+-                LIBGCRYPT_VERSION=`$LIBGCRYPT_CONFIG --version`
+-                if test VERSION_TO_NUMBER(echo $LIBGCRYPT_VERSION) -lt VERSION_TO_NUMBER(echo "1.1.42") ; then
+-                        LIBGCRYPT_CFLAGS=""
+-                        LIBGCRYPT_LIBS=""
+-                        AM_CONDITIONAL(HAVE_LIBGCRYPT, 0)
+-                        echo "GdaDataModelDir object won't compute MD5 column, install libgcrypt >= 1.1.42 and reconfigure to make available."
+-                else
+-                        LIBGCRYPT_CFLAGS="`$LIBGCRYPT_CONFIG $libgcrypt_config_args --cflags` -DHAVE_LIBGCRYPT"
+-                        LIBGCRYPT_LIBS=`$LIBGCRYPT_CONFIG $libgcrypt_config_args --libs`
+-                        AM_CONDITIONAL(HAVE_LIBGCRYPT, true)
+-                fi
+-        else
+-        LIBGCRYPT_CFLAGS=""
+-        LIBGCRYPT_LIBS=""
+-        AM_CONDITIONAL(HAVE_LIBGCRYPT, 0)
+-        echo "GdaDataModelDir object won't compute MD5 column, install libgcrypt and reconfigure to make available."
+-        fi
+-else
+-        AM_CONDITIONAL(HAVE_LIBGCRYPT, false)
+-fi
+-
+-AC_SUBST(LIBGCRYPT_CFLAGS)
+-AC_SUBST(LIBGCRYPT_LIBS)
+-
+-dnl ******************************
+ dnl Checks for Gnome VFS
+ dnl ******************************
+ 
+@@ -1004,7 +971,7 @@
+ then
+         AM_CONDITIONAL(HAVE_SQLITE, 0)
+ else
+-	SQLITE_MODULES="sqlite3 >= 3.3"
++	SQLITE_MODULES="sqlite3 >= 99999.FORCE.NONDETECT"
+ 	PKG_CHECK_MODULES(SQLITE, $SQLITE_MODULES, have_sqlite=yes, have_sqlite=no)
+ 	if test x"$have_sqlite" = "xyes"
+ 	then
+diff -Nurd -x'*~' libgda-3.1.5.orig/libgda/Makefile.am libgda-3.1.5/libgda/Makefile.am
+--- libgda-3.1.5.orig/libgda/Makefile.am	2008-07-20 05:51:23.000000000 -0400
++++ libgda-3.1.5/libgda/Makefile.am	2010-10-05 23:23:15.000000000 -0400
+@@ -14,8 +14,7 @@
+ 	$(LIBGDA_CFLAGS) \
+ 	$(FAM_CFLAGS) \
+ 	$(BDB_CFLAGS) \
+-	$(GNOMEVFS_CFLAGS) \
+-	$(LIBGCRYPT_CFLAGS)
++	$(GNOMEVFS_CFLAGS)
+ 
+ gda_marshal_built_files = gda-marshal.h gda-marshal.c
+ 
+@@ -178,7 +177,10 @@
+ 	gda-transaction-status.c \
+ 	gda-util.c \
+ 	gda-value.c \
+-	gda-xml-storage.c 
++	gda-xml-storage.c \
++	global.h \
++	md5.h \
++	md5c.c
+ 
+ gda-enum-types.h: s-enum-types-h
+ 	@true
+@@ -232,7 +234,7 @@
+ 	sqlite/libgda-sqlite.la \
+ 	$(top_builddir)/libsql/libgdasql-3.0.la \
+ 	$(LIBGDA_LIBS) $(FAM_LIBS) \
+-	$(BDB_LIBS) $(GNOMEVFS_LIBS) $(LIBGCRYPT_LIBS)
++	$(BDB_LIBS) $(GNOMEVFS_LIBS) $(INTLLIBS)
+ 
+ gdaincludedir=$(includedir)/libgda-$(GDA_ABI_MAJOR_VERSION).$(GDA_ABI_MINOR_VERSION)/libgda
+ gdainclude_HEADERS=$(libgda_built_headers) $(gda_headers)
+diff -Nurd -x'*~' libgda-3.1.4.orig/libgda/gda-data-model-dir.c libgda-3.1.4/libgda/gda-data-model-dir.c
+--- libgda-3.1.4.orig/libgda/gda-data-model-dir.c	2008-04-03 15:31:19.000000000 -0400
++++ libgda-3.1.4/libgda/gda-data-model-dir.c	2008-06-20 01:48:41.000000000 -0400
+@@ -1,5 +1,5 @@
+ /* GDA common library
+- * Copyright (C) 2007 The GNOME Foundation
++ * Copyright (C) 2007 - 2008 The GNOME Foundation
+  *
+  * AUTHORS:
+  *      Vivien Malerba <malerba@gnome-db.org>
+@@ -31,9 +31,9 @@
+ #include <libgnomevfs/gnome-vfs-mime.h>
+ #endif
+ 
+-#ifdef HAVE_LIBGCRYPT
+-#include <gcrypt.h>
+-#endif
++/* Use the RSA reference implementation included in the RFC-1321, http://www.freesoft.org/CIE/RFC/1321/ */
++#include "global.h"
++#include "md5.h"
+ 
+ #include <sys/types.h>
+ #include <sys/stat.h>
+@@ -491,10 +491,6 @@
+ {
+ 	gboolean changed = TRUE;
+ 	GValue *value = NULL;
+-
+-	/* compute md5sum value */
+-#ifdef HAVE_LIBGCRYPT
+-	gcry_md_hd_t mdctx = NULL;
+ 	int fd;
+ 	gpointer map;
+ 	guint length;
+@@ -525,25 +521,23 @@
+ 		goto md5end;
+ 	}
+ #endif /* !G_OS_WIN32 */
++
+ 	/* MD5 computation */
+-	gcry_md_open (&mdctx, GCRY_MD_MD5, 0);
+-	if (mdctx) {
+-		unsigned char *md5str;
+-		int i;
+-		GString *md5pass;
+-			
+-		gcry_md_write (mdctx, map, length);
+-		md5str = gcry_md_read (mdctx, GCRY_MD_MD5);
+-			
+-		md5pass = g_string_new ("");
+-		for (i = 0; i < 16; i++)
+-			g_string_append_printf (md5pass, "%02x", md5str[i]);
+-		value = gda_value_new (G_TYPE_STRING);
+-		g_value_take_string (value, md5pass->str);
+-		g_string_free (md5pass, FALSE);
+-			
+-		gcry_md_close (mdctx);	
+-	}
++	MD5_CTX context;
++	unsigned char digest[16];
++	GString *md5str;
++	gint i;
++
++	MD5Init (&context);
++	MD5Update (&context, map, length);
++	MD5Final (digest, &context);
++	
++	md5str = g_string_new ("");
++	for (i = 0; i < 16; i++)
++		g_string_append_printf (md5str, "%02x", digest[i]);
++	value = gda_value_new (G_TYPE_STRING);
++	g_value_take_string (value, md5str->str);
++	g_string_free (md5str, FALSE);
+ 		
+ #ifndef G_OS_WIN32
+ 	munmap (map, length);
+@@ -551,7 +545,7 @@
+ 	UnmapViewOfFile (map);
+ #endif /* !G_OS_WIN32 */
+ 	close (fd);
+-#endif /* HAVE_LIBGCRYPT */
++
+  md5end:
+ 	if (value) {
+ 		if (row->md5sum_value && (G_VALUE_TYPE (row->md5sum_value) == G_TYPE_STRING)
+diff -Nurd -x'*~' libgda-3.1.4.orig/libgda/global.h libgda-3.1.4/libgda/global.h
+--- libgda-3.1.4.orig/libgda/global.h	1969-12-31 19:00:00.000000000 -0500
++++ libgda-3.1.4/libgda/global.h	2008-06-20 01:48:41.000000000 -0400
+@@ -0,0 +1,46 @@
++/* GLOBAL.H - RSAREF types and constants */
++
++/* Copyright (C) RSA Laboratories, a division of RSA Data Security,
++     Inc., created 1991. All rights reserved.
++ */
++
++#ifndef _GLOBAL_H_
++#define _GLOBAL_H_ 1
++
++/* PROTOTYPES should be set to one if and only if the compiler supports
++     function argument prototyping.
++   The following makes PROTOTYPES default to 1 if it has not already been
++     defined as 0 with C compiler flags.
++ */
++#ifndef PROTOTYPES
++#define PROTOTYPES 1
++#endif
++
++/* POINTER defines a generic pointer type */
++typedef unsigned char *POINTER;
++
++/* UINT2 defines a two byte word */
++typedef unsigned short int UINT2;
++
++/* UINT4 defines a four byte word */
++typedef unsigned long int UINT4;
++
++#ifndef NULL_PTR
++#define NULL_PTR ((POINTER)0)
++#endif
++
++#ifndef UNUSED_ARG
++#define UNUSED_ARG(x) x = *(&x);
++#endif
++
++/* PROTO_LIST is defined depending on how PROTOTYPES is defined above.
++   If using PROTOTYPES, then PROTO_LIST returns the list, otherwise it
++     returns an empty list.  
++ */
++#if PROTOTYPES
++#define PROTO_LIST(list) list
++#else
++#define PROTO_LIST(list) ()
++#endif
++
++#endif /* end _GLOBAL_H_ */
+diff -Nurd -x'*~' libgda-3.1.4.orig/libgda/md5.h libgda-3.1.4/libgda/md5.h
+--- libgda-3.1.4.orig/libgda/md5.h	1969-12-31 19:00:00.000000000 -0500
++++ libgda-3.1.4/libgda/md5.h	2008-06-20 01:48:41.000000000 -0400
+@@ -0,0 +1,49 @@
++/* MD5.H - header file for MD5C.C
++ */
++
++/* Copyright (C) 1991-2, RSA Data Security, Inc. Created 1991. All
++   rights reserved.
++
++   License to copy and use this software is granted provided that it
++   is identified as the "RSA Data Security, Inc. MD5 Message-Digest
++   Algorithm" in all material mentioning or referencing this software
++   or this function.
++
++   License is also granted to make and use derivative works provided
++   that such works are identified as "derived from the RSA Data
++   Security, Inc. MD5 Message-Digest Algorithm" in all material
++   mentioning or referencing the derived work.  
++                                                                    
++   RSA Data Security, Inc. makes no representations concerning either
++   the merchantability of this software or the suitability of this
++   software for any particular purpose. It is provided "as is"
++   without express or implied warranty of any kind.  
++                                                                    
++   These notices must be retained in any copies of any part of this
++   documentation and/or software.  
++ */
++
++#ifndef _MD5_H_
++#define _MD5_H_ 1
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* MD5 context. */
++typedef struct {
++  UINT4 state[4];                                   /* state (ABCD) */
++  UINT4 count[2];        /* number of bits, modulo 2^64 (lsb first) */
++  unsigned char buffer[64];                         /* input buffer */
++} MD5_CTX;
++
++void MD5Init PROTO_LIST ((MD5_CTX *));
++void MD5Update PROTO_LIST
++  ((MD5_CTX *, unsigned char *, unsigned int));
++void MD5Final PROTO_LIST ((unsigned char [16], MD5_CTX *));
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
+diff -Nurd -x'*~' libgda-3.1.4.orig/libgda/md5c.c libgda-3.1.4/libgda/md5c.c
+--- libgda-3.1.4.orig/libgda/md5c.c	1969-12-31 19:00:00.000000000 -0500
++++ libgda-3.1.4/libgda/md5c.c	2008-06-20 01:48:41.000000000 -0400
+@@ -0,0 +1,334 @@
++/* MD5C.C - RSA Data Security, Inc., MD5 message-digest algorithm
++ */
++
++/* Copyright (C) 1991-2, RSA Data Security, Inc. Created 1991. All
++   rights reserved.
++
++   License to copy and use this software is granted provided that it
++   is identified as the "RSA Data Security, Inc. MD5 Message-Digest
++   Algorithm" in all material mentioning or referencing this software
++   or this function.
++
++   License is also granted to make and use derivative works provided
++   that such works are identified as "derived from the RSA Data
++   Security, Inc. MD5 Message-Digest Algorithm" in all material
++   mentioning or referencing the derived work.  
++                                                                    
++   RSA Data Security, Inc. makes no representations concerning either
++   the merchantability of this software or the suitability of this
++   software for any particular purpose. It is provided "as is"
++   without express or implied warranty of any kind.  
++                                                                    
++   These notices must be retained in any copies of any part of this
++   documentation and/or software.  
++ */
++
++#include "global.h"
++#include "md5.h"
++
++/* Constants for MD5Transform routine.
++ */
++#define S11 7
++#define S12 12
++#define S13 17
++#define S14 22
++#define S21 5
++#define S22 9
++#define S23 14
++#define S24 20
++#define S31 4
++#define S32 11
++#define S33 16
++#define S34 23
++#define S41 6
++#define S42 10
++#define S43 15
++#define S44 21
++
++static void MD5Transform PROTO_LIST ((UINT4 [4], unsigned char [64]));
++static void Encode PROTO_LIST
++  ((unsigned char *, UINT4 *, unsigned int));
++static void Decode PROTO_LIST
++  ((UINT4 *, unsigned char *, unsigned int));
++static void MD5_memcpy PROTO_LIST ((POINTER, POINTER, unsigned int));
++static void MD5_memset PROTO_LIST ((POINTER, int, unsigned int));
++
++static unsigned char PADDING[64] = {
++  0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
++  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
++  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
++};
++
++/* F, G, H and I are basic MD5 functions.
++ */
++#define F(x, y, z) (((x) & (y)) | ((~x) & (z)))
++#define G(x, y, z) (((x) & (z)) | ((y) & (~z)))
++#define H(x, y, z) ((x) ^ (y) ^ (z))
++#define I(x, y, z) ((y) ^ ((x) | (~z)))
++
++/* ROTATE_LEFT rotates x left n bits.
++ */
++#define ROTATE_LEFT(x, n) (((x) << (n)) | ((x) >> (32-(n))))
++
++/* FF, GG, HH, and II transformations for rounds 1, 2, 3, and 4.
++   Rotation is separate from addition to prevent recomputation.
++ */
++#define FF(a, b, c, d, x, s, ac) { \
++    (a) += F ((b), (c), (d)) + (x) + (UINT4)(ac); \
++    (a) = ROTATE_LEFT ((a), (s)); \
++    (a) += (b); \
++  }
++#define GG(a, b, c, d, x, s, ac) { \
++    (a) += G ((b), (c), (d)) + (x) + (UINT4)(ac); \
++    (a) = ROTATE_LEFT ((a), (s)); \
++    (a) += (b); \
++  }
++#define HH(a, b, c, d, x, s, ac) { \
++    (a) += H ((b), (c), (d)) + (x) + (UINT4)(ac); \
++    (a) = ROTATE_LEFT ((a), (s)); \
++    (a) += (b); \
++  }
++#define II(a, b, c, d, x, s, ac) { \
++    (a) += I ((b), (c), (d)) + (x) + (UINT4)(ac); \
++    (a) = ROTATE_LEFT ((a), (s)); \
++    (a) += (b); \
++  }
++
++/* MD5 initialization. Begins an MD5 operation, writing a new context.
++ */
++void MD5Init (context)
++MD5_CTX *context;                                        /* context */
++{
++  context->count[0] = context->count[1] = 0;
++
++  /* Load magic initialization constants.
++   */
++  context->state[0] = 0x67452301;
++  context->state[1] = 0xefcdab89;
++  context->state[2] = 0x98badcfe;
++  context->state[3] = 0x10325476;
++}
++
++/* MD5 block update operation. Continues an MD5 message-digest
++     operation, processing another message block, and updating the
++     context.
++ */
++void MD5Update (context, input, inputLen)
++MD5_CTX *context;                                        /* context */
++unsigned char *input;                                /* input block */
++unsigned int inputLen;                     /* length of input block */
++{
++  unsigned int i, index, partLen;
++
++  /* Compute number of bytes mod 64 */
++  index = (unsigned int)((context->count[0] >> 3) & 0x3F);
++
++  /* Update number of bits */
++  if ((context->count[0] += ((UINT4)inputLen << 3))
++      < ((UINT4)inputLen << 3))
++    context->count[1]++;
++  context->count[1] += ((UINT4)inputLen >> 29);
++  
++  partLen = 64 - index;
++  
++  /* Transform as many times as possible.
++   */
++  if (inputLen >= partLen) {
++    MD5_memcpy
++      ((POINTER)&context->buffer[index], (POINTER)input, partLen);
++    MD5Transform (context->state, context->buffer);
++  
++    for (i = partLen; i + 63 < inputLen; i += 64)
++      MD5Transform (context->state, &input[i]);
++    
++    index = 0;
++  }
++  else
++    i = 0;
++  
++  /* Buffer remaining input */
++  MD5_memcpy 
++    ((POINTER)&context->buffer[index], (POINTER)&input[i],
++     inputLen-i);
++}
++
++/* MD5 finalization. Ends an MD5 message-digest operation, writing the
++     the message digest and zeroizing the context.
++ */
++void MD5Final (digest, context)
++unsigned char digest[16];                         /* message digest */
++MD5_CTX *context;                                       /* context */
++{
++  unsigned char bits[8];
++  unsigned int index, padLen;
++
++  /* Save number of bits */
++  Encode (bits, context->count, 8);
++
++  /* Pad out to 56 mod 64.
++   */
++  index = (unsigned int)((context->count[0] >> 3) & 0x3f);
++  padLen = (index < 56) ? (56 - index) : (120 - index);
++  MD5Update (context, PADDING, padLen);
++  
++  /* Append length (before padding) */
++  MD5Update (context, bits, 8);
++
++  /* Store state in digest */
++  Encode (digest, context->state, 16);
++  
++  /* Zeroize sensitive information.
++   */
++  MD5_memset ((POINTER)context, 0, sizeof (*context));
++}
++
++/* MD5 basic transformation. Transforms state based on block.
++ */
++static void MD5Transform (state, block)
++UINT4 state[4];
++unsigned char block[64];
++{
++  UINT4 a = state[0], b = state[1], c = state[2], d = state[3], x[16];
++  
++  Decode (x, block, 64);
++
++  /* Round 1 */
++  FF (a, b, c, d, x[ 0], S11, 0xd76aa478); /* 1 */
++  FF (d, a, b, c, x[ 1], S12, 0xe8c7b756); /* 2 */
++  FF (c, d, a, b, x[ 2], S13, 0x242070db); /* 3 */
++  FF (b, c, d, a, x[ 3], S14, 0xc1bdceee); /* 4 */
++  FF (a, b, c, d, x[ 4], S11, 0xf57c0faf); /* 5 */
++  FF (d, a, b, c, x[ 5], S12, 0x4787c62a); /* 6 */
++  FF (c, d, a, b, x[ 6], S13, 0xa8304613); /* 7 */
++  FF (b, c, d, a, x[ 7], S14, 0xfd469501); /* 8 */
++  FF (a, b, c, d, x[ 8], S11, 0x698098d8); /* 9 */
++  FF (d, a, b, c, x[ 9], S12, 0x8b44f7af); /* 10 */
++  FF (c, d, a, b, x[10], S13, 0xffff5bb1); /* 11 */
++  FF (b, c, d, a, x[11], S14, 0x895cd7be); /* 12 */
++  FF (a, b, c, d, x[12], S11, 0x6b901122); /* 13 */
++  FF (d, a, b, c, x[13], S12, 0xfd987193); /* 14 */
++  FF (c, d, a, b, x[14], S13, 0xa679438e); /* 15 */
++  FF (b, c, d, a, x[15], S14, 0x49b40821); /* 16 */
++
++  /* Round 2 */
++  GG (a, b, c, d, x[ 1], S21, 0xf61e2562); /* 17 */
++  GG (d, a, b, c, x[ 6], S22, 0xc040b340); /* 18 */
++  GG (c, d, a, b, x[11], S23, 0x265e5a51); /* 19 */
++  GG (b, c, d, a, x[ 0], S24, 0xe9b6c7aa); /* 20 */
++  GG (a, b, c, d, x[ 5], S21, 0xd62f105d); /* 21 */
++  GG (d, a, b, c, x[10], S22,  0x2441453); /* 22 */
++  GG (c, d, a, b, x[15], S23, 0xd8a1e681); /* 23 */
++  GG (b, c, d, a, x[ 4], S24, 0xe7d3fbc8); /* 24 */
++  GG (a, b, c, d, x[ 9], S21, 0x21e1cde6); /* 25 */
++  GG (d, a, b, c, x[14], S22, 0xc33707d6); /* 26 */
++  GG (c, d, a, b, x[ 3], S23, 0xf4d50d87); /* 27 */
++  GG (b, c, d, a, x[ 8], S24, 0x455a14ed); /* 28 */
++  GG (a, b, c, d, x[13], S21, 0xa9e3e905); /* 29 */
++  GG (d, a, b, c, x[ 2], S22, 0xfcefa3f8); /* 30 */
++  GG (c, d, a, b, x[ 7], S23, 0x676f02d9); /* 31 */
++  GG (b, c, d, a, x[12], S24, 0x8d2a4c8a); /* 32 */
++
++  /* Round 3 */
++  HH (a, b, c, d, x[ 5], S31, 0xfffa3942); /* 33 */
++  HH (d, a, b, c, x[ 8], S32, 0x8771f681); /* 34 */
++  HH (c, d, a, b, x[11], S33, 0x6d9d6122); /* 35 */
++  HH (b, c, d, a, x[14], S34, 0xfde5380c); /* 36 */
++  HH (a, b, c, d, x[ 1], S31, 0xa4beea44); /* 37 */
++  HH (d, a, b, c, x[ 4], S32, 0x4bdecfa9); /* 38 */
++  HH (c, d, a, b, x[ 7], S33, 0xf6bb4b60); /* 39 */
++  HH (b, c, d, a, x[10], S34, 0xbebfbc70); /* 40 */
++  HH (a, b, c, d, x[13], S31, 0x289b7ec6); /* 41 */
++  HH (d, a, b, c, x[ 0], S32, 0xeaa127fa); /* 42 */
++  HH (c, d, a, b, x[ 3], S33, 0xd4ef3085); /* 43 */
++  HH (b, c, d, a, x[ 6], S34,  0x4881d05); /* 44 */
++  HH (a, b, c, d, x[ 9], S31, 0xd9d4d039); /* 45 */
++  HH (d, a, b, c, x[12], S32, 0xe6db99e5); /* 46 */
++  HH (c, d, a, b, x[15], S33, 0x1fa27cf8); /* 47 */
++  HH (b, c, d, a, x[ 2], S34, 0xc4ac5665); /* 48 */
++
++  /* Round 4 */
++  II (a, b, c, d, x[ 0], S41, 0xf4292244); /* 49 */
++  II (d, a, b, c, x[ 7], S42, 0x432aff97); /* 50 */
++  II (c, d, a, b, x[14], S43, 0xab9423a7); /* 51 */
++  II (b, c, d, a, x[ 5], S44, 0xfc93a039); /* 52 */
++  II (a, b, c, d, x[12], S41, 0x655b59c3); /* 53 */
++  II (d, a, b, c, x[ 3], S42, 0x8f0ccc92); /* 54 */
++  II (c, d, a, b, x[10], S43, 0xffeff47d); /* 55 */
++  II (b, c, d, a, x[ 1], S44, 0x85845dd1); /* 56 */
++  II (a, b, c, d, x[ 8], S41, 0x6fa87e4f); /* 57 */
++  II (d, a, b, c, x[15], S42, 0xfe2ce6e0); /* 58 */
++  II (c, d, a, b, x[ 6], S43, 0xa3014314); /* 59 */
++  II (b, c, d, a, x[13], S44, 0x4e0811a1); /* 60 */
++  II (a, b, c, d, x[ 4], S41, 0xf7537e82); /* 61 */
++  II (d, a, b, c, x[11], S42, 0xbd3af235); /* 62 */
++  II (c, d, a, b, x[ 2], S43, 0x2ad7d2bb); /* 63 */
++  II (b, c, d, a, x[ 9], S44, 0xeb86d391); /* 64 */
++
++  state[0] += a;
++  state[1] += b;
++  state[2] += c;
++  state[3] += d;
++  
++  /* Zeroize sensitive information.
++   */
++  MD5_memset ((POINTER)x, 0, sizeof (x));
++}
++
++/* Encodes input (UINT4) into output (unsigned char). Assumes len is
++     a multiple of 4.
++ */
++static void Encode (output, input, len)
++unsigned char *output;
++UINT4 *input;
++unsigned int len;
++{
++  unsigned int i, j;
++
++  for (i = 0, j = 0; j < len; i++, j += 4) {
++    output[j] = (unsigned char)(input[i] & 0xff);
++    output[j+1] = (unsigned char)((input[i] >> 8) & 0xff);
++    output[j+2] = (unsigned char)((input[i] >> 16) & 0xff);
++    output[j+3] = (unsigned char)((input[i] >> 24) & 0xff);
++  }
++}
++
++/* Decodes input (unsigned char) into output (UINT4). Assumes len is
++     a multiple of 4.
++ */
++static void Decode (output, input, len)
++UINT4 *output;
++unsigned char *input;
++unsigned int len;
++{
++  unsigned int i, j;
++
++  for (i = 0, j = 0; j < len; i++, j += 4)
++    output[i] = ((UINT4)input[j]) | (((UINT4)input[j+1]) << 8) |
++      (((UINT4)input[j+2]) << 16) | (((UINT4)input[j+3]) << 24);
++}
++
++/* Note: Replace "for loop" with standard memcpy if possible.
++ */
++static void MD5_memcpy (output, input, len)
++POINTER output;
++POINTER input;
++unsigned int len;
++{
++  unsigned int i;
++  
++  for (i = 0; i < len; i++)
++    output[i] = input[i];
++}
++
++/* Note: Replace "for loop" with standard memset if possible.
++ */
++static void MD5_memset (output, value, len)
++POINTER output;
++int value;
++unsigned int len;
++{
++  unsigned int i;
++  
++  for (i = 0; i < len; i++)
++    ((char *)output)[i] = (char)value;
++}
+diff -Nurd -x'*~' libgda-3.1.4.orig/libgda/sqlite/virtual/Makefile.am libgda-3.1.4/libgda/sqlite/virtual/Makefile.am
+--- libgda-3.1.4.orig/libgda/sqlite/virtual/Makefile.am	2008-04-03 15:31:15.000000000 -0400
++++ libgda-3.1.4/libgda/sqlite/virtual/Makefile.am	2008-06-20 01:48:41.000000000 -0400
+@@ -12,10 +12,10 @@
+ AM_CPPFLAGS = \
+ 	-I$(top_srcdir) \
+ 	-I$(top_builddir) \
+-	$(LIBGDA_CFLAGS) \
+-	$(SQLITE_CFLAGS) \
+ 	-I$(top_srcdir)/libgda/sqlite \
+         -I$(top_builddir)/libgda/sqlite \
++	$(LIBGDA_CFLAGS) \
++	$(SQLITE_CFLAGS) \
+ 	$(sqliteinc) 
+ 
+ virtual_headers = \
+diff -Nurd -x'*~' libgda-3.1.4.orig/libgda-report/DocBook/Makefile.am libgda-3.1.4/libgda-report/DocBook/Makefile.am
+--- libgda-3.1.4.orig/libgda-report/DocBook/Makefile.am	2008-04-03 15:30:55.000000000 -0400
++++ libgda-3.1.4/libgda-report/DocBook/Makefile.am	2008-06-20 01:48:41.000000000 -0400
+@@ -14,8 +14,8 @@
+ 	$(gda_report_headers)	\
+ 	gda-report-docbook-document.c	
+ 
+-libgda_report_docbook_3_0_la_LIBADD = $(LIBGDA_LIBS) \
+-	$(top_builddir)/libgda/libgda-3.0.la
++libgda_report_docbook_3_0_la_LIBADD = \
++	$(top_builddir)/libgda/libgda-3.0.la $(LIBGDA_LIBS)
+ 
+ gdareportincludedir=$(includedir)/libgda-$(GDA_ABI_MAJOR_VERSION).$(GDA_ABI_MINOR_VERSION)/libgda-report
+ gdareportinclude_HEADERS=$(gda_report_headers)
+diff -Nurd -x'*~' libgda-3.1.4.orig/libgda-report/RML/Makefile.am libgda-3.1.4/libgda-report/RML/Makefile.am
+--- libgda-3.1.4.orig/libgda-report/RML/Makefile.am	2008-04-03 15:30:55.000000000 -0400
++++ libgda-3.1.4/libgda-report/RML/Makefile.am	2008-06-20 01:48:41.000000000 -0400
+@@ -16,8 +16,8 @@
+ 	$(gda_report_headers)	\
+ 	gda-report-rml-document.c	
+ 
+-libgda_report_rml_3_0_la_LIBADD = $(LIBGDA_LIBS) \
+-	$(top_builddir)/libgda/libgda-3.0.la
++libgda_report_rml_3_0_la_LIBADD = \
++	$(top_builddir)/libgda/libgda-3.0.la $(LIBGDA_LIBS)
+ 
+ gdareportincludedir=$(includedir)/libgda-$(GDA_ABI_MAJOR_VERSION).$(GDA_ABI_MINOR_VERSION)/libgda-report
+ gdareportinclude_HEADERS=$(gda_report_headers)
+diff -Nurd -x'*~' libgda-3.1.5.orig/libgda-report/RML/gda-report-rml-document.c libgda-3.1.5/libgda-report/RML/gda-report-rml-document.c
+--- libgda-3.1.5.orig/libgda-report/RML/gda-report-rml-document.c     2008-07-20 05:51:14.000000000 -0400
++++ libgda-3.1.5/libgda-report/RML/gda-report-rml-document.c  2009-07-02 09:00:59.000000000 -0400
+@@ -193,7 +193,7 @@
+ 	if (!converter) {
+ 		converter = g_find_program_in_path ("trml2html.py");
+ 		if (!converter) {
+-			converter = gda_gbr_get_file_path (GDA_BIN_DIR, "gda_trml2html", "trml2html.py", NULL);
++			converter = gda_gbr_get_file_path (GDA_LIBEXEC_DIR, "gda_trml2html", "trml2html.py", NULL);
+ 			if (!g_file_test (converter, G_FILE_TEST_IS_EXECUTABLE)) {
+ 				g_free (converter);
+ 				converter = NULL;
+@@ -220,7 +220,7 @@
+ 	if (!converter) {
+ 		converter = g_find_program_in_path ("trml2pdf.py");
+ 		if (!converter) {
+-			converter = gda_gbr_get_file_path (GDA_BIN_DIR, "gda_trml2pdf", "trml2pdf.py", NULL);
++			converter = gda_gbr_get_file_path (GDA_LIBEXEC_DIR, "gda_trml2pdf", "trml2pdf.py", NULL);
+ 			if (!g_file_test (converter, G_FILE_TEST_IS_EXECUTABLE)) {
+ 				g_free (converter);
+ 				converter = NULL;
+diff -Nurd -x'*~' libgda-3.1.5.orig/libgda-report/RML/trml2html/Makefile.am libgda-3.1.5/libgda-report/RML/trml2html/Makefile.am
+--- libgda-3.1.5.orig/libgda-report/RML/trml2html/Makefile.am	2008-01-28 06:50:37.000000000 -0500
++++ libgda-3.1.5/libgda-report/RML/trml2html/Makefile.am	2009-07-02 09:02:31.000000000 -0400
+@@ -1,12 +1,3 @@
+-files = __init__.py  \
+-	trml2html.py \
+-	utils.py
+-
+-install-exec-local:
+-	-mkdir -p $(bindir)/gda_trml2html
+-	-cd $(top_srcdir)/libgda-report/RML/trml2html && $(INSTALL_PROGRAM) $(files) $(bindir)/gda_trml2html
+-
+-uninstall-local:
+-	-rm -rf $(bindir)/gda_trml2html
+-
+-EXTRA_DIST = $(files)
++trml2html_SCRIPTS = trml2html.py
++trml2html_DATA = __init__.py utils.py
++trml2htmldir = $(libexecdir)/gda_trml2html
+diff -Nurd -x'*~' libgda-3.1.5.orig/libgda-report/RML/trml2pdf/Makefile.am libgda-3.1.5/libgda-report/RML/trml2pdf/Makefile.am
+--- libgda-3.1.5.orig/libgda-report/RML/trml2pdf/Makefile.am	2008-01-28 06:50:37.000000000 -0500
++++ libgda-3.1.5/libgda-report/RML/trml2pdf/Makefile.am	2009-07-02 09:02:52.000000000 -0400
+@@ -1,13 +1,3 @@
+-files = color.py \
+-	__init__.py  \
+-	trml2pdf.py \
+-	utils.py
+-
+-install-exec-local:
+-	-mkdir -p $(bindir)/gda_trml2pdf
+-	-cd $(top_srcdir)/libgda-report/RML/trml2pdf && $(INSTALL_PROGRAM) $(files) $(bindir)/gda_trml2pdf
+-
+-uninstall-local:
+-	-rm -rf $(bindir)/gda_trml2pdf
+-
+-EXTRA_DIST = $(files)
++trml2pdf_SCRIPTS = trml2pdf.py
++trml2pdf_DATA = __init__.py color.py utils.py
++trml2pdfdir = $(libexecdir)/gda_trml2pdf
+diff -Nurd -x'*~' libgda-3.1.4.orig/libgda-report/engine/Makefile.am libgda-3.1.4/libgda-report/engine/Makefile.am
+--- libgda-3.1.4.orig/libgda-report/engine/Makefile.am	2008-04-03 15:30:55.000000000 -0400
++++ libgda-3.1.4/libgda-report/engine/Makefile.am	2008-06-20 01:48:41.000000000 -0400
+@@ -15,8 +15,8 @@
+ 	$(gda_report_headers)	\
+ 	gda-report-engine.c	
+ 
+-libgda_report_engine_3_0_la_LIBADD = $(LIBGDA_LIBS) \
+-	$(top_builddir)/libgda/libgda-3.0.la 
++libgda_report_engine_3_0_la_LIBADD = \
++	$(top_builddir)/libgda/libgda-3.0.la $(LIBGDA_LIBS)
+ 
+ gdareportincludedir=$(includedir)/libgda-$(GDA_ABI_MAJOR_VERSION).$(GDA_ABI_MINOR_VERSION)/libgda-report
+ gdareportinclude_HEADERS=$(gda_report_headers)
+diff -Nurd -x'*~' libgda-3.1.4.orig/libgda-xslt/Makefile.am libgda-3.1.4/libgda-xslt/Makefile.am
+--- libgda-3.1.4.orig/libgda-xslt/Makefile.am	2008-04-03 15:31:20.000000000 -0400
++++ libgda-3.1.4/libgda-xslt/Makefile.am	2008-06-20 01:50:51.000000000 -0400
+@@ -18,8 +18,8 @@
+ 	sql_exslt_internal.c \
+ 	sql_backend.c
+ 
+-libgda_xslt_3_0_la_LIBADD = $(LIBGDA_LIBS) $(LIBXSLT_LIBS)\
+-        $(top_builddir)/libgda/libgda-3.0.la
++libgda_xslt_3_0_la_LIBADD = \
++        $(top_builddir)/libgda/libgda-3.0.la $(top_builddir)/libsql/libgdasql-3.0.la $(LIBGDA_LIBS) $(LIBXSLT_LIBS)
+ 
+ gdaxsltincludedir=$(includedir)/libgda-$(GDA_ABI_MAJOR_VERSION).$(GDA_ABI_MINOR_VERSION)/libgda-xslt
+ gdaxsltinclude_HEADERS=$(gda_xslt_headers)
+diff -Nurd -x'*~' libgda-3.1.4.orig/providers/bdb/Makefile.am libgda-3.1.4/providers/bdb/Makefile.am
+--- libgda-3.1.4.orig/providers/bdb/Makefile.am	2008-04-03 15:31:00.000000000 -0400
++++ libgda-3.1.4/providers/bdb/Makefile.am	2008-06-20 01:48:41.000000000 -0400
+@@ -23,8 +23,7 @@
+ 
+ gda_bdb_test_SOURCES = gda-bdb-test.c
+ gda_bdb_test_LDADD = \
+-	$(LIBGDA_LIBS) \
+-	$(top_builddir)/libgda/libgda-3.0.la 
++	$(top_builddir)/libgda/libgda-3.0.la $(LIBGDA_LIBS)
+ 
+ xmldir   = $(datadir)/libgda-3.0
+ xml_in_files = bdb_specs_dsn.xml.in
+diff -Nurd -x'*~' libgda-3.1.5.orig/providers/sqlite/Makefile.am libgda-3.1.5/providers/sqlite/Makefile.am
+--- libgda-3.1.5.orig/providers/sqlite/Makefile.am	2008-07-20 05:51:16.000000000 -0400
++++ libgda-3.1.5/providers/sqlite/Makefile.am	2010-10-02 16:33:56.000000000 -0400
+@@ -15,14 +15,13 @@
+ 
+ libgda_sqlite_la_LDFLAGS = -export-dynamic -module -avoid-version $(NO_UNDEFINED)
+ libgda_sqlite_la_LIBADD = \
+-	$(top_builddir)/libgda/libgda-3.0.la \
++	$(top_builddir)/libgda/libgda-3.0.la $(top_builddir)/libsql/libgdasql-3.0.la \
+ 	$(sqlitelibs) \
+ 	$(LIBGDA_LIBS)
+ 
+ xmldir   = $(datadir)/libgda-3.0
+ xml_in_files = sqlite_specs_create_db.xml.in \
+ 	sqlite_specs_dsn.xml.in \
+-	sqlite_specs_create_db.xml.in \
+ 	sqlite_specs_drop_db.xml.in \
+ 	sqlite_specs_create_table.xml.in \
+ 	sqlite_specs_drop_table.xml.in \
+diff -Nurd -x'*~' libgda-3.1.4.orig/tests/data-models/Makefile.am libgda-3.1.4/tests/data-models/Makefile.am
+--- libgda-3.1.4.orig/tests/data-models/Makefile.am	2008-04-03 15:30:56.000000000 -0400
++++ libgda-3.1.4/tests/data-models/Makefile.am	2008-06-20 01:48:41.000000000 -0400
+@@ -11,23 +11,23 @@
+ 
+ check_model_import_SOURCES = $(common_sources) check_model_import.c
+ check_model_import_CFLAGS = @CHECK_CFLAGS@
+-check_model_import_LDADD = @CHECK_LIBS@ \
++check_model_import_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_virtual_SOURCES = $(common_sources) check_virtual.c
+-check_virtual_CFLAGS = @CHECK_CFLAGS@ \
++check_virtual_CFLAGS = \
+ 	-I$(top_srcdir)/libgda/sqlite \
+-	-I$(top_srcdir)/libgda/sqlite/virtual
+-check_virtual_LDADD = @CHECK_LIBS@ \
++	-I$(top_srcdir)/libgda/sqlite/virtual @CHECK_CFLAGS@
++check_virtual_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_data_proxy_SOURCES = $(common_sources) check_data_proxy.c
+ check_data_proxy_CFLAGS = @CHECK_CFLAGS@ 
+-check_data_proxy_LDADD = @CHECK_LIBS@ \
++check_data_proxy_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ 
+ EXTRA_DIST = \
+diff -Nurd -x'*~' libgda-3.1.4.orig/tests/providers/Makefile.am libgda-3.1.4/tests/providers/Makefile.am
+--- libgda-3.1.4.orig/tests/providers/Makefile.am	2008-04-03 15:30:56.000000000 -0400
++++ libgda-3.1.4/tests/providers/Makefile.am	2008-06-20 01:48:41.000000000 -0400
+@@ -81,87 +81,87 @@
+ 
+ check_sqlite_SOURCES = $(common_sources) check_sqlite.c
+ check_sqlite_CFLAGS = @CHECK_CFLAGS@
+-check_sqlite_LDADD = @CHECK_LIBS@ \
++check_sqlite_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_bdb_SOURCES = $(common_sources) check_bdb.c
+ check_bdb_CFLAGS = @CHECK_CFLAGS@
+-check_bdb_LDADD = @CHECK_LIBS@ \
++check_bdb_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_ibmdb2_SOURCES = $(common_sources) check_ibmdb2.c
+ check_ibmdb2_CFLAGS = @CHECK_CFLAGS@
+-check_ibmdb2_LDADD = @CHECK_LIBS@ \
++check_ibmdb2_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_firebird_SOURCES = $(common_sources) check_firebird.c
+ check_firebird_CFLAGS = @CHECK_CFLAGS@
+-check_firebird_LDADD = @CHECK_LIBS@ \
++check_firebird_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_mdb_SOURCES = $(common_sources) check_mdb.c
+ check_mdb_CFLAGS = @CHECK_CFLAGS@
+-check_mdb_LDADD = @CHECK_LIBS@ \
++check_mdb_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_mysql_SOURCES = $(common_sources) check_mysql.c
+ check_mysql_CFLAGS = @CHECK_CFLAGS@
+-check_mysql_LDADD = @CHECK_LIBS@ \
++check_mysql_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_msql_SOURCES = $(common_sources) check_msql.c
+ check_msql_CFLAGS = @CHECK_CFLAGS@
+-check_msql_LDADD = @CHECK_LIBS@ \
++check_msql_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_odbc_SOURCES = $(common_sources) check_odbc.c
+ check_odbc_CFLAGS = @CHECK_CFLAGS@
+-check_odbc_LDADD = @CHECK_LIBS@ \
++check_odbc_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_oracle_SOURCES = $(common_sources) check_oracle.c
+ check_oracle_CFLAGS = @CHECK_CFLAGS@
+-check_oracle_LDADD = @CHECK_LIBS@ \
++check_oracle_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_postgres_SOURCES = $(common_sources) check_postgres.c
+ check_postgres_CFLAGS = @CHECK_CFLAGS@
+-check_postgres_LDADD = @CHECK_LIBS@ \
++check_postgres_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_sybase_SOURCES = $(common_sources) check_sybase.c
+ check_sybase_CFLAGS = @CHECK_CFLAGS@
+-check_sybase_LDADD = @CHECK_LIBS@ \
++check_sybase_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_freetds_SOURCES = $(common_sources) check_freetds.c
+ check_freetds_CFLAGS = @CHECK_CFLAGS@
+-check_freetds_LDADD = @CHECK_LIBS@ \
++check_freetds_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_xbase_SOURCES = $(common_sources) check_xbase.c
+ check_xbase_CFLAGS = @CHECK_CFLAGS@
+-check_xbase_LDADD = @CHECK_LIBS@ \
++check_xbase_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_ldap_SOURCES = $(common_sources) check_ldap.c
+ check_ldap_CFLAGS = @CHECK_CFLAGS@
+-check_ldap_LDADD = @CHECK_LIBS@ \
++check_ldap_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ EXTRA_DIST = \
+ 	README \
+diff -Nurd -x'*~' libgda-3.1.4.orig/tests/queries/Makefile.am libgda-3.1.4/tests/queries/Makefile.am
+--- libgda-3.1.4.orig/tests/queries/Makefile.am	2008-04-03 15:30:57.000000000 -0400
++++ libgda-3.1.4/tests/queries/Makefile.am	2008-06-20 01:48:41.000000000 -0400
+@@ -10,15 +10,15 @@
+ 
+ check_delimiter_SOURCES = test-util.h test-util.c check_delimiter.c $(top_srcdir)/libgda/sql-delimiter/gda-sql-delimiter.h
+ check_delimiter_CFLAGS = @CHECK_CFLAGS@
+-check_delimiter_LDADD = @CHECK_LIBS@ \
++check_delimiter_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ check_gdaquery_SOURCES = test-util.h test-util.c check_gdaquery.c $(top_srcdir)/libsql/sql_parser.h
+ check_gdaquery_CFLAGS = @CHECK_CFLAGS@
+-check_gdaquery_LDADD = @CHECK_LIBS@  \
++check_gdaquery_LDADD = \
+ 	$(top_builddir)/libgda/libgda-3.0.la \
+-	$(LIBGDA_LIBS)
++	$(LIBGDA_LIBS) @CHECK_LIBS@
+ 
+ EXTRA_DIST = all_sql_tests.xml \
+ 	app_sql.xml \

@@ -1,0 +1,1169 @@
+
+--- xc/config/cf/Imake.rules	2004-08-13 13:21:43.000000000 -0400
++++ xc-new/config/cf/Imake.rules	2007-01-09 22:50:47.000000000 -0500
+@@ -3279,7 +3279,8 @@
+ 			-e '/^[ 	]*XCOMM$$/s/XCOMM/#/' \
+ 			-e '/^[ 	]*XCOMM[^a-zA-Z0-9_]/s/XCOMM/#/' \
+ 			-e '/^[ 	]*XHASH/s/XHASH/#/' \
+-			-e '/\@\@$$/s/\@\@$$/\\/'
++			-e '/\@\@$$/s/\@\@$$/\\/' \
++			-e '/^#pragma GCC .*$$/d'
+ #endif /* CppSedMagic */
+ 
+ #ifndef CppFileTarget
+--- xc/config/cf/darwin.cf	2004-12-14 23:53:05.000000000 -0500
++++ xc-new/config/cf/darwin.cf	2007-01-09 22:50:47.000000000 -0500
+@@ -160,7 +160,7 @@
+  * The default cpp-3.3 that ships with Panther inserts spurious #pragmas,
+  * so we use the 3.1-based version.
+  */
+-#if OSMajorVersion >= 7
++#if OSMajorVersion == 7
+ # define CppCmd                 /usr/bin/cpp3
+ # define StandardCppOptions     -traditional -D__GNUC__
+ #else
+--- xc/extras/Xpm/lib/create.c	2004-12-16 20:09:36.000000000 -0500
++++ xc-new/extras/Xpm/lib/create.c	2007-01-09 22:50:47.000000000 -0500
+@@ -1215,10 +1215,10 @@
+     register char *src;
+     register char *dst;
+     register unsigned int *iptr;
+-    register unsigned int x, y, i;
++    register unsigned int x, y;
+     register char *data;
+     Pixel pixel, px;
+-    int nbytes, depth, ibu, ibpp;
++    int nbytes, depth, ibu, ibpp, i;
+ 
+     data = image->data;
+     iptr = pixelindex;
+--- xc/extras/Xpm/lib/scan.c	2004-12-16 20:09:36.000000000 -0500
++++ xc-new/extras/Xpm/lib/scan.c	2007-01-09 22:50:47.000000000 -0500
+@@ -621,8 +621,8 @@
+     char *dst;
+     unsigned int *iptr;
+     char *data;
+-    unsigned int x, y, i;
+-    int bits, depth, ibu, ibpp, offset;
++    unsigned int x, y;
++    int bits, depth, ibu, ibpp, offset, i;
+     unsigned long lbt;
+     Pixel pixel, px;
+ 
+@@ -633,6 +633,9 @@
+     ibpp = image->bits_per_pixel;
+     offset = image->xoffset;
+ 
++    if (image->bitmap_unit < 0)
++	    return (XpmNoMemory);
++
+     if ((image->bits_per_pixel | image->depth) == 1) {
+ 	ibu = image->bitmap_unit;
+ 	for (y = 0; y < height; y++)
+--- xc/extras/freetype2/builds/unix/detect.mk	2004-04-28 06:38:58.000000000 -0400
++++ xc-new/extras/freetype2/builds/unix/detect.mk	2007-01-09 22:50:47.000000000 -0500
+@@ -20,7 +20,8 @@
+   #
+   is_unix := $(strip $(wildcard /sbin/init) \
+                      $(wildcard /usr/sbin/init) \
+-                     $(wildcard /hurd/auth))
++                     $(wildcard /hurd/auth) \
++                     $(wildcard /sbin/launchd))
+   ifneq ($(is_unix),)
+ 
+     PLATFORM := unix
+--- xc/extras/freetype2/include/freetype/freetype.h	2004-04-28 06:38:59.000000000 -0400
++++ xc-new/extras/freetype2/include/freetype/freetype.h	2007-01-09 22:50:47.000000000 -0500
+@@ -17,11 +17,7 @@
+ 
+ 
+ #ifndef FT_FREETYPE_H
+-#error "`ft2build.h' hasn't been included yet!"
+-#error "Please always use macros to include FreeType header files."
+-#error "Example:"
+-#error "  #include <ft2build.h>"
+-#error "  #include FT_FREETYPE_H"
++#include <ft2build.h>
+ #endif
+ 
+ 
+--- xc/extras/freetype2/src/base/ftapi.c	2003-11-14 11:48:24.000000000 -0500
++++ xc-new/extras/freetype2/src/base/ftapi.c	2007-01-09 22:50:47.000000000 -0500
+@@ -118,4 +118,18 @@
+   }
+                    
+ 
++  FT_BASE_DEF( FT_Short )
++  FT_Get_Short( FT_Stream stream )
++  {
++    return FT_GET_SHORT();
++  }
++
++
++  FT_BASE_DEF( FT_Long )
++  FT_Get_Long( FT_Stream stream )
++  {
++    return FT_GET_LONG();
++  }
++
++
+ /* END */
+--- xc/extras/freetype2/src/base/ftmac.c	2004-04-28 06:39:03.000000000 -0400
++++ xc-new/extras/freetype2/src/base/ftmac.c	2007-01-09 22:50:47.000000000 -0500
+@@ -319,12 +319,12 @@
+       if ( assoc->fontSize == 0 )
+       {
+         *have_sfnt = 1;
+-        *sfnt_id   = assoc->fontID;
++        *sfnt_id   = OSSwapBigToHostInt16(assoc->fontID);
+       }
+       else if ( base_assoc->fontSize == 0 )
+       {
+         *have_sfnt = 1;
+-        *sfnt_id   = base_assoc->fontID;
++        *sfnt_id   = OSSwapBigToHostInt16(base_assoc->fontID);
+       }
+     }
+ 
+@@ -338,10 +338,10 @@
+       int             i;
+ 
+ 
+-      p += fond->ffStylOff;
++      p += OSSwapBigToHostInt32(fond->ffStylOff);
+       style = (StyleTable*)p;
+       p += sizeof ( StyleTable );
+-      string_count = *(unsigned short*)(p);
++      string_count = OSSwapBigToHostInt16(*(unsigned short*)(p));
+       p += sizeof ( short );
+ 
+       for ( i = 0 ; i < string_count && i < 64; i++ )
+--- xc/extras/freetype2/src/truetype/ttinterp.c	2004-04-28 06:39:07.000000000 -0400
++++ xc-new/extras/freetype2/src/truetype/ttinterp.c	2007-01-09 22:50:48.000000000 -0500
+@@ -2474,7 +2474,7 @@
+     W = Vx * Vx + Vy * Vy;
+ 
+     /* Now, we want that Sqrt( W ) = 0x4000 */
+-    /* Or 0x1000000 <= W < 0x1004000        */
++    /* Or 0x10000000 <= W < 0x10004000        */
+ 
+     if ( Vx < 0 )
+     {
+@@ -2492,7 +2492,7 @@
+     else
+       S2 = FALSE;
+ 
+-    while ( W < 0x1000000L )
++    while ( W < 0x10000000L )
+     {
+       /* We need to increase W by a minimal amount */
+       if ( Vx < Vy )
+@@ -2503,7 +2503,7 @@
+       W = Vx * Vx + Vy * Vy;
+     }
+ 
+-    while ( W >= 0x1004000L )
++    while ( W >= 0x10004000L )
+     {
+       /* We need to decrease W by a minimal amount */
+       if ( Vx < Vy )
+--- xc/include/Xarch.h	2004-04-23 14:43:05.000000000 -0400
++++ xc-new/include/Xarch.h	2007-01-09 22:50:48.000000000 -0500
+@@ -32,8 +32,20 @@
+  * Determine the machine's byte order.
+  */
+ 
++#if defined (__BIG_ENDIAN__) || defined (__LITTLE_ENDIAN__)
++# undef X_BYTE_ORDER
++# undef X_LITTLE_ENDIAN
++# undef X_BIG_ENDIAN
++# define X_LITTLE_ENDIAN 1234
++# define X_BIG_ENDIAN 4321
++# if __BIG_ENDIAN__
++#  define X_BYTE_ORDER X_BIG_ENDIAN
++# else
++#  define X_BYTE_ORDER X_LITTLE_ENDIAN
++# endif
++
+ /* See if it is set in the imake config first */
+-#ifdef X_BYTE_ORDER
++#elif defined (X_BYTE_ORDER)
+ 
+ #define X_BIG_ENDIAN 4321
+ #define X_LITTLE_ENDIAN 1234
+--- xc/lib/GL/apple/dri_driver.h	2004-04-23 14:43:09.000000000 -0400
++++ xc-new/lib/GL/apple/dri_driver.h	2007-01-09 22:50:48.000000000 -0500
+@@ -40,6 +40,10 @@
+ #include "Xthreads.h"
+ #include <CoreGraphics/CoreGraphics.h>
+ #include <OpenGL/OpenGL.h>
++#ifndef GL_TYPEDEFS_2_0
++#define GL_TYPEDEFS_2_0
++	typedef char GLchar;
++#endif
+ #include <OpenGL/CGLContext.h>
+ 
+ #ifdef GLX_DIRECT_RENDERING
+--- xc/lib/GL/apple/dri_glx.c	2004-07-27 16:23:58.000000000 -0400
++++ xc-new/lib/GL/apple/dri_glx.c	2007-01-09 22:50:48.000000000 -0500
+@@ -51,7 +51,7 @@
+ 
+ /* Apple OpenGL "driver" information. */
+ static const char *__driDriverName = "apple";
+-static const char __driConfigOptions[] = "";
++const char __driConfigOptions[] = "";
+ static const int __driDriverMajor = 1;
+ static const int __driDriverMinor = 0;
+ static const int __driDriverPatch = 0;
+--- xc/lib/X11/imEvToWire.c	2004-04-23 14:43:24.000000000 -0400
++++ xc-new/lib/X11/imEvToWire.c	2007-01-09 22:50:48.000000000 -0500
+@@ -408,7 +408,7 @@
+ 	}
+ 	/* Common process */
+ 	if (((XAnyEvent *)re)->send_event)
+-	    event->u.u.type &= 0x80;
++	    event->u.u.type |= 0x80;
+ 	event->u.u.sequenceNumber =
+ 	    ((XAnyEvent *)re)->serial & ~((unsigned long)0xffff);
+ 	event->u.u.sequenceNumber = sw16(event->u.u.sequenceNumber, sw);
+--- xc/lib/Xcursor/cursor.c	2004-04-23 14:43:40.000000000 -0400
++++ xc-new/lib/Xcursor/cursor.c	2007-01-09 22:50:48.000000000 -0500
+@@ -711,6 +711,7 @@
+ 	    anim[n].delay = images->images[n]->delay;
+ 	}
+ 	cursor = XRenderCreateAnimCursor (dpy, cursors->ncursor, anim);
++	XcursorCursorsDestroy(cursors);
+ 	free (anim);
+     }
+ #if defined HAVE_XFIXES && XFIXES_MAJOR >= 2
+--- xc/lib/font/Type1/afm.c	2004-04-23 14:44:08.000000000 -0400
++++ xc-new/lib/font/Type1/afm.c	2007-01-09 22:50:48.000000000 -0500
+@@ -22,6 +22,7 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdlib.h>
++#include <limits.h>
+ #else
+ #include "Xmd.h"        /* For INT32 declaration */
+ #include "Xdefs.h"      /* For Bool */
+@@ -111,6 +112,11 @@
+             
+             fi->nChars = atoi(p);
+ 
++	    if (fi->nChars < 0 || fi->nChars > INT_MAX / sizeof(Metrics)) {
++		xfree(afmbuf);
++		xfree(fi);
++		return(1);
++	    }
+             fi->metrics = (Metrics *)xalloc(fi->nChars * 
+                 sizeof(Metrics));
+             if (fi->metrics == NULL) {
+--- xc/lib/font/Type1/scanfont.c	2004-04-23 14:44:09.000000000 -0400
++++ xc-new/lib/font/Type1/scanfont.c	2007-01-09 22:50:48.000000000 -0500
+@@ -50,6 +50,7 @@
+ 
+ #ifndef FONTMODULE
+ #include <string.h>
++#include <limits.h>
+ #else
+ #include "Xdefs.h"	/* Bool declaration */
+ #include "Xmd.h"	/* INT32 declaration */
+@@ -647,6 +648,7 @@
+   arrayP->data.valueP = tokenStartP;
+ 
+   /* allocate FDArray */
++  /* No integer overflow since arrayP->len is unsigned short */
+   FDArrayP = (psfont *)vm_alloc(arrayP->len*(sizeof(psfont)));
+   if (!(FDArrayP)) return(SCAN_OUT_OF_MEMORY);
+ 
+@@ -843,7 +845,8 @@
+      }
+      return(SCAN_OK);
+    }
+- 
++   if (N > INT_MAX / sizeof(psobj)) 
++       return (SCAN_ERROR);
+    arrayP = (psobj *)vm_alloc(N*sizeof(psobj));
+    if (!(arrayP) ) return(SCAN_OUT_OF_MEMORY);
+    FontP->Subrs.len = N;
+@@ -904,7 +907,7 @@
+      }
+      else return(rc);  /* if next token was not an Int */
+    }
+-   if (N<=0) return(SCAN_ERROR);
++   if (N<=0 || N > INT_MAX / sizeof(psdict)) return(SCAN_ERROR);
+    /* save number of entries in the dictionary */
+  
+    dictP = (psdict *)vm_alloc((N+1)*sizeof(psdict));
+@@ -1712,6 +1715,10 @@
+     if (tokenType == TOKEN_INTEGER)
+       rangecnt = tokenValue.integer;
+ 
++    if (rangecnt < 0 || rangecnt > INT_MAX / sizeof(spacerangecode)) {
++	rc = SCAN_ERROR;
++	break;
++    }
+     /* ==> tokenLength, tokenTooLong, tokenType, and */
+     /* tokenValue are now set                        */
+ 
+--- xc/lib/font/Type1/util.c	2004-04-23 14:44:09.000000000 -0400
++++ xc-new/lib/font/Type1/util.c	2007-01-09 22:50:48.000000000 -0500
+@@ -97,7 +97,7 @@
+   bytes = (bytes + 7) & ~7;
+  
+   /* Allocate the space, if it is available */
+-  if (bytes <= vm_free) {
++  if (bytes > 0 && bytes <= vm_free) {
+     answer = vm_next;
+     vm_free -= bytes;
+     vm_next += bytes;
+--- xc/lib/font/bitmap/pcfread.c	2004-04-23 14:44:20.000000000 -0400
++++ xc-new/lib/font/bitmap/pcfread.c	2007-01-09 22:50:48.000000000 -0500
+@@ -32,6 +32,8 @@
+  * Author:  Keith Packard, MIT X Consortium
+  */
+ 
++#include <stdint.h>
++
+ #include "fntfilst.h"
+ #include "bitmap.h"
+ #include "pcf.h"
+@@ -129,6 +131,10 @@
+ 	return (PCFTablePtr) NULL;
+     count = pcfGetLSB32(file);
+     if (IS_EOF(file)) return (PCFTablePtr) NULL;
++    if (count < 0 || count > INT32_MAX / sizeof(PCFTableRec)) {
++	pcfError("pcfReadTOC(): invalid file format\n");
++	return NULL;
++    }
+     tables = (PCFTablePtr) xalloc(count * sizeof(PCFTableRec));
+     if (!tables) {
+       pcfError("pcfReadTOC(): Couldn't allocate tables (%d*%d)\n", count, sizeof(PCFTableRec));
+@@ -248,6 +254,10 @@
+     if (!PCF_FORMAT_MATCH(format, PCF_DEFAULT_FORMAT))
+ 	goto Bail;
+     nprops = pcfGetINT32(file, format);
++    if (nprops <= 0 || nprops > INT32_MAX / sizeof(FontPropRec)) {
++	pcfError("pcfGetProperties(): invalid nprops value (%d)\n", nprops);
++	goto Bail;
++    }
+     if (IS_EOF(file)) goto Bail;
+     props = (FontPropPtr) xalloc(nprops * sizeof(FontPropRec));
+     if (!props) {
+@@ -263,6 +273,13 @@
+ 	props[i].name = pcfGetINT32(file, format);
+ 	isStringProp[i] = pcfGetINT8(file, format);
+ 	props[i].value = pcfGetINT32(file, format);
++	if (props[i].name < 0 
++	    || (isStringProp[i] != 0 && isStringProp[i] != 1)
++	    || (isStringProp[i] && props[i].value < 0)) {
++	    pcfError("pcfGetProperties(): invalid file format %d %d %d\n",
++		     props[i].name, isStringProp[i], props[i].value);
++	    goto Bail;
++	}
+ 	if (IS_EOF(file)) goto Bail;
+     }
+     /* pad the property array */
+@@ -278,6 +295,7 @@
+     }
+     if (IS_EOF(file)) goto Bail;
+     string_size = pcfGetINT32(file, format);
++    if (string_size < 0) goto Bail;
+     if (IS_EOF(file)) goto Bail;
+     strings = (char *) xalloc(string_size);
+     if (!strings) {
+@@ -418,6 +436,10 @@
+     else
+ 	nmetrics = pcfGetINT16(file, format);
+     if (IS_EOF(file)) goto Bail;
++    if (nmetrics < 0 || nmetrics > INT32_MAX / sizeof(CharInfoRec)) {
++	pcfError("pcfReadFont(): invalid file format\n");
++	goto Bail;
++    }
+     metrics = (CharInfoPtr) xalloc(nmetrics * sizeof(CharInfoRec));
+     if (!metrics) {
+       pcfError("pcfReadFont(): Couldn't allocate metrics (%d*%d)\n", nmetrics, sizeof(CharInfoRec));
+@@ -443,7 +465,7 @@
+     nbitmaps = pcfGetINT32(file, format);
+     if (nbitmaps != nmetrics || IS_EOF(file))
+ 	goto Bail;
+-
++    /* nmetrics is alreadt ok, so nbitmap also is */
+     offsets = (CARD32 *) xalloc(nbitmaps * sizeof(CARD32));
+     if (!offsets) {
+       pcfError("pcfReadFont(): Couldn't allocate offsets (%d*%d)\n", nbitmaps, sizeof(CARD32));
+@@ -457,6 +479,7 @@
+     for (i = 0; i < GLYPHPADOPTIONS; i++) {
+ 	bitmapSizes[i] = pcfGetINT32(file, format);
+ 	if (IS_EOF(file)) goto Bail;
++	if (bitmapSizes[i] < 0) goto Bail;
+     }
+     
+     sizebitmaps = bitmapSizes[PCF_GLYPH_PAD_INDEX(format)];
+@@ -532,6 +555,7 @@
+ 	if (IS_EOF(file)) goto Bail;
+ 	if (nink_metrics != nmetrics)
+ 	    goto Bail;
++	/* nmetrics already checked */
+ 	ink_metrics = (xCharInfo *) xalloc(nink_metrics * sizeof(xCharInfo));
+       if (!ink_metrics) {
+           pcfError("pcfReadFont(): Couldn't allocate ink_metrics (%d*%d)\n", nink_metrics, sizeof(xCharInfo));       
+@@ -805,6 +829,10 @@
+     else
+ 	nmetrics = pcfGetINT16(file, format);
+     if (IS_EOF(file)) goto Bail;
++    if (nmetrics < 0 || nmetrics > INT32_MAX / sizeof(CharInfoRec)) {
++	pcfError("pmfReadFont(): invalid file format\n");
++	goto Bail;
++    }
+     metrics = (CharInfoPtr) xalloc(nmetrics * sizeof(CharInfoRec));
+     if (!metrics) {
+       pcfError("pmfReadFont(): Couldn't allocate metrics (%d*%d)\n", nmetrics, sizeof(CharInfoRec));
+--- xc/programs/Xserver/Xext/saver.c	2004-12-12 22:34:33.000000000 -0500
++++ xc-new/programs/Xserver/Xext/saver.c	2007-01-09 22:50:48.000000000 -0500
+@@ -1166,8 +1166,8 @@
+     FreeAttrs (pAttr);
+ bail:
+     CheckScreenPrivate (pScreen);
++    if (pAttr) xfree (pAttr->values);
+     xfree (pAttr);
+-    xfree (values);
+     return ret;
+ }
+ 
+--- xc/programs/Xserver/dbe/dbe.c	2004-04-23 15:03:43.000000000 -0400
++++ xc-new/programs/Xserver/dbe/dbe.c	2007-01-09 22:51:03.000000000 -0500
+@@ -51,6 +51,10 @@
+ #include "xf86_ansic.h"
+ #endif
+ 
++#if !defined(UINT32_MAX)
++#define UINT32_MAX 0xffffffffU
++#endif
++
+ /* GLOBALS */
+ 
+ /* Per-screen initialization functions [init'ed by DbeRegisterFunction()] */
+@@ -729,11 +733,14 @@
+         return(Success);
+     }
+ 
++    if (nStuff > UINT32_MAX / sizeof(DbeSwapInfoRec))
++	    return BadAlloc;
++
+     /* Get to the swap info appended to the end of the request. */
+     dbeSwapInfo = (xDbeSwapInfo *)&stuff[1];
+ 
+     /* Allocate array to record swap information. */ 
+-    swapInfo = (DbeSwapInfoPtr)ALLOCATE_LOCAL(nStuff * sizeof(DbeSwapInfoRec));
++    swapInfo = (DbeSwapInfoPtr)Xalloc(nStuff * sizeof(DbeSwapInfoRec));
+     if (swapInfo == NULL)
+     {
+         return(BadAlloc);
+@@ -748,14 +755,14 @@
+         if (!(pWin = SecurityLookupWindow(dbeSwapInfo[i].window, client,
+ 					  SecurityWriteAccess)))
+         {
+-            DEALLOCATE_LOCAL(swapInfo);
++            Xfree(swapInfo);
+ 	    return(BadWindow);
+         }
+ 
+         /* Each window must be double-buffered - BadMatch. */
+         if (DBE_WINDOW_PRIV(pWin) == NULL)
+         {
+-            DEALLOCATE_LOCAL(swapInfo);
++            Xfree(swapInfo);
+             return(BadMatch);
+         }
+ 
+@@ -764,7 +771,7 @@
+         {
+             if (dbeSwapInfo[i].window == dbeSwapInfo[j].window)
+             {
+-                DEALLOCATE_LOCAL(swapInfo);
++                Xfree(swapInfo);
+                 return(BadMatch);
+ 	    }
+         }
+@@ -775,7 +782,7 @@
+             (dbeSwapInfo[i].swapAction != XdbeUntouched ) &&
+             (dbeSwapInfo[i].swapAction != XdbeCopied    ))
+         {
+-            DEALLOCATE_LOCAL(swapInfo);
++            Xfree(swapInfo);
+             return(BadValue);
+         }
+ 
+@@ -805,12 +812,12 @@
+         error = (*pDbeScreenPriv->SwapBuffers)(client, &nStuff, swapInfo);
+         if (error != Success)
+         {
+-            DEALLOCATE_LOCAL(swapInfo);
++            Xfree(swapInfo);
+             return(error);
+         }
+     }
+     
+-    DEALLOCATE_LOCAL(swapInfo);
++    Xfree(swapInfo);
+     return(Success);
+ 
+ } /* ProcDbeSwapBuffers() */
+@@ -894,10 +901,12 @@
+ 
+     REQUEST_AT_LEAST_SIZE(xDbeGetVisualInfoReq);
+ 
++    if (stuff->n > UINT32_MAX / sizeof(DrawablePtr))
++	    return BadAlloc;
+     /* Make sure any specified drawables are valid. */
+     if (stuff->n != 0)
+     {
+-        if (!(pDrawables = (DrawablePtr *)ALLOCATE_LOCAL(stuff->n *
++        if (!(pDrawables = (DrawablePtr *)Xalloc(stuff->n *
+                                                  sizeof(DrawablePtr))))
+         {
+             return(BadAlloc);
+@@ -910,7 +919,7 @@
+             if (!(pDrawables[i] = (DrawablePtr)SecurityLookupDrawable(
+ 				drawables[i], client, SecurityReadAccess)))
+             {
+-                DEALLOCATE_LOCAL(pDrawables);
++                Xfree(pDrawables);
+                 return(BadDrawable);
+             }
+         }
+@@ -922,7 +931,7 @@
+     {
+         if (pDrawables)
+         {
+-            DEALLOCATE_LOCAL(pDrawables);
++            Xfree(pDrawables);
+         }
+ 
+         return(BadAlloc);
+@@ -949,7 +958,7 @@
+             /* Free pDrawables if we needed to allocate it above. */
+             if (pDrawables)
+             {
+-                DEALLOCATE_LOCAL(pDrawables);
++                Xfree(pDrawables);
+             }
+ 
+             return(BadAlloc);
+@@ -1030,7 +1039,7 @@
+ 
+     if (pDrawables)
+     {
+-        DEALLOCATE_LOCAL(pDrawables);
++        Xfree(pDrawables);
+     }
+ 
+     return(client->noClientException);
+--- xc/programs/Xserver/dix/events.c	2004-08-08 22:08:35.000000000 -0400
++++ xc-new/programs/Xserver/dix/events.c	2007-01-09 22:50:48.000000000 -0500
+@@ -1960,6 +1960,13 @@
+ 		 */
+ 		&& (!wBoundingShape(pWin) || PointInBorderSize(pWin, x, y))
+ #endif
++#ifdef ROOTLESS
++		/* In rootless mode windows may be offscreen, even when
++		 * they're in X's stack. (E.g. if the native window system
++		 * implements some form of virtual desktop system).
++		 */
++		&& !pWin->rootlessUnhittable
++#endif
+ 		)
+ 	{
+ 	    if (spriteTraceGood >= spriteTraceSize)
+--- xc/programs/Xserver/dix/window.c	2004-07-31 04:24:13.000000000 -0400
++++ xc-new/programs/Xserver/dix/window.c	2007-01-09 22:50:49.000000000 -0500
+@@ -294,6 +294,9 @@
+ #ifdef COMPOSITE
+     pWin->redirectDraw = 0;
+ #endif
++#ifdef ROOTLESS
++    pWin->rootlessUnhittable = FALSE;
++#endif
+ }
+ 
+ static void
+@@ -1617,7 +1620,6 @@
+ 	if(pWin->drawable.pScreen->RestackWindow)
+ 	    (*pWin->drawable.pScreen->RestackWindow)(pWin, pOldNextSib);
+     }
+-
+ #ifdef ROOTLESS
+     /*
+      * In rootless mode we can't optimize away window restacks.
+--- xc/programs/Xserver/fb/fb.h	2004-12-14 23:53:05.000000000 -0500
++++ xc-new/programs/Xserver/fb/fb.h	2007-01-09 22:50:49.000000000 -0500
+@@ -650,6 +650,10 @@
+ #ifdef ROOTLESS
+ #define __fbPixOriginX(pPix)	((pPix)->drawable.x)
+ #define __fbPixOriginY(pPix)	((pPix)->drawable.y)
++#elif defined (ROOTLESS)
++/* Use X position to account for non-32-bit alignments. */
++#define __fbPixOriginX(pPix)   ((pPix)->drawable.x)
++#define __fbPixOriginY(pPix)   0
+ #else
+ #define __fbPixOriginX(pPix)	0
+ #define __fbPixOriginY(pPix)	0
+--- xc/programs/Xserver/fb/fbblt.c	2004-04-23 15:05:14.000000000 -0400
++++ xc-new/programs/Xserver/fb/fbblt.c	2007-01-09 22:50:49.000000000 -0500
+@@ -25,6 +25,10 @@
+ 
+ #include "fb.h"
+ 
++#ifdef FB_XP
++#include "Xplugin.h"
++#endif
++
+ #define InitializeShifts(sx,dx,ls,rs) { \
+     if (sx != dx) { \
+ 	if (sx > dx) { \
+@@ -84,6 +88,58 @@
+     }
+     FbMaskBitsBytes (dstX, width, destInvarient, startmask, startbyte,
+ 		     nmiddle, endmask, endbyte);
++
++#ifdef FB_XP
++    if (!startmask && !endmask && alu == GXcopy
++	&& height * nmiddle * sizeof (*dst) > xp_copy_bytes_threshold)
++    {
++	if (pm == FB_ALLONES)
++	{
++	    xp_copy_bytes (nmiddle * sizeof (*dst), height,
++			   (char *) srcLine + (srcX >> 3),
++			   srcStride * sizeof (*src),
++			   (char *) dstLine + (dstX >> 3),
++			   dstStride * sizeof (*dst));
++	    return;
++	}
++
++	/* FIXME: the pm test here isn't super-wonderful - just because
++	   we don't care about the top eight bits doesn't necessarily
++	   mean we want them set to 255. But doing this does give a
++	   factor of two performance improvement when copying from a
++	   pixmap to a window, which is pretty common.. */
++
++	else if (bpp == 32 && sizeof (FbBits) == 4
++		 && pm == 0x00FFFFFFUL && !reverse)
++	{
++	    /* need to copy XRGB to ARGB. */
++
++	    void *src[2], *dest[2];
++	    unsigned int src_rowbytes[2], dest_rowbytes[2];
++            unsigned int fn;
++
++	    src[0] = (char *) srcLine + (srcX >> 3);
++	    src[1] = NULL;
++	    src_rowbytes[0] = srcStride * sizeof (*src);
++	    src_rowbytes[1] = 0;
++
++	    dest[0] = (char *) dstLine + (dstX >> 3);
++	    dest[1] = dest[0];
++	    dest_rowbytes[0] = dstStride * sizeof (*dst);
++	    dest_rowbytes[1] = dest_rowbytes[0];
++
++	    fn = XP_COMPOSITE_FUNCTION (XP_COMPOSITE_SRC, XP_DEPTH_ARGB8888,
++					XP_DEPTH_NIL, XP_DEPTH_ARGB8888);
++
++	    if (xp_composite_pixels (nmiddle, height, fn, src, src_rowbytes,
++				     NULL, 0, dest, dest_rowbytes) == Success)
++	    {
++		return;
++	    }
++	}
++    }
++#endif
++
+     if (reverse)
+     {
+ 	srcLine += ((srcX + width - 1) >> FB_SHIFT) + 1;
+--- xc/programs/Xserver/fb/fbmmx.c	2004-07-22 15:24:50.000000000 -0400
++++ xc-new/programs/Xserver/fb/fbmmx.c	2007-01-09 22:50:49.000000000 -0500
+@@ -29,6 +29,8 @@
+ 
+ #ifdef RENDER
+ 
++#include <mmintrin.h>
++
+ #include "picturestr.h"
+ #include "mipict.h"
+ #include "fbpict.h"
+@@ -48,6 +50,10 @@
+ #define CHECKPOINT()
+ #endif
+ 
++#define mmx_and(a,b)	((Vector1x64)_mm_and_si64((__m64)(a),(__m64)(b)))
++#define mmx_or(a,b)	((Vector1x64)_mm_or_si64((__m64)(a),(__m64)(b)))
++#define mmx_xor(a,b)	((Vector1x64)_mm_xor_si64((__m64)(a),(__m64)(b)))
++
+ typedef struct
+ {
+     ullong mmx_zero;
+@@ -102,7 +108,7 @@
+ static __inline__ Vector4x16
+ negate (Vector4x16 mask)
+ {
+-    return (Vector4x16)__builtin_ia32_pxor (
++    return (Vector4x16)mmx_xor (
+ 	(Vector1x64)mask,
+ 	(Vector1x64)c.mmx_4x00ff);
+ }
+@@ -163,9 +169,9 @@
+ 
+     t1 = shift ((Vector1x64)pixel, -48);
+     t2 = shift (t1, 16);
+-    t1 = __builtin_ia32_por (t1, t2);
++    t1 = mmx_or (t1, t2);
+     t2 = shift (t1, 32);
+-    t1 = __builtin_ia32_por (t1, t2);
++    t1 = mmx_or (t1, t2);
+ 
+     return (Vector4x16)t1;
+ }
+@@ -178,9 +184,9 @@
+     t1 = shift ((Vector1x64)pixel,  48);
+     t1 = shift (t1, -48);
+     t2 = shift (t1, 16);
+-    t1 = __builtin_ia32_por (t1, t2);
++    t1 = mmx_or (t1, t2);
+     t2 = shift (t1, 32);
+-    t1 = __builtin_ia32_por (t1, t2);
++    t1 = mmx_or (t1, t2);
+ 
+     return (Vector4x16)t1;
+ }
+@@ -192,15 +198,15 @@
+ 
+     x = y = z = (Vector1x64)pixel;
+ 
+-    x = __builtin_ia32_pand (x, (Vector1x64)c.mmx_ffff0000ffff0000);
+-    y = __builtin_ia32_pand (y, (Vector1x64)c.mmx_000000000000ffff);
+-    z = __builtin_ia32_pand (z, (Vector1x64)c.mmx_0000ffff00000000);
++    x = mmx_and (x, (Vector1x64)c.mmx_ffff0000ffff0000);
++    y = mmx_and (y, (Vector1x64)c.mmx_000000000000ffff);
++    z = mmx_and (z, (Vector1x64)c.mmx_0000ffff00000000);
+ 
+     y = shift (y, 32);
+     z = shift (z, -32);
+ 
+-    x = __builtin_ia32_por (x, y);
+-    x = __builtin_ia32_por (x, z);
++    x = mmx_or (x, y);
++    x = mmx_or (x, z);
+ 
+     return (Vector4x16)x;
+ }
+@@ -234,7 +240,7 @@
+ over_rev_non_pre (Vector4x16 src, Vector4x16 dest)
+ {
+     Vector4x16 srca = expand_alpha (src);
+-    Vector4x16 srcfaaa = (Vector4x16)__builtin_ia32_por((Vector1x64)srca, (Vector1x64)c.mmx_full_alpha);
++    Vector4x16 srcfaaa = (Vector4x16)mmx_or((Vector1x64)srca, (Vector1x64)c.mmx_full_alpha);
+ 
+     return over(pix_multiply(invert_colors(src), srcfaaa), srca, dest);
+ }
+@@ -300,9 +306,9 @@
+     Vector1x64 t1 = shift (p, 36 - 11);
+     Vector1x64 t2 = shift (p, 16 - 5);
+     
+-    p = __builtin_ia32_por (t1, p);
+-    p = __builtin_ia32_por (t2, p);
+-    p = __builtin_ia32_pand (p, (Vector1x64)c.mmx_565_rgb);
++    p = mmx_or (t1, p);
++    p = mmx_or (t2, p);
++    p = mmx_and (p, (Vector1x64)c.mmx_565_rgb);
+     
+     pixel = __builtin_ia32_pmullw ((Vector4x16)p, (Vector4x16)c.mmx_565_unpack_multiplier);
+     return __builtin_ia32_psrlw (pixel, 8);
+@@ -324,27 +330,27 @@
+     Vector1x64 t = (Vector1x64)target;
+     Vector1x64 r, g, b;
+     
+-    r = __builtin_ia32_pand (p, (Vector1x64)c.mmx_565_r);
+-    g = __builtin_ia32_pand (p, (Vector1x64)c.mmx_565_g);
+-    b = __builtin_ia32_pand (p, (Vector1x64)c.mmx_565_b);
++    r = mmx_and (p, (Vector1x64)c.mmx_565_r);
++    g = mmx_and (p, (Vector1x64)c.mmx_565_g);
++    b = mmx_and (p, (Vector1x64)c.mmx_565_b);
+     
+     r = shift (r, - (32 - 8) + pos * 16);
+     g = shift (g, - (16 - 3) + pos * 16);
+     b = shift (b, - (0  + 3) + pos * 16);
+ 
+     if (pos == 0)
+-	t = __builtin_ia32_pand (t, (Vector1x64)c.mmx_mask_0);
++	t = mmx_and (t, (Vector1x64)c.mmx_mask_0);
+     else if (pos == 1)
+-	t = __builtin_ia32_pand (t, (Vector1x64)c.mmx_mask_1);
++	t = mmx_and (t, (Vector1x64)c.mmx_mask_1);
+     else if (pos == 2)
+-	t = __builtin_ia32_pand (t, (Vector1x64)c.mmx_mask_2);
++	t = mmx_and (t, (Vector1x64)c.mmx_mask_2);
+     else if (pos == 3)
+-	t = __builtin_ia32_pand (t, (Vector1x64)c.mmx_mask_3);
++	t = mmx_and (t, (Vector1x64)c.mmx_mask_3);
+     
+-    p = __builtin_ia32_por (r, t);
+-    p = __builtin_ia32_por (g, p);
++    p = mmx_or (r, t);
++    p = mmx_or (g, p);
+     
+-    return (Vector4x16)__builtin_ia32_por (b, p);
++    return (Vector4x16)mmx_or (b, p);
+ }
+ 
+ static __inline__ void
+--- xc/programs/Xserver/fb/fbpict.c	2004-08-06 19:42:10.000000000 -0400
++++ xc-new/programs/Xserver/fb/fbpict.c	2007-01-09 22:50:49.000000000 -0500
+@@ -25,6 +25,10 @@
+ 
+ #include "fb.h"
+ 
++#ifdef FB_XP
++#include "Xplugin.h"
++#endif
++
+ #ifdef RENDER
+ 
+ #include "picturestr.h"
+@@ -109,6 +113,30 @@
+     fbComposeGetStart (pDst, xDst, yDst, CARD32, dstStride, dstLine, 1);
+     fbComposeGetStart (pMask, xMask, yMask, CARD8, maskStride, maskLine, 1);
+     
++#ifdef FB_XP
++    if (dstMask == FB_ALLONES && pDst->pDrawable->bitsPerPixel == 32
++	&& width * height > xp_composite_area_threshold)
++    {
++	void *srcp[2], *destp[2];
++	unsigned int dest_rowbytes[2];
++	unsigned int fn;
++
++	srcp[0] = &src; srcp[1] = &src;
++	/* null rowbytes pointer means use first value as a constant */
++	destp[0] = dstLine; destp[1] = dstLine;
++	dest_rowbytes[0] = dstStride * 4; dest_rowbytes[1] = dest_rowbytes[0];
++	fn = XP_COMPOSITE_FUNCTION (XP_COMPOSITE_OVER, XP_DEPTH_ARGB8888,
++				    XP_DEPTH_A8, XP_DEPTH_ARGB8888);
++
++	if (xp_composite_pixels (width, height, fn, srcp, NULL,
++				 maskLine, maskStride,
++				 destp, dest_rowbytes) == Success)
++	{
++	    return;
++	}
++    }
++#endif
++    
+     while (height--)
+     {
+ 	dst = dstLine;
+--- xc/programs/Xserver/fb/fbsolid.c	2004-07-22 15:24:50.000000000 -0400
++++ xc-new/programs/Xserver/fb/fbsolid.c	2007-01-09 22:50:50.000000000 -0500
+@@ -26,6 +26,10 @@
+ 
+ #include "fb.h"
+ 
++#ifdef FB_XP
++#include "Xplugin.h"
++#endif
++
+ void
+ fbSolid (FbBits	    *dst,
+ 	 FbStride   dstStride,
+@@ -55,6 +59,23 @@
+ 		    nmiddle, endmask, endbyte);
+     if (startmask)
+ 	dstStride--;
++
++#ifdef FB_XP
++    if (!startmask && !endmask && !and
++	&& height * nmiddle * sizeof (*dst) > xp_fill_bytes_threshold)
++    {
++	if (bpp <= 8)
++	    xor |= xor << 8;
++	if (bpp <= 16)
++	    xor |= xor << 16;
++
++	xp_fill_bytes (nmiddle * sizeof (*dst), height, xor,
++		       (char *) dst + (dstX >> 3),
++		       dstStride * sizeof (*dst));
++	return;
++    }
++#endif
++
+     dstStride -= nmiddle;
+     while (height--)
+     {
+--- xc/programs/Xserver/hw/darwin/darwinKeyboard.c	2004-04-23 15:06:15.000000000 -0400
++++ xc-new/programs/Xserver/hw/darwin/darwinKeyboard.c	2007-01-09 22:50:50.000000000 -0500
+@@ -64,7 +64,9 @@
+ /* Define this to use Alt for Mode_switch. */
+ #define ALT_IS_MODE_SWITCH 1
+ 
+-#include <drivers/event_status_driver.h>
++#define __BEGIN_DECLS
++#define __END_DECLS
++#include <IOKit/hidsystem/event_status_driver.h>
+ #include <IOKit/hidsystem/ev_keymap.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+--- xc/programs/Xserver/hw/darwin/quartz/applewmExt.h	2004-04-23 15:15:17.000000000 -0400
++++ xc-new/programs/Xserver/hw/darwin/quartz/applewmExt.h	2007-01-09 22:50:50.000000000 -0500
+@@ -59,8 +59,6 @@
+     FrameDrawProc FrameDraw;
+ } AppleWMProcsRec, *AppleWMProcsPtr;
+ 
+-extern AppleWMProcsPtr appleWMProcs;
+-
+ void AppleWMExtensionInit(
+     AppleWMProcsPtr procsPtr
+ );
+--- xc/programs/Xserver/hw/vfb/InitOutput.c	2004-08-26 21:15:10.000000000 -0400
++++ xc-new/programs/Xserver/hw/vfb/InitOutput.c	2007-01-09 22:50:50.000000000 -0500
+@@ -28,6 +28,13 @@
+ */
+ /* $XFree86: xc/programs/Xserver/hw/vfb/InitOutput.c,v 3.25 2003/11/15 04:01:56 dawes Exp $ */
+ 
++/* jsh: workaround for 3834723 */
++#ifdef HAS_SHM
++#include <sys/types.h>
++#include <sys/ipc.h>
++#include <sys/shm.h>
++#endif /* HAS_SHM */
++
+ #if defined(WIN32)
+ #include <X11/Xwinsock.h>
+ #endif
+--- xc/programs/Xserver/hw/xnest/Screen.c	2004-08-11 18:40:14.000000000 -0400
++++ xc-new/programs/Xserver/hw/xnest/Screen.c	2007-01-09 22:50:50.000000000 -0500
+@@ -360,6 +360,11 @@
+   if (!miScreenDevPrivateInit(pScreen, xnestWidth, NULL))
+       return FALSE;
+ 
++#ifdef SHAPE
++  /* overwrite miSetShape with our own */
++  pScreen->SetShape = xnestSetShape;
++#endif /* SHAPE */
++
+   /* devPrivates */
+ 
+ #define POSITION_OFFSET (pScreen->myNum * (xnestWidth + xnestHeight) / 32)
+--- xc/programs/Xserver/hw/xnest/Window.c	2004-04-23 15:54:21.000000000 -0400
++++ xc-new/programs/Xserver/hw/xnest/Window.c	2007-01-09 22:50:50.000000000 -0500
+@@ -449,6 +449,13 @@
+ }
+ 
+ #ifdef SHAPE
++void
++xnestSetShape(WindowPtr pWin)
++{
++  xnestShapeWindow(pWin);
++  miSetShape(pWin);
++}
++
+ static Bool
+ xnestRegionEqual(RegionPtr pReg1, RegionPtr pReg2)
+ {
+--- xc/programs/Xserver/hw/xnest/XNWindow.h	2004-04-23 15:54:21.000000000 -0400
++++ xc-new/programs/Xserver/hw/xnest/XNWindow.h	2007-01-09 22:50:50.000000000 -0500
+@@ -73,6 +73,7 @@
+ void xnestWindowExposures(WindowPtr pWin, RegionPtr pRgn,
+ 			  RegionPtr other_exposed);
+ #ifdef SHAPE
++void xnestSetShape(WindowPtr pWin);
+ void xnestShapeWindow(WindowPtr pWin);
+ #endif /* SHAPE */
+ 
+--- xc/programs/Xserver/include/servermd.h	2004-08-09 18:37:22.000000000 -0400
++++ xc-new/programs/Xserver/include/servermd.h	2007-01-09 22:50:50.000000000 -0500
+@@ -167,7 +167,7 @@
+ 
+ #endif /* hpux || __hppa__ */
+ 
+-#if defined(__powerpc__)
++#if defined(__powerpc__) || defined (__ppc__)
+ 
+ #define IMAGE_BYTE_ORDER        MSBFirst
+ #define BITMAP_BIT_ORDER        MSBFirst
+--- xc/programs/Xserver/include/windowstr.h	2004-07-31 04:24:13.000000000 -0400
++++ xc-new/programs/Xserver/include/windowstr.h	2007-01-09 22:50:50.000000000 -0500
+@@ -139,6 +139,9 @@
+ #ifdef COMPOSITE
+     unsigned		redirectDraw:1;	/* rendering is redirected from here */
+ #endif
++#ifdef ROOTLESS
++    unsigned		rootlessUnhittable:1;	/* doesn't hit-test */
++#endif
+     DevUnion		*devPrivates;
+ } WindowRec;
+ 
+--- xc/programs/Xserver/mi/miinitext.c	2004-12-13 00:48:41.000000000 -0500
++++ xc-new/programs/Xserver/mi/miinitext.c	2007-01-09 22:50:50.000000000 -0500
+@@ -608,7 +608,7 @@
+ #ifdef XSYNC
+     if (!noSyncExtension) SyncExtensionInit();
+ #endif
+-#if defined(XKB) && !defined(PRINT_ONLY_SERVER) && !defined(NO_HW_ONLY_EXTS)
++#if defined(XKB) && !defined(PRINT_ONLY_SERVER)
+     if (!noXkbExtension) XkbExtensionInit();
+ #endif
+ #ifdef XCMISC
+--- xc/programs/Xserver/mi/miwindow.c	2004-04-23 15:54:26.000000000 -0400
++++ xc-new/programs/Xserver/mi/miwindow.c	2007-01-09 22:50:50.000000000 -0500
+@@ -883,7 +883,11 @@
+ 
+ 	    /* and move those bits */
+ 
+-	    if (oldpt.x != x || oldpt.y != y)
++	    if (oldpt.x != x || oldpt.y != y
++#ifdef COMPOSITE
++		|| pWin->redirectDraw
++#endif
++		)
+ 		(*pWin->drawable.pScreen->CopyWindow)(pWin, oldpt, gravitate[g]);
+ 
+ 	    /* remove any overwritten bits from the remaining useful bits */
+--- xc/programs/Xserver/miext/damage/damage.c	2004-12-12 19:56:07.000000000 -0500
++++ xc-new/programs/Xserver/miext/damage/damage.c	2007-01-09 22:50:50.000000000 -0500
+@@ -742,9 +742,13 @@
+     /* The driver will only call SourceValidate() when pSrc != pDst,
+      * but the software sprite (misprite.c) always need to know when a
+      * drawable is copied so it can remove the sprite. See #1030. */
+-    if ((pSrc == pDst) && pSrc->pScreen->SourceValidate)
+-        (*pSrc->pScreen->SourceValidate) (pSrc, srcx, srcy, width, height);
+-
++    if ((pSrc == pDst) && pSrc->pScreen->SourceValidate &&
++	pSrc->type == DRAWABLE_WINDOW &&
++	((WindowPtr)pSrc)->viewable)
++    {
++	(*pSrc->pScreen->SourceValidate) (pSrc, srcx, srcy, width, height);
++    }
++    
+     if (checkGCDamage (pDst, pGC))
+     {
+ 	BoxRec box;
+--- xc/programs/Xserver/render/render.c	2004-08-06 19:42:10.000000000 -0400
++++ xc-new/programs/Xserver/render/render.c	2007-01-09 22:51:03.000000000 -0500
+@@ -48,6 +48,10 @@
+ #include "xf86_ansic.h"
+ #endif
+ 
++#if !defined(UINT32_MAX)
++#define UINT32_MAX 0xffffffffU
++#endif
++
+ static int ProcRenderQueryVersion (ClientPtr pClient);
+ static int ProcRenderQueryPictFormats (ClientPtr pClient);
+ static int ProcRenderQueryPictIndexValues (ClientPtr pClient);
+@@ -1074,11 +1078,14 @@
+     }
+ 
+     nglyphs = stuff->nglyphs;
++    if (nglyphs > UINT32_MAX / sizeof(GlyphNewRec))
++	    return BadAlloc;
++
+     if (nglyphs <= NLOCALGLYPH)
+ 	glyphsBase = glyphsLocal;
+     else
+     {
+-	glyphsBase = (GlyphNewPtr) ALLOCATE_LOCAL (nglyphs * sizeof (GlyphNewRec));
++	glyphsBase = (GlyphNewPtr) Xalloc (nglyphs * sizeof (GlyphNewRec));
+ 	if (!glyphsBase)
+ 	    return BadAlloc;
+     }
+@@ -1135,7 +1142,7 @@
+     }
+ 
+     if (glyphsBase != glyphsLocal)
+-	DEALLOCATE_LOCAL (glyphsBase);
++	Xfree (glyphsBase);
+     return client->noClientException;
+ bail:
+     while (glyphs != glyphsBase)
+@@ -1144,7 +1151,7 @@
+ 	xfree (glyphs->glyph);
+     }
+     if (glyphsBase != glyphsLocal)
+-	DEALLOCATE_LOCAL (glyphsBase);
++	Xfree (glyphsBase);
+     return err;
+ }
+ 
+@@ -1304,7 +1311,7 @@
+ 	{
+ 	    if (buffer + sizeof (GlyphSet) < end)
+ 	    {
+-		gs = *(GlyphSet *) buffer;
++                memcpy(&gs, buffer, sizeof(GlyphSet));
+ 		glyphSet = (GlyphSetPtr) SecurityLookupIDByType (client,
+ 								 gs,
+ 								 GlyphSetType,
+--- xc/programs/Xserver/xkb/xkbAccessX.c	2004-04-23 15:54:30.000000000 -0400
++++ xc-new/programs/Xserver/xkb/xkbAccessX.c	2007-01-09 22:50:50.000000000 -0500
+@@ -320,7 +320,7 @@
+ void
+ AccessXCancelRepeatKey(XkbSrvInfoPtr xkbi,KeyCode key)
+ {
+-    if (xkbi->repeatKey==key)
++    if (xkbi && xkbi->repeatKey==key)
+ 	xkbi->repeatKey= 0;
+     return;
+ }
+--- xc/programs/fstobdf/chars.c	2004-04-23 15:54:32.000000000 -0400
++++ xc-new/programs/fstobdf/chars.c	2007-01-09 22:50:50.000000000 -0500
+@@ -213,7 +213,8 @@
+   	  encoding=(chHigh << 8)+chLow;
+ 	if ((charInfo->width != 0) || (charInfo->right != charInfo->left))
+ 	    EmitBitmap(outFile, fontHeader, charInfo, encoding, bpr, glyph);
+-	glyph += (charInfo->descent + charInfo->ascent) * bpr;
++	glyph = glyphs +
++	  offsets[encoding-((firstCharHigh << 8)+firstCharLow) + 1].position;
+ 	charInfo++;
+       }
+     }
+--- xc/programs/xterm/main.c	2005-01-12 16:45:10.000000000 -0500
++++ xc-new/programs/xterm/main.c	2007-01-09 22:50:50.000000000 -0500
+@@ -376,7 +376,7 @@
+ #include <local/openpty.h>
+ #endif /* PUCC_PTYD */
+ 
+-#ifdef __OpenBSD__
++#if defined(__OpenBSD__) || defined(__DARWIN__)
+ #include <util.h>
+ #endif
+ 
+@@ -674,6 +674,11 @@
+  * to implement xterm -ls.  They can turn on USE_LOGIN_DASH_P and turn off
+  * WTMP and USE_LASTLOG.
+  */
++#ifdef __DARWIN__
++#define USE_LOGIN_DASH_P
++#define LOGIN_FILENAME "/usr/bin/login"
++#endif
++
+ #ifdef USE_LOGIN_DASH_P
+ #ifndef LOGIN_FILENAME
+ #define LOGIN_FILENAME "/bin/login"
+@@ -2294,7 +2299,7 @@
+ 			       (resource.utmpInhibit ? OPTY_NOP : OPTY_LOGIN),
+ 			       getuid(), from)) < 0);
+ 
+-#elif defined(__osf__) || (defined(__GLIBC__) && !defined(USE_USG_PTYS)) || defined(__NetBSD__)
++#elif defined(__osf__) || (defined(__GLIBC__) && !defined(USE_USG_PTYS)) || defined(__NetBSD__) || defined(__DARWIN__)
+ 
+     int tty;
+     result = openpty(pty, &tty, ttydev, NULL, NULL);
+@@ -4148,6 +4153,9 @@
+ #endif /* !USE_ANY_SYSV_TERMIO && !USE_POSIX_TERMIOS */
+ 
+ #ifdef USE_LOGIN_DASH_P
++#ifdef __DARWIN__
++	    added_utmp_entry = 1;       /* login does this for us */
++#endif
+ 	    if (term->misc.login_shell && pw && added_utmp_entry)
+ 		execl(bin_login, "login", "-p", "-f", login_name, (void *) 0);
+ #endif

@@ -1,0 +1,131 @@
+diff -Nurd libtunepimp-0.4.4/plugins/flac/flac_meta.cpp libtunepimp-0.4.4-new/plugins/flac/flac_meta.cpp
+--- libtunepimp-0.4.4/plugins/flac/flac_meta.cpp	2006-10-13 16:06:46.000000000 -0400
++++ libtunepimp-0.4.4-new/plugins/flac/flac_meta.cpp	2008-02-19 15:10:43.000000000 -0500
+@@ -21,7 +21,7 @@
+ along with libtunepimp; if not, write to the Free Software
+ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ 
+-$Id: flac_meta.cpp 1472 2006-01-22 14:26:17Z luks $
++$Id: flac_meta.cpp 7325 2006-04-25 07:57:00Z luks $
+ 
+ ----------------------------------------------------------------------------*/
+   // ---------------------------------------------------------------------------
+@@ -243,8 +243,6 @@
+       if (get_comment(tagmap, "MUSICBRAINZ_ALBUMARTISTSORTNAME", val))
+           metadata.albumArtistSortName = string(val.c_str());
+    }
+-   if (get_comment(tagmap, "MUSICBRAINZ_TRMID", val))
+-      metadata.fileTrm = string(val.c_str());
+    if (get_comment(tagmap, "RELEASECOUNTRY", val))
+       metadata.releaseCountry = string(val.c_str());
+     if (get_comment(tagmap, "MUSICBRAINZ_NONALBUM", val))
+@@ -322,7 +320,6 @@
+        add_comment(tagmap, "MUSICBRAINZ_ALBUMSTATUS", temp.c_str());
+    }
+    add_comment(tagmap, "MUSICBRAINZ_ARTISTID", metadata.artistId.c_str());
+-   add_comment(tagmap, "MUSICBRAINZ_TRMID", metadata.fileTrm.c_str());
+    if (!metadata.albumArtistId.empty())
+    {
+         add_comment(tagmap, "MUSICBRAINZ_ALBUMARTISTID", metadata.albumArtistId.c_str());
+diff -Nurd libtunepimp-0.4.4/plugins/flac/flacdecode.cpp libtunepimp-0.4.4-new/plugins/flac/flacdecode.cpp
+--- libtunepimp-0.4.4/plugins/flac/flacdecode.cpp	2006-10-13 16:06:46.000000000 -0400
++++ libtunepimp-0.4.4-new/plugins/flac/flacdecode.cpp	2008-02-19 15:10:43.000000000 -0500
+@@ -21,13 +21,21 @@
+    along with libtunepimp; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ 
+-   $Id: flacdecode.cpp 1394 2005-06-16 06:44:37Z robert $
++   $Id: flacdecode.cpp 8625 2006-11-05 22:13:17Z luks $
+ 
+ ----------------------------------------------------------------------------*/
+ #include <stdlib.h>
+ #include <string.h>
+ #include "flacdecode.h"
+ 
++#include <FLAC/export.h>
++/* FLAC 1.1.3 has FLAC_API_VERSION_CURRENT == 8 */
++#if !defined(FLAC_API_VERSION_CURRENT) || FLAC_API_VERSION_CURRENT < 8
++#define LEGACY_FLAC
++#else
++#undef LEGACY_FLAC
++#endif
++
+ void FLAC_errorcb(const FLAC__StreamDecoder * decoder,
+                   FLAC__StreamDecoderErrorStatus status, void *client_data)
+ {
+@@ -54,12 +62,12 @@
+                                             const FLAC__int32 * const buffer[], void *client_data)
+ {
+    
+-   // No idea how TRM signatures are generated for more than two 
++   // No idea how PUID signatures are generated for more than two 
+    // channels, so not going to try
+    if (frame->header.channels > 2)
+       return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
+ 
+-   // TRM code doesn't support anything other than 8 and 16 bit samples
++   // PUID code doesn't support anything other than 8 and 16 bit samples
+    if (frame->header.bits_per_sample != 8 &&
+        frame->header.bits_per_sample != 16 &&
+        frame->header.bits_per_sample != 24)
+@@ -99,7 +107,11 @@
+ 
+ FLAC__StreamDecoderReadStatus FLAC_readcb(const FLAC__StreamDecoder *decoder, 
+                                           FLAC__byte buffer[], 
++#ifdef LEGACY_FLAC
+                                           unsigned *bytes, 
++#else
++                                          size_t *bytes, 
++#endif
+                                           void *client_data)
+ {
+    clientdata_t *cd = reinterpret_cast < clientdata_t * >(client_data);
+@@ -131,6 +143,7 @@
+    if (!cd.in)
+       return;
+ 
++#ifdef LEGACY_FLAC
+    if (!FLAC__stream_decoder_set_read_callback(decoder, &FLAC_readcb))
+       return;
+ 
+@@ -149,6 +162,10 @@
+    state = FLAC__stream_decoder_init(decoder);
+    if (state != FLAC__STREAM_DECODER_SEARCH_FOR_METADATA)
+       return;
++#else
++   if (FLAC__stream_decoder_init_stream(decoder, &FLAC_readcb, NULL, NULL, NULL, NULL, &FLAC_writecb, &FLAC_metadatacb, &FLAC_errorcb, &cd) != FLAC__STREAM_DECODER_INIT_STATUS_OK)
++      return;
++#endif
+ 
+    FLAC__stream_decoder_process_until_end_of_metadata(decoder);
+    state = FLAC__stream_decoder_get_state(decoder);
+@@ -221,6 +238,8 @@
+           break;
+        
+        state = FLAC__stream_decoder_get_state(decoder);
++       if (state == FLAC__STREAM_DECODER_END_OF_STREAM)
++           break;
+        if (state != FLAC__STREAM_DECODER_SEARCH_FOR_FRAME_SYNC ||
+            state != FLAC__STREAM_DECODER_READ_FRAME)
+        {
+diff -Nurd libtunepimp-0.4.4/plugins/flac/flacdecode.h libtunepimp-0.4.4-new/plugins/flac/flacdecode.h
+--- libtunepimp-0.4.4/plugins/flac/flacdecode.h	2006-10-13 16:06:46.000000000 -0400
++++ libtunepimp-0.4.4-new/plugins/flac/flacdecode.h	2008-02-19 15:10:45.000000000 -0500
+@@ -21,13 +21,13 @@
+    along with libtunepimp; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ 
+-   $Id: flacdecode.h 1393 2005-06-15 01:08:20Z robert $
++   $Id: flacdecode.h 8625 2006-11-05 22:13:17Z luks $
+ 
+ ----------------------------------------------------------------------------*/
+-#ifndef __VORBIS_DECODE_H
+-#define __VORBIS_DECODE_H
++#ifndef __FLAC_DECODE_H
++#define __FLAC_DECODE_H
+ 
+-#include <FLAC/file_decoder.h>
++#include <FLAC/stream_decoder.h>
+ #include <string>
+ #include "decode_plugin.h"
+ #include "fileio.h"

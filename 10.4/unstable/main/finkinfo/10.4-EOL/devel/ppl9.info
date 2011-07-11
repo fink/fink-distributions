@@ -1,0 +1,194 @@
+Package: ppl9
+Version: 0.11.2
+Revision: 1
+BuildDependsOnly: True
+Depends: %N-shlibs (= %v-%r)
+BuildDepends: <<
+	fink (>= 0.28),
+	gmp5,
+	m4,
+	system-java-dev
+<<
+Conflicts: ppl
+Replaces: ppl
+GCC: 4.0
+Source: ftp://ftp.cs.unipr.it/pub/ppl/releases/%v/ppl-%v.tar.bz2
+Source-MD5: c24429e6c3bc97d45976a63f40f489a1
+ConfigureParams: <<
+	--mandir=%p/share/man \
+	--infodir=%p/share/info \
+	--disable-static \
+	--enable-pch \
+	--with-java="$JAVA_HOME" \
+	CFLAGS="-g -O2 -pipe -fpch-preprocess -fPIC" \
+	CXXFLAGS="-g -O2 -pipe -fpch-preprocess -fPIC" \
+	CPPFLAGS="-I$JAVA_INCLUDE" \
+	--enable-check=thorough \
+	-C
+# if you do not have the patience for the 'thorough' tests, --enable-check=quick
+<<
+PatchScript: <<
+	#!/bin/sh -ev
+	# g++-4.0.1 rejects template instantiating w/ anonymous enums -- fangism
+	# this was fixed in ppl-0.11; the following patch doesn't do anything
+	# file=src/meta_programming.hh
+	# sed -i.orig -e '/struct Bool/,/^};/s|enum {|enum value_type {|' $file
+	# symbols in anonymous namespace given extern linkage
+	file=src/initializer.hh
+	sed -i.orig -e '/::Init.*initializer/s|^|static |' $file
+	# To take advantage of precompiled headers, defined macros must match.
+	# patch could apply to src/Makefile.am too
+	file=src/Makefile.in
+	sed -i.orig -e '/CXXCOMPILE.*-xc++-header/s|-o|-DPIC &|' $file
+	# files compiled here are VERY taxing on memory, so we serialize
+	file=tests/MIP_Problem/Makefile.in
+	echo ".NOTPARALLEL: check-am" >> $file
+	# move pkglibdir to a versioned dir to avoid shlib conflict
+	file=interfaces/Java/jni/Makefile.in
+	sed -i.orig -e '/^pkglibdir =/s|$|-0.11|' $file
+	file=interfaces/Java/Makefile.in
+	sed -i.orig -e '/^pkglibdir =/s|$|-0.11|' $file
+	# use consistent architecture for testing, override default as needed
+	file=interfaces/Java/tests/Makefile.in
+	case "%m" in
+	powerpc ) ;;
+	i386 ) sed -i.orig '/\$(JAVA)/s|-classpath|-d32 &|' $file ;;
+	x64_64 ) ;;
+	esac
+<<
+CompileScript: <<
+	#!/bin/sh -ev
+	mkdir build
+	cd build
+	# old-location
+	# JAVA_HOME=`/usr/libexec/java_home`
+	JAVA_FW=/System/Library/Frameworks/JavaVM.framework
+	JAVA_HOME=$JAVA_FW/Home
+	test -d $JAVA_HOME && test -x $JAVA_HOME || \
+	  { echo "$JAVA_HOME not found." ; exit 1 ;}
+	JAVA_INCLUDE=$JAVA_HOME/include
+	test -r $JAVA_INCLUDE/jni.h || JAVA_INCLUDE=$JAVA_FW/Headers
+	test -r $JAVA_INCLUDE/jni.h || \
+	  { echo "Missing Java development package containing jni.h." ; \
+	  echo "Please download/install from connect.apple.com and try again." ; \
+	  echo "Thank you and have a nice day." ; exit 1 ;}
+	darwin_vers=`uname -r | cut -d. -f1`
+	if test "$darwin_vers" = 9 ; then
+	  export CC=gcc-4.2
+	  export CXX=g++-4.2
+	  test -x `which gcc-4.2` || \
+	  { echo "gcc-4.2 required on OS X 10.5, but missing!" ; \
+	    echo "Please upgrade Xcode Developer Tools from Apple." ; \
+	    exit 1; }
+	fi
+	../configure %c
+	# for ccache-default
+	export CCACHE_SLOPPINESS=time_macros
+	# num_cpu=$(echo `sysctl -n hw.ncpu`)
+	# make -j $num_cpu
+	make
+<<
+InfoTest: <<
+	TestScript: <<
+	#!/bin/sh -ev
+	cd build
+	# for ccache-default
+	export CCACHE_SLOPPINESS=time_macros
+	#num_cpu=$(echo `sysctl -n hw.ncpu`)
+	#make -j $num_cpu -k check || exit 2
+	make -k check || exit 2
+	<<
+	TestDepends: glpk-dev
+	TestSuiteSize: large
+<<
+InstallScript: <<
+	#!/bin/sh -ev
+	cd build
+	make install DESTDIR=%d
+<<
+DocFiles: <<
+	BUGS
+	COPYING
+	CREDITS
+	ChangeLog*
+	INSTALL
+	NEWS
+	README*
+	STANDARDS
+	TODO
+<<
+SplitOff: <<
+  Package: %N-shlibs
+  Depends: <<
+	gmp5-shlibs,
+	libgmpxx5-shlibs
+  <<
+  Files: <<
+    %p/lib/libppl.9*.dylib
+    %p/lib/libppl_c.4*.dylib
+    %p/lib/libpwl.5*.dylib
+    %p/lib/ppl-0.11
+  <<
+  Shlibs: <<
+    %p/lib/libppl.9.dylib 10.0.0 %n (>= 0.11-1)
+    %p/lib/libppl_c.4.dylib 5.0.0 %n (>= 0.11-1)
+    %p/lib/libpwl.5.dylib 6.0.0 %n (>= 0.11-1)
+    !%p/lib/ppl-0.11/libppl_java.jnilib
+  <<
+  DocFiles: <<
+	BUGS
+	COPYING
+	CREDITS
+	ChangeLog*
+	INSTALL
+	NEWS
+	README*
+	STANDARDS
+	TODO
+  <<
+<<
+License: GPL
+Description: Parma Polyhedra Library
+DescDetail: <<
+The Parma Polyhedra Library (PPL) is a C++ library for the 
+manipulation of (not necessarily closed) convex polyhedra 
+and other numerical abstractions. The applications of convex 
+polyhedra include program analysis, optimized compilation, 
+integer and combinatorial optimization and statistical 
+data-editing. The Parma Polyhedra Library is user friendly 
+(you write `x + 2*y + 5*z <= 7' when you mean it), fully 
+dynamic (available virtual memory is the only limitation 
+to the dimension of anything), written in standard C++, 
+exception-safe, rather efficient and thoroughly documented.
+<<
+DescPackaging: <<
+Reminder to never move %p/lib/ppl from ppl-shlibs since it
+brings over private .la as well as private shared lib.
+
+Added CompileScript to deal with Apple's new java.
+
+Initial packaging by Jack Howarth <howarth@bromo.med.uc.edu>.
+
+fangism turned on use of precompiled headers and exported a 
+few environment variables for ccache-default support.
+Patch to add -DPIC allows defined macros to match to use .gch.
+
+Noticed checks and references to OCaml, which may need to be 
+added to BuildDepends or TestDepends.
+
+Epoch was added to ppl-0.10.2 after an accident (fangism).
+pkglibdir was versioned to avoid conflicts.
+
+Since 0.11.1, build against gmp5.
+<<
+DescPort: <<
+Issues was raised about g++-4.0.1 compile failing:
+http://www.cs.unipr.it/pipermail/ppl-devel/2008-August/012001.html
+fangism patched up the offending lines of C++ in PatchScript for 10.4.
+Said patch no longer needed for 0.11.
+The monstrously 'thorough' test suite for 0.11 was successfully run and 
+passed on powerpc-darwin8 -- fangism.  
+<<
+Homepage: http://www.cs.unipr.it/ppl
+Maintainer: David Fang <fangism@users.sourceforge.net>
+
