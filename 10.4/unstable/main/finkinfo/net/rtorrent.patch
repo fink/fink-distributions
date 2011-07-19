@@ -1,0 +1,98 @@
+--- rtorrent-0.8.9-orig/rak/allocators.h	2011-06-21 22:37:15.000000000 -0700
++++ rtorrent-0.8.9/rak/allocators.h	2011-06-21 22:42:44.000000000 -0700
+@@ -77,8 +77,15 @@
+ 
+   static pointer alloc_size(size_type size) {
+     pointer ptr = NULL;
++#ifdef	HAVE_POSIX_MEMALIGN
+     int __UNUSED result = posix_memalign((void**)&ptr, LT_SMP_CACHE_BYTES, size);
+ 
++#elif	defined(__APPLE__)
++	// apple-darwin's malloc is already Altivec-aligned (16B)
++	ptr = static_cast<pointer>(malloc(size));
++#else
++#error	"Missing equivalent of posix_memalign()."
++#endif
+     return ptr;
+   }
+ 
+--- rtorrent-0.8.9-orig/src/thread_base.h	2011-06-21 23:12:25.000000000 -0700
++++ rtorrent-0.8.9/src/thread_base.h	2011-06-21 23:33:19.000000000 -0700
+@@ -37,6 +37,20 @@
+ #ifndef LIBTORRENT_THREAD_BASE_H
+ #define LIBTORRENT_THREAD_BASE_H
+ 
++#if (__GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 2))
++#if defined(__APPLE__)
++#define	USE_DARWIN_ATOMICS
++#endif
++#endif
++
++#ifdef	USE_DARWIN_ATOMICS
++#include <libkern/OSAtomic.h>
++#define	__sync_add_and_fetch(x, y)	OSAtomicIncrement32Barrier(x)
++#define	__sync_sub_and_fetch(x, y)	OSAtomicDecrement32Barrier(x)
++#define	__sync_lock_test_and_set(x, y)	OSAtomicTestAndSetBarrier(y, x)
++#define	__sync_bool_compare_and_swap(x, y, z)	OSAtomicCompareAndSwap32Barrier(y, z, x)
++#endif
++
+ #include <pthread.h>
+ #include <sys/types.h>
+ #include <torrent/common.h>
+--- rtorrent-0.8.9-orig/src/control.h	2011-06-27 11:08:48.000000000 -0700
++++ rtorrent-0.8.9/src/control.h	2011-06-27 11:10:06.000000000 -0700
+@@ -43,6 +43,9 @@
+ #include <rak/priority_queue_default.h>
+ #include <torrent/torrent.h>
+ 
++#include <libkern/OSAtomic.h>
++#define	__sync_synchronize	OSMemoryBarrier
++
+ namespace ui {
+   class Root;
+ }
+--- rtorrent-0.8.9-orig/src/rpc/command_impl.h	2011-06-27 12:20:31.000000000 -0700
++++ rtorrent-0.8.9/src/rpc/command_impl.h	2011-06-27 12:23:22.000000000 -0700
+@@ -92,7 +92,8 @@
+ 
+ inline torrent::Object*
+ command_base::push_stack(const torrent::Object::list_type& args, stack_type* stack) {
+-  return push_stack(args.data(), args.data() + args.size(), stack);
++  // vector<>::data() was introduced by ISO C++ DR 464
++  return push_stack(&args.front(), &args.front() + args.size(), stack);
+ }
+ 
+ inline void
+--- rtorrent-0.8.9-orig/src/rpc/object_storage.h	2011-06-27 12:33:21.000000000 -0700
++++ rtorrent-0.8.9/src/rpc/object_storage.h	2011-06-27 12:33:38.000000000 -0700
+@@ -78,7 +78,7 @@
+   using base_type::end;
+   using base_type::size;
+   using base_type::empty;
+-  using base_type::key_eq;
++  using base_type::key_equal;
+   using base_type::bucket;
+   using base_type::bucket_count;
+   using base_type::max_bucket_count;
+--- rtorrent-0.8.9-orig/src/thread_base.cc	2011-07-16 16:41:13.000000000 -0700
++++ rtorrent-0.8.9/src/thread_base.cc	2011-07-16 16:45:34.000000000 -0700
+@@ -79,7 +79,7 @@
+     if (itr == max_capacity())
+       throw torrent::internal_error("Overflowed thread_queue.");
+ 
+-    __sync_bool_compare_and_swap(itr, NULL, v);
++    __sync_bool_compare_and_swap(reinterpret_cast<int32_t*>(itr), NULL, reinterpret_cast<int32_t>(v));
+     __sync_bool_compare_and_swap(&m_lock, 1, 0);
+   }
+ 
+--- rtorrent-0.8.9-orig/src/thread_worker.cc	2011-07-16 16:45:44.000000000 -0700
++++ rtorrent-0.8.9/src/thread_worker.cc	2011-07-16 16:46:43.000000000 -0700
+@@ -69,7 +69,7 @@
+ 
+ bool
+ ThreadWorker::set_scgi(rpc::SCgi* scgi) {
+-  if (!__sync_bool_compare_and_swap(&m_safe.scgi, NULL, scgi))
++  if (!__sync_bool_compare_and_swap(reinterpret_cast<int32_t*>(&m_safe.scgi), NULL, reinterpret_cast<int32_t>(scgi)))
+     return false;
+ 
+   change_xmlrpc_log();
