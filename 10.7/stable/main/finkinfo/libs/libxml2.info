@@ -1,0 +1,135 @@
+Package: libxml2
+Version: 2.7.8
+Revision: 102
+Distribution: 10.5, 10.6, 10.7
+Maintainer: The Gnome Core Team <fink-gnome-core@lists.sourceforge.net>
+Depends: %N-bin (= %v-%r), %N-shlibs (= %v-%r), pkgconfig (>= 0.23)
+BuildDepends: <<
+	fink (>= 0.24.12-1),
+	fink-package-precedence,
+	libiconv-dev,
+	libncurses5 (>= 5.4-20041023-1006),
+	readline5 (>= 5.0-1004)
+<<
+#Source: mirror:gnome:sources/%n/2.6/%n-%v.tar.bz2
+Source: http://xmlsoft.org/sources/%n-%v.tar.gz
+Source-MD5: 8127a65e8c3b08856093099b52599c86
+PatchFile: %n.patch
+PatchFile-MD5: 51675f66115d7ab64a5bf04ffbc455f7
+PatchScript: <<
+#!/bin/sh -ev
+	sed 's|@PREFIX@|%p|g' <%{PatchFile} | patch -p1
+	perl -pi -e 's|/etc|%p/etc|g' catalog.c doc/catalog.html doc/guidelines.html doc/xml.html doc/xmlcatalog.1 doc/xmlcatalog_man.html doc/xmlcatalog_man.xml doc/xmllint.1 doc/xmllint.html runtest.c xmlcatalog.c doc/xmllint.xml
+	perl -pi -e 's/MAKEFLAGS\+=--silent//' `find . -name Makefile.in`
+	rm test/ebcdic_566012.xml
+
+<<
+SetLDFLAGS: -no-undefined
+ConfigureParams: --mandir=%p/share/man --with-iconv=%p --without-python --enable-dependency-tracking --with-html-dir=%p/share/doc --with-html-subdir=%n --with-history
+CompileScript: <<
+	## Work around a missing xhtml-dtd in catalog
+	## which obviously cannot be in
+	## and xmllint --nonet to rebuild the doc which
+	## makes vanish index.html
+	cp doc/index.html doc/index1.html
+	XMLLINT=/usr/bin/true XSLTPROC=/usr/bin/true ./configure %c
+	make
+	rm -f doc/index.html
+	mv doc/index1.html doc/index.html
+	fink-package-precedence --prohibit-bdep=%n .
+<<
+InfoTest: TestScript: make check || exit 2
+InstallScript: <<
+	make install DESTDIR=%d DOC_MODULE=%n
+	mkdir -p %i/etc/xml/catalog.d
+	mkdir -p %i/etc/sgml/catalog.d
+	mkdir -p %i/sbin
+	install -c -m 755 update-xml-catalog %i/sbin/
+	install -c -m 755 update-sgml-catalog %i/sbin/
+<<
+DocFiles: AUTHORS ChangeLog COPYING Copyright NEWS README TODO TODO_SCHEMAS
+BuildDependsOnly: True
+SplitOff: <<
+	Package: %N-shlibs
+	Depends: libiconv
+	Replaces: libxml2 (<< 2.4.18-2)
+	Suggests: %N-bin
+	Files: lib/libxml2.2.dylib
+	Shlibs: %p/lib/libxml2.2.dylib 10.0.0 %n (>= 2.7.7-1)
+	DocFiles: Copyright README
+<<
+SplitOff2: <<
+	Package: %N-bin
+	Depends: %N-shlibs (>= %v-%r), libncurses5-shlibs (>= 5.4-20041023-1006), readline5-shlibs (>= 5.0-1004)
+	Replaces: libxml2 (<< 2.4.18-2)
+	Files: bin/xmlcatalog bin/xmllint sbin share/man/man1/xmlcatalog.1 share/man/man1/xmllint.1 etc/xml
+	DocFiles: Copyright README
+	RuntimeVars: <<
+		SGML_CATALOG_FILES: %p/etc/sgml/catalog
+		XML_CATALOG_FILES: %p/etc/xml/catalog
+	<<
+	PostInstScript: <<
+		case "$1" in
+			configure)
+				export SGML_CATALOG_FILES=%p/etc/sgml/catalog
+				export XML_CATALOG_FILES=%p/etc/xml/catalog
+				%p/sbin/update-xml-catalog
+				%p/sbin/update-sgml-catalog
+			;;
+		esac
+	<<
+	PostRmScript: <<
+		case "$1" in
+			abort-install|purge|remove)
+				rm -f %p/etc/xml/catalog
+				rm -f %p/etc/sgml/catalog
+				;;
+		esac
+	<<
+<<
+Description: XML parsing library, version 2
+DescDetail: <<
+	This set of packages does *not* contain the python bindings. Those
+	are in libxml2-pyXX for various pythonX.X versions.
+<<
+DescPort: <<
+	Hide xmllint and xsltproc executables from ./configure to avoid
+	circular dependencies (on libxml2-bin (build here) and libxslt-bin
+	(depends on libxml2)) and network access during build. Fortunately,
+	these executables are only used to build docs that already come
+	prebuilt (we patch the targets instead of patching sources and
+	rebuilding).
+
+	Packages prior to 2.6.22-1 did not use --with-history, so they did
+	not need readline or ncurses. Now it does, but these libs are only
+	used for the -bin programs not the -shlibs libs. So no new flags in
+	.la or .pc, so no dependency and rebuilding nightmare for dependent
+	packages. Hooray!
+
+	Rebuild the doc/examples/index.html not present in the tarball
+	Changed the installation to avoid examples overriding top level
+	of doc.
+<<
+DescPackaging: <<
+libxml2 uses XML/SGML super catalog to know location of DTDs installed on
+local system. They are managed by update-xml-catalog and update-sgml-catalog
+script. Each package that provides DTDs should also provide configuration
+file(s) for these script and call them within Pre/PostInstScript.
+
+When update-xml-catalog is called, it reads every configuration file belongs
+to %p/etc/xml/catalog.d/. Each line of them contain 3 fields, TYPE, ORIG and
+REPLACE, correspond to arguments of `xmlcatalog --add'. See xmlcatalog(1) for
+detail.
+
+Also, update-sgml-catalog reads every configuration file belongs to %p/etc/
+sgml/catalog.d/ when it is called. Each line of them contain only 1 field,
+reference to other SGML catalog file.
+
+Previous versions by Christoph Pfisterer <chrisp@users.sourceforge.net>
+
+	disable the self-test of ebcdic handling because GNU
+	libiconv doesn't support ebcdic. See:
+	https://bugzilla.gnome.org/show_bug.cgi?id=603432
+<<
+License: BSD
+Homepage: http://www.xmlsoft.org/
