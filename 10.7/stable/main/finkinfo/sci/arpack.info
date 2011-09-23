@@ -1,6 +1,9 @@
-Package: arpack
+Info2: <<
+Package: arpack%type_pkg[-atlas]
 Version: 96patched
-Revision: 5
+Revision: 6
+Type: -atlas (boolean)
+
 Maintainer: Alexander Hansen <alexkhansen@users.sourceforge.net>
 Description: Solve large scale eigenvalue problems
 DescDetail: <<
@@ -22,16 +25,54 @@ Source-MD5: fffaa970198b285676f4156cebc8626e
 Source2-MD5: 14830d758f195f272b8594a493501fa2
 SourceDirectory: ARPACK
 
-BuildDepends: fink (>=0.30.0), gcc46-compiler
+BuildDepends: <<
+(%type_raw[-atlas] != .) atlas,
+fink (>=0.30.0),
+gcc46-compiler
+<<
 Depends: %N-shlibs (= %v-%r )
-UseMaxBuildJobs: false
+Conflicts: %{Ni}, %{Ni}-atlas
+Replaces: %{Ni}, %{Ni}-atlas
 
-PatchFile: %n.patch
-PatchFile-MD5:  c21f6a329b48f1490bd84873a9acaac4
+PatchFile: %{ni}.patch
+PatchFile-MD5:7f2b7e1cc58e18f9705c784a680e71ef
 PatchScript: <<
+	#!/bin/sh -ev
 	sed -e 's|FINKPREFIX|%p|g' %{PatchFile} | patch -p1
 	perl -pi -e 's|\$\(HOME\)/ARPACK|%b|' ARmake.inc
+	# set appropriate libraries for variant
+	if [ "%type_raw[-atlas]" = "-atlas" ] 
+	then
+		sed -i.bak  -e 's|@FF2C@||' \
+					-e 's|@LAPACKLIB@|%p/lib/liblapack.dylib|' \
+					-e 's|@BLASLIB@|%p/lib/libf77blas.dylib|' ARmake.inc 
+		sed -i.bak 	-e 's|@LAPACKLINK@|%p/lib/liblapack.dylib|' \
+					-e 's|@BLASLINK@|%p/lib/libf77blas.dylib|' Makefile
+	else
+		sed -i.bak  -e 's|@FF2C@|-ff2c|' \
+					-e 's|@LAPACKLIB@|-framework Accelerate|' \
+					-e 's|@BLASLIB@||' ARmake.inc
+		sed -i.bak 	-e 's|@LAPACKLINK@|/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLAPACK.dylib|' \
+					-e 's|@BLASLINK@|/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib|' \
+						Makefile
+	fi
+	# set LDFLAGS appropriately
+	if [ `uname -r | cut -f1 -d.` -ge 9 ]
+	then 
+		sed -i.bak -e 's|@LDFLAGS@|-Wl,-dead_strip_dylibs|' ARmake.inc
+	else 
+		sed -i.bak -e 's|@LDFLAGS@||' ARmake.inc
+	fi	
+	# use OS-appropriate methods to make dylib
+	if [ `uname -r | cut -f1 -d.` -le 9 ]
+	then 
+		sed -i.bak -e 's|@LOAD@|-all_load|' Makefile
+	else 
+		sed -i.bak -e 's|@LOAD@|-force_load|' Makefile
+	fi	
 <<
+
+UseMaxBuildJobs: false
 CompileScript: <<
 	make all
 	make arpackdylib
@@ -50,25 +91,39 @@ InstallScript:  <<
 	install -d -v %i/share/%n
 	cp -r -v EXAMPLES %i/share/%n
 <<
+
 DocFiles: DOCUMENTS
 DescPackaging:  <<
 	Borrowed liberally from Macports.
+	
 	Needs a gfortran; I've arbitrarily chosen gcc46, as it's the
 	lowest-versioned one available on 10.7.
+
+	Needs -ff2c when using Accelerate.framework, but not when using
+	ATLAS.
 <<
 DescPort: <<
 	Dynamic library originally courtesy of Ben Abbot.  I've tweaked it to
-	have a nonzero compatibility_version and current_version.
+	have a nonzero compatibility_version and current_version.  Additional
+	tweaks thanks to J-F Mertens and Peter O'Gorman
+	
 	Fortran files are built at -O0 to avoid runtime crashes--thanks to
 	Martin Costabel for bringing this up.
 <<
+
 Splitoff: <<
 	Package: %N-shlibs
-	Files: lib/lib%N.0.dylib
-	Shlibs: %p/lib/lib%N.0.dylib 1.0.0 %n (>=0.96patched-2)
-	Depends: gcc46-shlibs
+	Files: lib/lib%{Ni}.0.dylib
+	Shlibs: %p/lib/lib%{Ni}.0.dylib 1.1.0 %n (>=0.96patched-6)
+	Depends: <<
+	(%type_raw[-atlas] != .) atlas-shlibs,
+	gcc46-shlibs
+	<<
+	Conflicts: %{Ni}-shlibs, %{Ni}-atlas-shlibs
+	Replaces: %{Ni}-shlibs, %{Ni}-atlas-shlibs
 	DescDetail: <<
 	This package contains a dynamic library.
 	<<
 	DocFiles: DOCUMENTS/README
+<<
 <<

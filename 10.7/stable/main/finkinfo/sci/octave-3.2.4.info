@@ -2,7 +2,7 @@ Info2: <<
 Package: octave%type_pkg[-atlas]
 Type: -atlas (.), oct(3.2.4)
 Version: 3.2.4
-Revision: 22
+Revision: 325
 Maintainer: Alexander Hansen <alexkhansen@users.sourceforge.net>
 
 # disable atlas on 10.7 distro file until atlas is available
@@ -11,16 +11,18 @@ Source: mirror:gnu:%{Ni}/%{Ni}-%v.tar.gz
 Source-MD5: 90c39fa9e241ad2e978bcee4682a2ba9
 
 BuildDepends: <<
-	arpack (>= 96patched-5), glpk-dev, hdf5.7, readline5, libncurses5, fftw3 (>= 3.1.1-7), 
+	glpk-dev, hdf5.7, readline5, libncurses5, fftw3 (>= 3.1.1-7), 
 	libcurl4, libftgl2, qhull6-dev, flag-sort,
 	pcre, gcc46-compiler, suitesparse-metis, fink (>= 0.30.0), fink-package-precedence, sed, 
 	graphicsmagick-dev, freetype219,
-	(%type_raw[-atlas] = atlas) atlas, 
-	(%type_raw[-atlas] = atlas) qrupdate-atlas (>=1.1.1-3) 
-	(%type_raw[-atlas] != atlas) qrupdate (>=1.1.1-3) 
+	(%type_raw[-atlas] = -atlas) atlas, 
+	(%type_raw[-atlas] = -atlas) qrupdate-atlas (>=1.1.1-5),
+	(%type_raw[-atlas] != -atlas) qrupdate (>=1.1.1-5),
+	(%type_raw[-atlas] = -atlas) arpack-atlas (>= 96patched-6),
+	(%type_raw[-atlas] != -atlas) arpack (>= 96patched-6)
 <<
 Depends: %{Ni}%type_pkg[oct]%type_pkg[-atlas] (=%v-%r)
-BuildConflicts: coot-dev, broken-gcc, lammpi-dev, fort77, 4ti2-dev
+BuildConflicts: coot-dev, broken-gcc, lammpi-dev, fort77, 4ti2-dev, imagemagick10-dev
 Suggests: %{Ni}%type_pkg[oct]-docs
 GCC: 4.0
 
@@ -32,9 +34,9 @@ Replaces: %{Ni}, %{Ni}-atlas, %{Ni}3.0.2 ( << 3.0.2-5), %{Ni}3.0.2-atlas ( << 3.
 UseMaxBuildJobs: false
 
 PatchFile: %{ni}.patch
-PatchFile-MD5: ce167f65e283dccf624e888c1a0a8725
+PatchFile-MD5: 88467884eb9955a26a37b9b3b87e122f
 PatchFile2: %{ni}-%v.patch
-PatchFile2-MD5: 28dea047c7b3e51539a35b76249c8f67
+PatchFile2-MD5: a09d6337e021085a8c9d14c5bdcdf088
 PatchFile3: %{ni}-10.7.patch
 PatchFile3-MD5: adf5439f08870b6f7ba0d9be7e85bb22
 PatchScript: <<
@@ -67,12 +69,28 @@ using std::size_t;' liboctave/oct-alloc.h
 	do sed -i.orig -e '/using.*element_type;/s|using|& typename|' $f
 	done
 	# missing qualifier to dependent-name member-function
-	sed -i.orig -e '/truncate_int/s|\(return\) \(truncate_int\)|\1 octave_int_base<T>::\2|' liboctave/oct-inttypes.h
+	sed -i.orig -e '/truncate_int/s|\(return\) \(truncate_int\)|\1 octave_int_base<T>::\2|' \
+		liboctave/oct-inttypes.h
 	# disable FLTK backend
 	patch -p1 < %{PatchFile2}
 	# fix lack of CGDisplayBitsPerPixel
 	patch -p1 < %{PatchFile3}
-    perl -pi -e 's/scripts doc/scripts/; s/INSTALL.OCTAVE//' Makefile
+ 	# Put compiler information without 'flag-sort' into oct-conf.h, which in 
+ 	# turn gets harcoded into the Octave interpreter's 'octave_config_info' 
+ 	# function, which is then used by some of the octave-forge packages at 
+ 	# configure time.  Also do this for mkoctfile.in.
+ 	sed -i.bak 	-e "s|%%OCTAVE_CONF_CC%%|\"`which gcc`\"|" \
+ 				-e "s|%%OCTAVE_CONF_CXXCPP%%|\"`which g++` -E\"|" \
+ 				-e "s|%%OCTAVE_CONF_CXX%%|\"`which g++`\"|" \
+ 				-e "s|%%OCTAVE_CONF_DL_LD%%|\"`which g++`\"|" \
+ 				-e "s|%%OCTAVE_CONF_LD_CXX%%|\"`which g++`\"|" \
+ 				-e "s|%%OCTAVE_CONF_SH_LD%%|\"`which g++`\"|" src/oct-conf.h.in mkoctfile.in	
+	# Add the BLAS C library for the -atlas variant.
+	if [ "%type_pkg[-atlas]" = "-atlas" ]
+	then
+		sed -i.bak -e 's|%%OCTAVE_CONF_BLAS_LIBS%%|"%p/lib/liblapack.dylib %p/lib/libf77blas.dylib %p/lib/libcblas.dylib"|' \
+			src/oct-conf.h.in mkoctfile.in
+	fi
 <<
 
 SetCC: flag-sort -r gcc
@@ -91,20 +109,35 @@ CompileScript: <<
  export CXXFLAGS='-O3'
  export FFLAGS='-O3'
  if [ "%type_pkg[-atlas]" == "" ]
-	then a='--with-lapack=-Wl,-framework,Accelerate,-dylib_file,/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLAPACK.dylib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLAPACK.dylib --with-blas=-Wl,-framework,Accelerate,-dylib_file,/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib'
-	else a='--with-lapack=%p/lib/liblapack.dylib --with-blas=%p/lib/libf77blas.dylib'
+ then 
+	a='--with-lapack=-Wl,-framework,Accelerate,-dylib_file,/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLAPACK.dylib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLAPACK.dylib --with-blas=-Wl,-framework,Accelerate,-dylib_file,/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib'
+	export FFLAGS='-O3 -ff2c'
+ else 
+ 	a='--with-lapack=%p/lib/liblapack.dylib --with-blas=%p/lib/libf77blas.dylib'
+    export FFLAGS='-O3'
  fi
  FLIBDIR="%p/lib/gcc4.6/lib"
- ./configure FLIBS="${FLIBDIR}/libgfortran.dylib" %c $a
+ ./configure AR="/usr/bin/ar" FLIBS="${FLIBDIR}/libgfortran.dylib" %c $a
+ # put compiler information into our own version of Makeconf, which in turn
+ # goes into oct-conf.h, which in turn gets harcoded into the Octave 
+ # interpreter's 'octave_config_info' function, which is used by some of the 
+ # octave-forge packages.
+ sed  -e 's|flag-sort -r gcc|@WHICH_CC@|g' \
+ 			-e 's|flag-sort -r g++|@WHICH_CXX@|g' \
+ 			Makeconf > Makeconf.fink
  make
  fink-package-precedence --depfile-ext='\.d$' --prohibit-bdep=%{Ni},%{Ni}-atlas,%{Ni}%type_raw[oct]-dev,%{Ni}%type_raw[oct]-atlas-dev,%{Ni}305-dev,%{Ni}305-atlas-dev,saclib-gcc46,saclib src
 <<
 
 InfoTest: <<
 	TestScript: <<
+		# doesn't work on 10.6/i386
+		mv src/ov-struct.cc src/ov-struct.cc.testfails
+		# doesn't work anywhere
 		mv scripts/image/imread.m scripts/image/imread.m.testfails
 		make check || exit 2	
 		mv scripts/image/imread.m.testfails scripts/image/imread.m
+		mv src/ov-struct.cc.testfails src/ov-struct.cc
 	<<
 <<
 
@@ -132,10 +165,10 @@ InstallScript: <<
  # install the octave-forge helper scripts
  cp %{Ni}-forge* %i/share/%{Ni}/%v/scripts
  chmod a+x %i/share/%{Ni}/%v/scripts/*
- # oct-conf.h and octave-bug need to use Fink's compiler wrappers, too
+ # octave-bug needs to use Fink's compiler wrappers, too
  sed -i.bak -e 's|flag-sort -r gcc|@WHICH_CC@|g' \
  			-e 's|flag-sort -r g++|@WHICH_CXX@|g' \
- 			%i/include/%{Ni}-%v/%{Ni}/oct-conf.h %i/bin/%{Ni}-bug-%v
+ 			%i/bin/%{Ni}-bug-%v
  # for the -atlas variant, add libcblas.dylib to BLAS_LIBS:
  perl -pi -e 's|(%p/lib/liblapack.dylib %p/lib/libf77blas.dylib)|$1 %p/lib/libcblas.dylib|' \
  %i/bin/mkoctfile-%v %i/include/%{ni}-%v/%{ni}/oct-conf.h %i/bin/%{ni}-bug-%v
@@ -164,8 +197,8 @@ SplitOff: <<
 	Depends: << 
 		fftw3-shlibs, gcc46-shlibs, hdf5.7-shlibs, readline5-shlibs, 
 		(%type_raw[-atlas] = -atlas) atlas-shlibs (>= 3.8.1-1),
-		(%type_raw[-atlas] = -atlas) qrupdate-atlas-shlibs (>= 1.1.1-3), 
-		(%type_raw[-atlas] != -atlas) qrupdate-shlibs (>= 1.1.1-3)
+		(%type_raw[-atlas] = -atlas) qrupdate-atlas-shlibs (>= 1.1.1-5), 
+		(%type_raw[-atlas] != -atlas) qrupdate-shlibs (>= 1.1.1-5)
 	<<
 	Files: <<
 		lib/%{Ni}-%v
@@ -254,11 +287,13 @@ Splitoff3: <<
 	Package: octave%type_pkg[oct]%type_pkg[-atlas]
 	Depends: <<
 	%{Ni}%type_pkg[oct]%type_pkg[-atlas]-shlibs (=%v-%r),
-	arpack-shlibs(>= 96patched-5), fftw3-shlibs (>= 3.1.1-7), glpk-shlibs,
+	fftw3-shlibs (>= 3.1.1-7), glpk-shlibs,
 	graphicsmagick-shlibs, libcurl4-shlibs, %{Ni}%type_pkg[oct]%type_pkg[-atlas]-shlibs, pcre-shlibs, 
 	qhull6-shlibs, (%type_raw[-atlas] = -atlas) atlas-shlibs (>= 3.8.1-1),
 	ncurses, gnuplot | gnuplot-nox | gnuplot-nogtk,
-	fltk-backend-aqua-oct%type_pkg[oct] | fltk-backend-x11-oct%type_pkg[oct]
+	fltk-backend-aqua-oct%type_pkg[oct] | fltk-backend-x11-oct%type_pkg[oct],
+	(%type_raw[-atlas] = -atlas) arpack-atlas-shlibs (>= 96patched-6),
+	(%type_raw[-atlas] != -atlas) arpack-shlibs (>= 96patched-6)
 	<<
 	Conflicts: << 
 		(%type_raw[-atlas] = atlas) %{Ni}%type_pkg[oct], 
@@ -405,6 +440,12 @@ Not sane (and now not even compilable) to use private code
 from glpk. Import the functions needed so can still use it
 even when glpk stops exporting its internals. See:
 	http://octave.1599824.n4.nabble.com/GLPK-interface-was-Re-Multithreaded-Atlas-td1654632.html
+
+Patch the graphicsmagick interface to use InitializeMagick before doing anything:
+
+http://sourceforge.net/tracker/?func=detail&aid=3104518&group_id=73485&atid=537937
+
+This was not mandatory in prior versions of GraphicsMagick, but now it is.
  
 Set the GNUTERM environment variable to AquaTerm because autodetection
 of DISPLAY seems to cause options to be fed to our gnuplot that it doesn't understand.

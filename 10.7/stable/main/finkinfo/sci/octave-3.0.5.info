@@ -2,7 +2,7 @@ Info2: <<
 Package: octave%type_pkg[-atlas]
 Type: -atlas (.), oct(3.0.5)
 Version: 3.0.5
-Revision: 22
+Revision: 325
 Maintainer: Alexander Hansen <alexkhansen@users.sourceforge.net>
 
 # disable atlas on 10.7 distro file until atlas is available
@@ -28,7 +28,7 @@ Replaces: %{Ni}, %{Ni}-atlas, %{Ni}3.0.2 ( << 3.0.2-5), %{Ni}3.0.2-atlas ( << 3.
 UseMaxBuildJobs: false
 
 PatchFile: %{ni}.patch
-PatchFile-MD5: ce167f65e283dccf624e888c1a0a8725
+PatchFile-MD5: 88467884eb9955a26a37b9b3b87e122f
 PatchScript: <<
 	#!/bin/sh -ev
 	cp doc/interpreter/%{Ni}.1 doc/interpreter/%{Ni}-%v.1
@@ -43,6 +43,22 @@ PatchScript: <<
 	for f in `grep -l -r "qhull_a\.h" src`
 		do sed -i.orig -e '/include/s|qhull/|lib&|' $f
 	done
+ 	# Put compiler information without 'flag-sort' into oct-conf.h, which in 
+ 	# turn gets harcoded into the Octave interpreter's 'octave_config_info' 
+ 	# function, which is then used by some of the octave-forge packages at 
+ 	# configure time.  Also do this for mkoctfile.in.
+ 	sed -i.bak 	-e "s|%%OCTAVE_CONF_CC%%|\"`which gcc`\"|" \
+ 				-e "s|%%OCTAVE_CONF_CXXCPP%%|\"`which g++` -E\"|" \
+ 				-e "s|%%OCTAVE_CONF_CXX%%|\"`which g++`\"|" \
+ 				-e "s|%%OCTAVE_CONF_DL_LD%%|\"`which g++`\"|" \
+ 				-e "s|%%OCTAVE_CONF_LD_CXX%%|\"`which g++`\"|" \
+ 				-e "s|%%OCTAVE_CONF_SH_LD%%|\"`which g++`\"|" src/oct-conf.h.in mkoctfile.in	
+	# Add the BLAS C library for the -atlas variant.
+	if [ "%type_pkg[-atlas]" = "-atlas" ]
+	then
+		sed -i.bak -e 's|%%OCTAVE_CONF_BLAS_LIBS%%|"%p/lib/liblapack.dylib %p/lib/libf77blas.dylib %p/lib/libcblas.dylib"|' \
+			src/oct-conf.h.in mkoctfile.in
+	fi
 <<
 
 SetCC: flag-sort -r gcc
@@ -61,11 +77,15 @@ CompileScript: <<
  export CXXFLAGS='-O3'
  export FFLAGS='-O3'
  if [ "%type_pkg[-atlas]" == "" ]
-	then a='--with-lapack=-Wl,-framework,Accelerate,-dylib_file,/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLAPACK.dylib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLAPACK.dylib --with-blas=-Wl,-framework,Accelerate,-dylib_file,/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib'
-	else a='--with-lapack=%p/lib/liblapack.dylib --with-blas=%p/lib/libf77blas.dylib'
+ then 
+	a='--with-lapack=-Wl,-framework,Accelerate,-dylib_file,/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLAPACK.dylib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLAPACK.dylib --with-blas=-Wl,-framework,Accelerate,-dylib_file,/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib'
+	export FFLAGS='-O3 -ff2c'
+ else 
+ 	a='--with-lapack=%p/lib/liblapack.dylib --with-blas=%p/lib/libf77blas.dylib'
+    export FFLAGS='-O3'
  fi
  FLIBDIR="%p/lib/gcc4.6/lib"
- ./configure FLIBS="${FLIBDIR}/libgfortran.dylib" %c $a
+ ./configure AR="/usr/bin/ar" FLIBS="${FLIBDIR}/libgfortran.dylib" %c $a
  make
  fink-package-precedence --depfile-ext='\.d$' --prohibit-bdep=%{Ni},%{Ni}-atlas,%{Ni}%type_raw[oct]-dev,%{Ni}%type_raw[oct]-atlas-dev,%{Ni}305-dev,%{Ni}305-atlas-dev,saclib-gcc46,saclib src
 <<
@@ -78,15 +98,15 @@ InstallScript: <<
  #!/bin/sh -ev
  export MAKEFLAGS=-j1
  make install DESTDIR=%d
- # install Fink-specific octaverc which points at our oct-versioned
- # package directory
+ # Install Fink-specific octaverc which points at our oct-versioned
+ # package directory.
  cp %b/%{Ni}rc %i/share/%{Ni}/%v/m/startup
  mkdir -p %i/var/%{Ni}/%v/
  # install examples
  mkdir -p %i/share/%{Ni}/%v/doc/examples
  cp -R examples %i/share/%{Ni}/%v/doc/examples
  pushd %i/bin 
- # clear out hardcoded Fink sed
+ # clear out hardcoded Fink sed.
  for file in mkoctfile-%v %{Ni}-bug-%v %{Ni}-config-%v 
  do
  	perl -pi -e 's|%p/bin/sed|/usr/bin/sed|g' $file
@@ -100,13 +120,14 @@ InstallScript: <<
  # install the octave-forge helper scripts
  cp %{Ni}-forge* %i/share/%{Ni}/%v/scripts
  chmod a+x %i/share/%{Ni}/%v/scripts/*
- # oct-conf.h and octave-bug need to use Fink's compiler wrappers, too
- sed -i.bak -e 's|flag-sort -r gcc|@WHICH_CC@|g' \
- 			-e 's|flag-sort -r g++|@WHICH_CXX@|g' \
- 			%i/include/%{Ni}-%v/%{Ni}/oct-conf.h %i/bin/%{Ni}-bug-%v
+ # octave-bug needs to use Fink's compiler wrappers, too, since
+ # some octave-forge packages use it for configuration.
+ sed -i.bak -e "s|flag-sort -r gcc|`which gcc`|g" \
+ 			-e "s|flag-sort -r g++|`which g++`|g" \
+ 			%i/bin/%{Ni}-bug-%v 
  # for the -atlas variant, add libcblas.dylib to BLAS_LIBS:
  perl -pi -e 's|(%p/lib/liblapack.dylib %p/lib/libf77blas.dylib)|$1 %p/lib/libcblas.dylib|' \
- %i/bin/mkoctfile-%v %i/include/%{ni}-%v/%{ni}/oct-conf.h %i/bin/%{ni}-bug-%v
+ 	%i/bin/%{ni}-bug-%v
 <<
 InfoDocs: %{Ni}.info
 RuntimeVars: <<
@@ -182,15 +203,6 @@ SplitOff2: <<
 		share/man/man1/mkoctfile.1
 		share/man/man1/octave-config.1
 	<<
-	PostInstScript: <<
-		finkpath=`fink dumpinfo -ePATH %N`
-		fink_cc=`export $finkpath; which gcc`
-		fink_cxx=`export $finkpath; which g++`
-		sed -i.bak 	-e "s|@WHICH_CC@|$fink_cc|g" \
-					-e "s|@WHICH_CXX@|$fink_cxx|g" \
-					%p/bin/mkoctfile-%type_raw[oct] \
-					%p/include/%{Ni}-%v/%{Ni}/oct-conf.h
-	<<
 	DescDetail: <<
 	This package contains files needed to build against Octave, including
 	headers and the mkoctfile executable.
@@ -242,14 +254,6 @@ Splitoff3: <<
 		bin/%{Ni}-%v
 		bin/%{Ni}-bug-%v
 		var/%{Ni}/%v
-	<<
-	PostInstScript: <<
-		finkpath=`fink dumpinfo -ePATH %N`
-		fink_cc=`export $finkpath; which gcc`
-		fink_cxx=`export $finkpath; which g++`
-		sed -i.bak 	-e "s|@WHICH_CC@|$fink_cc|g" \
-					-e "s|@WHICH_CXX@|$fink_cxx|g" \
-					 %p/bin/%{Ni}-bug-%v
 	<<
 	DescDetail: <<
 	The %{Ni}%type_pkg[oct]%type_pkg[-atlas] package contains versioned executables, as well as all of the 
@@ -355,7 +359,10 @@ run the following command in your script:
  
 <<
 DescPort: <<
- Thanks to Per Persson for most (if not all) of the work on the macos X port.
+Thanks to Per Persson for most (if not all) of the work on the macos X port.
+
+As of revision 25:  the non-atlas variant is built with -ff2c in the FFLAGS, 
+because this appears to be necessary when using the Accelerate framework.
 <<
 DescPackaging:  <<
 Set the GNUTERM environment variable to AquaTerm because autodetection
@@ -370,9 +377,6 @@ even when glpk stops exporting its internals. See:
  
 Remove a desktop file that gets generated only for users with GNOME/KDE installed.
 
-As of 3.0.5.>5, patch mkoctfile.in so that it uses Fink's compiler wrappers
-when building octave packages by hand.  This is critical for 10.6/i386 users.
-
 As of 3.0.5-5, we have split the package up into runtime, development, and library packages,
 to make upgrades easier for us and for users.
 	
@@ -384,6 +388,20 @@ Unfortunately, Octave's 'pkg' tool doesn't seem to know how to deal with
 variables, and the individual octave-forge  packages have to make copies
 of the octave scripts during their build process and edit them to use the
 package's name.
+
+As of revision 25:  
+
+Give the full path '/usr/bin/ar' to configure because at least one Octave Forge
+package can't cope with just 'ar'.
+
+Patch oct-conf.h, mkoctfile, and octave-bug not to put "flag-sort -r" in the 
+name of the compiler used, and to use the full path of Fink's compiler wrappers.
+Also, we add the BLAS C library to BLAS_LIBS in the -atlas variant.  This makes
+sure that anything that builds against Octave has the proper information when 
+installed manually as well as via Fink, and is critical for 10.6/i386 (and 10.5
+/x86_64) users.  Unfortunately, this requires a rebuild on OS upgrades, because
+the information in oct-conf.h gets hardcoded into the Octave interpreter 
+executable, and some octave-forge packages get information from that.
 <<
 Homepage: http://www.octave.org/
 License: GPL
