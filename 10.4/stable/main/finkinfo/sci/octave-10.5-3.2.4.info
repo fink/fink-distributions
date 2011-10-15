@@ -33,21 +33,42 @@ Conflicts: <<
 Replaces: %{Ni}, %{Ni}-atlas, %{Ni}3.0.2 ( << 3.0.2-5), %{Ni}3.0.2-atlas ( << 3.0.2-5)
 UseMaxBuildJobs: false
 
-PatchFile: %{ni}.patch
-PatchFile-MD5: 88467884eb9955a26a37b9b3b87e122f
-PatchFile2: %{ni}-%v.patch
-PatchFile2-MD5: a09d6337e021085a8c9d14c5bdcdf088
+PatchFile: %{ni}-glpk.patch
+PatchFile-MD5: a4861a0803cfbbbb8892019cd5f217d2
+PatchFile2: %{ni}.patch
+PatchFile2-MD5: 94f6e470ee04b0e2837709966fc31420
+PatchFile3: %{ni}-%v.patch
+PatchFile3-MD5: a09d6337e021085a8c9d14c5bdcdf088
 PatchScript: <<
 	#!/bin/sh -ev
+	#fix for use of glpk private internals
+	patch -p1 < %{PatchFile}
+	# create versioned manpages
 	cp doc/interpreter/%{Ni}.1 doc/interpreter/%{Ni}-%v.1
 	cp doc/interpreter/%{Ni}-bug.1 doc/interpreter/%{Ni}-bug-%v.1
 	cp doc/interpreter/%{Ni}-config.1 doc/interpreter/%{Ni}-config-%v.1
 	cp doc/interpreter/mkoctfile.1 doc/interpreter/mkoctfile-%v.1
-	sed -e 's/@OCTVERSION@/%v/g' %{PatchFile} | patch -p1 
-	# disable FLTK backend build since we have it already
-	patch -p1 < %{PatchFile2}
-	# add versioned manpages
+	#Fink-specific changes
+	sed -e 's/@OCTVERSION@/%v/g' %{PatchFile2} | patch -p1 
 	sed -i -e 's|@FINKPREFIX@|%p|g'   %{Ni}-forge* %{Ni}rc doc/interpreter/*.1 mkoctfile.in
+ 	# Put compiler information without 'flag-sort' into oct-conf.h, which in 
+ 	# turn gets harcoded into the Octave interpreter's 'octave_config_info' 
+ 	# function, which is then used by some of the octave-forge packages at 
+ 	# configure time.  Also do this for mkoctfile.in.
+ 	sed -i.bak 	-e "s|%%OCTAVE_CONF_CC%%|\"`which gcc`\"|" \
+ 				-e "s|%%OCTAVE_CONF_CXXCPP%%|\"`which g++` -E\"|" \
+ 				-e "s|%%OCTAVE_CONF_CXX%%|\"`which g++`\"|" \
+ 				-e "s|%%OCTAVE_CONF_DL_LD%%|\"`which g++`\"|" \
+ 				-e "s|%%OCTAVE_CONF_LD_CXX%%|\"`which g++`\"|" \
+ 				-e "s|%%OCTAVE_CONF_SH_LD%%|\"`which g++`\"|" src/oct-conf.h.in mkoctfile.in	
+	# Add the BLAS C library for the -atlas variant.
+	if [ "%type_pkg[-atlas]" = "-atlas" ]
+		then sed -i.bak -e 's|%%OCTAVE_CONF_BLAS_LIBS%%|"%p/lib/liblapack.dylib %p/lib/libf77blas.dylib %p/lib/libcblas.dylib"|' \
+							src/oct-conf.h.in mkoctfile.in
+	fi
+	# disable FLTK backend since that's in a separate package, and make sure GraphicsMagick
+	# gets activated properly.
+	patch -p1 < %{PatchFile3}
 	# fix lib name for qhull6
 	perl -pi -e 's|(qhull[/.])|lib\1|g ; s|lqhull|lqhull6|' configure
 	# wrong include dir for qhull6
@@ -72,24 +93,7 @@ using std::size_t;' liboctave/oct-alloc.h
 	# missing qualifier to dependent-name member-function
 	sed -i.orig -e '/truncate_int/s|\(return\) \(truncate_int\)|\1 octave_int_base<T>::\2|' \
 		liboctave/oct-inttypes.h
- 	# Put compiler information without 'flag-sort' into oct-conf.h, which in 
- 	# turn gets harcoded into the Octave interpreter's 'octave_config_info' 
- 	# function, which is then used by some of the octave-forge packages at 
- 	# configure time.  Also do this for mkoctfile.in.
- 	sed -i.bak 	-e "s|%%OCTAVE_CONF_CC%%|\"`which gcc`\"|" \
- 				-e "s|%%OCTAVE_CONF_CXXCPP%%|\"`which g++` -E\"|" \
- 				-e "s|%%OCTAVE_CONF_CXX%%|\"`which g++`\"|" \
- 				-e "s|%%OCTAVE_CONF_DL_LD%%|\"`which g++`\"|" \
- 				-e "s|%%OCTAVE_CONF_LD_CXX%%|\"`which g++`\"|" \
- 				-e "s|%%OCTAVE_CONF_SH_LD%%|\"`which g++`\"|" src/oct-conf.h.in mkoctfile.in	
-	# Add the BLAS C library for the -atlas variant.
-	if [ "%type_pkg[-atlas]" = "-atlas" ]
-		then sed -i.bak -e 's|%%OCTAVE_CONF_BLAS_LIBS%%|"%p/lib/liblapack.dylib %p/lib/libf77blas.dylib %p/lib/libcblas.dylib"|' \
-							src/oct-conf.h.in mkoctfile.in
-	elif [ "%m" = "x86_64" ] 
-		then sed -i.bak -e 's|%%OCTAVE_CONF_BLAS_LIBS%%|"-Wl,-framework,Accelerate"|' \
-							src/oct-conf.h.in mkoctfile.in
-	fi
+	sed -i.orig -e 's|template static|template|g' liboctave/eigs-base.cc
 	# avoid ccache-default's compiler wrappers
 	perl -pi -e 's|%p(/bin/gcc)|/usr$1|g' src/oct-conf.h.in mkoctfile.in
 <<
@@ -175,6 +179,7 @@ InstallScript: <<
  fi
  # avoid ccache-default's compiler wrappers
  perl -pi -e 's|%p(/bin/gcc)|/usr$1|g' %i/bin/%{ni}-bug-%v
+ # generate Fink-gcc enabled mkoctfile
  cp %i/bin/mkoctfile-%type_raw[oct] %i/bin/mkoctfile-%type_raw[oct]-gcc%type_raw[gcc]
  perl -pi -e \
  's,(CC).*(gcc),\1\="%p/bin/\2-fsf-%type_raw[gcc],g; \
@@ -433,6 +438,12 @@ from glpk. Import the functions needed so can still use it
 even when glpk stops exporting its internals. See:
 	http://octave.1599824.n4.nabble.com/GLPK-interface-was-Re-Multithreaded-Atlas-td1654632.html
 
+Patch the graphicsmagick interface to use InitializeMagick before doing anything:
+
+http://sourceforge.net/tracker/?func=detail&aid=3104518&group_id=73485&atid=537937
+
+This was not mandatory in prior versions of GraphicsMagick, but now it is.
+ 
 Set the GNUTERM environment variable to AquaTerm because autodetection
 of DISPLAY seems to cause options to be fed to our gnuplot that it doesn't understand.
 AquaTerm seems to be a sensible default, particularly since gnuplot-nox is also a 
