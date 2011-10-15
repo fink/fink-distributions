@@ -33,20 +33,46 @@ Conflicts: <<
 Replaces: %{Ni}, %{Ni}-atlas, %{Ni}3.0.2 ( << 3.0.2-5), %{Ni}3.0.2-atlas ( << 3.0.2-5)
 UseMaxBuildJobs: false
 
-PatchFile: %{ni}.patch
-PatchFile-MD5: 88467884eb9955a26a37b9b3b87e122f
-PatchFile2: %{ni}-%v.patch
-PatchFile2-MD5: a09d6337e021085a8c9d14c5bdcdf088
-PatchFile3: %{ni}-10.7.patch
-PatchFile3-MD5: adf5439f08870b6f7ba0d9be7e85bb22
+PatchFile: %{ni}-glpk.patch
+PatchFile-MD5: a4861a0803cfbbbb8892019cd5f217d2
+PatchFile2: %{ni}.patch
+PatchFile2-MD5: 94f6e470ee04b0e2837709966fc31420
+PatchFile3: %{ni}-%v.patch
+PatchFile3-MD5: a09d6337e021085a8c9d14c5bdcdf088
+PatchFile4: %{ni}-10.7.patch
+PatchFile4-MD5: adf5439f08870b6f7ba0d9be7e85bb22
 PatchScript: <<
 	#!/bin/sh -ev
+	#fix for use of glpk private internals
+	patch -p1 < %{PatchFile}
+	# create versioned manpages
 	cp doc/interpreter/%{Ni}.1 doc/interpreter/%{Ni}-%v.1
 	cp doc/interpreter/%{Ni}-bug.1 doc/interpreter/%{Ni}-bug-%v.1
 	cp doc/interpreter/%{Ni}-config.1 doc/interpreter/%{Ni}-config-%v.1
 	cp doc/interpreter/mkoctfile.1 doc/interpreter/mkoctfile-%v.1
-	sed -e 's/@OCTVERSION@/%v/g' %{PatchFile} | patch -p1 
+	#Fink-specific changes
+	sed -e 's/@OCTVERSION@/%v/g' %{PatchFile2} | patch -p1 
 	sed -i -e 's|@FINKPREFIX@|%p|g'   %{Ni}-forge* %{Ni}rc doc/interpreter/*.1 mkoctfile.in
+ 	# Put compiler information without 'flag-sort' into oct-conf.h, which in 
+ 	# turn gets harcoded into the Octave interpreter's 'octave_config_info' 
+ 	# function, which is then used by some of the octave-forge packages at 
+ 	# configure time.  Also do this for mkoctfile.in.
+ 	sed -i.bak 	-e "s|%%OCTAVE_CONF_CC%%|\"`which gcc`\"|" \
+ 				-e "s|%%OCTAVE_CONF_CXXCPP%%|\"`which g++` -E\"|" \
+ 				-e "s|%%OCTAVE_CONF_CXX%%|\"`which g++`\"|" \
+ 				-e "s|%%OCTAVE_CONF_DL_LD%%|\"`which g++`\"|" \
+ 				-e "s|%%OCTAVE_CONF_LD_CXX%%|\"`which g++`\"|" \
+ 				-e "s|%%OCTAVE_CONF_SH_LD%%|\"`which g++`\"|" src/oct-conf.h.in mkoctfile.in	
+	# Add the BLAS C library for the -atlas variant.
+	if [ "%type_pkg[-atlas]" = "-atlas" ]
+		then sed -i.bak -e 's|%%OCTAVE_CONF_BLAS_LIBS%%|"%p/lib/liblapack.dylib %p/lib/libf77blas.dylib %p/lib/libcblas.dylib"|' \
+							src/oct-conf.h.in mkoctfile.in
+	fi
+	# disable FLTK backend since that's in a separate package, and make sure GraphicsMagick
+	# gets activated properly.
+	patch -p1 < %{PatchFile3}
+	# fix lack of CGDisplayBitsPerPixel
+	patch -p1 < %{PatchFile4}
 	# fix lib name for qhull6
 	perl -pi -e 's|(qhull[/.])|lib\1|g ; s|lqhull|lqhull6|' configure
 	# wrong include dir for qhull6
@@ -71,25 +97,7 @@ using std::size_t;' liboctave/oct-alloc.h
 	# missing qualifier to dependent-name member-function
 	sed -i.orig -e '/truncate_int/s|\(return\) \(truncate_int\)|\1 octave_int_base<T>::\2|' \
 		liboctave/oct-inttypes.h
-	# disable FLTK backend
-	patch -p1 < %{PatchFile2}
-	# fix lack of CGDisplayBitsPerPixel
-	patch -p1 < %{PatchFile3}
- 	# Put compiler information without 'flag-sort' into oct-conf.h, which in 
- 	# turn gets harcoded into the Octave interpreter's 'octave_config_info' 
- 	# function, which is then used by some of the octave-forge packages at 
- 	# configure time.  Also do this for mkoctfile.in.
- 	sed -i.bak 	-e "s|%%OCTAVE_CONF_CC%%|\"`which gcc`\"|" \
- 				-e "s|%%OCTAVE_CONF_CXXCPP%%|\"`which g++` -E\"|" \
- 				-e "s|%%OCTAVE_CONF_CXX%%|\"`which g++`\"|" \
- 				-e "s|%%OCTAVE_CONF_DL_LD%%|\"`which g++`\"|" \
- 				-e "s|%%OCTAVE_CONF_LD_CXX%%|\"`which g++`\"|" \
- 				-e "s|%%OCTAVE_CONF_SH_LD%%|\"`which g++`\"|" src/oct-conf.h.in mkoctfile.in	
-	# Add the BLAS C library for the -atlas variant.
-	if [ "%type_pkg[-atlas]" = "-atlas" ]
-		then sed -i.bak -e 's|%%OCTAVE_CONF_BLAS_LIBS%%|"%p/lib/liblapack.dylib %p/lib/libf77blas.dylib %p/lib/libcblas.dylib"|' \
-							src/oct-conf.h.in mkoctfile.in
-	fi
+	sed -i.orig -e 's|template static|template|g' liboctave/eigs-base.cc
 <<
 
 SetCC: flag-sort -r gcc
@@ -163,10 +171,8 @@ InstallScript: <<
  			-e "s|flag-sort -r g++|`which g++`|g" \
  			%i/bin/%{Ni}-bug-%v 
  # for the -atlas variant, add libcblas.dylib to BLAS_LIBS:
- if ["%type_pkg[-atlas]" = "-atlas"]
- 	then perl -pi -e 's|(%p/lib/liblapack.dylib %p/lib/libf77blas.dylib)|$1 %p/lib/libcblas.dylib|' \
- 				%i/bin/%{ni}-bug-%v
- fi
+ perl -pi -e 's|(%p/lib/liblapack.dylib %p/lib/libf77blas.dylib)|$1 %p/lib/libcblas.dylib|' \
+ 	%i/bin/%{ni}-bug-%v
  # generate Fink-gcc enabled mkoctfile
  cp %i/bin/mkoctfile-%type_raw[oct] %i/bin/mkoctfile-%type_raw[oct]-gcc%type_raw[gcc]
  perl -pi -e \
@@ -485,9 +491,6 @@ As of revision 326:
 
 Get rid of the ugly construction previously used for setting the BLAS and 
 LAPACK libraries.
-
-Fix issue in which BLAS_LIBS wasn't getting properly encoded for the x86_64 
-non-atlas variant.
 
 Now includes an additional mkoctfile which uses Fink's gcc46 compilers instead
 of Xcode's.
