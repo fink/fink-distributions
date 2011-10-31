@@ -1,8 +1,8 @@
 Info2: <<
 Package: python%type_pkg[python]
-Version: 3.1.4
-Revision: 2
-Type: python 3.1
+Version: 3.2.2
+Revision: 1
+Type: python 3.2
 Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
 Depends: <<
 	%N-shlibs (= %v-%r),
@@ -32,17 +32,18 @@ BuildDepends: <<
 	tcltk-dev (>= 8.4.1-1),
 	x11-dev
 <<
+Provides: argparse-py%type_pkg[python], futures-py%type_pkg[python]
 Source: http://python.org/ftp/python/%v/Python-%v.tar.bz2
-Source-MD5: 09ed98eace4c403b475846702708675e
+Source-MD5: 9d763097a13a59ff53428c9e4d098a05
 Source2: http://www.python.org/ftp/python/doc/%v/python-%v-docs-html.tar.bz2
-Source2-MD5: 0a4a56361005966cc38d1068dfd52a54
+Source2-MD5: 55af06e320f35920ea9fed1f143e1286
 PatchFile: %n.patch
-PatchFile-MD5: c5cb925836eca9f48750e1800c04d196
+PatchFile-MD5: c545d3975a69d0f1cbcaca4cf3a70257
 PatchScript: sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
 
 UseMaxBuildJobs: true
 SetLDFLAGS: -L%p/lib/system-openssl/lib
-ConfigureParams: --enable-shared --with-dbmliborder=gdbm
+ConfigureParams: --enable-shared --with-dbmliborder=gdbm --enable-loadable-sqlite-extensions
 CompileScript: <<
 #!/bin/sh -ex
 	darwin_vers=`uname -r | cut -d. -f1`
@@ -51,30 +52,32 @@ CompileScript: <<
 		perl -pi -e 's/-O3/-fwrapv -O3/' ./configure
 	fi
 	if [ "%m" = "x86_64" ]; then
-		#perl -pi -e 's|num_missing != 2:|num_missing != 2:|g' ./setup.py
+		#perl -pi.bak -e 's|num_missing != 2:|num_missing != 2:|g' ./setup.py
 		# Architecture:x86_64 has tcltk-8.5.x, other arch have 8.4.x
-        perl -pi -e "s/8.4\'/8.5\'/" ./setup.py
-        # Test assumes that little endian Macs always return i386.
-        perl -pi -e "s/i386/x86_64/" Lib/test/test_platform.py
+        perl -pi.bak -e "s/8.4\'/8.5\'/" ./setup.py
 	fi
 	%{default_script}
 <<
 
-InfoTest: TestScript: LANG=en_US.UTF-8 make -k test EXTRATESTOPTS='-w -x test_distutils test_cmd_line test_argparse test_httpservers' || exit 2
+InfoTest: <<
+	TestScript: <<
+		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS='-w -x test_distutils test_argparse test_httpservers test_import' || exit 2
+	<<
+<<
 
 InstallScript: <<
 #!/bin/sh -ex
-	# install fails with -j great than 1
+	# install fails with -j greater than 1
 	export MAKEFLAGS=-j1
 	make install DESTDIR=%d
 
 	# don't propagate our hackery
-	perl -pi -e 's|-L%p/lib/system-openssl/lib||; s|-lintl ||' %i/lib/python%type_raw[python]/config/Makefile
+	perl -pi -e 's|-L%p/lib/system-openssl/lib||; s|-lintl ||' %i/lib/python%type_raw[python]/config-%type_raw[python]m/Makefile
 
 	# fix all main things to be python-versioned filenames with
 	# unversioned symlinks to them
 	pushd %i/bin
-		for f in 2to3 idle3 pydoc3; do
+		for f in idle3 pydoc3; do
 			mv ${f} ${f}-%type_raw[python]
 			ln -s ${f}-%type_raw[python] %i/bin/${f}
 		done
@@ -87,16 +90,14 @@ InstallScript: <<
 	# install some docs and other useful tidbits
 	rm -rf Misc/RPM
 	/bin/cp -R Misc Tools %i/lib/python%type_raw[python]
-	mkdir -p %i/share/doc/%n
-	/bin/cp -R Demo Doc %i/share/doc/%n
 	mkdir -p %i/share/doc/%n/html
 	/bin/cp -R ../python-%v-docs-html/ %i/share/doc/%n/html
 <<
 SplitOff: <<
  Package: %N-shlibs
  Depends: libgettext8-shlibs
- Files: lib/python%type_raw[python]/config/libpython%type_raw[python].dylib
- Shlibs: %p/lib/python3.1/config/libpython3.1.dylib 3.1.0 %n (>= 3.1-1)
+ Files: lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib
+ Shlibs: %p/lib/python3.2/config-%type_raw[python]m/libpython3.2m.dylib 3.2.0 %n (>= 3.2-1)
  DocFiles: README LICENSE 
 <<
 SplitOff2: <<
@@ -135,7 +136,7 @@ DescPackaging: <<
 	Patch a lot of things to impliment shared-lib support for
 	non-Framework build on Darwin.
 
-	Static libpython is installed in lib/pythonX.X/config/ but
+	Static libpython is installed in lib/pythonX.X/config-%type_raw[python]m/ but
 	shared goes in %p/lib by default. Fink's packaging has always
 	placed manually-built shared lib in config/ along side static,
 	This gives consistency regardless of -search_paths_first.
@@ -146,8 +147,6 @@ DescPackaging: <<
 	propagate this to third-party compiled modules) to ensure that
 	all symbols resolved at compile-time to avoid packager
 	mistakes and user runtime surprises.
-
-	Should use --with-pth (fink's pth package)?
 
 	Play lots of games to make sure we get expected support
 	libraries. Also make sure -L/sw/lib/system-openssl is passed
@@ -162,6 +161,12 @@ DescPackaging: <<
 	package series. Why would they be in different places? Patch
 	-config script to continue this tradition (bug in previous
 	versions accidentally did the Right Thing here).
+	
+	New in 3.2, .pyc files are saved in the __pycache__ directory
+	at the same level as the matching .py file. Any packages that
+	expect the .pyc file to be next to the .py file will need adjustment.
+	
+	The .pyc and .so files also include the python version in the name.
 <<
 DescPort: <<
 	libpython needs to link to CF because that lib has the parent
@@ -171,10 +176,6 @@ DescPort: <<
 	bsddb is gone so drop db* patch and dep.
 	Patch setup.py to find ncursesw headers and drop libncurses5 dep.
 	Ensure $(LDFLAGS) is used linking libpython or else it can't find libintl.
-	Fink's gdbm3 installs %p/include/ndbm.h but python expects
-	%p/include/gdbm/ndbm.h so python ends up using /usr/include/ndbm.h
-	but the lib from gdbm3 which is, shall we say, bad. Force it to find
-	%p/include/ndbm.h instead.
 	
 	test_ctypes fails with clang unless _ctypes/_ctypes_test.c is built
 	with -O0 so force that in setup.py.
