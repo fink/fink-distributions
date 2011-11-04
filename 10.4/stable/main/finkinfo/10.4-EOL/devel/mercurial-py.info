@@ -1,25 +1,36 @@
 Info2: <<
 Package: mercurial-py%type_pkg[python]
-Version: 1.6.4
+Version: 2.0
 Revision: 1
 Distribution: (%type_pkg[python] = 24) 10.4, (%type_pkg[python] = 24) 10.5
 Type: python (2.4 2.5 2.6 2.7)
-Depends: python%type_pkg[python]
-BuildDepends: gettext-tools, fink (>= 0.24.12)
-Provides: mercurial
+Depends: python%type_pkg[python], ca-bundle
+BuildDepends: gettext-tools, fink (>= 0.24.12), docutils-py%type_pkg[python] (>= 0.7-1)
+# These are only needed when converting from the appropriate VCS.
+# pygments-py%type_pkg[python] is only needed for the highlight extension.
+# pyopenssl-py%type_pkg[python] is needed by hgweb for ssl support.
+Suggests: bzr-py%type_pkg[python], cvsps, darcs, git, arch-tla, monotone, svn-swig-py%type_pkg[python], pygments-py%type_pkg[python], pyopenssl-py%type_pkg[python]
 Source: http://www.selenic.com/mercurial/release/mercurial-%v.tar.gz
-Source-MD5: 657dd6aff80aa9a3b187652a635544d0
+Source-MD5: 38f439a63bae1687d385758c8ad3d53e
+PatchScript: <<
+	perl -pi -e 's|/etc/|%p/etc/|g' doc/hg.1* doc/hgrc.5*
+	# In fixing building with Xcode 4.0 on system python, they broke
+	# building on fink. Make the -arch stuff go away.
+	perl -pi -e 's/-arch i386 -arch x86_64//' setup.py
+<<
 CompileScript: <<
 %p/bin/python%type_raw[python] setup.py build
+cd doc; make PREFIX=%p PYTHON=%p/bin/python%type_raw[python]
 <<
 InstallScript: <<
 # Bin
 %p/bin/python%type_raw[python] setup.py install --root %d
+/usr/bin/find contrib -name '*.pyc' -delete
 cp contrib/hgk %i/bin/
 cd %i/bin; for filename in *; do mv -v $filename $filename-py%type_pkg[python]; done;
 
 # Docs
-cd doc; make PREFIX=%i install
+cd doc; make PREFIX=%p PYTHON=%p/bin/python%type_raw[python] DESTDIR=%d install
 cd %i/share/man; for i in 1 5; do cd "man$i"; for filename in *; \
   do cutname=`echo "$filename" | cut -d "." -f 1 -`; \
   mv -v $filename $cutname-py%type_pkg[python].$i; done; cd ..; done;
@@ -27,6 +38,8 @@ cd %i/share/man; for i in 1 5; do cd "man$i"; for filename in *; \
 mkdir -p %i/etc/mercurial
 cat contrib/sample.hgrc contrib/mergetools.hgrc > %i/etc/mercurial/hgrc-py%type_pkg[python]
 rm -f contrib/sample.hgrc contrib/mergetools.hgrc
+# Need to point to CA certs now.
+echo '[web]\ncacerts = %p/etc/ssl/certs/ca-bundle.crt' >> %i/etc/mercurial/hgrc-py%type_pkg[python]
 
 # Extras
 mkdir -p %i/etc/bash_completion.d
@@ -39,14 +52,15 @@ mv contrib/mq.el %i/share/emacs/site-lisp/mq-py%type_pkg[python].el
 rm -Rf contrib/win32 contrib/macosx contrib/buildrpm
 mkdir -p %i/share/doc/%n/contrib
 cp -r contrib/* %i/share/doc/%n/contrib/
-
-mkdir -p %i/share/doc/%n/hgext
-cp -r hgext/* %i/share/doc/%n/hgext/
 <<
 
 # Mercurial can fail if LC_LANG isn't set correctly.
 # Set HGENCODING to a known good value. User can always override.
-RuntimeVars: HGENCODING: UTF-8
+# HG needs to be set for hgk to work.
+RuntimeVars: <<
+	HGENCODING: UTF-8
+	HG: %p/bin/hg
+<<
 
 PostInstScript: <<
 # Bin
@@ -78,14 +92,21 @@ if [ $1 != "upgrade" ]; then
 fi
 <<
 
+UseMaxBuildJobs: true
 InfoTest: <<
-  TestScript: <<
-  cd tests/ && %p/bin/python%type_raw[python] run-tests.py
-  <<
-  TestSuiteSize: large
+	TestScript: <<
+		#!/bin/bash -ev
+		cd tests
+		# Tests expect a 'python' executable, so make one that's predictable.
+		ln -s %p/bin/python%type_raw[python] python
+		export PATH=".:$PATH"
+		rm test-url.py
+		%p/bin/python%type_raw[python] run-tests.py $MAKEFLAGS || exit 2
+	<<
+	TestSuiteSize: large
 <<
 
-DocFiles: README COPYING CONTRIBUTORS
+DocFiles: README COPYING CONTRIBUTORS doc/*.html
 ConfFiles: %p/etc/mercurial/hgrc-py%type_pkg[python]
 Description: Lightweight distributed SCM 
 DescDetail: <<
@@ -106,6 +127,11 @@ distributed projects. Features include:
  * Small Python codebase
  * GPL license
 <<
+DescUsage: <<
+The Bookmarks extension is now always enabled. If you previously
+had it enabled with 'hgext.bookmarks =' in your hgrc file, please
+remove that line.
+<<
 DescPackaging: <<
 Formerly maintained by Pepe Barbe <pepe.barbe@gmail.com>
 
@@ -114,7 +140,7 @@ to ensure that the python versions match.
 Packages that just need the 'hg' command line tool can Depend
 on just 'mercurial' if they don't care about python version.
 <<
-License: GPL
+License: GPL2+
 Homepage: http://mercurial.selenic.com/
 Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
 <<
