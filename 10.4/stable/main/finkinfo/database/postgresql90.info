@@ -1,7 +1,7 @@
 Info4: <<
 Package: postgresql90
 Version: 9.0.4
-Revision: 1
+Revision: 5
 Description: PostgreSQL open-source database
 License: BSD
 Maintainer: Benjamin Reed <postgresql90@fink.raccoonfink.com>
@@ -10,17 +10,17 @@ Depends: <<
 	daemonic (>= 20010902-1),
 	libxml2-shlibs,
 	libxslt-shlibs,
-	passwd (>= 20030906-1),
+	passwd-postgres,
 	readline5-shlibs,
 	%N-shlibs (>= %v-%r)
 <<
 BuildDepends: <<
 	bison,
-	fink (>= 0.29.7-1),
+	fink (>= 0.30.0-1),
 	fink-mirrors (>= 0.28.7.1-2),
 	libxml2,
 	libxslt,
-	passwd (>= 20030906-1),
+	passwd-postgres,
 	readline5,
 	system-openssl-dev,
 	system-perl,
@@ -32,9 +32,20 @@ GCC: 4.0
 
 Source: mirror:postgresql:source/v%v/postgresql-%v.tar.bz2
 Source-MD5: 80390514d568a7af5ab61db1cda27e29
-PatchScript: sed -e 's|@BUILDDIR@|%b|g' -e 's|@INSTPREFIX@|%p|g' < %{PatchFile} | patch -p1
+PatchScript: <<
+#!/bin/sh -ex
+	sed -e 's|@BUILDDIR@|%b|g' -e 's|@INSTPREFIX@|%p|g' < %{PatchFile} | patch -p1
+
+	# If we have fink ExtUtils::ParseXS, it is early in PERL5LIB;
+	# therefore we need the xsubpp program (also part of that
+	# pkg). Handcoded makefiles for perl modules are bad, m'kay?
+	fink_XSUBPP="%p/lib/perl5/ExtUtils/xsubpp"
+	if [ -x $fink_XSUBPP ]; then
+		perl -pi -e "s,\S+xsubpp,${fink_XSUBPP},g" src/pl/plperl/GNUmakefile
+	fi
+<<
 PatchFile: %n.patch
-PatchFile-MD5: 3a631636c02956ab807bd4b08eef5e00
+PatchFile-MD5: 7c9ccbc8a0c66027b7bf6d0f5df6ad5a
 
 SetCPPFLAGS: -I%p/lib/system-openssl/include -DHAVE_OPTRESET -fno-common
 SetLDFLAGS: -L%p/lib/system-openssl/lib -F/System/Library/Frameworks
@@ -42,7 +53,10 @@ UseMaxBuildJobs: true
 CompileScript: <<
 	#!/bin/sh -xe
 	
-	if [ -x /usr/bin/gcc-4.2 ]; then
+	if [[ $(sw_vers -productVersion | cut -d. -f1-2) > 10.6 ]]; then
+	export CC=clang
+	export CXX=clang++
+	elif [ -x /usr/bin/gcc-4.2 ]; then
 	export CC=gcc-4.2
 	export CXX=g++-4.2
 	fi
@@ -198,14 +212,13 @@ SplitOff: <<
 PG_ID=`id -u postgres 2>/dev/null || true`
 if [ -z "$PG_ID" ]; then
 	echo "Whoa there!  You must have a postgres user to install this package."
-	echo "Please do a 'fink reinstall passwd' and make sure you hit 'y' when it"
-	echo "asks if you want to update your users."
+	echo "Please do a 'fink reinstall passwd-postgres'"
+	echo "and make sure you hit 'y' when it asks if you want to update your users."
 	exit 1
 fi
 	<<
 	PostInstScript: [ -x %p/var/postgresql-9.0/update-alternatives.sh ] && %p/var/postgresql-9.0/update-alternatives.sh
-	PreRmScript: [ -x %p/var/postgresql-9.0/remove-alternatives.sh ] && %p/var/postgresql-9.0/remove-alternatives.sh
-	PostRmScript: [ -x %p/var/postgresql-9.0/update-alternatives.sh ] && %p/var/postgresql-9.0/update-alternatives.sh
+	PreRmScript: if [ "$1" != "upgrade" ]; then [ -x %p/var/postgresql-9.0/remove-alternatives.sh ] && %p/var/postgresql-9.0/remove-alternatives.sh; fi
 <<
 SplitOff2: <<
 	Package: %N-shlibs
@@ -236,15 +249,15 @@ if [ -d "%p/var/postgresql-9.0/data" ]; then
 	fi
 fi
 	<<
-	PreRmScript: [ -x %p/var/postgresql-9.0/remove-alternatives.sh ] && %p/var/postgresql-9.0/remove-alternatives.sh
+	PreRmScript: if [ "$1" != "upgrade" ]; then [ -x %p/var/postgresql-9.0/remove-alternatives.sh ] && %p/var/postgresql-9.0/remove-alternatives.sh; fi
 <<
 
 PreInstScript: <<
 PG_ID=`id -u postgres 2>/dev/null || true`
 if [ -z "$PG_ID" ]; then
 	echo "Whoa there!  You must have a postgres user to install this package."
-	echo "Please do a 'fink reinstall passwd' and make sure you hit 'y' when it"
-	echo "asks if you want to update your users."
+	echo "Please do a 'fink reinstall passwd-postgres'"
+	echo "and make sure you hit 'y' when it asks if you want to update your users."
 	exit 1
 fi
 <<
@@ -314,14 +327,12 @@ END
 fi
 <<
 PreRmScript: <<
-[ -x %p/var/postgresql-9.0/remove-alternatives.sh ] && %p/var/postgresql-9.0/remove-alternatives.sh
-
 # clean up
 if [ $1 != "upgrade" ]; then
+	[ -x %p/var/postgresql-9.0/remove-alternatives.sh ] && %p/var/postgresql-9.0/remove-alternatives.sh
 	daemonic remove %N >/dev/null 2>&1 || :
 fi
 <<
-PostRmScript: [ -x %p/var/postgresql-9.0/update-alternatives.sh ] && %p/var/postgresql-9.0/update-alternatives.sh
 DaemonicFile: <<
 <service>
 <description>PostgreSQL database server</description>
