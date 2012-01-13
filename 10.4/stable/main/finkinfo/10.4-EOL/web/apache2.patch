@@ -1,0 +1,3167 @@
+diff -ruN httpd-2.2.6.orig/fink/a2-scripts/a2dismod httpd-2.2.6/fink/a2-scripts/a2dismod
+--- httpd-2.2.6.orig/fink/a2-scripts/a2dismod	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/a2-scripts/a2dismod	2007-12-05 20:18:07.000000000 -0700
+@@ -0,0 +1,37 @@
++#!/bin/sh -e
++
++SYSCONFDIR='@FINKPREFIX@/etc/apache2'
++
++if [ -z $1 ]; then
++	echo "Which module would you like to disable?"
++	echo -n "Your choices are: "
++	ls $SYSCONFDIR/mods-enabled/*.load | \
++	sed -e "s,$SYSCONFDIR/mods-enabled/,,g" | sed -e 's/\.load$//g;' | xargs echo
++	echo -n "Module name? "
++	read MODNAME
++else
++	MODNAME=$1
++fi
++
++DEPENDS=`grep -l "# Depends:.*$MODNAME" $SYSCONFDIR/mods-enabled/*.load| sed -e "s,$SYSCONFDIR/mods-enabled/,,g" | sed -e 's/\.load$//g;'`
++#for i in $DEPENDS; do
++#        a2dismod ${i%.load};
++#done
++if [ ! -z "$DEPENDS" ]; then
++        echo "The following modules depend on the module you requested be uninstalled:" >&2
++        echo "$DEPENDS" >&2
++        echo "Please uninstall these first" >&2
++        exit 1
++fi
++
++if ! [ -L $SYSCONFDIR/mods-enabled/$MODNAME.load ]; then
++    if [ -e $SYSCONFDIR/mods-available/$MODNAME.load ]; then
++        echo "Module $MODNAME already disabled"
++        exit 0
++    fi
++    echo "Module $MODNAME does not exist!" >&2
++    exit 1
++fi
++
++rm -f $SYSCONFDIR/mods-enabled/$MODNAME.*
++echo "Module $MODNAME disabled; run apache2ctl restart to fully disable."
+diff -ruN httpd-2.2.6.orig/fink/a2-scripts/a2dissite httpd-2.2.6/fink/a2-scripts/a2dissite
+--- httpd-2.2.6.orig/fink/a2-scripts/a2dissite	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/a2-scripts/a2dissite	2007-12-05 20:18:07.000000000 -0700
+@@ -0,0 +1,33 @@
++#!/bin/sh -e
++
++SYSCONFDIR='@FINKPREFIX@/etc/apache2'
++
++if [ -z $1 ]; then
++	echo "Which site would you like to disable?"
++	echo -n "Your choices are: "
++	ls @FINKPREFIX@/etc/apache2/sites-enabled/* | \
++	sed -e "s,$SYSCONFDIR/sites-enabled/,,g" | xargs echo
++	echo -n "Site name? "
++	read SITENAME
++else
++	SITENAME=$1
++fi
++
++if [ $SITENAME = "default" ]; then
++        PRIORITY="000"
++fi
++
++if ! [ -e $SYSCONFDIR/sites-enabled/$SITENAME -o \
++       -e $SYSCONFDIR/sites-enabled/"$PRIORITY"-"$SITENAME" ]; then
++	if [ -e $SYSCONFDIR/sites-available/$SITENAME ]; then
++		echo "Site $SITENAME is already disabled"
++		exit 0
++	fi
++	echo "Site $SITENAME does not exist!" >&2
++	exit 1
++fi
++
++if ! rm $SYSCONFDIR/sites-enabled/$SITENAME 2>/dev/null; then
++	rm -f $SYSCONFDIR/sites-enabled/"$PRIORITY"-"$SITENAME"
++fi
++echo "Site $SITENAME disabled; run apache2ctl restart to fully disable."
+diff -ruN httpd-2.2.6.orig/fink/a2-scripts/a2enmod httpd-2.2.6/fink/a2-scripts/a2enmod
+--- httpd-2.2.6.orig/fink/a2-scripts/a2enmod	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/a2-scripts/a2enmod	2007-12-05 21:15:08.000000000 -0700
+@@ -0,0 +1,60 @@
++#!/bin/sh -e
++
++SYSCONFDIR='@FINKPREFIX@/etc/apache2'
++
++if [ -z $1 ]; then
++	echo "Which module would you like to enable?"
++	echo -n "Your choices are: "
++	ls @FINKPREFIX@/etc/apache2/mods-available/*.load | \
++	sed -e "s,$SYSCONFDIR/mods-available/,,g" | sed -e 's/\.load$//g;' | xargs echo
++	echo -n "Module name? "
++	read MODNAME
++else
++	MODNAME=$1
++fi
++
++#figure out if we're on a prefork or threaded mpm
++if [ -x @FINKPREFIX@/sbin/apache2 ]; then
++	PREFORK=`@FINKPREFIX@/sbin/apache2 -l | grep -E 'prefork|itk' || true`
++fi
++
++if [ "$MODNAME" = "cgi" ] && [ -z $PREFORK ]; then
++	MODNAME="cgid"
++	echo "Your MPM seems to be threaded. Selecting cgid instead of cgi."
++fi
++
++if [ -e $SYSCONFDIR/mods-enabled/$MODNAME.load ]; then
++	echo "This module is already enabled!"
++	exit 0 
++fi
++
++if ! [ -e $SYSCONFDIR/mods-available/$MODNAME.load ]; then
++	echo "This module does not exist!" >&2
++	exit 1
++fi
++
++DEPENDS=`grep "# Depends:" $SYSCONFDIR/mods-available/$MODNAME.load|cut -f2 -d:`
++if [ ! -z "$DEPENDS" ]; then
++        for i in $DEPENDS; do
++                echo "Enabling $i as a dependency"
++                @FINKPREFIX@/sbin/a2enmod "$i";
++        done
++fi
++
++if [ -e $SYSCONFDIR/mods-available/$MODNAME.conf ] ; then
++	if grep -qE '^# a2enmod-note:.*needs-configuration' \
++			$SYSCONFDIR/mods-available/$MODNAME.conf ; then
++		echo "mod_$MODNAME needs configuration before being able to work."
++		echo "See the comments in $SYSCONFDIR/mods-available/$MODNAME.conf"
++		echo "for details."
++	fi
++fi
++
++for i in conf load; do 
++        if [ -e $SYSCONFDIR/mods-available/$MODNAME.$i -a ! -e $SYSCONFDIR/mods-enabled/$MODNAME.$i ]; then
++        cd $SYSCONFDIR/mods-enabled;
++        ln -sf ../mods-available/$MODNAME.$i $MODNAME.$i;
++        fi
++done
++
++echo "Module $MODNAME installed; run apache2ctl restart to enable."
+diff -ruN httpd-2.2.6.orig/fink/a2-scripts/a2ensite httpd-2.2.6/fink/a2-scripts/a2ensite
+--- httpd-2.2.6.orig/fink/a2-scripts/a2ensite	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/a2-scripts/a2ensite	2007-12-05 20:18:07.000000000 -0700
+@@ -0,0 +1,38 @@
++#!/bin/sh -e
++
++SYSCONFDIR='@FINKPREFIX@/etc/apache2'
++
++if [ -z $1 ]; then
++	echo "Which site would you like to enable?"
++	echo -n "Your choices are: "
++	ls $SYSCONFDIR/sites-available/* | \
++	sed -e "s,$SYSCONFDIR/sites-available/,,g" | xargs echo
++	echo -n "Site name? "
++	read SITENAME
++else
++	SITENAME=$1
++fi
++
++if [ $SITENAME = "default" ]; then
++	PRIORITY="000"
++fi
++
++if [ -e $SYSCONFDIR/sites-enabled/$SITENAME -o \
++     -e $SYSCONFDIR/sites-enabled/"$PRIORITY"-"$SITENAME" ]; then
++	echo "This site is already enabled!"
++	exit 0
++fi
++
++if ! [ -e $SYSCONFDIR/sites-available/$SITENAME ]; then
++	echo "This site does not exist!" >&2
++	exit 1
++fi
++
++if [ $SITENAME = "default" ]; then
++	ln -sf $SYSCONFDIR/sites-available/$SITENAME \
++	       $SYSCONFDIR/sites-enabled/"$PRIORITY"-"$SITENAME"
++else
++	ln -sf $SYSCONFDIR/sites-available/$SITENAME $SYSCONFDIR/sites-enabled/$SITENAME
++fi
++
++echo "Site $SITENAME installed; run apache2ctl restart to enable."
+diff -ruN httpd-2.2.6.orig/fink/a2-scripts/modhandler.py httpd-2.2.6/fink/a2-scripts/modhandler.py
+--- httpd-2.2.6.orig/fink/a2-scripts/modhandler.py	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/a2-scripts/modhandler.py	2007-12-05 20:18:07.000000000 -0700
+@@ -0,0 +1,190 @@
++#!/usr/bin/env python
++# Copyright (C) Thom May 2002
++#All rights reserved.
++
++#Redistribution and use in source and binary forms, with or without
++#modification, are permitted provided that the following conditions
++#are met:
++#1. Redistributions of source code must retain the above copyright
++#   notice, this list of conditions and the following disclaimer.
++#2. Redistributions in binary form must reproduce the above copyright
++#   notice, this list of conditions and the following disclaimer in the
++#   documentation and/or other materials provided with the distribution.
++
++#THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
++#IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++#OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++#IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
++#INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
++#NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++#DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++#THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++#(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++#THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++#TODO: add --force option
++
++import shelve, textwrap
++
++__all__ = ["ModHandler", "ModHandlerException", "ModuleAlreadyExists", "NoSuchModule"]
++
++class ModHandlerException(Exception):
++    pass
++
++class ModuleAlreadyExists(ModHandlerException):
++    def __init__(self, name):
++        self.args = name
++        self.name = name
++        
++class NoSuchModule(ModHandlerException):
++    def __init__(self, name):
++        self.args = name
++        self.name = name
++
++class ModHandler:
++    def __init__(self, db):
++        self.registry = shelve.open(db,"c",writeback=True)
++        self.revision = "$LastChangedRevision: 19 $"
++        
++    def add(self,module,sequence=99,*dependencies):
++        """add(module[, sequence, *dependencies])
++    
++        Add a module into the registry ready for enabling.
++        module is the name of the module
++        sequence is the sequence number of the module. The default is 99
++        any further arguments define dependencies for the module"""
++    
++        if __debug__: print "The module is", module, "and the sequence number is",sequence,"\n"
++        state = "disabled"
++        #now we create a tuple
++        # name, sequence, state, [dependencies]
++        if len(dependencies) > 0:
++            entry = module, sequence, state, 0, dependencies
++        else:
++            entry = module, sequence, state, 0
++        
++        if self.registry.has_key(module):
++            raise ModuleAlreadyExists(module)
++            
++        self.registry[module] = entry
++        return 0
++        
++    def dolist(self):
++        """dolist (no arguments) 
++        lists all the current elements in the database."""
++    
++        for key in self.registry.keys():
++             print textwrap.fill("The name of the key is %s and the data in the key is: %s" % (key , self.registry[key][:3])) 
++             if len(self.registry[key]) > 4:
++                print textwrap.fill("The dependencies for %s are: %s\n" % (key ,  self.registry[key][4]))
++             if self.registry[key][3] > 0:
++                 print textwrap.fill("%s is in use %s times\n" % (key, self.registry[key][3]))
++             print 
++        
++    def remove(self,module):
++        if __debug__: print "Plotting to remove",module,"\n"
++        try:        
++            self.disable(module)
++            del self.registry[module]
++            if __debug__: print "Removed",module
++        except KeyError:
++            raise NoSuchModule(module)
++        return 0
++        
++    def enable(self,module,isdependency=False,*dependseq):
++        """enable(module,[dependseq])
++        
++        enable takes one or two arguments. in normal opperation, just the module 
++        name is passed. When being run recursively to fix dependencies, the
++        dependency sequence of the depending module is also passed"""
++        
++        try:
++             data = self.registry[module]
++        except KeyError:
++            raise NoSuchModule(module)
++        
++        #now, we check to see if our sequence number is higher than the module that's depending on us
++        #if so, we bump our sequence number down to one less than the depending module
++        changedseqnum = True
++        seqnum = data[1]
++        if __debug__: print module+": seqnum "+str(seqnum)
++        if len(dependseq) > 0:
++             if __debug__: print module+": dependseq "+str(dependseq[0])
++             if int(seqnum) > int(dependseq[0]):
++                oldseqnum = seqnum
++                seqnum = int(dependseq[0])
++                seqnum = seqnum - 1
++                if __debug__:
++                    print module +": punting old seqnum:",str(oldseqnum)," to new seqnum:",str(seqnum)
++                    print "new seqnum:",str(seqnum)
++                #changedseqnum = True
++             else:
++                changedseqnum = False
++         
++        #next, we need to load any dependencies.
++        #this is complicated by the need to get the sequence right.
++        if len(data) > 4:
++             dependencies = data[4]
++             if __debug__: print dependencies
++             for dependency in dependencies:
++                  if __debug__: print dependency
++                  returncode = self.enable(dependency,True,seqnum)
++                  if __debug__: print returncode
++                  
++        #now, we check whether the module is loaded already
++        if data[2] == "enabled" and changedseqnum == False:
++              #nothing more to do.
++              return
++        else:
++              self.switchon(module,seqnum)
++
++        refcount = data[3]
++        if isdependency:
++            refcount += 1
++        
++        #ok, nothing has broken. Only now do we update the module's status.
++        #it would be nice to provide some semblance of atomicity to the 
++        #operation
++        if len(data) < 5:
++            newstatus = module, seqnum, "enabled", refcount
++        else:
++            newstatus = module, seqnum, "enabled", refcount, dependencies
++        
++        self.registry[module] = newstatus
++        
++    def disable(self,module):
++        """disable(module) marks a module as disabled"""
++    
++        #this might require some form of refcounting so we can work out if any 
++        #unneeded dependencies can be unloaded as well, for example with mod_dav         
++        #and its providers, such as dav_fs or dav_svn - but not till the basic
++        #functionality works ;-)
++        
++        
++        try:
++            data = self.registry[module]
++        except KeyError:
++            raise NoSuchModule(module)
++        if data[2] == "disabled":
++            return
++
++        if __debug__: print "shutting",module,"down\n"
++        
++        #try:
++        self.switchoff(module,data[1])
++        
++        if len(data) < 4:
++            newstatus = module, data[1], "disabled"
++        else:
++             newstatus = module, data[1], "disabled", data[3]
++        
++        self.registry[module] = newstatus
++        
++    def version(self, versionnum):
++        
++        print "The version of the client is",versionnum
++        print "The revision number of ModHandler is %s" % self.revision.strip('$').split(':')[1].strip() 
++        
++    def switchon(self,module,seqnum): pass
++        
++    def switchoff(self,module): pass
+diff -ruN httpd-2.2.6.orig/fink/a2-scripts/update-apache2-modules httpd-2.2.6/fink/a2-scripts/update-apache2-modules
+--- httpd-2.2.6.orig/fink/a2-scripts/update-apache2-modules	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/a2-scripts/update-apache2-modules	2007-12-05 21:15:51.000000000 -0700
+@@ -0,0 +1,154 @@
++#!/usr/bin/env python
++# Copyright (C) Thom May 2002
++#All rights reserved.
++
++#Redistribution and use in source and binary forms, with or without
++#modification, are permitted provided that the following conditions
++#are met:
++#1. Redistributions of source code must retain the above copyright
++#   notice, this list of conditions and the following disclaimer.
++#2. Redistributions in binary form must reproduce the above copyright
++#   notice, this list of conditions and the following disclaimer in the
++#   documentation and/or other materials provided with the distribution.
++
++#THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
++#IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++#OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++#IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
++#INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
++#NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++#DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++#THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++#(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++#THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
++import getopt, sys, os
++from modhandler import *
++
++versionnum = 0.8
++class A2ModHandler(ModHandler):
++    def switchon(self,module,seqnum):
++        if __debug__: print "switching on %s%s" % (seqnum,module)
++        availloadstring = "@FINKPREFIX@/etc/apache2/mods-available/"+module+".load"
++        enableloadstring = "@FINKPREFIX@/etc/apache2/mods-enabled/"+str(seqnum)+module+".load"
++        availconfstring = "@FINKPREFIX@/etc/apache2/mods-available/"+module+".conf"
++        enableconfstring = "@FINKPREFIX@/etc/apache2/mods-enabled/"+str(seqnum)+module+".conf"
++        if os.path.exists(availloadstring) and not os.path.exists(enableloadstring):
++            os.symlink(availloadstring,enableloadstring)
++        else:
++            return
++            
++        if os.path.exists(availconfstring) and not os.path.exists(enableconfstring):
++            os.symlink(availconfstring,enableconfstring)
++        else:
++            return
++        
++        
++    def switchoff(self,module,seqnum):
++        if __debug__: print "switching %s off" % (module,)
++
++        enableloadstring = "@FINKPREFIX@/etc/apache2/mods-enabled/"+str(seqnum)+module+".load"
++        enableconfstring = "@FINKPREFIX@/etc/apache2/mods-enabled/"+str(seqnum)+module+".conf"
++
++        if os.path.exists(enableloadstring):
++            os.unlink(enableloadstring)
++        else:
++            return
++        
++        if os.path.exists(enableconfstring):
++            os.unlink(enableconfstring)
++        else:
++            return
++    
++                
++def main():
++    if len(sys.argv) == 1:
++        usage()
++        sys.exit(2)
++
++    mh = A2ModHandler("@FINKPREFIX@/lib/apache2/modules")    
++
++    name = os.path.split(sys.argv[0])[1]
++    if name == 'a2enmod':
++        mh.enable(sys.argv[1])
++    if name == 'a2dismod':
++        mh.disable(sys.argv[1])
++    
++    try:
++        opts, args = getopt.getopt(sys.argv[1:],"hlv" ,["add","disable","enable","help","list","remove","version","force"])
++    except getopt.GetoptError:
++        usage()
++        sys.exit(2)
++
++    for o,a in opts:
++        if o in ("-h", "--help"):
++            usage()
++            sys.exit()
++        if o in ("-v", "--version"):
++            mh.version(versionnum)
++            sys.exit()
++        if o == "--add":
++            try:
++                mh.add(*args)
++            except ModuleAlreadyExists:
++                print "Module has already been registered"
++                sys.exit(1)
++            except (IndexError, TypeError):
++                usage()
++                sys.exit(2)
++        if o == "--remove":
++            try:
++                mh.remove(args[0])
++            except NoSuchModule:
++                print "No such module"
++                sys.exit(1)
++            except IndexError:
++                usage()
++                sys.exit(2)
++        if o == "--enable":
++            try:
++                mh.enable(args[0])
++            except NoSuchModule:
++                print "No Such Module"
++                sys.exit(1)
++            except IndexError:
++                usage()
++                sys.exit(2)
++        if o == "--disable":
++            try:
++                mh.disable(args[0])
++            except NoSuchModule:
++                print "No Such Module"
++                sys.exit(1)
++            except IndexError:
++                usage()
++                sys.exit(2)
++        if o in ("-l","--list"):
++            mh.dolist()
++
++def usage():
++    """Print the usage statement
++
++    Prints the correct list of arguments, and then exits.
++    """
++    print "Debian update-apache2-modules", versionnum
++    print "Copyright (C) 2002 Thom May, under the BSD license."
++    msg = """
++    
++usage: update-apache2-modules --add <module> [<sequence> <depends>]
++       update-apache2-modules --remove <module>
++       update-apache2-modules --enable <module>
++       update-apache2-modules --disable <module>
++       update-apache2-modules --list <module>
++
++<module>   is the name of the module
++<sequence> is used to decide the order the modules are loaded in.
++           The default if no sequence number is specified is 99
++<depends>  signifies any dependencies the module might have
++"""
++    sys.stderr.write(msg)
++    return(0)
++
++
++if __name__ == '__main__':
++    main()
+diff -ruN httpd-2.2.6.orig/fink/a2dismod.8 httpd-2.2.6/fink/a2dismod.8
+--- httpd-2.2.6.orig/fink/a2dismod.8	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/a2dismod.8	2007-12-05 20:18:20.000000000 -0700
+@@ -0,0 +1 @@
++.so man8/a2enmod.8
+diff -ruN httpd-2.2.6.orig/fink/a2dissite.8 httpd-2.2.6/fink/a2dissite.8
+--- httpd-2.2.6.orig/fink/a2dissite.8	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/a2dissite.8	2007-12-05 20:18:20.000000000 -0700
+@@ -0,0 +1 @@
++.so man8/a2ensite.8
+diff -ruN httpd-2.2.6.orig/fink/a2enmod.8 httpd-2.2.6/fink/a2enmod.8
+--- httpd-2.2.6.orig/fink/a2enmod.8	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/a2enmod.8	2007-12-05 21:33:25.000000000 -0700
+@@ -0,0 +1,68 @@
++.\"                                      Hey, EMACS: -*- nroff -*-
++.\" First parameter, NAME, should be all caps
++.\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
++.\" other parameters are allowed: see man(7), man(1)
++.TH A2ENMOD 8 "12 October 2006"
++.\" Please adjust this date whenever revising the manpage.
++.\"
++.\" Some roff macros, for reference:
++.\" .nh        disable hyphenation
++.\" .hy        enable hyphenation
++.\" .ad l      left justify
++.\" .ad b      justify to both left and right margins
++.\" .nf        disable filling
++.\" .fi        enable filling
++.\" .br        insert line break
++.\" .sp <n>    insert n+1 empty lines
++.\" for manpage-specific macros, see man(7)
++.SH NAME
++a2enmod, a2dismod \- enable or disable an apache2 module
++.SH SYNOPSIS
++.B a2enmod
++.RI [ module ]
++.PP
++.B a2dismod
++.RI [ module ]
++.SH DESCRIPTION
++This manual page documents briefly the
++.B a2enmod
++and
++.B a2dismod
++commands.
++.PP
++.B a2enmod
++is a script that enables the specified module within the
++.B apache2
++configuration.  It does this by creating symlinks within
++.BR @FINKPREFIX@/etc/apache2/mods-enabled .
++Likewise,
++.B a2dismod
++disables a module by removing those symlinks.  It is not an error to
++enable a module which is already enabled, or to disable one which is
++already disabled.
++.SH EXAMPLES
++.RS
++.B "a2enmod imagemap"
++.br
++.B "a2dismod mime_magic"
++.RE
++.PP
++Enables the
++.B mod_imagemap
++module, and disables the
++.B mod_mime_magic
++module.
++.SH FILES
++.TP
++.B @FINKPREFIX@/etc/apache2/mods-available
++Directory with files giving information on available modules.
++.TP
++.B @FINKPREFIX@/etc/apache2/mods-enabled
++Directory with links to the files in
++.B mods-available
++for enabled modules.
++.SH "SEE ALSO"
++.BR apache2ctl (8).
++.SH AUTHOR
++This manual page was written by Daniel Stone <daniel@sfarc.net> for the Debian
++GNU/Linux distribution, as it is a Debian-specific script with the package.
+diff -ruN httpd-2.2.6.orig/fink/a2ensite.8 httpd-2.2.6/fink/a2ensite.8
+--- httpd-2.2.6.orig/fink/a2ensite.8	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/a2ensite.8	2007-12-05 21:33:49.000000000 -0700
+@@ -0,0 +1,70 @@
++.\"                                      Hey, EMACS: -*- nroff -*-
++.\" First parameter, NAME, should be all caps
++.\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
++.\" other parameters are allowed: see man(7), man(1)
++.TH A2ENSITE 8 "8 June 2007"
++.\" Please adjust this date whenever revising the manpage.
++.\"
++.\" Some roff macros, for reference:
++.\" .nh        disable hyphenation
++.\" .hy        enable hyphenation
++.\" .ad l      left justify
++.\" .ad b      justify to both left and right margins
++.\" .nf        disable filling
++.\" .fi        enable filling
++.\" .br        insert line break
++.\" .sp <n>    insert n+1 empty lines
++.\" for manpage-specific macros, see man(7)
++.SH NAME
++a2ensite, a2dissite \- enable or disable an apache2 site / virtual host
++.SH SYNOPSIS
++.B a2ensite
++.RI [ site ]
++.PP
++.B a2dissite
++.RI [ site ]
++.SH DESCRIPTION
++This manual page documents briefly the
++.B a2ensite
++and
++.B a2dissite
++commands.
++.PP
++.B a2ensite
++is a script that enables the specified site (which contains a <VirtualHost> block) within the
++.B apache2
++configuration.  It does this by creating symlinks within
++.BR @FINKPREFIX@/etc/apache2/sites-enabled .
++Likewise,
++.B a2dissite
++disables a site by removing those symlinks.  It is not an error to
++enable a site which is already enabled, or to disable one which is
++already disabled.
++.PP
++The
++.B default
++site is handled specially: The resulting symlink will be called
++.B 000-default
++in order to be loaded first.
++.SH EXAMPLES
++.RS
++.B "a2dissite default"
++.RE
++.PP
++Disables the
++.B default
++site.
++.SH FILES
++.TP
++.B @FINKPREFIX@/etc/apache2/sites-available
++Directory with files giving information on available sites.
++.TP
++.B @FINKPREFIX@/etc/apache2/sites-enabled
++Directory with links to the files in
++.B sites-available
++for enabled sites.
++.SH "SEE ALSO"
++.BR apache2ctl (8).
++.SH AUTHOR
++This manual page was written by Stefan Fritsch <sf@debian.org> (based on the a2enmod manual
++page by Daniel Stone <daniel@sfarc.net>) for the Debian GNU/Linux distribution.
+diff -ruN httpd-2.2.6.orig/fink/apache2-doc.conf httpd-2.2.6/fink/apache2-doc.conf
+--- httpd-2.2.6.orig/fink/apache2-doc.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/apache2-doc.conf	2007-12-05 20:54:02.000000000 -0700
+@@ -0,0 +1,21 @@
++AliasMatch ^/manual(?:/(?:de|en|es|fr|ja|ko|pt-br|ru))?(/.*)?$ "@FINKPREFIX@/share/doc/apache2-doc/manual/$1"
++AliasMatch ^/apache2-default/manual(?:/(?:de|en|es|fr|ja|ko|pt-br|ru))?(/.*)?$ "@FINKPREFIX@/share/doc/apache2-doc/manual/$1"
++
++<Directory "@FINKPREFIX@/share/doc/apache2-doc/manual/">
++    Options Indexes
++    AllowOverride None
++    Order allow,deny
++    Allow from all
++    AddDefaultCharset off
++
++    <Files *.html>
++        SetHandler type-map
++    </Files>
++
++    SetEnvIf Request_URI ^/manual/(de|en|es|fr|ja|ko|pt-br|ru)/ prefer-language=$1
++    RedirectMatch 301 ^/manual(?:/(de|en|es|fr|ja|ko|pt-br|ru)){2,}(/.*)?$ /manual/$1$2
++
++    LanguagePriority en de es fr ja ko pt-br ru
++    ForceLanguagePriority Prefer Fallback
++</Directory>
++
+diff -ruN httpd-2.2.6.orig/fink/apache2.8 httpd-2.2.6/fink/apache2.8
+--- httpd-2.2.6.orig/fink/apache2.8	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/apache2.8	2007-12-05 21:34:33.000000000 -0700
+@@ -0,0 +1,81 @@
++.TH "APACHE2" 8 "2005-09-20" "Apache HTTP Server" "apache2"
++
++.SH NAME
++apache2 \- Apache Hypertext Transfer Protocol Server
++
++.SH "SYNOPSIS"
++ 
++.PP
++\fBapache2\fR [ -\fBd\fR \fIserverroot\fR ] [ -\fBf\fR \fIconfig\fR ] [ -\fBC\fR \fIdirective\fR ] [ -\fBc\fR \fIdirective\fR ] [ -\fBD\fR \fIparameter\fR ] [ -\fBe\fR \fIlevel\fR ] [ -\fBE\fR \fIfile\fR ] [ \fB-k\fR start|restart|graceful|stop|graceful-stop ] [ -\fBR\fR \fIdirectory\fR ] [ -\fBh\fR ] [ -\fBl\fR ] [ -\fBL\fR ] [ -\fBS\fR ] [ -\fBt\fR ] [ -\fBv\fR ] [ -\fBV\fR ] [ -\fBX\fR ] [ -\fBM\fR ]
++ 
++
++.SH "SUMMARY"
++ 
++.PP
++apache2 is the Apache HyperText Transfer Protocol (HTTP) server program\&. It is designed to be run as a standalone daemon process\&. When used like this it will create a pool of child processes or threads to handle requests\&.
++ 
++.PP
++In general, apache2 should not be invoked directly, but rather should be invoked via @FINKPREFIX@/etc/init.d/apache2\&.
++
++.PP
++The full documentation is available in the apache2-doc package or at http://httpd.apache.org/docs/2.2/
++ 
++
++.SH "OPTIONS"
++ 
++ 
++.TP
++-d \fIserverroot\fR
++Set the initial value for the ServerRoot directive to \fIserverroot\fR\&. This can be overridden by the ServerRoot directive in the configuration file\&.
++.TP
++-f \fIconfig\fR
++Uses the directives in the file \fIconfig\fR on startup\&. If \fIconfig\fR does not begin with a /, then it is taken to be a path relative to the ServerRoot\&. The default is @FINKPREFIX@/etc/apache2/apache2\&.conf\&.  
++.TP
++-k start|restart|graceful|stop|graceful-stop
++Signals apache2 to start, restart, or stop\&. See Stopping Apache for more information\&.  
++.TP
++-C \fIdirective\fR
++Process the configuration \fIdirective\fR before reading config files\&.  
++.TP
++-c \fIdirective\fR
++Process the configuration \fIdirective\fR after reading config files\&.  
++.TP
++-D \fIparameter\fR
++Sets a configuration \fIparameter \fRwhich can be used with <IfDefine> sections in the configuration files to conditionally skip or process commands at server startup and restart\&.  
++.TP
++-e \fIlevel\fR
++Sets the LogLevel to \fIlevel\fR during server startup\&. This is useful for temporarily increasing the verbosity of the error messages to find problems during startup\&.  
++.TP
++-E \fIfile\fR
++Send error messages during server startup to \fIfile\fR\&.  
++.TP
++-R \fIdirectory\fR
++When the server is compiled using the SHARED_CORE rule, this specifies the \fIdirectory\fR for the shared object files\&.  
++.TP
++-h
++Output a short summary of available command line options\&.  
++.TP
++-l
++Output a list of modules compiled into the server\&. This will \fBnot\fR list dynamically loaded modules included using the LoadModule directive\&.  
++.TP
++-L
++Output a list of directives together with expected arguments and places where the directive is valid\&.  
++.TP
++-M
++Dump a list of loaded Static and Shared Modules\&.  
++.TP
++-S
++Show the settings as parsed from the config file (currently only shows the virtualhost settings)\&.  
++.TP
++-t
++Run syntax tests for configuration files only\&. The program immediately exits after these syntax parsing tests with either a return code of 0 (Syntax OK) or return code not equal to 0 (Syntax Error)\&. If -D \fIDUMP\fR_\fIVHOSTS \fRis also set, details of the virtual host configuration will be printed\&. If -D \fIDUMP\fR_\fIMODULES \fR is set, all loaded modules will be printed\&.  
++.TP
++-v
++Print the version of apache2, and then exit\&.  
++.TP
++-V
++Print the version and build parameters of apache2, and then exit\&.  
++.TP
++-X
++Run apache2 in debug mode\&. Only one worker will be started and the server will not detach from the console\&.  
++ 
+diff -ruN httpd-2.2.6.orig/fink/apache2.conf httpd-2.2.6/fink/apache2.conf
+--- httpd-2.2.6.orig/fink/apache2.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/apache2.conf	2007-12-05 21:35:55.000000000 -0700
+@@ -0,0 +1,666 @@
++#
++# Based upon the NCSA server configuration files originally by Rob McCool.
++#
++# This is the main Apache server configuration file.  It contains the
++# configuration directives that give the server its instructions.
++# See <URL:http://httpd.apache.org/docs-2.1/> for detailed information about
++# the directives.
++#
++# Do NOT simply read the instructions in here without understanding
++# what they do.  They're here only as hints or reminders.  If you are unsure
++# consult the online docs. You have been warned.  
++#
++# The configuration directives are grouped into three basic sections:
++#  1. Directives that control the operation of the Apache server process as a
++#     whole (the 'global environment').
++#  2. Directives that define the parameters of the 'main' or 'default' server,
++#     which responds to requests that aren't handled by a virtual host.
++#     These directives also provide default values for the settings
++#     of all virtual hosts.
++#  3. Settings for virtual hosts, which allow Web requests to be sent to
++#     different IP addresses or hostnames and have them handled by the
++#     same Apache server process.
++#
++# Configuration and logfile names: If the filenames you specify for many
++# of the server's control files begin with "/" (or "drive:/" for Win32), the
++# server will use that explicit path.  If the filenames do *not* begin
++# with "/", the value of ServerRoot is prepended -- so "/var/log/apache2/foo.log"
++# with ServerRoot set to "" will be interpreted by the
++# server as "//var/log/apache2/foo.log".
++#
++
++### Section 1: Global Environment
++#
++# The directives in this section affect the overall operation of Apache,
++# such as the number of concurrent requests it can handle or where it
++# can find its configuration files.
++#
++
++#
++# ServerRoot: The top of the directory tree under which the server's
++# configuration, error, and log files are kept.
++#
++# NOTE!  If you intend to place this on an NFS (or otherwise network)
++# mounted filesystem then please read the LockFile documentation (available
++# at <URL:http://httpd.apache.org/docs-2.1/mod/mpm_common.html#lockfile>);
++# you will save yourself a lot of trouble.
++#
++# Do NOT add a slash at the end of the directory path.
++#
++ServerRoot "@FINKPREFIX@/etc/apache2"
++
++#
++# The accept serialization lock file MUST BE STORED ON A LOCAL DISK.
++#
++#<IfModule !mpm_winnt.c>
++#<IfModule !mpm_netware.c>
++LockFile @FINKPREFIX@/var/lock/apache2/accept.lock
++#</IfModule>
++#</IfModule>
++
++#
++# PidFile: The file in which the server should record its process
++# identification number when it starts.
++#
++PidFile @FINKPREFIX@/var/run/apache2/apache2.pid
++
++#
++# Timeout: The number of seconds before receives and sends time out.
++#
++Timeout 300
++
++#
++# KeepAlive: Whether or not to allow persistent connections (more than
++# one request per connection). Set to "Off" to deactivate.
++#
++KeepAlive On
++
++#
++# MaxKeepAliveRequests: The maximum number of requests to allow
++# during a persistent connection. Set to 0 to allow an unlimited amount.
++# We recommend you leave this number high, for maximum performance.
++#
++MaxKeepAliveRequests 100
++
++#
++# KeepAliveTimeout: Number of seconds to wait for the next request from the
++# same client on the same connection.
++#
++KeepAliveTimeout 15
++
++##
++## Server-Pool Size Regulation (MPM specific)
++## 
++
++# prefork MPM
++# StartServers: number of server processes to start
++# MinSpareServers: minimum number of server processes which are kept spare
++# MaxSpareServers: maximum number of server processes which are kept spare
++# MaxClients: maximum number of server processes allowed to start
++# MaxRequestsPerChild: maximum number of requests a server process serves
++<IfModule prefork.c>
++    StartServers          5
++    MinSpareServers       5
++    MaxSpareServers      10
++    MaxClients          150
++    MaxRequestsPerChild   0
++</IfModule>
++
++# worker MPM
++# StartServers: initial number of server processes to start
++# MaxClients: maximum number of simultaneous client connections
++# MinSpareThreads: minimum number of worker threads which are kept spare
++# MaxSpareThreads: maximum number of worker threads which are kept spare
++# ThreadsPerChild: constant number of worker threads in each server process
++# MaxRequestsPerChild: maximum number of requests a server process serves
++<IfModule worker.c>
++    StartServers          2
++    MaxClients          150
++    MinSpareThreads      25
++    MaxSpareThreads      75 
++    ThreadsPerChild      25
++    MaxRequestsPerChild   0
++</IfModule>
++
++# perchild MPM
++# NumServers: constant number of server processes
++# StartThreads: initial number of worker threads in each server process
++# MinSpareThreads: minimum number of worker threads which are kept spare
++# MaxSpareThreads: maximum number of worker threads which are kept spare
++# MaxThreadsPerChild: maximum number of worker threads in each server process
++# MaxRequestsPerChild: maximum number of connections per server process
++<IfModule perchild.c>
++    NumServers            5
++    StartThreads          5
++    MinSpareThreads       5
++    MaxSpareThreads      10
++    MaxThreadsPerChild   20
++    MaxRequestsPerChild   0
++    AcceptMutex fcntl
++</IfModule>
++
++User www
++Group www
++
++AccessFileName .htaccess
++#
++# The following lines prevent .htaccess and .htpasswd files from being 
++# viewed by Web clients. 
++#
++<Files ~ "^\.ht">
++    Order allow,deny
++    Deny from all
++</Files>
++
++TypesConfig @FINKPREFIX@/etc/apache2/mime.types
++
++#
++# DefaultType is the default MIME type the server will use for a document
++# if it cannot otherwise determine one, such as from filename extensions.
++# If your server contains mostly text or HTML documents, "text/plain" is
++# a good value.  If most of your content is binary, such as applications
++# or images, you may want to use "application/octet-stream" instead to
++# keep browsers from trying to display binary files as though they are
++# text.
++#
++DefaultType text/plain
++
++
++#
++# HostnameLookups: Log the names of clients or just their IP addresses
++# e.g., www.apache.org (on) or 204.62.129.132 (off).
++# The default is off because it'd be overall better for the net if people
++# had to knowingly turn this feature on, since enabling it means that
++# each client request will result in AT LEAST one lookup request to the
++# nameserver.
++#
++HostnameLookups Off
++
++# ErrorLog: The location of the error log file.
++# If you do not specify an ErrorLog directive within a <VirtualHost>
++# container, error messages relating to that virtual host will be
++# logged here.  If you *do* define an error logfile for a <VirtualHost>
++# container, that host's errors will be logged there and not here.
++#
++ErrorLog @FINKPREFIX@/var/log/apache2/error_log
++
++#
++# LogLevel: Control the number of messages logged to the error_log.
++# Possible values include: debug, info, notice, warn, error, crit,
++# alert, emerg.
++#
++LogLevel warn
++
++# Include module configuration:
++Include @FINKPREFIX@/etc/apache2/mods-enabled/*.load
++Include @FINKPREFIX@/etc/apache2/mods-enabled/*.conf
++
++# Include all the user configurations:
++# Include @FINKPREFIX@/etc/apache2/httpd.conf
++
++# Include ports listing
++Include @FINKPREFIX@/etc/apache2/ports.conf
++
++# Include generic snippets of statements
++Include @FINKPREFIX@/etc/apache2/conf.d/[^.#]*
++
++#
++# The following directives define some format nicknames for use with
++# a CustomLog directive (see below).
++#
++LogFormat "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"" combined
++LogFormat "%h %l %u %t \"%r\" %>s %b" common
++LogFormat "%{Referer}i -> %U" referer
++LogFormat "%{User-agent}i" agent
++
++#
++# ServerTokens
++# This directive configures what you return as the Server HTTP response
++# Header. The default is 'Full' which sends information about the OS-Type
++# and compiled in modules.
++# Set to one of:  Full | OS | Minor | Minimal | Major | Prod
++# where Full conveys the most information, and Prod the least.
++#
++ServerTokens Full
++
++#
++# Optionally add a line containing the server version and virtual host
++# name to server-generated pages (internal error documents, FTP directory 
++# listings, mod_status and mod_info output etc., but not CGI generated 
++# documents or custom error documents).
++# Set to "EMail" to also include a mailto: link to the ServerAdmin.
++# Set to one of:  On | Off | EMail
++#
++ServerSignature On
++
++<IfModule mod_alias.c>
++    #
++    # Aliases: Add here as many aliases as you need (with no limit). The format is 
++    # Alias fakename realname
++    #
++    # Note that if you include a trailing / on fakename then the server will
++    # require it to be present in the URL.  So "/icons" isn't aliased in this
++    # example, only "/icons/".  If the fakename is slash-terminated, then the 
++    # realname must also be slash terminated, and if the fakename omits the 
++    # trailing slash, the realname must also omit it.
++    #
++    # We include the /icons/ alias for FancyIndexed directory listings.  If
++    # you do not use FancyIndexing, you may comment this out.
++    #
++    Alias /icons/ "@FINKPREFIX@/share/apache2/icons/"
++
++    <Directory "@FINKPREFIX@/share/apache2/icons">
++        Options Indexes MultiViews
++        AllowOverride None
++        Order allow,deny
++        Allow from all
++    </Directory>
++
++</IfModule>
++
++#
++# Directives controlling the display of server-generated directory listings.
++#
++<IfModule mod_autoindex.c>
++
++    #
++    # IndexOptions: Controls the appearance of server-generated directory
++    # listings.
++    #
++    IndexOptions FancyIndexing VersionSort
++
++    #
++    # AddIcon* directives tell the server which icon to show for different
++    # files or filename extensions.  These are only displayed for
++    # FancyIndexed directories.
++    #
++    AddIconByEncoding (CMP,/icons/compressed.gif) x-compress x-gzip
++
++    AddIconByType (TXT,/icons/text.gif) text/*
++    AddIconByType (IMG,/icons/image2.gif) image/*
++    AddIconByType (SND,/icons/sound2.gif) audio/*
++    AddIconByType (VID,/icons/movie.gif) video/*
++
++    AddIcon /icons/binary.gif .bin .exe
++    AddIcon /icons/binhex.gif .hqx
++    AddIcon /icons/tar.gif .tar
++    AddIcon /icons/world2.gif .wrl .wrl.gz .vrml .vrm .iv
++    AddIcon /icons/compressed.gif .Z .z .tgz .gz .zip
++    AddIcon /icons/a.gif .ps .ai .eps
++    AddIcon /icons/layout.gif .html .shtml .htm .pdf
++    AddIcon /icons/text.gif .txt
++    AddIcon /icons/c.gif .c
++    AddIcon /icons/p.gif .pl .py
++    AddIcon /icons/f.gif .for
++    AddIcon /icons/dvi.gif .dvi
++    AddIcon /icons/uuencoded.gif .uu
++    AddIcon /icons/script.gif .conf .sh .shar .csh .ksh .tcl
++    AddIcon /icons/tex.gif .tex
++    AddIcon /icons/bomb.gif core
++
++    AddIcon /icons/back.gif ..
++    AddIcon /icons/hand.right.gif README
++    AddIcon /icons/folder.gif ^^DIRECTORY^^
++    AddIcon /icons/blank.gif ^^BLANKICON^^
++
++    #
++    # DefaultIcon is which icon to show for files which do not have an icon
++    # explicitly set.
++    #
++    DefaultIcon /icons/unknown.gif
++
++    #
++    # AddDescription allows you to place a short description after a file in
++    # server-generated indexes.  These are only displayed for FancyIndexed
++    # directories.
++    # Format: AddDescription "description" filename
++    #
++    #AddDescription "GZIP compressed document" .gz
++    #AddDescription "tar archive" .tar
++    #AddDescription "GZIP compressed tar archive" .tgz
++
++    #
++    # ReadmeName is the name of the README file the server will look for by
++    # default, and append to directory listings.
++    #
++    # HeaderName is the name of a file which should be prepended to
++    # directory indexes. 
++    ReadmeName README.html
++    HeaderName HEADER.html
++
++    #
++    # IndexIgnore is a set of filenames which directory indexing should ignore
++    # and not include in the listing.  Shell-style wildcarding is permitted.
++    #
++    IndexIgnore .??* *~ *# RCS CVS *,v *,t 
++</IfModule>
++
++<IfModule mod_mime.c>
++
++    #
++    # AddType allows you to add to or override the MIME configuration
++    # file mime.types for specific file types.
++    #
++    #AddType application/x-gzip .tgz
++    #
++    # AddEncoding allows you to have certain browsers uncompress
++    # information on the fly. Note: Not all browsers support this.
++    # Despite the name similarity, the following Add* directives have
++    # nothing to do with the FancyIndexing customization directives above.
++    #
++    #AddEncoding x-compress .Z
++    #AddEncoding x-gzip .gz .tgz
++    #
++    # If the AddEncoding directives above are commented-out, then you
++    # probably should define those extensions to indicate media types:
++    #
++    AddType application/x-compress .Z
++    AddType application/x-gzip .gz .tgz
++
++    #
++    # DefaultLanguage and AddLanguage allows you to specify the language of 
++    # a document. You can then use content negotiation to give a browser a 
++    # file in a language the user can understand.
++    #
++    # Specify a default language. This means that all data
++    # going out without a specific language tag (see below) will 
++    # be marked with this one. You probably do NOT want to set
++    # this unless you are sure it is correct for all cases.
++    #
++    # * It is generally better to not mark a page as 
++    # * being a certain language than marking it with the wrong
++    # * language!
++    #
++    # DefaultLanguage nl
++    #
++    # Note 1: The suffix does not have to be the same as the language
++    # keyword --- those with documents in Polish (whose net-standard
++    # language code is pl) may wish to use "AddLanguage pl .po" to
++    # avoid the ambiguity with the common suffix for perl scripts.
++    #
++    # Note 2: The example entries below illustrate that in some cases 
++    # the two character 'Language' abbreviation is not identical to 
++    # the two character 'Country' code for its country,
++    # E.g. 'Danmark/dk' versus 'Danish/da'.
++    #
++    # Note 3: In the case of 'ltz' we violate the RFC by using a three char
++    # specifier. There is 'work in progress' to fix this and get
++    # the reference data for rfc1766 cleaned up.
++    #
++    # Catalan (ca) - Croatian (hr) - Czech (cs) - Danish (da) - Dutch (nl)
++    # English (en) - Esperanto (eo) - Estonian (et) - French (fr) - German (de)
++    # Greek-Modern (el) - Hebrew (he) - Italian (it) - Japanese (ja)
++    # Korean (ko) - Luxembourgeois* (ltz) - Norwegian Nynorsk (nn)
++    # Norwegian (no) - Polish (pl) - Portugese (pt)
++    # Brazilian Portuguese (pt-BR) - Russian (ru) - Swedish (sv)
++    # Simplified Chinese (zh-CN) - Spanish (es) - Traditional Chinese (zh-TW)
++    #
++    AddLanguage ca .ca
++    AddLanguage cs .cz .cs
++    AddLanguage da .dk
++    AddLanguage de .de
++    AddLanguage el .el
++    AddLanguage en .en
++    AddLanguage eo .eo
++    AddLanguage es .es
++    AddLanguage et .et
++    AddLanguage fr .fr
++    AddLanguage he .he
++    AddLanguage hr .hr
++    AddLanguage it .it
++    AddLanguage ja .ja
++    AddLanguage ko .ko
++    AddLanguage ltz .ltz
++    AddLanguage nl .nl
++    AddLanguage nn .nn
++    AddLanguage no .no
++    AddLanguage pl .po
++    AddLanguage pt .pt
++    AddLanguage pt-BR .pt-br
++    AddLanguage ru .ru
++    AddLanguage sv .sv
++    AddLanguage zh-CN .zh-cn
++    AddLanguage zh-TW .zh-tw
++</IfModule>
++
++<IfModule mod_negotiation.c>
++    #
++    # LanguagePriority allows you to give precedence to some languages
++    # in case of a tie during content negotiation.
++    #
++    # Just list the languages in decreasing order of preference. We have
++    # more or less alphabetized them here. You probably want to change this.
++    #
++    LanguagePriority en ca cs da de el eo es et fr he hr it ja ko ltz nl nn no pl pt pt-BR ru sv zh-CN zh-TW
++
++    #
++    # ForceLanguagePriority allows you to serve a result page rather than
++    # MULTIPLE CHOICES (Prefer) [in case of a tie] or NOT ACCEPTABLE (Fallback)
++    # [in case no accepted languages matched the available variants]
++    #
++    ForceLanguagePriority Prefer Fallback
++
++</IfModule>
++
++<IfModule mod_mime.c>
++    #
++    # Commonly used filename extensions to character sets. You probably
++    # want to avoid clashes with the language extensions, unless you
++    # are good at carefully testing your setup after each change.
++    # See http://www.iana.org/assignments/character-sets for the
++    # official list of charset names and their respective RFCs.
++    #
++    AddCharset us-ascii    .ascii .us-ascii
++    AddCharset ISO-8859-1  .iso8859-1  .latin1
++    AddCharset ISO-8859-2  .iso8859-2  .latin2 .cen
++    AddCharset ISO-8859-3  .iso8859-3  .latin3
++    AddCharset ISO-8859-4  .iso8859-4  .latin4
++    AddCharset ISO-8859-5  .iso8859-5  .cyr .iso-ru
++    AddCharset ISO-8859-6  .iso8859-6  .arb .arabic
++    AddCharset ISO-8859-7  .iso8859-7  .grk .greek
++    AddCharset ISO-8859-8  .iso8859-8  .heb .hebrew
++    AddCharset ISO-8859-9  .iso8859-9  .latin5 .trk
++    AddCharset ISO-8859-10  .iso8859-10  .latin6
++    AddCharset ISO-8859-13  .iso8859-13
++    AddCharset ISO-8859-14  .iso8859-14  .latin8
++    AddCharset ISO-8859-15  .iso8859-15  .latin9
++    AddCharset ISO-8859-16  .iso8859-16  .latin10
++    AddCharset ISO-2022-JP .iso2022-jp .jis
++    AddCharset ISO-2022-KR .iso2022-kr .kis
++    AddCharset ISO-2022-CN .iso2022-cn .cis
++    AddCharset Big5        .Big5       .big5 .b5
++    AddCharset cn-Big5     .cn-big5
++    # For russian, more than one charset is used (depends on client, mostly):
++    AddCharset WINDOWS-1251 .cp-1251   .win-1251
++    AddCharset CP866       .cp866
++    AddCharset KOI8      .koi8
++    AddCharset KOI8-E      .koi8-e
++    AddCharset KOI8-r      .koi8-r .koi8-ru
++    AddCharset KOI8-U      .koi8-u
++    AddCharset KOI8-ru     .koi8-uk .ua
++    AddCharset ISO-10646-UCS-2 .ucs2
++    AddCharset ISO-10646-UCS-4 .ucs4
++    AddCharset UTF-7       .utf7
++    AddCharset UTF-8       .utf8
++    AddCharset UTF-16      .utf16
++    AddCharset UTF-16BE    .utf16be
++    AddCharset UTF-16LE    .utf16le
++    AddCharset UTF-32      .utf32
++    AddCharset UTF-32BE    .utf32be
++    AddCharset UTF-32LE    .utf32le
++    AddCharset euc-cn      .euc-cn
++    AddCharset euc-gb      .euc-gb
++    AddCharset euc-jp      .euc-jp
++    AddCharset euc-kr      .euc-kr
++    #Not sure how euc-tw got in - IANA doesn't list it???
++    AddCharset EUC-TW      .euc-tw
++    AddCharset gb2312      .gb2312 .gb
++    AddCharset iso-10646-ucs-2 .ucs-2 .iso-10646-ucs-2
++    AddCharset iso-10646-ucs-4 .ucs-4 .iso-10646-ucs-4
++    AddCharset shift_jis   .shift_jis .sjis
++
++    #
++    # AddHandler allows you to map certain file extensions to "handlers":
++    # actions unrelated to filetype. These can be either built into the server
++    # or added with the Action directive (see below)
++    #
++    # To use CGI scripts outside of ScriptAliased directories:
++    # (You will also need to add "ExecCGI" to the "Options" directive.)
++    #
++    #AddHandler cgi-script .cgi
++
++    #
++    # For files that include their own HTTP headers:
++    #
++    #AddHandler send-as-is asis
++
++    #
++    # For server-parsed imagemap files:
++    #
++    #AddHandler imap-file map
++
++    #
++    # For type maps (negotiated resources):
++    # (This is enabled by default to allow the Apache "It Worked" page
++    #  to be distributed in multiple languages.)
++    #
++    AddHandler type-map var
++
++    #
++    # Filters allow you to process content before it is sent to the client.
++    #
++    # To parse .shtml files for server-side includes (SSI):
++    # (You will also need to add "Includes" to the "Options" directive.)
++    #
++    <IfModule mod_include.c>
++        AddType text/html .shtml
++        AddOutputFilter INCLUDES .shtml
++    </IfModule>
++</IfModule>
++
++#
++# Action lets you define media types that will execute a script whenever
++# a matching file is called. This eliminates the need for repeated URL
++# pathnames for oft-used CGI file processors.
++# Format: Action media/type /cgi-script/location
++# Format: Action handler-name /cgi-script/location
++#
++
++#
++# Customizable error responses come in three flavors:
++# 1) plain text 2) local redirects 3) external redirects
++#
++# Some examples:
++#ErrorDocument 500 "The server made a boo boo."
++#ErrorDocument 404 /missing.html
++#ErrorDocument 404 "/cgi-bin/missing_handler.pl"
++#ErrorDocument 402 http://www.example.com/subscription_info.html
++#
++
++#
++# Putting this all together, we can internationalize error responses.
++#
++# We use Alias to redirect any /error/HTTP_<error>.html.var response to
++# our collection of by-error message multi-language collections.  We use 
++# includes to substitute the appropriate text.
++#
++# You can modify the messages' appearance without changing any of the
++# default HTTP_<error>.html.var files by adding the line:
++#
++#   Alias /error/include/ "/your/include/path/"
++#
++# which allows you to create your own set of files by starting with the
++# @FINKPREFIX@/share/apache2/error/include/ files and copying them to /your/include/path/, 
++# even on a per-VirtualHost basis.  The default include files will display
++# your Apache version number and your ServerAdmin email address regardless
++# of the setting of ServerSignature.
++#
++# The internationalized error documents require mod_alias, mod_include
++# and mod_negotiation.  To activate them, uncomment the following 30 lines.
++
++#    Alias /error/ "@FINKPREFIX@/share/apache2/error/"
++#
++#    <Directory "@FINKPREFIX@/share/apache2/error">
++#        AllowOverride None
++#        Options IncludesNoExec
++#        AddOutputFilter Includes html
++#        AddHandler type-map var
++#        Order allow,deny
++#        Allow from all
++#        LanguagePriority en cs de es fr it nl sv pt-br ro
++#        ForceLanguagePriority Prefer Fallback
++#    </Directory>
++#
++#    ErrorDocument 400 /error/HTTP_BAD_REQUEST.html.var
++#    ErrorDocument 401 /error/HTTP_UNAUTHORIZED.html.var
++#    ErrorDocument 403 /error/HTTP_FORBIDDEN.html.var
++#    ErrorDocument 404 /error/HTTP_NOT_FOUND.html.var
++#    ErrorDocument 405 /error/HTTP_METHOD_NOT_ALLOWED.html.var
++#    ErrorDocument 408 /error/HTTP_REQUEST_TIME_OUT.html.var
++#    ErrorDocument 410 /error/HTTP_GONE.html.var
++#    ErrorDocument 411 /error/HTTP_LENGTH_REQUIRED.html.var
++#    ErrorDocument 412 /error/HTTP_PRECONDITION_FAILED.html.var
++#    ErrorDocument 413 /error/HTTP_REQUEST_ENTITY_TOO_LARGE.html.var
++#    ErrorDocument 414 /error/HTTP_REQUEST_URI_TOO_LARGE.html.var
++#    ErrorDocument 415 /error/HTTP_UNSUPPORTED_MEDIA_TYPE.html.var
++#    ErrorDocument 500 /error/HTTP_INTERNAL_SERVER_ERROR.html.var
++#    ErrorDocument 501 /error/HTTP_NOT_IMPLEMENTED.html.var
++#    ErrorDocument 502 /error/HTTP_BAD_GATEWAY.html.var
++#    ErrorDocument 503 /error/HTTP_SERVICE_UNAVAILABLE.html.var
++#    ErrorDocument 506 /error/HTTP_VARIANT_ALSO_VARIES.html.var
++
++<IfModule mod_setenvif.c>
++    #
++    # The following directives modify normal HTTP response behavior to
++    # handle known problems with browser implementations.
++    #
++    BrowserMatch "Mozilla/2" nokeepalive
++    BrowserMatch "MSIE 4\.0b2;" nokeepalive downgrade-1.0 force-response-1.0
++    BrowserMatch "RealPlayer 4\.0" force-response-1.0
++    BrowserMatch "Java/1\.0" force-response-1.0
++    BrowserMatch "JDK/1\.0" force-response-1.0
++
++    #
++    # The following directive disables redirects on non-GET requests for
++    # a directory that does not include the trailing slash.  This fixes a 
++    # problem with Microsoft WebFolders which does not appropriately handle 
++    # redirects for folders with DAV methods.
++    # Same deal with Apple's DAV filesystem and Gnome VFS support for DAV.
++    #
++    BrowserMatch "Microsoft Data Access Internet Publishing Provider" redirect-carefully
++    BrowserMatch "^WebDrive" redirect-carefully
++    BrowserMatch "^WebDAVFS/1.[012]" redirect-carefully
++    BrowserMatch "^gnome-vfs/1.0" redirect-carefully
++    BrowserMatch "^XML Spy" redirect-carefully
++</IfModule>
++
++#<IfModule mod_status.c>
++    #
++    # Allow server status reports generated by mod_status,
++    # with the URL of http://servername/server-status
++    # Change the ".example.com" to match your domain to enable.
++    #
++    #<Location /server-status>
++    #    SetHandler server-status
++    #    Order deny,allow
++    #    Deny from all
++    #    Allow from .example.com
++    #</Location>
++#</IfModule>
++
++#<IfModule mod_info.c>
++    #
++    # Allow remote server configuration reports, with the URL of
++    #  http://servername/server-info (requires that mod_info.c be loaded).
++    # Change the ".example.com" to match your domain to enable.
++    #
++    #<Location /server-info>
++    #    SetHandler server-info
++    #    Order deny,allow
++    #    Deny from all
++    #    Allow from .example.com
++    #</Location>
++#</IfModule>
++
++# Include the virtual host configurations:
++Include @FINKPREFIX@/etc/apache2/sites-enabled/[^.#]*
+diff -ruN httpd-2.2.6.orig/fink/apache2ctl.8 httpd-2.2.6/fink/apache2ctl.8
+--- httpd-2.2.6.orig/fink/apache2ctl.8	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/apache2ctl.8	2007-12-05 21:34:57.000000000 -0700
+@@ -0,0 +1,135 @@
++.TH apache2ctl 8 "September 1997"
++.\" The Apache Software License, Version 1.1
++.\"
++.\" Copyright (c) 2000-2002 The Apache Software Foundation.  All rights
++.\" reserved.
++.\"
++.\" Redistribution and use in source and binary forms, with or without
++.\" modification, are permitted provided that the following conditions
++.\" are met:
++.\"
++.\" 1. Redistributions of source code must retain the above copyright
++.\"    notice, this list of conditions and the following disclaimer.
++.\"
++.\" 2. Redistributions in binary form must reproduce the above copyright
++.\"    notice, this list of conditions and the following disclaimer in
++.\"    the documentation and/or other materials provided with the
++.\"    distribution.
++.\"
++.\" 3. The end-user documentation included with the redistribution,
++.\"    if any, must include the following acknowledgment:
++.\"       "This product includes software developed by the
++.\"        Apache Software Foundation (http://www.apache.org/)."
++.\"    Alternately, this acknowledgment may appear in the software itself,
++.\"    if and wherever such third-party acknowledgments normally appear.
++.\"
++.\" 4. The names "Apache" and "Apache Software Foundation" must
++.\"    not be used to endorse or promote products derived from this
++.\"    software without prior written permission. For written
++.\"    permission, please contact apache@apache.org.
++.\"
++.\" 5. Products derived from this software may not be called "Apache",
++.\"    nor may "Apache" appear in their name, without prior written
++.\"    permission of the Apache Software Foundation.
++.\"
++.\" THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED
++.\" WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++.\" OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++.\" DISCLAIMED.  IN NO EVENT SHALL THE APACHE SOFTWARE FOUNDATION OR
++.\" ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++.\" SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++.\" LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
++.\" USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++.\" ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
++.\" OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
++.\" OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
++.\" SUCH DAMAGE.
++.\"
++.\" This software consists of voluntary contributions made by many
++.\" individuals on behalf of the Apache Software Foundation.  For more
++.\" information on the Apache Software Foundation, please see
++.\" <http://www.apache.org/>.
++.\"
++.SH NAME
++apache2ctl \- Apache HTTP server control interface
++.SH SYNOPSIS
++.B apache2ctl 
++\fIcommand\fP [...]
++.SH DESCRIPTION
++.B apache2ctl
++is a front end to the Apache HyperText Transfer Protocol (HTTP) 
++server.  It is designed to help the administrator control the 
++functioning of the Apache 
++.B apache2
++daemon.  
++.PP
++.B NOTE: 
++If your Apache installation uses non-standard paths, you will need to 
++edit the 
++.B apache2ctl
++script to set the appropriate paths to your PID file and your 
++.B apache2
++binary.  See the comments in the script for details.
++.PP
++The 
++.B apache2ctl
++script returns a 0 exit value on success, and >0 if an error 
++occurs.  For more details, view the comments in the script.
++.PP
++Full documentation for Apache is available at 
++.B http://httpd.apache.org/
++.
++.SH OPTIONS
++The \fIcommand\fP can be any one or more of the following options:
++.TP 12
++.BI start
++Start the Apache daemon.  Gives an error if it is already running.
++.TP
++.BI stop
++Stops the Apache daemon.
++.TP
++.BI restart
++Restarts the Apache daemon by sending it a SIGHUP.  If the daemon
++is not running, it is started.
++This command automatically checks the configuration files via 
++.BI configtest
++before initiating the restart to make sure Apache doesn't die.
++.TP
++.BI fullstatus
++Displays a full status report from 
++.B mod_status. 
++For this to work, you need to have mod_status enabled on your server 
++and a text-based browser such as \fIlynx\fP available on your system.  The
++URL used to access the status report can be set by editing the
++.B STATUSURL
++variable in the script.
++.TP
++.BI status
++Displays a brief status report.  Similar to the fullstatus option,
++except that the list of requests currently being served is omitted.
++.TP
++.BI graceful
++Gracefully restarts the Apache daemon by sending it a SIGUSR1.  If
++the daemon is not running, it is started.  This differs from a
++normal restart in that currently open connections are not aborted.
++A side effect is that old log files will not be closed immediately.
++This means that if used in a log rotation script, a substantial delay may be
++necessary to ensure that the old log files are closed before processing them.
++This command automatically checks the configuration files via 
++.BI configtest
++before initiating the restart to make sure Apache doesn't die.
++On certain platforms that do not allow SIGUSR1 to be used for a graceful
++restart, an alternative signal may be used (such as SIGWINCH).  graceful 
++will send the right signal for your platform.
++.TP
++.BI configtest
++Run a configuration file syntax test. It parses the configuration
++files and either reports 
++.B "Syntax Ok"
++or detailed information about the particular syntax error.
++.TP
++.BI help
++Displays a short help message.
++.SH SEE ALSO
++.BR apache2(8)
++.
+diff -ruN httpd-2.2.6.orig/fink/bash_completion httpd-2.2.6/fink/bash_completion
+--- httpd-2.2.6.orig/fink/bash_completion	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/bash_completion	2007-12-05 20:51:59.000000000 -0700
+@@ -0,0 +1,54 @@
++# bash completion for Debian apache2 configuration tools
++# $Id: apache2,v 1.1 2005/03/16 22:51:19 guillaume Exp $
++
++_apache2_modsites()
++{
++       COMPREPLY=( $( compgen -W '$( command ls @FINKPREFIX@/etc/apache2/$1 2>/dev/null \
++               | sed -e 's/\.load//' -e 's/\.conf//' )' -- $cur  ) )
++}
++
++_a2enmod()
++{
++       local cur
++
++       COMPREPLY=()
++       cur=${COMP_WORDS[COMP_CWORD]}
++
++       _apache2_modsites mods-available
++}
++complete -F _a2enmod a2enmod
++
++_a2ensite()
++{
++       local cur
++
++       COMPREPLY=()
++       cur=${COMP_WORDS[COMP_CWORD]}
++
++       _apache2_modsites sites-available
++
++}
++complete -F _a2ensite a2ensite
++
++_a2dismod()
++{
++       local cur
++
++       COMPREPLY=()
++       cur=${COMP_WORDS[COMP_CWORD]}
++
++       _apache2_modsites mods-enabled
++}
++complete -F _a2dismod a2dismod
++
++_a2dissite()
++{
++       local cur
++
++       COMPREPLY=()
++       cur=${COMP_WORDS[COMP_CWORD]}
++
++       _apache2_modsites sites-enabled
++
++}
++complete -F _a2dissite a2dissite
+diff -ruN httpd-2.2.6.orig/fink/check_forensic.8 httpd-2.2.6/fink/check_forensic.8
+--- httpd-2.2.6.orig/fink/check_forensic.8	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/check_forensic.8	2007-12-05 20:18:20.000000000 -0700
+@@ -0,0 +1,15 @@
++.TH check_forensic 8
++.SH NAME
++check_forensic \- tool to extract mod_log_forensic output from apache log files
++.SH SYNOPSIS
++.B check_forensic
++<log_file>
++.SH "DESCRIPTION"
++chech_forensic is a simple shell script designed to help apache administrators
++to extract mod_log_forensic output from apache, apache-ssl and apache-perl
++log files.
++.PP
++.SH AUTHOR
++This manual page was written by Fabio M. Di Nitto
++<fabbione@fabbione.net>, for the Debian GNU/Linux system
++(but may be used by others).
+diff -ruN httpd-2.2.6.orig/fink/checkgid.8 httpd-2.2.6/fink/checkgid.8
+--- httpd-2.2.6.orig/fink/checkgid.8	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/checkgid.8	2007-12-05 20:18:20.000000000 -0700
+@@ -0,0 +1,36 @@
++.\"                                      Hey, EMACS: -*- nroff -*-
++.\" First parameter, NAME, should be all caps
++.\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
++.\" other parameters are allowed: see man(7), man(1)
++.TH CHECKGID 8 "November 3rd, 2001"
++.\" Please adjust this date whenever revising the manpage.
++.\"
++.\" Some roff macros, for reference:
++.\" .nh        disable hyphenation
++.\" .hy        enable hyphenation
++.\" .ad l      left justify
++.\" .ad b      justify to both left and right margins
++.\" .nf        disable filling
++.\" .fi        enable filling
++.\" .br        insert line break
++.\" .sp <n>    insert n+1 empty lines
++.\" for manpage-specific macros, see man(7)
++.SH NAME
++checkgid \- checks the gid 
++.SH SYNOPSIS
++.B checkgid group 
++.SH DESCRIPTION
++This manual page documents briefly the
++.B checkgid 
++command.
++.PP
++.\" TeX users may be more comfortable with the \fB<whatever>\fP and
++.\" \fI<whatever>\fP escape sequences to invode bold face and italics, 
++.\" respectively.
++\fBcheckgid\fP is a program that checks whether it can setgid to the group
++specified. This is to see if it is a valid group for apache2 to use at runtime.
++If the user (should be run as superuser) is in that group, or can setgid to it,
++it will return 0.
++.SH AUTHOR
++This manual page was written by Daniel Stone <daniel@sfarc.net> for the Debian
++GNU/Linux distribution, as the original did not have a manpage.
+diff -ruN httpd-2.2.6.orig/fink/config-dir/apache2.conf httpd-2.2.6/fink/config-dir/apache2.conf
+--- httpd-2.2.6.orig/fink/config-dir/apache2.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/apache2.conf	2007-12-05 21:37:51.000000000 -0700
+@@ -0,0 +1,295 @@
++#
++# Based upon the NCSA server configuration files originally by Rob McCool.
++#
++# This is the main Apache server configuration file.  It contains the
++# configuration directives that give the server its instructions.
++# See http://httpd.apache.org/docs/2.2/ for detailed information about
++# the directives.
++#
++# Do NOT simply read the instructions in here without understanding
++# what they do.  They're here only as hints or reminders.  If you are unsure
++# consult the online docs. You have been warned.  
++#
++# The configuration directives are grouped into three basic sections:
++#  1. Directives that control the operation of the Apache server process as a
++#     whole (the 'global environment').
++#  2. Directives that define the parameters of the 'main' or 'default' server,
++#     which responds to requests that aren't handled by a virtual host.
++#     These directives also provide default values for the settings
++#     of all virtual hosts.
++#  3. Settings for virtual hosts, which allow Web requests to be sent to
++#     different IP addresses or hostnames and have them handled by the
++#     same Apache server process.
++#
++# Configuration and logfile names: If the filenames you specify for many
++# of the server's control files begin with "/" (or "drive:/" for Win32), the
++# server will use that explicit path.  If the filenames do *not* begin
++# with "/", the value of ServerRoot is prepended -- so "/var/log/apache2/foo.log"
++# with ServerRoot set to "" will be interpreted by the
++# server as "//var/log/apache2/foo.log".
++#
++
++### Section 1: Global Environment
++#
++# The directives in this section affect the overall operation of Apache,
++# such as the number of concurrent requests it can handle or where it
++# can find its configuration files.
++#
++
++#
++# ServerRoot: The top of the directory tree under which the server's
++# configuration, error, and log files are kept.
++#
++# NOTE!  If you intend to place this on an NFS (or otherwise network)
++# mounted filesystem then please read the LockFile documentation (available
++# at <URL:http://httpd.apache.org/docs-2.1/mod/mpm_common.html#lockfile>);
++# you will save yourself a lot of trouble.
++#
++# Do NOT add a slash at the end of the directory path.
++#
++ServerRoot "@FINKPREFIX@/etc/apache2"
++
++#
++# The accept serialization lock file MUST BE STORED ON A LOCAL DISK.
++#
++#<IfModule !mpm_winnt.c>
++#<IfModule !mpm_netware.c>
++LockFile @FINKPREFIX@/var/lock/apache2/accept.lock
++#</IfModule>
++#</IfModule>
++
++#
++# PidFile: The file in which the server should record its process
++# identification number when it starts.
++#
++PidFile @FINKPREFIX@/var/run/apache2/apache2.pid
++
++#
++# Timeout: The number of seconds before receives and sends time out.
++#
++Timeout 300
++
++#
++# KeepAlive: Whether or not to allow persistent connections (more than
++# one request per connection). Set to "Off" to deactivate.
++#
++KeepAlive On
++
++#
++# MaxKeepAliveRequests: The maximum number of requests to allow
++# during a persistent connection. Set to 0 to allow an unlimited amount.
++# We recommend you leave this number high, for maximum performance.
++#
++MaxKeepAliveRequests 100
++
++#
++# KeepAliveTimeout: Number of seconds to wait for the next request from the
++# same client on the same connection.
++#
++KeepAliveTimeout 15
++
++##
++## Server-Pool Size Regulation (MPM specific)
++## 
++
++# prefork MPM
++# StartServers: number of server processes to start
++# MinSpareServers: minimum number of server processes which are kept spare
++# MaxSpareServers: maximum number of server processes which are kept spare
++# MaxClients: maximum number of server processes allowed to start
++# MaxRequestsPerChild: maximum number of requests a server process serves
++<IfModule mpm_prefork_module>
++    StartServers          5
++    MinSpareServers       5
++    MaxSpareServers      10
++    MaxClients          150
++    MaxRequestsPerChild   0
++</IfModule>
++
++# worker MPM
++# StartServers: initial number of server processes to start
++# MaxClients: maximum number of simultaneous client connections
++# MinSpareThreads: minimum number of worker threads which are kept spare
++# MaxSpareThreads: maximum number of worker threads which are kept spare
++# ThreadsPerChild: constant number of worker threads in each server process
++# MaxRequestsPerChild: maximum number of requests a server process serves
++<IfModule mpm_worker_module>
++    StartServers          2
++    MaxClients          150
++    MinSpareThreads      25
++    MaxSpareThreads      75 
++    ThreadsPerChild      25
++    MaxRequestsPerChild   0
++</IfModule>
++
++User www
++Group www
++
++#
++# AccessFileName: The name of the file to look for in each directory
++# for additional configuration directives.  See also the AllowOverride
++# directive.
++#
++
++AccessFileName .htaccess
++
++#
++# The following lines prevent .htaccess and .htpasswd files from being 
++# viewed by Web clients. 
++#
++<Files ~ "^\.ht">
++    Order allow,deny
++    Deny from all
++</Files>
++
++#
++# DefaultType is the default MIME type the server will use for a document
++# if it cannot otherwise determine one, such as from filename extensions.
++# If your server contains mostly text or HTML documents, "text/plain" is
++# a good value.  If most of your content is binary, such as applications
++# or images, you may want to use "application/octet-stream" instead to
++# keep browsers from trying to display binary files as though they are
++# text.
++#
++DefaultType text/plain
++
++
++#
++# HostnameLookups: Log the names of clients or just their IP addresses
++# e.g., www.apache.org (on) or 204.62.129.132 (off).
++# The default is off because it'd be overall better for the net if people
++# had to knowingly turn this feature on, since enabling it means that
++# each client request will result in AT LEAST one lookup request to the
++# nameserver.
++#
++HostnameLookups Off
++
++# ErrorLog: The location of the error log file.
++# If you do not specify an ErrorLog directive within a <VirtualHost>
++# container, error messages relating to that virtual host will be
++# logged here.  If you *do* define an error logfile for a <VirtualHost>
++# container, that host's errors will be logged there and not here.
++#
++ErrorLog @FINKPREFIX@/var/log/apache2/error.log
++
++#
++# LogLevel: Control the number of messages logged to the error_log.
++# Possible values include: debug, info, notice, warn, error, crit,
++# alert, emerg.
++#
++LogLevel warn
++
++# Include module configuration:
++Include @FINKPREFIX@/etc/apache2/mods-enabled/*.load
++Include @FINKPREFIX@/etc/apache2/mods-enabled/*.conf
++
++# Include all the user configurations:
++# Include @FINKPREFIX@/etc/apache2/httpd.conf
++
++# Include ports listing
++Include @FINKPREFIX@/etc/apache2/ports.conf
++
++#
++# The following directives define some format nicknames for use with
++# a CustomLog directive (see below).
++#
++LogFormat "%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"" combined
++LogFormat "%h %l %u %t \"%r\" %>s %b" common
++LogFormat "%{Referer}i -> %U" referer
++LogFormat "%{User-agent}i" agent
++
++#
++# ServerTokens
++# This directive configures what you return as the Server HTTP response
++# Header. The default is 'Full' which sends information about the OS-Type
++# and compiled in modules.
++# Set to one of:  Full | OS | Minor | Minimal | Major | Prod
++# where Full conveys the most information, and Prod the least.
++#
++ServerTokens Full
++
++#
++# Optionally add a line containing the server version and virtual host
++# name to server-generated pages (internal error documents, FTP directory 
++# listings, mod_status and mod_info output etc., but not CGI generated 
++# documents or custom error documents).
++# Set to "EMail" to also include a mailto: link to the ServerAdmin.
++# Set to one of:  On | Off | EMail
++#
++ServerSignature On
++
++
++
++#
++# Customizable error responses come in three flavors:
++# 1) plain text 2) local redirects 3) external redirects
++#
++# Some examples:
++#ErrorDocument 500 "The server made a boo boo."
++#ErrorDocument 404 /missing.html
++#ErrorDocument 404 "/cgi-bin/missing_handler.pl"
++#ErrorDocument 402 http://www.example.com/subscription_info.html
++#
++
++#
++# Putting this all together, we can internationalize error responses.
++#
++# We use Alias to redirect any /error/HTTP_<error>.html.var response to
++# our collection of by-error message multi-language collections.  We use 
++# includes to substitute the appropriate text.
++#
++# You can modify the messages' appearance without changing any of the
++# default HTTP_<error>.html.var files by adding the line:
++#
++#   Alias /error/include/ "/your/include/path/"
++#
++# which allows you to create your own set of files by starting with the
++# @FINKPREFIX@/share/apache2/error/include/ files and copying them to /your/include/path/, 
++# even on a per-VirtualHost basis.  The default include files will display
++# your Apache version number and your ServerAdmin email address regardless
++# of the setting of ServerSignature.
++#
++# The internationalized error documents require mod_alias, mod_include
++# and mod_negotiation.  To activate them, uncomment the following 30 lines.
++
++#    Alias /error/ "@FINKPREFIX@/share/apache2/error/"
++#
++#    <Directory "@FINKPREFIX@/share/apache2/error">
++#        AllowOverride None
++#        Options IncludesNoExec
++#        AddOutputFilter Includes html
++#        AddHandler type-map var
++#        Order allow,deny
++#        Allow from all
++#        LanguagePriority en cs de es fr it nl sv pt-br ro
++#        ForceLanguagePriority Prefer Fallback
++#    </Directory>
++#
++#    ErrorDocument 400 /error/HTTP_BAD_REQUEST.html.var
++#    ErrorDocument 401 /error/HTTP_UNAUTHORIZED.html.var
++#    ErrorDocument 403 /error/HTTP_FORBIDDEN.html.var
++#    ErrorDocument 404 /error/HTTP_NOT_FOUND.html.var
++#    ErrorDocument 405 /error/HTTP_METHOD_NOT_ALLOWED.html.var
++#    ErrorDocument 408 /error/HTTP_REQUEST_TIME_OUT.html.var
++#    ErrorDocument 410 /error/HTTP_GONE.html.var
++#    ErrorDocument 411 /error/HTTP_LENGTH_REQUIRED.html.var
++#    ErrorDocument 412 /error/HTTP_PRECONDITION_FAILED.html.var
++#    ErrorDocument 413 /error/HTTP_REQUEST_ENTITY_TOO_LARGE.html.var
++#    ErrorDocument 414 /error/HTTP_REQUEST_URI_TOO_LARGE.html.var
++#    ErrorDocument 415 /error/HTTP_UNSUPPORTED_MEDIA_TYPE.html.var
++#    ErrorDocument 500 /error/HTTP_INTERNAL_SERVER_ERROR.html.var
++#    ErrorDocument 501 /error/HTTP_NOT_IMPLEMENTED.html.var
++#    ErrorDocument 502 /error/HTTP_BAD_GATEWAY.html.var
++#    ErrorDocument 503 /error/HTTP_SERVICE_UNAVAILABLE.html.var
++#    ErrorDocument 506 /error/HTTP_VARIANT_ALSO_VARIES.html.var
++
++
++
++# Include of directories ignores editors' and dpkg's backup files,
++# see README.Debian for details.
++
++# Include generic snippets of statements
++Include @FINKPREFIX@/etc/apache2/conf.d/
++
++# Include the virtual host configurations:
++Include @FINKPREFIX@/etc/apache2/sites-enabled/
+diff -ruN httpd-2.2.6.orig/fink/config-dir/conf.d/charset httpd-2.2.6/fink/config-dir/conf.d/charset
+--- httpd-2.2.6.orig/fink/config-dir/conf.d/charset	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/conf.d/charset	2007-12-05 20:20:26.000000000 -0700
+@@ -0,0 +1,6 @@
++# Read the documentation before enabling AddDefaultCharset.
++# In general, it is only a good idea if you know that all your files
++# have this encoding. It will override any encoding given in the files
++# in meta http-equiv or xml encoding tags.
++
++#AddDefaultCharset UTF-8
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/actions.conf httpd-2.2.6/fink/config-dir/mods-available/actions.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/actions.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/actions.conf	2007-12-05 20:20:25.000000000 -0700
+@@ -0,0 +1,10 @@
++# a2enmod-note: needs-configuration
++
++#
++# Action lets you define media types that will execute a script whenever
++# a matching file is called. This eliminates the need for repeated URL
++# pathnames for oft-used CGI file processors.
++# Format: Action media/type /cgi-script/location
++# Format: Action handler-name /cgi-script/location
++#
++
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/actions.load httpd-2.2.6/fink/config-dir/mods-available/actions.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/actions.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/actions.load	2007-12-05 21:23:55.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule actions_module @FINKPREFIX@/lib/apache2/modules/mod_actions.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/alias.conf httpd-2.2.6/fink/config-dir/mods-available/alias.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/alias.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/alias.conf	2007-12-05 21:21:08.000000000 -0700
+@@ -0,0 +1,24 @@
++<IfModule alias_module>
++#
++# Aliases: Add here as many aliases as you need (with no limit). The format is 
++# Alias fakename realname
++#
++# Note that if you include a trailing / on fakename then the server will
++# require it to be present in the URL.  So "/icons" isn't aliased in this
++# example, only "/icons/".  If the fakename is slash-terminated, then the 
++# realname must also be slash terminated, and if the fakename omits the 
++# trailing slash, the realname must also omit it.
++#
++# We include the /icons/ alias for FancyIndexed directory listings.  If
++# you do not use FancyIndexing, you may comment this out.
++#
++Alias /icons/ "@FINKPREFIX@/share/apache2/icons/"
++
++<Directory "@FINKPREFIX@/share/apache2/icons">
++    Options Indexes MultiViews
++    AllowOverride None
++    Order allow,deny
++    Allow from all
++</Directory>
++
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/alias.load httpd-2.2.6/fink/config-dir/mods-available/alias.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/alias.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/alias.load	2007-12-05 21:24:06.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule alias_module @FINKPREFIX@/lib/apache2/modules/mod_alias.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/asis.load httpd-2.2.6/fink/config-dir/mods-available/asis.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/asis.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/asis.load	2007-12-05 21:24:11.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule asis_module @FINKPREFIX@/lib/apache2/modules/mod_asis.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/auth_basic.load httpd-2.2.6/fink/config-dir/mods-available/auth_basic.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/auth_basic.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/auth_basic.load	2007-12-05 21:26:08.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule auth_basic_module @FINKPREFIX@/lib/apache2/modules/mod_auth_basic.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/auth_digest.load httpd-2.2.6/fink/config-dir/mods-available/auth_digest.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/auth_digest.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/auth_digest.load	2007-12-05 21:26:12.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule auth_digest_module @FINKPREFIX@/lib/apache2/modules/mod_auth_digest.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authn_alias.load httpd-2.2.6/fink/config-dir/mods-available/authn_alias.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authn_alias.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authn_alias.load	2007-12-05 21:26:18.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule authn_alias_module @FINKPREFIX@/lib/apache2/modules/mod_authn_alias.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authn_anon.load httpd-2.2.6/fink/config-dir/mods-available/authn_anon.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authn_anon.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authn_anon.load	2007-12-05 21:26:23.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule authn_anon_module @FINKPREFIX@/lib/apache2/modules/mod_authn_anon.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authn_dbd.load httpd-2.2.6/fink/config-dir/mods-available/authn_dbd.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authn_dbd.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authn_dbd.load	2007-12-05 21:26:28.000000000 -0700
+@@ -0,0 +1,2 @@
++# Depends: dbd
++LoadModule authn_dbd_module @FINKPREFIX@/lib/apache2/modules/mod_authn_dbd.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authn_dbm.load httpd-2.2.6/fink/config-dir/mods-available/authn_dbm.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authn_dbm.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authn_dbm.load	2007-12-05 21:26:33.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule authn_dbm_module @FINKPREFIX@/lib/apache2/modules/mod_authn_dbm.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authn_default.load httpd-2.2.6/fink/config-dir/mods-available/authn_default.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authn_default.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authn_default.load	2007-12-05 21:26:41.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule authn_default_module @FINKPREFIX@/lib/apache2/modules/mod_authn_default.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authn_file.load httpd-2.2.6/fink/config-dir/mods-available/authn_file.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authn_file.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authn_file.load	2007-12-05 21:26:46.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule authn_file_module @FINKPREFIX@/lib/apache2/modules/mod_authn_file.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authnz_ldap.load httpd-2.2.6/fink/config-dir/mods-available/authnz_ldap.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authnz_ldap.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authnz_ldap.load	2007-12-05 21:26:53.000000000 -0700
+@@ -0,0 +1,2 @@
++# Depends: ldap
++LoadModule authnz_ldap_module @FINKPREFIX@/lib/apache2/modules/mod_authnz_ldap.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authz_dbm.load httpd-2.2.6/fink/config-dir/mods-available/authz_dbm.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authz_dbm.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authz_dbm.load	2007-12-05 21:26:57.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule authz_dbm_module @FINKPREFIX@/lib/apache2/modules/mod_authz_dbm.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authz_default.load httpd-2.2.6/fink/config-dir/mods-available/authz_default.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authz_default.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authz_default.load	2007-12-05 21:27:02.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule authz_default_module @FINKPREFIX@/lib/apache2/modules/mod_authz_default.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authz_groupfile.load httpd-2.2.6/fink/config-dir/mods-available/authz_groupfile.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authz_groupfile.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authz_groupfile.load	2007-12-05 21:27:08.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule authz_groupfile_module @FINKPREFIX@/lib/apache2/modules/mod_authz_groupfile.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authz_host.load httpd-2.2.6/fink/config-dir/mods-available/authz_host.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authz_host.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authz_host.load	2007-12-05 21:27:13.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule authz_host_module @FINKPREFIX@/lib/apache2/modules/mod_authz_host.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authz_owner.load httpd-2.2.6/fink/config-dir/mods-available/authz_owner.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authz_owner.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authz_owner.load	2007-12-05 21:27:18.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule authz_owner_module @FINKPREFIX@/lib/apache2/modules/mod_authz_owner.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/authz_user.load httpd-2.2.6/fink/config-dir/mods-available/authz_user.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/authz_user.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/authz_user.load	2007-12-05 21:27:23.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule authz_user_module @FINKPREFIX@/lib/apache2/modules/mod_authz_user.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/autoindex.conf httpd-2.2.6/fink/config-dir/mods-available/autoindex.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/autoindex.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/autoindex.conf	2007-12-05 20:20:26.000000000 -0700
+@@ -0,0 +1,77 @@
++<IfModule mod_autoindex.c>
++#
++# Directives controlling the display of server-generated directory listings.
++#
++
++#
++# IndexOptions: Controls the appearance of server-generated directory
++# listings.
++#
++IndexOptions FancyIndexing VersionSort HTMLTable NameWidth=* DescriptionWidth=*
++
++#
++# AddIcon* directives tell the server which icon to show for different
++# files or filename extensions.  These are only displayed for
++# FancyIndexed directories.
++#
++AddIconByEncoding (CMP,/icons/compressed.gif) x-compress x-gzip x-bzip2
++
++AddIconByType (TXT,/icons/text.gif) text/*
++AddIconByType (IMG,/icons/image2.gif) image/*
++AddIconByType (SND,/icons/sound2.gif) audio/*
++AddIconByType (VID,/icons/movie.gif) video/*
++
++AddIcon /icons/binary.gif .bin .exe
++AddIcon /icons/binhex.gif .hqx
++AddIcon /icons/tar.gif .tar
++AddIcon /icons/world2.gif .wrl .wrl.gz .vrml .vrm .iv
++AddIcon /icons/compressed.gif .Z .z .tgz .gz .zip
++AddIcon /icons/a.gif .ps .ai .eps
++AddIcon /icons/layout.gif .html .shtml .htm .pdf
++AddIcon /icons/text.gif .txt
++AddIcon /icons/c.gif .c
++AddIcon /icons/p.gif .pl .py
++AddIcon /icons/f.gif .for
++AddIcon /icons/dvi.gif .dvi
++AddIcon /icons/uuencoded.gif .uu
++AddIcon /icons/script.gif .conf .sh .shar .csh .ksh .tcl
++AddIcon /icons/tex.gif .tex
++AddIcon /icons/bomb.gif core
++
++AddIcon /icons/back.gif ..
++AddIcon /icons/hand.right.gif README
++AddIcon /icons/folder.gif ^^DIRECTORY^^
++AddIcon /icons/blank.gif ^^BLANKICON^^
++
++#
++# DefaultIcon is which icon to show for files which do not have an icon
++# explicitly set.
++#
++DefaultIcon /icons/unknown.gif
++
++#
++# AddDescription allows you to place a short description after a file in
++# server-generated indexes.  These are only displayed for FancyIndexed
++# directories.
++# Format: AddDescription "description" filename
++#
++#AddDescription "GZIP compressed document" .gz
++#AddDescription "tar archive" .tar
++#AddDescription "GZIP compressed tar archive" .tgz
++
++#
++# ReadmeName is the name of the README file the server will look for by
++# default, and append to directory listings.
++#
++# HeaderName is the name of a file which should be prepended to
++# directory indexes. 
++ReadmeName README.html
++HeaderName HEADER.html
++
++#
++# IndexIgnore is a set of filenames which directory indexing should ignore
++# and not include in the listing.  Shell-style wildcarding is permitted.
++#
++IndexIgnore .??* *~ *# RCS CVS *,v *,t 
++
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/autoindex.load httpd-2.2.6/fink/config-dir/mods-available/autoindex.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/autoindex.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/autoindex.load	2007-12-05 21:27:29.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule autoindex_module @FINKPREFIX@/lib/apache2/modules/mod_autoindex.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/bucketeer.load httpd-2.2.6/fink/config-dir/mods-available/bucketeer.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/bucketeer.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/bucketeer.load	2007-12-05 21:27:35.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule bucketeer_module @FINKPREFIX@/lib/apache2/modules/mod_bucketeer.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/cache.load httpd-2.2.6/fink/config-dir/mods-available/cache.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/cache.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/cache.load	2007-12-05 21:27:40.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule cache_module @FINKPREFIX@/lib/apache2/modules/mod_cache.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/cern_meta.load httpd-2.2.6/fink/config-dir/mods-available/cern_meta.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/cern_meta.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/cern_meta.load	2007-12-05 21:27:47.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule cern_meta_module @FINKPREFIX@/lib/apache2/modules/mod_cern_meta.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/cgi.load httpd-2.2.6/fink/config-dir/mods-available/cgi.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/cgi.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/cgi.load	2007-12-05 21:27:53.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule cgi_module @FINKPREFIX@/lib/apache2/modules/mod_cgi.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/cgid.conf httpd-2.2.6/fink/config-dir/mods-available/cgid.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/cgid.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/cgid.conf	2007-12-05 21:21:22.000000000 -0700
+@@ -0,0 +1,2 @@
++# Socket for cgid communication
++ScriptSock @FINKPREFIX@/var/run/apache2/cgisock
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/cgid.load httpd-2.2.6/fink/config-dir/mods-available/cgid.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/cgid.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/cgid.load	2007-12-05 21:27:59.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule cgid_module @FINKPREFIX@/lib/apache2/modules/mod_cgid.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/charset_lite.load httpd-2.2.6/fink/config-dir/mods-available/charset_lite.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/charset_lite.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/charset_lite.load	2007-12-05 21:28:03.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule charset_lite_module @FINKPREFIX@/lib/apache2/modules/mod_charset_lite.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/dav.load httpd-2.2.6/fink/config-dir/mods-available/dav.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/dav.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/dav.load	2007-12-05 21:28:08.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule dav_module @FINKPREFIX@/lib/apache2/modules/mod_dav.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/dav_fs.conf httpd-2.2.6/fink/config-dir/mods-available/dav_fs.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/dav_fs.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/dav_fs.conf	2007-12-05 21:21:28.000000000 -0700
+@@ -0,0 +1 @@
++DAVLockDB @FINKPREFIX@/var/lock/apache2/DAVLock
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/dav_fs.load httpd-2.2.6/fink/config-dir/mods-available/dav_fs.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/dav_fs.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/dav_fs.load	2007-12-05 21:28:13.000000000 -0700
+@@ -0,0 +1,2 @@
++# Depends: dav
++LoadModule dav_fs_module @FINKPREFIX@/lib/apache2/modules/mod_dav_fs.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/dav_lock.load httpd-2.2.6/fink/config-dir/mods-available/dav_lock.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/dav_lock.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/dav_lock.load	2007-12-05 21:28:17.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule dav_lock_module @FINKPREFIX@/lib/apache2/modules/mod_dav_lock.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/dbd.load httpd-2.2.6/fink/config-dir/mods-available/dbd.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/dbd.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/dbd.load	2007-12-05 21:28:21.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule dbd_module @FINKPREFIX@/lib/apache2/modules/mod_dbd.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/deflate.conf httpd-2.2.6/fink/config-dir/mods-available/deflate.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/deflate.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/deflate.conf	2007-12-05 20:20:25.000000000 -0700
+@@ -0,0 +1,3 @@
++<IfModule mod_deflate.c>
++          AddOutputFilterByType DEFLATE text/html text/plain text/xml
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/deflate.load httpd-2.2.6/fink/config-dir/mods-available/deflate.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/deflate.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/deflate.load	2007-12-05 21:28:26.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule deflate_module @FINKPREFIX@/lib/apache2/modules/mod_deflate.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/dir.conf httpd-2.2.6/fink/config-dir/mods-available/dir.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/dir.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/dir.conf	2007-12-05 20:20:25.000000000 -0700
+@@ -0,0 +1,5 @@
++<IfModule mod_dir.c>
++
++          DirectoryIndex index.html index.cgi index.pl index.php index.xhtml index.htm
++
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/dir.load httpd-2.2.6/fink/config-dir/mods-available/dir.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/dir.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/dir.load	2007-12-05 21:28:30.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule dir_module @FINKPREFIX@/lib/apache2/modules/mod_dir.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/disk_cache.conf httpd-2.2.6/fink/config-dir/mods-available/disk_cache.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/disk_cache.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/disk_cache.conf	2007-12-05 21:21:48.000000000 -0700
+@@ -0,0 +1,16 @@
++<IfModule mod_disk_cache.c>
++# cache cleaning is done by htcacheclean, which can be configured in
++# @FINKPREFIX@/etc/default/apache2
++#
++# For further information, see the comments in that file, 
++# /usr/share/doc/apache2.2-common/README.Debian, and the htcacheclean(8)
++# man page.
++
++	# This path must be the same as the one in @FINKPREFIX@/etc/default/apache2
++        CacheRoot @FINKPREFIX@/var/cache/apache2/mod_disk_cache
++
++        CacheEnable disk /
++
++        CacheDirLevels 5
++        CacheDirLength 3
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/disk_cache.load httpd-2.2.6/fink/config-dir/mods-available/disk_cache.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/disk_cache.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/disk_cache.load	2007-12-05 21:28:35.000000000 -0700
+@@ -0,0 +1,2 @@
++# Depends: cache
++LoadModule disk_cache_module @FINKPREFIX@/lib/apache2/modules/mod_disk_cache.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/dump_io.load httpd-2.2.6/fink/config-dir/mods-available/dump_io.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/dump_io.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/dump_io.load	2007-12-05 21:28:40.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule dumpio_module @FINKPREFIX@/lib/apache2/modules/mod_dumpio.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/env.load httpd-2.2.6/fink/config-dir/mods-available/env.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/env.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/env.load	2007-12-05 21:28:44.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule env_module @FINKPREFIX@/lib/apache2/modules/mod_env.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/expires.load httpd-2.2.6/fink/config-dir/mods-available/expires.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/expires.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/expires.load	2007-12-05 21:28:48.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule expires_module @FINKPREFIX@/lib/apache2/modules/mod_expires.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/ext_filter.load httpd-2.2.6/fink/config-dir/mods-available/ext_filter.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/ext_filter.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/ext_filter.load	2007-12-05 21:28:53.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule ext_filter_module @FINKPREFIX@/lib/apache2/modules/mod_ext_filter.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/file_cache.load httpd-2.2.6/fink/config-dir/mods-available/file_cache.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/file_cache.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/file_cache.load	2007-12-05 21:28:58.000000000 -0700
+@@ -0,0 +1,2 @@
++# Depends: cache
++LoadModule file_cache_module @FINKPREFIX@/lib/apache2/modules/mod_file_cache.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/filter.load httpd-2.2.6/fink/config-dir/mods-available/filter.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/filter.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/filter.load	2007-12-05 21:29:04.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule filter_module @FINKPREFIX@/lib/apache2/modules/mod_filter.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/headers.load httpd-2.2.6/fink/config-dir/mods-available/headers.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/headers.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/headers.load	2007-12-05 21:29:08.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule headers_module @FINKPREFIX@/lib/apache2/modules/mod_headers.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/ident.load httpd-2.2.6/fink/config-dir/mods-available/ident.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/ident.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/ident.load	2007-12-05 21:29:12.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule ident_module @FINKPREFIX@/lib/apache2/modules/mod_ident.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/imagemap.load httpd-2.2.6/fink/config-dir/mods-available/imagemap.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/imagemap.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/imagemap.load	2007-12-05 21:29:17.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule imagemap_module @FINKPREFIX@/lib/apache2/modules/mod_imagemap.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/include.load httpd-2.2.6/fink/config-dir/mods-available/include.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/include.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/include.load	2007-12-05 21:29:22.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule include_module @FINKPREFIX@/lib/apache2/modules/mod_include.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/info.conf httpd-2.2.6/fink/config-dir/mods-available/info.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/info.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/info.conf	2007-12-05 20:20:26.000000000 -0700
+@@ -0,0 +1,17 @@
++<IfModule mod_info.c>
++#
++# Allow remote server configuration reports, with the URL of
++#  http://servername/server-info (requires that mod_info.c be loaded).
++# Uncomment and change the ".example.com" to allow
++# access from other hosts.
++#
++<Location /server-info>
++    SetHandler server-info
++    Order deny,allow
++    Deny from all
++    Allow from localhost ip6-localhost
++#    Allow from .example.com
++</Location>
++
++</IfModule>
++
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/info.load httpd-2.2.6/fink/config-dir/mods-available/info.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/info.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/info.load	2007-12-05 21:29:27.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule info_module @FINKPREFIX@/lib/apache2/modules/mod_info.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/ldap.load httpd-2.2.6/fink/config-dir/mods-available/ldap.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/ldap.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/ldap.load	2007-12-05 21:29:31.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule ldap_module @FINKPREFIX@/lib/apache2/modules/mod_ldap.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/log_forensic.load httpd-2.2.6/fink/config-dir/mods-available/log_forensic.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/log_forensic.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/log_forensic.load	2007-12-05 21:29:36.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule log_forensic_module @FINKPREFIX@/lib/apache2/modules/mod_log_forensic.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/mem_cache.conf httpd-2.2.6/fink/config-dir/mods-available/mem_cache.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/mem_cache.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/mem_cache.conf	2007-12-05 20:20:26.000000000 -0700
+@@ -0,0 +1,7 @@
++<IfModule mod_mem_cache.c>
++        CacheEnable mem /
++        MCacheSize 4096
++        MCacheMaxObjectCount 100
++        MCacheMinObjectSize 1
++        MCacheMaxObjectSize 2048
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/mem_cache.load httpd-2.2.6/fink/config-dir/mods-available/mem_cache.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/mem_cache.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/mem_cache.load	2007-12-05 21:29:41.000000000 -0700
+@@ -0,0 +1,2 @@
++# Depends: cache
++LoadModule mem_cache_module @FINKPREFIX@/lib/apache2/modules/mod_mem_cache.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/mime.conf httpd-2.2.6/fink/config-dir/mods-available/mime.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/mime.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/mime.conf	2007-12-05 21:22:10.000000000 -0700
+@@ -0,0 +1,188 @@
++<IfModule mod_mime.c>
++
++#
++# TypesConfig points to the file containing the list of mappings from
++# filename extension to MIME-type.
++#
++TypesConfig @FINKPREFIX@/etc/apache2/mime.types
++
++#
++# AddType allows you to add to or override the MIME configuration
++# file mime.types for specific file types.
++#
++#AddType application/x-gzip .tgz
++#
++# AddEncoding allows you to have certain browsers uncompress
++# information on the fly. Note: Not all browsers support this.
++# Despite the name similarity, the following Add* directives have
++# nothing to do with the FancyIndexing customization directives above.
++#
++#AddEncoding x-compress .Z
++#AddEncoding x-gzip .gz .tgz
++#AddEncoding x-bzip2 .bz2
++#
++# If the AddEncoding directives above are commented-out, then you
++# probably should define those extensions to indicate media types:
++#
++AddType application/x-compress .Z
++AddType application/x-gzip .gz .tgz
++AddType application/x-bzip2 .bz2
++
++#
++# DefaultLanguage and AddLanguage allows you to specify the language of 
++# a document. You can then use content negotiation to give a browser a 
++# file in a language the user can understand.
++#
++# Specify a default language. This means that all data
++# going out without a specific language tag (see below) will 
++# be marked with this one. You probably do NOT want to set
++# this unless you are sure it is correct for all cases.
++#
++# * It is generally better to not mark a page as 
++# * being a certain language than marking it with the wrong
++# * language!
++#
++# DefaultLanguage nl
++#
++# Note 1: The suffix does not have to be the same as the language
++# keyword --- those with documents in Polish (whose net-standard
++# language code is pl) may wish to use "AddLanguage pl .po" to
++# avoid the ambiguity with the common suffix for perl scripts.
++#
++# Note 2: The example entries below illustrate that in some cases 
++# the two character 'Language' abbreviation is not identical to 
++# the two character 'Country' code for its country,
++# E.g. 'Danmark/dk' versus 'Danish/da'.
++#
++# Note 3: In the case of 'ltz' we violate the RFC by using a three char
++# specifier. There is 'work in progress' to fix this and get
++# the reference data for rfc1766 cleaned up.
++#
++# Catalan (ca) - Croatian (hr) - Czech (cs) - Danish (da) - Dutch (nl)
++# English (en) - Esperanto (eo) - Estonian (et) - French (fr) - German (de)
++# Greek-Modern (el) - Hebrew (he) - Italian (it) - Japanese (ja)
++# Korean (ko) - Luxembourgeois* (ltz) - Norwegian Nynorsk (nn)
++# Norwegian (no) - Polish (pl) - Portugese (pt)
++# Brazilian Portuguese (pt-BR) - Russian (ru) - Swedish (sv)
++# Simplified Chinese (zh-CN) - Spanish (es) - Traditional Chinese (zh-TW)
++#
++AddLanguage ca .ca
++AddLanguage cs .cz .cs
++AddLanguage da .dk
++AddLanguage de .de
++AddLanguage el .el
++AddLanguage en .en
++AddLanguage eo .eo
++AddLanguage es .es
++AddLanguage et .et
++AddLanguage fr .fr
++AddLanguage he .he
++AddLanguage hr .hr
++AddLanguage it .it
++AddLanguage ja .ja
++AddLanguage ko .ko
++AddLanguage ltz .ltz
++AddLanguage nl .nl
++AddLanguage nn .nn
++AddLanguage no .no
++AddLanguage pl .po
++AddLanguage pt .pt
++AddLanguage pt-BR .pt-br
++AddLanguage ru .ru
++AddLanguage sv .sv
++AddLanguage zh-CN .zh-cn
++AddLanguage zh-TW .zh-tw
++
++#
++# Commonly used filename extensions to character sets. You probably
++# want to avoid clashes with the language extensions, unless you
++# are good at carefully testing your setup after each change.
++# See http://www.iana.org/assignments/character-sets for the
++# official list of charset names and their respective RFCs.
++#
++AddCharset us-ascii    .ascii .us-ascii
++AddCharset ISO-8859-1  .iso8859-1  .latin1
++AddCharset ISO-8859-2  .iso8859-2  .latin2 .cen
++AddCharset ISO-8859-3  .iso8859-3  .latin3
++AddCharset ISO-8859-4  .iso8859-4  .latin4
++AddCharset ISO-8859-5  .iso8859-5  .cyr .iso-ru
++AddCharset ISO-8859-6  .iso8859-6  .arb .arabic
++AddCharset ISO-8859-7  .iso8859-7  .grk .greek
++AddCharset ISO-8859-8  .iso8859-8  .heb .hebrew
++AddCharset ISO-8859-9  .iso8859-9  .latin5 .trk
++AddCharset ISO-8859-10  .iso8859-10  .latin6
++AddCharset ISO-8859-13  .iso8859-13
++AddCharset ISO-8859-14  .iso8859-14  .latin8
++AddCharset ISO-8859-15  .iso8859-15  .latin9
++AddCharset ISO-8859-16  .iso8859-16  .latin10
++AddCharset ISO-2022-JP .iso2022-jp .jis
++AddCharset ISO-2022-KR .iso2022-kr .kis
++AddCharset ISO-2022-CN .iso2022-cn .cis
++AddCharset Big5        .Big5       .big5 .b5
++AddCharset cn-Big5     .cn-big5
++# For russian, more than one charset is used (depends on client, mostly):
++AddCharset WINDOWS-1251 .cp-1251   .win-1251
++AddCharset CP866       .cp866
++AddCharset KOI8      .koi8
++AddCharset KOI8-E      .koi8-e
++AddCharset KOI8-r      .koi8-r .koi8-ru
++AddCharset KOI8-U      .koi8-u
++AddCharset KOI8-ru     .koi8-uk .ua
++AddCharset ISO-10646-UCS-2 .ucs2
++AddCharset ISO-10646-UCS-4 .ucs4
++AddCharset UTF-7       .utf7
++AddCharset UTF-8       .utf8
++AddCharset UTF-16      .utf16
++AddCharset UTF-16BE    .utf16be
++AddCharset UTF-16LE    .utf16le
++AddCharset UTF-32      .utf32
++AddCharset UTF-32BE    .utf32be
++AddCharset UTF-32LE    .utf32le
++AddCharset euc-cn      .euc-cn
++AddCharset euc-gb      .euc-gb
++AddCharset euc-jp      .euc-jp
++AddCharset euc-kr      .euc-kr
++#Not sure how euc-tw got in - IANA doesn't list it???
++AddCharset EUC-TW      .euc-tw
++AddCharset gb2312      .gb2312 .gb
++AddCharset iso-10646-ucs-2 .ucs-2 .iso-10646-ucs-2
++AddCharset iso-10646-ucs-4 .ucs-4 .iso-10646-ucs-4
++AddCharset shift_jis   .shift_jis .sjis
++
++#
++# AddHandler allows you to map certain file extensions to "handlers":
++# actions unrelated to filetype. These can be either built into the server
++# or added with the Action directive (see below)
++#
++# To use CGI scripts outside of ScriptAliased directories:
++# (You will also need to add "ExecCGI" to the "Options" directive.)
++#
++#AddHandler cgi-script .cgi
++
++#
++# For files that include their own HTTP headers:
++#
++#AddHandler send-as-is asis
++
++#
++# For server-parsed imagemap files:
++#
++#AddHandler imap-file map
++
++#
++# For type maps (negotiated resources):
++# (This is enabled by default to allow the Apache "It Worked" page
++#  to be distributed in multiple languages.)
++#
++AddHandler type-map var
++
++#
++# Filters allow you to process content before it is sent to the client.
++#
++# To parse .shtml files for server-side includes (SSI):
++# (You will also need to add "Includes" to the "Options" directive.)
++#
++AddType text/html .shtml
++AddOutputFilter INCLUDES .shtml
++
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/mime.load httpd-2.2.6/fink/config-dir/mods-available/mime.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/mime.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/mime.load	2007-12-05 21:29:45.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule mime_module @FINKPREFIX@/lib/apache2/modules/mod_mime.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/mime_magic.conf httpd-2.2.6/fink/config-dir/mods-available/mime_magic.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/mime_magic.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/mime_magic.conf	2007-12-05 21:22:19.000000000 -0700
+@@ -0,0 +1,3 @@
++<IfModule mod_mime_magic.c>
++        MIMEMagicFile @FINKPREFIX@/share/file/magic.mime
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/mime_magic.load httpd-2.2.6/fink/config-dir/mods-available/mime_magic.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/mime_magic.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/mime_magic.load	2007-12-05 21:29:50.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule mime_magic_module @FINKPREFIX@/lib/apache2/modules/mod_mime_magic.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/negotiation.conf httpd-2.2.6/fink/config-dir/mods-available/negotiation.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/negotiation.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/negotiation.conf	2007-12-05 20:20:25.000000000 -0700
+@@ -0,0 +1,18 @@
++<IfModule mod_negotiation.c>
++#
++# LanguagePriority allows you to give precedence to some languages
++# in case of a tie during content negotiation.
++#
++# Just list the languages in decreasing order of preference. We have
++# more or less alphabetized them here. You probably want to change this.
++#
++LanguagePriority en ca cs da de el eo es et fr he hr it ja ko ltz nl nn no pl pt pt-BR ru sv zh-CN zh-TW
++
++#
++# ForceLanguagePriority allows you to serve a result page rather than
++# MULTIPLE CHOICES (Prefer) [in case of a tie] or NOT ACCEPTABLE (Fallback)
++# [in case no accepted languages matched the available variants]
++#
++ForceLanguagePriority Prefer Fallback
++
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/negotiation.load httpd-2.2.6/fink/config-dir/mods-available/negotiation.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/negotiation.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/negotiation.load	2007-12-05 21:29:59.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule negotiation_module @FINKPREFIX@/lib/apache2/modules/mod_negotiation.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/proxy.conf httpd-2.2.6/fink/config-dir/mods-available/proxy.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/proxy.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/proxy.conf	2007-12-05 20:20:26.000000000 -0700
+@@ -0,0 +1,19 @@
++<IfModule mod_proxy.c>
++        #turning ProxyRequests on and allowing proxying from all may allow
++        #spammers to use your proxy to send email.
++
++        ProxyRequests Off
++
++        <Proxy *>
++                AddDefaultCharset off
++                Order deny,allow
++                Deny from all
++                #Allow from .example.com
++        </Proxy>
++
++        # Enable/disable the handling of HTTP/1.1 "Via:" headers.
++        # ("Full" adds the server version; "Block" removes all outgoing Via: headers)
++        # Set to one of: Off | On | Full | Block
++
++        ProxyVia On
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/proxy.load httpd-2.2.6/fink/config-dir/mods-available/proxy.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/proxy.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/proxy.load	2007-12-05 21:30:03.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule proxy_module @FINKPREFIX@/lib/apache2/modules/mod_proxy.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/proxy_ajp.load httpd-2.2.6/fink/config-dir/mods-available/proxy_ajp.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/proxy_ajp.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/proxy_ajp.load	2007-12-05 21:30:26.000000000 -0700
+@@ -0,0 +1,2 @@
++# Depends: proxy
++LoadModule proxy_ajp_module @FINKPREFIX@/lib/apache2/modules/mod_proxy_ajp.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/proxy_balancer.load httpd-2.2.6/fink/config-dir/mods-available/proxy_balancer.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/proxy_balancer.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/proxy_balancer.load	2007-12-05 21:30:31.000000000 -0700
+@@ -0,0 +1,2 @@
++# Depends: proxy cache
++LoadModule proxy_balancer_module @FINKPREFIX@/lib/apache2/modules/mod_proxy_balancer.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/proxy_connect.load httpd-2.2.6/fink/config-dir/mods-available/proxy_connect.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/proxy_connect.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/proxy_connect.load	2007-12-05 21:30:43.000000000 -0700
+@@ -0,0 +1,2 @@
++# Depends: proxy
++LoadModule proxy_connect_module @FINKPREFIX@/lib/apache2/modules/mod_proxy_connect.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/proxy_ftp.load httpd-2.2.6/fink/config-dir/mods-available/proxy_ftp.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/proxy_ftp.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/proxy_ftp.load	2007-12-05 21:30:54.000000000 -0700
+@@ -0,0 +1,2 @@
++# Depends: proxy
++LoadModule proxy_ftp_module @FINKPREFIX@/lib/apache2/modules/mod_proxy_ftp.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/proxy_http.load httpd-2.2.6/fink/config-dir/mods-available/proxy_http.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/proxy_http.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/proxy_http.load	2007-12-05 21:30:59.000000000 -0700
+@@ -0,0 +1,2 @@
++# Depends: proxy
++LoadModule proxy_http_module @FINKPREFIX@/lib/apache2/modules/mod_proxy_http.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/rewrite.load httpd-2.2.6/fink/config-dir/mods-available/rewrite.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/rewrite.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/rewrite.load	2007-12-05 21:31:24.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule rewrite_module @FINKPREFIX@/lib/apache2/modules/mod_rewrite.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/setenvif.conf httpd-2.2.6/fink/config-dir/mods-available/setenvif.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/setenvif.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/setenvif.conf	2007-12-05 20:20:25.000000000 -0700
+@@ -0,0 +1,28 @@
++<IfModule mod_setenvif.c>
++
++#
++# The following directives modify normal HTTP response behavior to
++# handle known problems with browser implementations.
++#
++BrowserMatch "Mozilla/2" nokeepalive
++BrowserMatch "MSIE 4\.0b2;" nokeepalive downgrade-1.0 force-response-1.0
++BrowserMatch "RealPlayer 4\.0" force-response-1.0
++BrowserMatch "Java/1\.0" force-response-1.0
++BrowserMatch "JDK/1\.0" force-response-1.0
++
++#
++# The following directive disables redirects on non-GET requests for
++# a directory that does not include the trailing slash.  This fixes a 
++# problem with Microsoft WebFolders which does not appropriately handle 
++# redirects for folders with DAV methods.
++# Same deal with Apple's DAV filesystem and Gnome VFS support for DAV.
++#
++BrowserMatch "Microsoft Data Access Internet Publishing Provider" redirect-carefully
++BrowserMatch "MS FrontPage" redirect-carefully
++BrowserMatch "^WebDrive" redirect-carefully
++BrowserMatch "^WebDAVFS/1.[012]" redirect-carefully
++BrowserMatch "^gnome-vfs/1.0" redirect-carefully
++BrowserMatch "^XML Spy" redirect-carefully
++BrowserMatch "^Dreamweaver-WebDAV-SCM1" redirect-carefully
++
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/setenvif.load httpd-2.2.6/fink/config-dir/mods-available/setenvif.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/setenvif.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/setenvif.load	2007-12-05 21:31:29.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule setenvif_module @FINKPREFIX@/lib/apache2/modules/mod_setenvif.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/speling.load httpd-2.2.6/fink/config-dir/mods-available/speling.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/speling.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/speling.load	2007-12-05 21:31:33.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule speling_module @FINKPREFIX@/lib/apache2/modules/mod_speling.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/ssl.conf httpd-2.2.6/fink/config-dir/mods-available/ssl.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/ssl.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/ssl.conf	2007-12-05 21:22:53.000000000 -0700
+@@ -0,0 +1,60 @@
++<IfModule mod_ssl.c>
++#
++# Pseudo Random Number Generator (PRNG):
++# Configure one or more sources to seed the PRNG of the SSL library.
++# The seed data should be of good random quality.
++# WARNING! On some platforms /dev/random blocks if not enough entropy
++# is available. This means you then cannot use the /dev/random device
++# because it would lead to very long connection times (as long as
++# it requires to make more entropy available). But usually those
++# platforms additionally provide a /dev/urandom device which doesn't
++# block. So, if available, use this one instead. Read the mod_ssl User
++# Manual for more details.
++#
++SSLRandomSeed startup builtin
++SSLRandomSeed startup file:/dev/urandom 512
++SSLRandomSeed connect builtin
++SSLRandomSeed connect file:/dev/urandom 512
++
++##
++##  SSL Global Context
++##
++##  All SSL configuration in this context applies both to
++##  the main server and all SSL-enabled virtual hosts.
++##
++
++#
++#   Some MIME-types for downloading Certificates and CRLs
++#
++AddType application/x-x509-ca-cert .crt
++AddType application/x-pkcs7-crl    .crl
++
++#   Pass Phrase Dialog:
++#   Configure the pass phrase gathering process.
++#   The filtering dialog program (`builtin' is a internal
++#   terminal dialog) has to provide the pass phrase on stdout.
++SSLPassPhraseDialog  builtin
++
++#   Inter-Process Session Cache:
++#   Configure the SSL Session Cache: First the mechanism 
++#   to use and second the expiring timeout (in seconds).
++#SSLSessionCache         dbm:@FINKPREFIX@/var/run/apache2/ssl_scache
++SSLSessionCache        shmcb:@FINKPREFIX@/var/run/apache2/ssl_scache(512000)
++SSLSessionCacheTimeout  300
++
++#   Semaphore:
++#   Configure the path to the mutual exclusion semaphore the
++#   SSL engine uses internally for inter-process synchronization. 
++SSLMutex  file:@FINKPREFIX@/var/run/apache2/ssl_mutex
++
++#   SSL Cipher Suite:
++#   List the ciphers that the client is permitted to negotiate.
++#   See the mod_ssl documentation for a complete list.
++#SSLCipherSuite ALL:!ADH:!EXPORT56:RC4+RSA:+HIGH:+MEDIUM:+LOW:+SSLv2:+EXP:+eNULL
++#   enable only secure ciphers:
++#SSLCipherSuite HIGH:MEDIUM:!ADH
++
++# enable only secure protocols: SSLv3 and TLSv1, but not SSLv2
++#SSLProtocol all -SSLv2
++
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/ssl.load httpd-2.2.6/fink/config-dir/mods-available/ssl.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/ssl.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/ssl.load	2007-12-05 21:31:38.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule ssl_module @FINKPREFIX@/lib/apache2/modules/mod_ssl.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/status.conf httpd-2.2.6/fink/config-dir/mods-available/status.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/status.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/status.conf	2007-12-05 20:20:25.000000000 -0700
+@@ -0,0 +1,16 @@
++<IfModule mod_status.c>
++#
++# Allow server status reports generated by mod_status,
++# with the URL of http://servername/server-status
++# Uncomment and change the ".example.com" to allow
++# access from other hosts.
++#
++<Location /server-status>
++    SetHandler server-status
++    Order deny,allow
++    Deny from all
++    Allow from localhost ip6-localhost
++#    Allow from .example.com
++</Location>
++
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/status.load httpd-2.2.6/fink/config-dir/mods-available/status.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/status.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/status.load	2007-12-05 21:31:43.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule status_module @FINKPREFIX@/lib/apache2/modules/mod_status.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/suexec.load httpd-2.2.6/fink/config-dir/mods-available/suexec.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/suexec.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/suexec.load	2007-12-05 21:31:48.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule suexec_module @FINKPREFIX@/lib/apache2/modules/mod_suexec.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/unique_id.load httpd-2.2.6/fink/config-dir/mods-available/unique_id.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/unique_id.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/unique_id.load	2007-12-05 21:31:53.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule unique_id_module @FINKPREFIX@/lib/apache2/modules/mod_unique_id.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/userdir.conf httpd-2.2.6/fink/config-dir/mods-available/userdir.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/userdir.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/userdir.conf	2007-12-05 21:23:36.000000000 -0700
+@@ -0,0 +1,11 @@
++<IfModule mod_userdir.c>
++        UserDir Sites
++        UserDir disabled root
++
++        <Directory /Users/*/Sites>
++                AllowOverride FileInfo AuthConfig Limit
++                Options MultiViews Indexes SymLinksIfOwnerMatch IncludesNoExec
++        </Directory>
++</IfModule>
++
++Include @FINKPREFIX@/etc/apache2/users/
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/userdir.load httpd-2.2.6/fink/config-dir/mods-available/userdir.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/userdir.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/userdir.load	2007-12-05 21:31:57.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule userdir_module @FINKPREFIX@/lib/apache2/modules/mod_userdir.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/systemusers.conf httpd-2.2.6/fink/config-dir/mods-available/systemusers.conf
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/systemusers.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/systemusers.conf	2007-12-05 21:31:57.000000000 -0700
+@@ -0,0 +1 @@
++Include /etc/apache2/users/
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/systemusers.load httpd-2.2.6/fink/config-dir/mods-available/systemusers.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/systemusers.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/systemusers.load	2007-12-05 21:31:57.000000000 -0700
+@@ -0,0 +1 @@
++
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/usertrack.load httpd-2.2.6/fink/config-dir/mods-available/usertrack.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/usertrack.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/usertrack.load	2007-12-05 21:32:04.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule usertrack_module @FINKPREFIX@/lib/apache2/modules/mod_usertrack.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/version.load httpd-2.2.6/fink/config-dir/mods-available/version.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/version.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/version.load	2007-12-05 21:32:10.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule version_module @FINKPREFIX@/lib/apache2/modules/mod_version.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/mods-available/vhost_alias.load httpd-2.2.6/fink/config-dir/mods-available/vhost_alias.load
+--- httpd-2.2.6.orig/fink/config-dir/mods-available/vhost_alias.load	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/mods-available/vhost_alias.load	2007-12-05 21:32:18.000000000 -0700
+@@ -0,0 +1 @@
++LoadModule vhost_alias_module @FINKPREFIX@/lib/apache2/modules/mod_vhost_alias.so
+diff -ruN httpd-2.2.6.orig/fink/config-dir/ports.conf httpd-2.2.6/fink/config-dir/ports.conf
+--- httpd-2.2.6.orig/fink/config-dir/ports.conf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/ports.conf	2007-12-05 20:20:26.000000000 -0700
+@@ -0,0 +1,5 @@
++Listen 80
++
++<IfModule mod_ssl.c>
++    Listen 443
++</IfModule>
+diff -ruN httpd-2.2.6.orig/fink/config-dir/sites-available/default httpd-2.2.6/fink/config-dir/sites-available/default
+--- httpd-2.2.6.orig/fink/config-dir/sites-available/default	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/config-dir/sites-available/default	2007-12-05 21:18:18.000000000 -0700
+@@ -0,0 +1,46 @@
++NameVirtualHost *
++<VirtualHost *>
++	ServerAdmin webmaster@localhost
++	
++	DocumentRoot @FINKPREFIX@/var/www/
++	<Directory />
++		Options FollowSymLinks
++		AllowOverride None
++	</Directory>
++	<Directory @FINKPREFIX@/var/www/>
++		Options Indexes FollowSymLinks MultiViews
++		AllowOverride None
++		Order allow,deny
++		allow from all
++		# This directive allows us to have apache2's default start page
++                # in /apache2-default/, but still have / go to the right place
++                RedirectMatch ^/$ /apache2-default/
++	</Directory>
++
++	ScriptAlias /cgi-bin/ @FINKPREFIX@/lib/cgi-bin/
++	<Directory "@FINKPREFIX@/lib/cgi-bin">
++		AllowOverride None
++		Options +ExecCGI -MultiViews +SymLinksIfOwnerMatch
++		Order allow,deny
++		Allow from all
++	</Directory>
++
++	ErrorLog @FINKPREFIX@/var/log/apache2/error.log
++
++	# Possible values include: debug, info, notice, warn, error, crit,
++	# alert, emerg.
++	LogLevel warn
++
++	CustomLog @FINKPREFIX@/var/log/apache2/access.log combined
++	ServerSignature On
++
++    Alias /doc/ "@FINKPREFIX@/share/doc/"
++    <Directory "@FINKPREFIX@/share/doc/">
++        Options Indexes MultiViews FollowSymLinks
++        AllowOverride None
++        Order deny,allow
++        Deny from all
++        Allow from 127.0.0.0/255.0.0.0 ::1/128
++    </Directory>
++
++</VirtualHost>
+diff -ruN httpd-2.2.6.orig/fink/httxt2dbm.8 httpd-2.2.6/fink/httxt2dbm.8
+--- httpd-2.2.6.orig/fink/httxt2dbm.8	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/httxt2dbm.8	2007-12-05 20:18:20.000000000 -0700
+@@ -0,0 +1,41 @@
++.TH "HTTXT2DBM" 8 "2007-06-26" "Apache HTTP Server" "httxt2dbm"
++
++.SH NAME
++httxt2dbm - Generate dbm files for use with RewriteMap
++
++.SH "SYNOPSIS"
++ 
++.PP
++\fBhttxt2dbm\fR [ \fB\-v\fR ] [ \fB\-f\fR \fIDBM_TYPE\fR ] \fB\-i\fR \fISOURCE_TXT\fR \fB\-o\fR \fIOUTPUT_DBM\fR 
++
++.SH "SUMMARY"
++ 
++.PP
++\fBhttxt2dbm\fR is used to generate dbm files from text input, for use in RewriteMap with the dbm map type.
++
++.SH "OPTIONS"
++ 
++.TP
++\-v
++More verbose output
++.TP
++\-f \fIDBM_TYPE\fR
++Specify the DBM type to be used for the output. If not specified, will use the APR Default. Available types are:
++ GDBM for GDBM files
++ SDBM for SDBM files
++ DB for berkeley DB files
++ NDBM for NDBM files
++ default for the default DBM type 
++.TP
++\-i \fISOURCE_TXT\fR
++Input file from which the dbm is to be created. The file should be formated with one record per line, of the form:
++ key value
++See the documentation for RewriteMap for further details of this file's format and meaning. 
++.TP
++\-o \fIOUTPUT_DBM\fR
++Name of the output dbm files.
++
++.SH "EXAMPLES"
++httxt2dbm \-i rewritemap.txt \-o rewritemap.dbm
++
++httxt2dbm \-f SDBM \-i rewritemap.txt \-o rewritemap.dbm
+diff -ruN httpd-2.2.6.orig/fink/logrotate httpd-2.2.6/fink/logrotate
+--- httpd-2.2.6.orig/fink/logrotate	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/logrotate	2007-12-05 20:30:50.000000000 -0700
+@@ -0,0 +1,15 @@
++/var/log/apache2/*.log {
++	weekly
++	missingok
++	rotate 52
++	compress
++	delaycompress
++	notifempty
++	create 640 root admin
++	sharedscripts
++	postrotate
++		if [ -f @FINKPREFIX@/var/run/apache2/apache2.pid ]; then
++			@FINKPREFIX@/sbin/apache2ctl restart > /dev/null
++		fi
++	endscript
++}
+diff -ruN httpd-2.2.6.orig/fink/robots.txt httpd-2.2.6/fink/robots.txt
+--- httpd-2.2.6.orig/fink/robots.txt	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/robots.txt	2007-12-05 21:06:20.000000000 -0700
+@@ -0,0 +1,2 @@
++User-Agent: *
++Disallow: /
+diff -ruN httpd-2.2.6.orig/fink/ssl-certificate httpd-2.2.6/fink/ssl-certificate
+--- httpd-2.2.6.orig/fink/ssl-certificate	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/ssl-certificate	2007-12-05 21:06:28.000000000 -0700
+@@ -0,0 +1,31 @@
++#!/bin/sh -e
++
++if [ "$1" != "--force" -a -f @FINKPREFIX@/etc/apache2/ssl/apache.pem ]; then
++  echo "@FINKPREFIX@/etc/apache2/ssl/apache.pem exists!  Use \"$0 --force.\""
++  exit 0
++fi
++
++if [ "$1" = "--force" ]; then
++  shift
++fi     
++
++echo
++echo creating selfsigned certificate
++echo "replace it with one signed by a certification authority (CA)"
++echo
++echo enter your ServerName at the Common Name prompt
++echo
++echo If you want your certificate to expire after x days call this programm 
++echo with "-days x" 
++
++# use special .cnf, because with normal one no valid selfsigned
++# certificate is created
++
++export RANDFILE=/dev/random
++openssl req $@ -config @FINKPREFIX@/share/apache2/ssleay.cnf \
++  -new -x509 -nodes -out @FINKPREFIX@/etc/apache2/ssl/apache.pem \
++  -keyout @FINKPREFIX@/etc/apache2/ssl/apache.pem
++chmod 600 @FINKPREFIX@/etc/apache2/ssl/apache.pem
++ln -sf @FINKPREFIX@/etc/apache2/ssl/apache.pem \
++  @FINKPREFIX@/etc/apache2/ssl/`/usr/bin/openssl \
++  x509 -noout -hash < @FINKPREFIX@/etc/apache2/ssl/apache.pem`.0
+diff -ruN httpd-2.2.6.orig/fink/ssleay.cnf httpd-2.2.6/fink/ssleay.cnf
+--- httpd-2.2.6.orig/fink/ssleay.cnf	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.6/fink/ssleay.cnf	2007-12-05 21:06:38.000000000 -0700
+@@ -0,0 +1,34 @@
++#
++# SSLeay example configuration file.
++#
++
++RANDFILE                = $ENV::HOME/.rnd
++
++[ req ]
++default_bits            = 1024
++default_keyfile         = privkey.pem
++distinguished_name      = req_distinguished_name
++
++[ req_distinguished_name ]
++countryName                     = Country Name (2 letter code)
++countryName_default             = GB
++countryName_min                 = 2
++countryName_max                 = 2
++
++stateOrProvinceName             = State or Province Name (full name)
++stateOrProvinceName_default     = Some-State
++
++localityName                    = Locality Name (eg, city)
++
++organizationName                = Organization Name (eg, company; recommended)
++organizationName_max            = 64
++
++organizationalUnitName          = Organizational Unit Name (eg, section)
++organizationalUnitName_max      = 64
++
++commonName                      = server name (eg. ssl.domain.tld; required!!!)
++commonName_max                  = 64
++
++emailAddress                    = Email Address
++emailAddress_max                = 40
++
