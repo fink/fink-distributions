@@ -1,0 +1,317 @@
+diff -rauN MPlayer-1.0rc2/libmpdemux/demux_audio.c MPlayer-1.0rc2-p1/libmpdemux/demux_audio.c
+--- MPlayer-1.0rc2/libmpdemux/demux_audio.c	2007-10-07 19:49:33.000000000 +0000
++++ MPlayer-1.0rc2-p1/libmpdemux/demux_audio.c	2008-02-05 18:23:02.000000000 +0000
+@@ -229,6 +229,8 @@
+           ptr += 4;
+ 
+           comment = ptr;
++          if (&comment[length] < comments || &comment[length] >= &comments[blk_len])
++            return;
+           c = comment[length];
+           comment[length] = 0;
+ 
+diff -rauN MPlayer-1.0rc2/libmpdemux/demux_mov.c MPlayer-1.0rc2-p1/libmpdemux/demux_mov.c
+--- MPlayer-1.0rc2/libmpdemux/demux_mov.c	2007-10-07 19:49:33.000000000 +0000
++++ MPlayer-1.0rc2-p1/libmpdemux/demux_mov.c	2008-02-05 18:24:01.000000000 +0000
+@@ -173,11 +173,12 @@
+     i=trak->chunkmap_size;
+     while(i>0){
+ 	--i;
+-	for(j=trak->chunkmap[i].first;j<last;j++){
++	j=FFMAX(trak->chunkmap[i].first, 0);
++	for(;j<last;j++){
+ 	    trak->chunks[j].desc=trak->chunkmap[i].sdid;
+ 	    trak->chunks[j].size=trak->chunkmap[i].spc;
+ 	}
+-	last=trak->chunkmap[i].first;
++	last=FFMIN(trak->chunkmap[i].first, trak->chunks_size);
+     }
+ 
+ #if 0
+@@ -235,6 +236,8 @@
+     s=0;
+     for(j=0;j<trak->durmap_size;j++){
+ 	for(i=0;i<trak->durmap[j].num;i++){
++	    if (s >= trak->samples_size)
++		break;
+ 	    trak->samples[s].pts=pts;
+ 	    ++s;
+ 	    pts+=trak->durmap[j].dur;
+@@ -246,6 +249,8 @@
+     for(j=0;j<trak->chunks_size;j++){
+ 	off_t pos=trak->chunks[j].pos;
+ 	for(i=0;i<trak->chunks[j].size;i++){
++	    if (s >= trak->samples_size)
++		break;
+ 	    trak->samples[s].pos=pos;
+ 	    mp_msg(MSGT_DEMUX, MSGL_DBG3, "Sample %5d: pts=%8d  off=0x%08X  size=%d\n",s,
+ 		trak->samples[s].pts,
+@@ -1568,8 +1573,7 @@
+ 			if( udta_len>udta_size)
+ 				udta_len=udta_size;
+ 			{
+-			char dump[udta_len-4];
+-			stream_read(demuxer->stream, (char *)&dump, udta_len-4-4);
++			stream_skip(demuxer->stream, udta_len-4-4);
+ 			udta_size -= udta_len;
+ 			}
+ 		    }
+diff -rauN MPlayer-1.0rc2/stream/stream_cddb.c MPlayer-1.0rc2-p1/stream/stream_cddb.c
+--- MPlayer-1.0rc2/stream/stream_cddb.c	2007-10-07 19:49:26.000000000 +0000
++++ MPlayer-1.0rc2-p1/stream/stream_cddb.c	2008-02-05 18:24:39.000000000 +0000
+@@ -53,6 +53,7 @@
+ #include "version.h"
+ #include "stream.h"
+ #include "network.h"
++#include "libavutil/intreadwrite.h"
+ 
+ #define DEFAULT_FREEDB_SERVER	"freedb.freedb.org"
+ #define DEFAULT_CACHE_DIR	"/.cddb/"
+@@ -453,8 +454,9 @@
+ 		} else {
+ 			len = ptr2-ptr+1;
+ 		}
++		len = FFMIN(sizeof(album_title) - 1, len);
+ 		strncpy(album_title, ptr, len);
+-		album_title[len-2]='\0';
++		album_title[len]='\0';
+ 	}
+ 	mp_msg(MSGT_DEMUX, MSGL_STATUS, MSGTR_MPDEMUX_CDDB_ParseOKFoundAlbumTitle, album_title);
+ 	return 0;
+@@ -490,8 +492,9 @@
+ 				} else {
+ 					len = ptr2-ptr+1;
+ 				}
++				len = FFMIN(sizeof(album_title) - 1, len);
+ 				strncpy(album_title, ptr, len);
+-				album_title[len-2]='\0';
++				album_title[len]='\0';
+ 			}
+ 			mp_msg(MSGT_DEMUX, MSGL_STATUS, MSGTR_MPDEMUX_CDDB_ParseOKFoundAlbumTitle, album_title);
+ 			return cddb_request_titles(cddb_data);
+diff -rauN MPlayer-1.0rc2/stream/url.c MPlayer-1.0rc2-p1/stream/url.c
+--- MPlayer-1.0rc2/stream/url.c	2007-10-07 19:49:26.000000000 +0000
++++ MPlayer-1.0rc2-p1/stream/url.c	2008-02-05 18:26:16.000000000 +0000
+@@ -328,6 +328,7 @@
+ 		}
+ 	}
+ 	
++	tmp = NULL;
+ 	while(i < len) {
+ 		// look for the next char that must be kept
+ 		for  (j=i;j<len;j++) {
+diff -ur MPlayer-1.0rc2/configure MPlayer-1.0rc2-p1/configure
+--- MPlayer-1.0rc2/configure	2007-10-08 05:49:33.000000000 +1000
++++ MPlayer-1.0rc2-p1/configure	2008-03-10 19:47:42.000000000 +1100
+@@ -2275,9 +2275,11 @@
+     test "$_sse2"     != no && _sse2=yes
+     test "$_ssse3"    != no && _ssse3=yes
+     test "$_mtrr"     != no && _mtrr=yes
++    _inc_extra="$_inc_extra -mmmx -msse -msse2 -msse3 -mssse3 -m3dnow"
+   fi
+   if ppc; then
+     _altivec=yes
++    _inc_extra="$_inc_extra -maltivec"
+   fi
+ fi
+
+@@ -7486,7 +7486,7 @@
+ # to use its own copy of the library)
+ echocheck "DVD support (libdvdnav)"
+ if test "$_dvdnav" = auto ; then
+-  $_dvdnavconfig --version --minilibs >> $TMPLOG 2>&1 || _dvdnav=no
++  $_dvdnavconfig --version --libs >> $TMPLOG 2>&1 || _dvdnav=no
+ fi
+ if test "$_dvdnav" = auto ; then
+   cat > $TMPC <<EOF
+@@ -7508,7 +7508,7 @@
+   _dvdnav_version=`$_dvdnavconfig --version | sed "s/\.//g"`
+   _def_dvdnav_version="#define DVDNAVVERSION $_dvdnav_version"
+   _inc_extra="$_inc_extra `$_dvdnavconfig --cflags`"
+-  _ld_extra="$_ld_extra `$_dvdnavconfig --minilibs`"
++  _ld_extra="$_ld_extra `$_dvdnavconfig --libs`"
+   _inputmodules="dvdnav $_inputmodules"
+ else
+   _def_dvdnav='#undef USE_DVDNAV'
+diff -ur MPlayer-1.0rc2/libvo/aclib_template.c MPlayer-1.0rc2-p1/libvo/aclib_template.c
+--- MPlayer-1.0rc2/libvo/aclib_template.c	2007-10-08 05:49:33.000000000 +1000
++++ MPlayer-1.0rc2-p1/libvo/aclib_template.c	2008-03-10 19:47:42.000000000 +1100
+@@ -109,7 +109,7 @@
+ #elif defined ( HAVE_3DNOW )
+ #define PREFETCH  "prefetch"
+ #else
+-#define PREFETCH "/nop"
++#define PREFETCH "# nop"
+ #endif
+ 
+ /* On K6 femms is faster of emms. On K7 femms is directly mapped on emms. */
+diff -ur MPlayer-1.0rc2/libvo/osd_template.c MPlayer-1.0rc2-p1/libvo/osd_template.c
+--- MPlayer-1.0rc2/libvo/osd_template.c	2007-10-08 05:49:33.000000000 +1000
++++ MPlayer-1.0rc2-p1/libvo/osd_template.c	2008-03-10 19:47:42.000000000 +1100
+@@ -16,8 +16,8 @@
+ #define PREFETCHW "prefetcht0"
+ #define PAVGB	  "pavgb"
+ #else
+-#define PREFETCH "/nop"
+-#define PREFETCHW "/nop"
++#define PREFETCH "# nop"
++#define PREFETCHW "# nop"
+ #endif
+ 
+ #ifdef HAVE_3DNOW
+diff -ur MPlayer-1.0rc2/libswscale/yuv2rgb_template.c MPlayer-1.0rc2-p1/libswscale/yuv2rgb_template.c
+--- MPlayer-1.0rc2/libswscale/yuv2rgb_template.c	2007-10-08 05:49:31.000000000 +1000
++++ MPlayer-1.0rc2-p1/libswscale/yuv2rgb_template.c	2008-11-16 17:54:27.000000000 +1100
+@@ -154,7 +154,7 @@
+         "movd    (%2, %0), %%mm0;" /* Load 4 Cb 00 00 00 00 u3 u2 u1 u0 */
+         "movd    (%3, %0), %%mm1;" /* Load 4 Cr 00 00 00 00 v3 v2 v1 v0 */
+         "movq (%5, %0, 2), %%mm6;" /* Load 8  Y Y7 Y6 Y5 Y4 Y3 Y2 Y1 Y0 */
+-        //".balign 16     \n\t"
++        //".align 4     \n\t"
+         "1:             \n\t"
+         /* no speed diference on my p3@500 with prefetch,
+          * if it is faster for anyone with -benchmark then tell me
+@@ -249,7 +249,7 @@
+         "movd    (%2, %0), %%mm0;" /* Load 4 Cb 00 00 00 00 u3 u2 u1 u0 */
+         "movd    (%3, %0), %%mm1;" /* Load 4 Cr 00 00 00 00 v3 v2 v1 v0 */
+         "movq (%5, %0, 2), %%mm6;" /* Load 8  Y Y7 Y6 Y5 Y4 Y3 Y2 Y1 Y0 */
+-        //".balign 16     \n\t"
++        //".align 4     \n\t"
+         "1:             \n\t"
+ YUV2RGB
+ 
+@@ -333,7 +333,7 @@
+         "movd    (%2, %0), %%mm0;" /* Load 4 Cb 00 00 00 00 u3 u2 u1 u0 */
+         "movd    (%3, %0), %%mm1;" /* Load 4 Cr 00 00 00 00 v3 v2 v1 v0 */
+         "movq (%5, %0, 2), %%mm6;" /* Load 8  Y Y7 Y6 Y5 Y4 Y3 Y2 Y1 Y0 */
+-        //".balign 16     \n\t"
++        //".align 4     \n\t"
+         "1:             \n\t"
+ YUV2RGB
+         /* mm0=B, %%mm2=G, %%mm1=R */
+@@ -479,7 +479,7 @@
+         "movd    (%2, %0), %%mm0;" /* Load 4 Cb 00 00 00 00 u3 u2 u1 u0 */
+         "movd    (%3, %0), %%mm1;" /* Load 4 Cr 00 00 00 00 v3 v2 v1 v0 */
+         "movq (%5, %0, 2), %%mm6;" /* Load 8  Y Y7 Y6 Y5 Y4 Y3 Y2 Y1 Y0 */
+-        //".balign 16     \n\t"
++        //".align 4     \n\t"
+         "1:             \n\t"
+ YUV2RGB
+         /* convert RGB plane to RGB packed format,
+diff -ur MPlayer-1.0rc2/libvo/aclib_template.c MPlayer-1.0rc2-p1/libvo/aclib_template.c
+--- MPlayer-1.0rc2/libvo/aclib_template.c	2007-10-08 05:49:28.000000000 +1000
++++ MPlayer-1.0rc2-p1/libvo/aclib_template.c	2008-11-16 17:54:40.000000000 +1100
+@@ -258,7 +258,7 @@
+ 	if(i>=BLOCK_SIZE/64)
+ 		asm volatile(
+ 			"xor %%"REG_a", %%"REG_a"	\n\t"
+-			".balign 16		\n\t"
++			".align 4		\n\t"
+ 			"1:			\n\t"
+ 				"movl (%0, %%"REG_a"), %%ebx 	\n\t"
+ 				"movl 32(%0, %%"REG_a"), %%ebx 	\n\t"
+@@ -270,7 +270,7 @@
+ 
+ 			"xor %%"REG_a", %%"REG_a"	\n\t"
+ 
+-				".balign 16		\n\t"
++				".align 4		\n\t"
+ 				"2:			\n\t"
+ 				"movq (%0, %%"REG_a"), %%mm0\n"
+ 				"movq 8(%0, %%"REG_a"), %%mm1\n"
+--- MPlayer-1.0rc2/libvo/vo_macosx.m	2008-11-22 00:20:15.000000000 +1100
++++ MPlayer-1.0rc2-p1/libvo/vo_macosx.m	2008-11-22 13:41:48.000000000 +1100
+@@ -285,19 +285,21 @@
+ 		#if !defined (MACOSX_FINDER_SUPPORT) || !defined (HAVE_SDL)
+ 		//this chunk of code is heavily based off SDL_macosx.m from SDL 
+ 		//it uses an Apple private function to request foreground operation
+-		void CPSEnableForegroundOperation(ProcessSerialNumber* psn);
+-		ProcessSerialNumber myProc, frProc;
+-		Boolean sameProc;
+-
+-		if (GetFrontProcess(&frProc) == noErr)
+-		{
+-			if (GetCurrentProcess(&myProc) == noErr)
+-			{
+-				if (SameProcess(&frProc, &myProc, &sameProc) == noErr && !sameProc)
+-				{
+-					CPSEnableForegroundOperation(&myProc);
++		typedef struct CPSProcessSerNum
++		{
++			UInt32 lo;
++			UInt32 hi;
++		} CPSProcessSerNum;
++		OSErr CPSEnableForegroundOperation(CPSProcessSerNum* psn, UInt32 _arg2, UInt32 _arg3, UInt32 _arg4, UInt32 _arg5);
++		OSErr CPSGetCurrentProcess(CPSProcessSerNum* psn);
++		OSErr CPSSetFrontProcess(CPSProcessSerNum* psn);
++		CPSProcessSerNum psn;
++
++		if (!CPSGetCurrentProcess(&psn)) {
++			if (!CPSEnableForegroundOperation(&psn,0x03,0x3C,0x2C,0x1103)) {
++				if (!CPSSetFrontProcess(&psn)) {
++					// Success!
+ 				}
+-				SetFrontProcess(&myProc);
+ 			}
+ 		}
+ 		#endif
+@@ -308,6 +310,7 @@
+ 			[mpGLView autorelease];
+ 		}
+ 	
++		[NSApp setDelegate:mpGLView];
+ 		[mpGLView display];
+ 		[mpGLView preinit];
+ 	}
+@@ -1023,4 +1026,12 @@
+     mpGLView = NULL;
+ 	mplayer_put_key(KEY_ESC);
+ }
++
++/*
++	NSApplication delegate
++*/
++- (void)applicationDidBecomeActive:(NSNotification *)aNotification
++{
++	[window makeKeyAndOrderFront:self];
++}
+ @end
+--- MPlayer-1.0rc2/etc/example.conf	2007-10-08 05:49:33.000000000 +1000
++++ MPlayer-1.0rc2-p1/etc/example.conf	2008-11-22 14:32:34.000000000 +1100
+@@ -17,7 +17,7 @@
+ ##################
+ 
+ # Specify default video driver (see -vo help for a list).
+-#vo=xv
++vo=macosx
+ 
+ # Use SDL video with the aalib subdriver by default.
+ #vo = sdl:aalib
+@@ -71,7 +71,7 @@
+ ##################
+ 
+ # Specify default audio driver (see -ao help for a list).
+-#ao=oss
++ao=macosx
+ 
+ # Use SDL audio driver with the esd subdriver by default.
+ #ao = sdl:esd
+@@ -83,6 +83,18 @@
+ #af=lavcresample=44100
+ 
+ 
++#################
++# OSD and fonts #
++#################
++
++fontconfig=1
++font="Bitstream Vera Sans"
++subfont-autoscale=1
++ass=yes
++ass-use-margins=yes
++embeddedfonts=yes
++
++
+ ##################
+ # other settings #
+ ##################
