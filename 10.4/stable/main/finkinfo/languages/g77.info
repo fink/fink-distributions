@@ -1,22 +1,26 @@
 Package: g77
 Version: 3.4.3
-Revision: 15
-Architecture: powerpc
-#BuildDependsOnly: true
+Revision: 107
+Architecture: powerpc, i386
 Source: mirror:gnu:gcc/gcc-%v/gcc-%v.tar.bz2
 Source-MD5: e744b30c834360fccac41eb7269a3011
 NoSourceDirectory: True
-#BuildDepends: dejagnu
-BuildDepends: libgettext8-dev, gettext-tools, libiconv-dev
+BuildDepends: libgettext8-dev, gettext-tools, libiconv-dev, fink (>= 0.24.12)
 Depends: libgettext8-shlibs, libiconv
-ConfigureParams: --enable-languages=f77 --infodir='${prefix}/share/info' --libexecdir='${prefix}/lib' --disable-shared
+ConfigureParams: --enable-languages=f77 --infodir='${prefix}/share/info' --libexecdir='${prefix}/lib' --disable-shared 
 NoSetMAKEFLAGS: true
 SetMAKEFLAGS: -j1
+PatchFile: %n.patch
+PatchFile-MD5: a20e01e087bc3fc056794799a16cc382
 PatchScript: <<
  #!/bin/sh -ev
+ # PatchFile-MD5: a20e01e087bc3fc056794799a16cc382
+ patch -p1 < %{PatchFile}
  cd gcc-%v/gcc
- mv Makefile.in Makefile.in.orig
- sed 's|$(ALL_CPPFLAGS) $(INCLUDES)|$(INCLUDES) $(ALL_CPPFLAGS)|g' < Makefile.in.orig > Makefile.in
+ autoconf
+ autoheader
+ sed -i -e 's|"%v"|"%v (Fink-%r)"|' version.c
+ sed -i -e 's|$(ALL_CPPFLAGS) $(INCLUDES)|$(INCLUDES) $(ALL_CPPFLAGS)|g'  Makefile.in
  if test -f /usr/lib/libSystemStubs.a ; then
    perl -pi.bak -e 's|-lSystem|%%{!mlong-double-64:%%{pg:-lSystemStubs_profile;:-lSystemStubs}} -lSystem -lmx %%:if-exists(/usr/lib/gcc/%m-apple-darwin8/4.0.0/libgcc.a) %%:if-exists(/usr/lib/gcc/%m-apple-darwin8/4.0.1/libgcc.a)|' config/darwin.h
  else
@@ -28,8 +32,22 @@ CompileScript: <<
  #!/bin/sh -ev
  mkdir darwin 
  cd darwin
+ #Following determines whether compiler is 32 or 64 bit default, and forces
+ #  build to use 32 bit;
+ darwinvers=`/usr/bin/uname -v | cut -f1 -d":" | awk '{print $4}'`
+ echo mflag= > .set-mflag
+ echo 'int main(int argc, char *argv[]){return 0;}' > cc-target.c
+ cc -v -o cc-target cc-target.c 2>&1 | egrep '/as[ 	]*-arch' |
+ while read prog arch arg rest; do
+   case "${arg}" in
+      x86_64) echo mflag=-m32 > .set-mflag ;;
+      *) ;;
+   esac
+ done
+ . .set-mflag
+ /bin/rm -f cc-target.c cc-target .set-mflag
  ../gcc-%v/configure %c
- make CFLAGS='-O -fno-common' LIBCFLAGS='-g -O2 -fno-common' LIBCXXFLAGS='-g -O2 -fno-implicit-templates' profiledbootstrap
+ make STAGE1_CFLAGS="${mflag} -D_FORTIFY_SOURCE=0" BOOT_CFLAGS="${mflag} -D_FORTIFY_SOURCE=0" CFLAGS="-O -fno-common ${mflag} -D_FORTIFY_SOURCE=0" LIBCFLAGS="-g -O2 -fno-common ${mflag} -D_FORTIFY_SOURCE=0" LIBCXXFLAGS="-g -O2 ${mflag} -fno-implicit-templates -D_FORTIFY_SOURCE=0" bootstrap
 # cd gcc; make check-g77
 <<
 InstallScript: <<
@@ -73,7 +91,7 @@ DescDetail: <<
 DescPort: <<
  Installs g77 from the FSF gcc distribution.
 
- This version does not install in /usr. It contains it's own cc1 and
+ This version does not install in /usr. It contains its own cc1 and
  libgcc.a installed in %p.
 
  libiberty.a moved to libiberty-g77.a to avoid conflict with ddd.
@@ -81,19 +99,16 @@ DescPort: <<
  Built with -fno-common, and global symbols in the static libraries
  private extern using "nmedit -p". These changes (from Peter O'Gorman)
  allow g77 to build shared libs on darwin.
-
- The gcc-3.3 codebase does not compile on the intel compiler.  It should
- be possible to merge back some of the Apple changes to gcc-4.0 in order
- to get this to compile, but will require substantial work.  Excluded
- from intel for now.
 <<
 DescUsage: <<
-# If you get unresolved symbol '_saveFP', add -lcc_dynamic when linking.
-
  Does not support -framework argument, to link frameworks use -Wl flag
  (for example, to link vecLib use "-Wl,-framework -Wl,vecLib").
 
  No man page, use "info g77".
 <<
+DescPackaging: <<
+ Earlier versions by Jeffrey Whitaker
+<<
 Homepage: http://gcc.gnu.org/onlinedocs/g77/
-Maintainer: None <fink-devel@lists.sourceforge.net>
+Maintainer:  George Helffrich <george.helffrich@bristol.ac.uk>
+
