@@ -1,17 +1,16 @@
 Package: glib2-shlibs
 
-#cannot update to >= 2.26 because gdbus does not support launchd. See:
-#http://lists.macosforge.org/pipermail/macports-dev/2010-October/013047.html
+#2.22.5 fails self-test; do not update. See:
+#https://bugzilla.gnome.org/show_bug.cgi?id=613060
+Version: 2.32.0
 
-#2.28.6 fails self-test (collation on x86_64). See:
-#https://bugzilla.gnome.org/show_bug.cgi?id=644686
-#https://bugzilla.gnome.org/show_bug.cgi?id=612019
-
-Version: 2.28.7
+# some code requires python >= 2.5; 10.5 comes with 2.3 and not yet
+# ready to push a Depends:pythonXX into the glib dep tree
+Distribution: 10.6
 
 Revision: 1
 BuildDepends: <<
-	fink (>= 0.24.12-1),
+	fink (>= 0.32),
 	gettext-bin,
 	gettext-tools,
 	gtk-doc (>= 1.13-5),
@@ -19,6 +18,8 @@ BuildDepends: <<
 	libiconv-dev,
 	pkgconfig (>= 0.25)
 <<
+# this package is busted on many platforms
+BuildConflicts: libffi
 Depends: <<
 	dbus (>= 1.2.1-1),
 	libgettext8-shlibs,
@@ -30,17 +31,18 @@ Recommends: <<
 	shared-mime-info (>= 0.51-1)
 <<
 Replaces: glib2 (<< 2.12.0-1)
-Source: mirror:gnome:sources/glib/2.28/glib-%v.tar.bz2
-Source-MD5: feda1650c8646ad39c7b01d95b03766b
+Source: mirror:gnome:sources/glib/2.32/glib-%v.tar.xz
+Source-MD5: c5fa76fbf9184d20dfb04af66b598190
 PatchFile: %n.patch
-PatchFile-MD5: 96002ecbcd68aebf5c8b7405f0f8d325
+PatchFile-MD5: 8f094c69c6751dba889e115d7729c8a1
 PatchScript: <<
 	sed 's,@PREFIX@,%p,g' < %{PatchFile} | patch -p1
-#	perl -pi -e 's,/usr/share/gtk-doc/html,%p/share/gtk-doc/html,g' docs/reference/*/html/*.html
+	perl -pi -e 's,/usr/share/gtk-doc/html,%p/share/gtk-doc/html,g' docs/reference/*/html/*.html
 	perl -pi -e 's/-version-info/-no-undefined -version-info/' */Makefile.in
+	perl -pi -e 's/elf_begin/elf_begin_is_not_a_sufficient_test_here/' configure
 <<
 SetCFLAGS: -Os
-ConfigureParams: --mandir=%p/share/man --enable-gtk-doc --disable-dependency-tracking --disable-fam
+ConfigureParams: --mandir=%p/share/man --disable-gtk-doc --enable-dependency-tracking --disable-fam PKG_CONFIG_PATH="%p/lib/glib-2.0/pkgconfig-strict:$PKG_CONFIG_PATH" LIBFFI_CFLAGS="-I/usr/include/ffi" LIBFFI_LIBS="-lffi"
 CompileScript: <<
 	PERL_PATH=/usr/bin/perl PERL=/usr/bin/perl ./configure %c PYTHON=/usr/bin/python
 	perl -pi -e '$_="#define BROKEN_POLL 1\n" if /BROKEN_POLL/' config.h
@@ -132,11 +134,6 @@ have that flag.
 	<<
 <<
 Description: Handy library of utility functions
-DescUsage: <<
-Note: timezone lookups by name ("EDT", "US/Eastern") does not work but
-explicit offsets ("-04:00") does work. This new gdate interface does
-not have good error-checking in any case.
-<<
 DescPort: <<
 	glib2 provides etc/glib-2.0/charset.alias for darwin because there's
 	no system-wide charset.alias.
@@ -147,9 +144,6 @@ DescPort: <<
 
 	check uses some C++ but it doesn't leak out into the installed
 	package
-
-	Patch child-test.c for our location of `true`. See:
-	http://bugzilla.gnome.org/show_bug.cgi?id=495690
 
 	We need to set LANG=C when doing 'make check', else a previously
 	installed glib2 will trigger a crash caused by a bug in the old
@@ -181,18 +175,26 @@ DescPort: <<
 	http://bugzilla.gnome.org/show_bug.cgi?id=566994
 	Flag is not passed at all via .la now, but okay because we
 	don't have static libs and the shared libs get what they need
-	via dyld.
+	via dyld. See:
+	https://bugzilla.gnome.org/show_bug.cgi?id=668152
 
 	Not fixing RTLD_GLOBAL configure test. See:
 	http://bugzilla.gnome.org/show_bug.cgi?id=583010
 
-	libgio needs libresolv to get _res_9_* symbols. See:
-	https://bugzilla.gnome.org/show_bug.cgi?id=606857
+	String sorting ("collation") is broken on x86_64. See:
+	https://bugzilla.gnome.org/show_bug.cgi?id=673047
+	for potential fix.
 
-	Some timezone lookups fail (return "0"). Not fixing (new
-	interface, so not a regression; upstream seems uninterested in
-	getting it fixed), so disabling its test suite. See:
+	Fix timezone-file lookups, using patch from Comment #5 at
 	https://bugzilla.gnome.org/show_bug.cgi?id=644473
+	Doesn't fix all datetime self-tests yet
+
+	Detection of Carbon activates gio/gnextstepsettingsbackend.c,
+	which uses the Foundation framework. See:
+	https://bugzilla.gnome.org/show_bug.cgi?id=673250
+
+	Disable libelf support. See:
+	https://bugzilla.gnome.org/show_bug.cgi?id=673253
 <<
 DescPackaging: <<
 	Library contains some C symbols whose real name looks like C++
@@ -209,31 +211,32 @@ DescPackaging: <<
 	Builds with included pcre instead of external lib to avoid need to
 	cascade deps on pcre packages
 
-	gtester-report claims to require python >= 2.4, but it appears
-	to run with 2.3. Adjust to allow that version so can use
-	Apple's on OS X < 10.5 also (py2.5 comes with OS X 10.5). See:
-	http://bugzilla.gnome.org/show_bug.cgi?id=553716
-
-	The following are newly deprecated in glib2 2.18.1 since 2.14.6:
-		g_assert_warning
-		G_GNUC_FUNCTION
-		G_GNUC_PRETTY_FUNCTION
-	And in 2.20:
-		g_volume_monitor_adopt_orphan_mount
-	And in 2.22:
-		g_drive_eject
-		g_drive_eject_finish
-		g_file_unmount_mountable
-		g_file_unmount_mountable_finish
-		g_file_eject_mountable
-		g_file_eject_mountable_finish
-		g_mount_unmount
-		g_mount_unmount_finish
-		g_volume_eject
-		g_volume_eject_finish
-	External packages and out-of-sync gnome core might still be
-	using them, so may as well leave them undeprecated until jump
-	to glib3.
+#	The following are newly deprecated in glib2 2.18.1 since 2.14.6:
+#		g_assert_warning
+#		G_GNUC_FUNCTION
+#		G_GNUC_PRETTY_FUNCTION
+#	And in 2.20:
+#		g_volume_monitor_adopt_orphan_mount
+#	And in 2.22:
+#		g_drive_eject
+#		g_drive_eject_finish
+#		g_file_unmount_mountable
+#		g_file_unmount_mountable_finish
+#		g_file_eject_mountable
+#		g_file_eject_mountable_finish
+#		g_mount_unmount
+#		g_mount_unmount_finish
+#		g_volume_eject
+#		g_volume_eject_finish
+#	External packages and out-of-sync gnome core might still be
+#	using them, so may as well leave them undeprecated until jump
+#	to glib3.
+^-- glib3 isn't expected ever; it's documented that G_DISABLE_* are
+documented as useful and the deprecations are well-documented as well.
+Making stable releases of other packages that fail (!=warn) when doing
+something valid but deprecated is known to be a poor approach. Too
+crazy to keep trying to track all the deprecations over many years
+here.
 
 	Leaving G_DISABLE_SINGLE_INCLUDES undefined in most places,
 	though in the future it will become defined...
@@ -261,15 +264,13 @@ DescPackaging: <<
 
 	Make sure the update-*-database programs can be found even if
 	run from a non-fink'ed shell: explicit path and fink XDG vars.
+	See also: https://bugzilla.gnome.org/show_bug.cgi?id=673135
 
-#	Regenerating gtk-doc files The Right Way (--enable-gtk-doc) is
-#	very slow, so just patch the prefix in the bad URLs in the
-#	existing generated files.
-	2.22.4 generated docs include leakage from overly-public
-	entries in libcamel, so have to regenerate:/
-
-	Improve cross-linking among gtk-doc for glib/gobject/gio. See:
-	https://bugzilla.gnome.org/show_bug.cgi?id=644687
+	Regenerating gtk-doc files The Right Way (--enable-gtk-doc) is
+	very slow, so just patch the prefix in the bad URLs in the
+	existing generated files.
+#	2.22.4 generated docs include leakage from overly-public
+#	entries in libcamel, so have to regenerate:/
 
 	Don't install gdb files. They aren't named correctly and it's
 	not clear they are usable on darwin. See:
@@ -282,11 +283,15 @@ DescPackaging: <<
 	Reduces BuildDepends inheritance of things that are not in
 	public interface.
 
+	Fink's libffi package is busted on many platforms and OS X has
+	a libffi, so use system's: BCon:libffi and hardcode compiler
+	flags (system's has no .pc)
+
 	Cannot run volume-monitor test as nobody because monitor
 	daemon is owned by logged in user, or at all because we don't
 	have a functional gvfs-hal-volume-monitor
 
-	pollable/unix hangs...sometimes. Disabling.
+	pollable/unix hangs...sometimes? Should disable?
 <<
 License: LGPL
 Maintainer: The Gnome Core Team <fink-gnome-core@lists.sourceforge.net>
