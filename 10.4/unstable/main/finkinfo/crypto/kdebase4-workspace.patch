@@ -87,6 +87,35 @@ diff -Nurd kdebase-workspace-4.4.1/kcontrol/kxkb/x11helper.h kdebase-workspace-4
  
  #ifndef HAVE_XKLAVIER
  	static const QString findX11Dir();
+diff -Nurd kdebase-workspace-4.4.1/kdm/kfrontend/genkdmconf.c kdebase-workspace-4.4.1-new/kdm/kfrontend/genkdmconf.c
+--- kdebase-workspace-4.4.1/kdm/kfrontend/genkdmconf.c	2009-10-26 05:14:48.000000000 -0400
++++ kdebase-workspace-4.4.1-new/kdm/kfrontend/genkdmconf.c	2012-04-02 00:03:06.000000000 -0400
+@@ -1586,16 +1586,25 @@
+ 	if (!(sa = splitArgs( ce->value )))
+ 		return;
+ 	ASPrintf( &svr, "%s -help 2>&1", sa->str );
++	/*
++	// running "X" may hang if already running, so
++	// hardcode likely results instead of instrospecting
+ 	if (!(fp = popen( svr, "r" )))
+ 		return;
+ 	buf[fread( buf, 1, sizeof(buf) - 1, fp )] = 0;
+ 	pclose( fp );
+ 	if (strstr( buf, "\n-br " ))
++	*/
++	  // mentioned in Xserver manpage back at least to 10.4's x11
+ 		addStr( &sa, "-br" );
++	/*
+ 	if (strstr( buf, "\n-novtswitch " ))
++	  // not available as of 10.6 x11
+ 		addStr( &sa, "-novtswitch" );
+ 	if (strstr( buf, "\n-quiet " ))
++	  // not available as of 10.6 x11
+ 		addStr( &sa, "-quiet" );
++	*/
+ 	ce->value = joinArgs( sa );
+ 	ce->written = True;
+ }
 diff -Nurd kdebase-workspace-4.4.1/ksmserver/server.cpp kdebase-workspace-4.4.1-new/ksmserver/server.cpp
 --- kdebase-workspace-4.4.1/ksmserver/server.cpp	2009-07-28 15:44:41.000000000 -0400
 +++ kdebase-workspace-4.4.1-new/ksmserver/server.cpp	2010-03-05 14:53:30.000000000 -0500
@@ -108,6 +137,111 @@ diff -Nurd kdebase-workspace-4.4.1/ksmserver/server.cpp kdebase-workspace-4.4.1-
  
      fName += '_'+display.toLocal8Bit();
      ::unlink(fName.data());
+diff -Nurd kdebase-workspace-4.4.1/ksplash/ksplashx/qpngio.cpp kdebase-workspace-4.4.1-new/ksplash/ksplashx/qpngio.cpp
+--- kdebase-workspace-4.4.1/ksplash/ksplashx/qpngio.cpp	2009-08-28 12:01:29.000000000 -0400
++++ kdebase-workspace-4.4.1-new/ksplash/ksplashx/qpngio.cpp	2012-04-01 15:10:02.000000000 -0400
+@@ -112,12 +112,16 @@
+     png_uint_32 height;
+     int bit_depth;
+     int color_type;
+-    png_get_IHDR(png_ptr, info_ptr, &width, &height, &bit_depth, &color_type,
+-	0, 0, 0);
++    png_bytep trans_alpha = 0;
++    png_color_16p trans_color_p = 0;
++    int num_trans;
++    png_colorp palette = 0;
++    int num_palette;
++    png_get_IHDR(png_ptr, info_ptr, &width, &height, &bit_depth, &color_type, 0, 0, 0);
+ 
+     if ( color_type == PNG_COLOR_TYPE_GRAY ) {
+ 	// Black & White or 8-bit grayscale
+-	if ( bit_depth == 1 && info_ptr->channels == 1 ) {
++	if ( bit_depth == 1 && png_get_channels(png_ptr, info_ptr) == 1 ) {
+ 	    png_set_invert_mono( png_ptr );
+ 	    png_read_update_info( png_ptr, info_ptr );
+ 	    if (!image.create( width, height, 1, 2, QImage::BigEndian ))
+@@ -150,54 +154,45 @@
+ 		int c = i*255/(ncols-1);
+ 		image.setColor( i, qRgba(c,c,c,0xff) );
+ 	    }
+-	    if ( png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS) ) {
+-#if PNG_LIBPNG_VER < 10400
+-		const int g = info_ptr->trans_values.gray;
+-#else
+-		const int g = info_ptr->trans_color.gray;
+-#endif
++	    if (png_get_tRNS(png_ptr, info_ptr, &trans_alpha, &num_trans, &trans_color_p) && trans_color_p) {
++		const int g = trans_color_p->gray;
+ 		if (g < ncols) {
+-		    image.setAlphaBuffer(true);
+-		    image.setColor(g, image.color(g) & RGB_MASK);
++		    image.setColor(g, 0);
+ 		}
+ 	    }
+ 	}
+     } else if ( color_type == PNG_COLOR_TYPE_PALETTE
+-     && png_get_valid(png_ptr, info_ptr, PNG_INFO_PLTE)
+-     && info_ptr->num_palette <= 256 )
++		&& png_get_PLTE(png_ptr, info_ptr, &palette, &num_palette)
++		&& num_palette <= 256 )
+     {
+ 	// 1-bit and 8-bit color
+ 	if ( bit_depth != 1 )
+ 	    png_set_packing( png_ptr );
+ 	png_read_update_info( png_ptr, info_ptr );
+-	png_get_IHDR(png_ptr, info_ptr,
+-	    &width, &height, &bit_depth, &color_type, 0, 0, 0);
+-	if (!image.create(width, height, bit_depth, info_ptr->num_palette,
++	png_get_IHDR(png_ptr, info_ptr, &width, &height, &bit_depth, &color_type, 0, 0, 0);
++	if (!image.create(width, height, bit_depth, num_palette,
+ 	    QImage::BigEndian))
+ 	    return;
+ 	int i = 0;
+-	if ( png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS) ) {
++	png_get_PLTE(png_ptr, info_ptr, &palette, &num_palette);
++	if (png_get_tRNS(png_ptr, info_ptr, &trans_alpha, &num_trans, &trans_color_p) && trans_alpha) {
+ 	    image.setAlphaBuffer( true );
+-	    while ( i < info_ptr->num_trans ) {
++	    while ( i < num_trans ) {
+ 		image.setColor(i, qRgba(
+-		    info_ptr->palette[i].red,
+-		    info_ptr->palette[i].green,
+-		    info_ptr->palette[i].blue,
+-#if PNG_LIBPNG_VER < 10400
+-		    info_ptr->trans[i]
+-#else
+-		    info_ptr->trans_alpha[i]
+-#endif
++		    palette[i].red,
++		    palette[i].green,
++		    palette[i].blue,
++		    trans_alpha[i]
+ 		    )
+ 		);
+ 		i++;
+ 	    }
+ 	}
+-	while ( i < info_ptr->num_palette ) {
++	while ( i < num_palette ) {
+ 	    image.setColor(i, qRgba(
+-		info_ptr->palette[i].red,
+-		info_ptr->palette[i].green,
+-		info_ptr->palette[i].blue,
++		palette[i].red,
++		palette[i].green,
++		palette[i].blue,
+ 		0xff
+ 		)
+ 	    );
+@@ -280,7 +275,7 @@
+ 	return QImage();
+     }
+ 
+-    if (setjmp(png_ptr->jmpbuf)) {
++    if (setjmp(png_jmpbuf(png_ptr))) {
+ 	png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
+ 	return QImage();
+     }
 diff -Nurd kdebase-workspace-4.4.1/ksplash/ksplashx/qpoint.h kdebase-workspace-4.4.1-new/ksplash/ksplashx/qpoint.h
 --- kdebase-workspace-4.4.1/ksplash/ksplashx/qpoint.h	2008-01-04 18:55:38.000000000 -0500
 +++ kdebase-workspace-4.4.1-new/ksplash/ksplashx/qpoint.h	2010-03-05 14:53:30.000000000 -0500
@@ -1474,7 +1608,44 @@ diff -Nurd kdebase-workspace-4.4.1/plasma/generic/applets/CMakeLists.txt kdebase
 +if(NOT WIN32 AND NOT APPLE)
     add_subdirectory(system-monitor)
     add_subdirectory(systemtray)
- endif(NOT WIN32)
+-endif(NOT WIN32)
++endif(NOT WIN32 AND NOT APPLE)
+diff -Nurd kdebase-workspace-4.4.1/plasma/generic/applets/battery/battery.cpp kdebase-workspace-4.4.1-new/plasma/generic/applets/battery/battery.cpp
+--- kdebase-workspace-4.4.1/plasma/generic/applets/battery/battery.cpp	2010-02-04 04:28:44.000000000 -0500
++++ kdebase-workspace-4.4.1-new/plasma/generic/applets/battery/battery.cpp	2012-04-01 17:16:04.000000000 -0400
+@@ -80,7 +80,7 @@
+       m_hours(0),
+       m_theme(0),
+       m_availableProfiles(QStringList()),
+-      m_currentProfile(0),
++      m_currentProfile(),
+       m_numOfBattery(0),
+       m_acAdapterPlugged(false),
+       m_remainingMSecs(0),
+diff -Nurd kdebase-workspace-4.4.1/plasma/generic/applets/battery/battery.h kdebase-workspace-4.4.1-new/plasma/generic/applets/battery/battery.h
+--- kdebase-workspace-4.4.1/plasma/generic/applets/battery/battery.h	2010-01-19 18:19:14.000000000 -0500
++++ kdebase-workspace-4.4.1-new/plasma/generic/applets/battery/battery.h	2012-04-01 14:33:11.000000000 -0400
+@@ -42,7 +42,7 @@
+ class Battery : public Plasma::PopupApplet
+ {
+     Q_OBJECT
+-    Q_PROPERTY(qreal labelAlpha READ labelAlpha WRITE setLabelAlpha NOTIFY labelAlphaChanged)
++    Q_PROPERTY(qreal labelAlpha READ labelAlpha WRITE setLabelAlpha)
+     Q_PROPERTY(qreal acAlpha READ acAlpha WRITE setAcAlpha)
+ 
+     public:
+diff -Nurd kdebase-workspace-4.4.1/plasma/generic/applets/digital-clock/clock.cpp kdebase-workspace-4.4.1-new/plasma/generic/applets/digital-clock/clock.cpp
+--- kdebase-workspace-4.4.1/plasma/generic/applets/digital-clock/clock.cpp	2010-02-26 13:31:57.000000000 -0500
++++ kdebase-workspace-4.4.1-new/plasma/generic/applets/digital-clock/clock.cpp	2012-04-01 15:43:31.000000000 -0400
+@@ -54,7 +54,7 @@
+       m_showSeconds(false),
+       m_showTimezone(false),
+       m_dateTimezoneBesides(false),
+-      m_dateString(0),
++      m_dateString(),
+       m_layout(0)
+ {
+     KGlobal::locale()->insertCatalog("libplasmaclock");
 diff -Nurd kdebase-workspace-4.4.1/plasma/generic/dataengines/geolocation/CMakeLists.txt kdebase-workspace-4.4.1-new/plasma/generic/dataengines/geolocation/CMakeLists.txt
 --- kdebase-workspace-4.4.1/plasma/generic/dataengines/geolocation/CMakeLists.txt	2009-09-16 07:40:54.000000000 -0400
 +++ kdebase-workspace-4.4.1-new/plasma/generic/dataengines/geolocation/CMakeLists.txt	2010-03-05 14:53:30.000000000 -0500
