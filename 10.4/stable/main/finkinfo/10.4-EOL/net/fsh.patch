@@ -1,0 +1,937 @@
+diff -Naur fsh-1.2.old/fsh.py fsh-1.2/fsh.py
+--- fsh-1.2.old/fsh.py	Fri Oct  8 23:16:53 2004
++++ fsh-1.2/fsh.py	Fri Oct  8 23:17:52 2004
+@@ -29,45 +29,47 @@
+ 
+ class remote:
+     def __init__(self, method, login, use_l_flag, server, command,
+-                 fshd_timeout):
++                 fshd_timeout, port, use_p_flag):
+         (sockname, unused_dir) = fshlib.fshd_socket(server, method, login)
+         self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+-	try:
+-	    self.s.connect(sockname)
+-	except socket.error, (eno, emsg):
+-	    if eno != errno.ECONNREFUSED and eno != errno.ENOENT:
+-		raise
+-	    else:
+-		# Start an fshd in daemon mode.
+-		cmd = "fshd -b -r " + fshlib.shell_quote(method)
+-		if use_l_flag:
+-		    cmd = cmd + " -l " + login
++        try:
++            self.s.connect(sockname)
++        except socket.error, (eno, emsg):
++            if eno != errno.ECONNREFUSED and eno != errno.ENOENT:
++                raise
++            else:
++                # Start an fshd in daemon mode.
++                cmd = "fshd -b -r " + fshlib.shell_quote(method)
++                if use_l_flag:
++                    cmd = cmd + " -l " + login
+                 if fshd_timeout != None:
+                     cmd = cmd + " --timeout='%s'" % fshd_timeout
+-		cmd = cmd + " " + server
+-		ret = os.system(cmd)
+-		if not (os.WIFEXITED(ret) and os.WEXITSTATUS(ret) == 0):
+-		    sys.stderr.write("fsh: Failed to start fshd\n")
+-		    sys.exit(1)
+-
+-		# Repeatedly try to connect to it.  Giv up after a minute.
+-		for i in range(60):
+-		    time.sleep(1)
+-		    try:
+-			self.s.connect(sockname)
+-			break
+-		    except socket.error, (eno, emsg):
+-			if eno != errno.ECONNREFUSED and eno != errno.ENOENT:
+-			    raise
+-		else:
+-		    sys.stderr.write("fsh: Failed to connect to tunnel.\n")
+-		    sys.exit(1)
+-			
+-	self.s.setblocking(0)
++                if use_p_flag:
++                    cmd = cmd + " -p " + str(port)
++                cmd = cmd + " " + server
++                ret = os.system(cmd)
++                if not (os.WIFEXITED(ret) and os.WEXITSTATUS(ret) == 0):
++                    sys.stderr.write("fsh: Failed to start fshd\n")
++                    sys.exit(1)
++
++                # Repeatedly try to connect to it.  Giv up after a minute.
++                for i in range(60):
++                    time.sleep(1)
++                    try:
++                        self.s.connect(sockname)
++                        break
++                    except socket.error, (eno, emsg):
++                        if eno != errno.ECONNREFUSED and eno != errno.ENOENT:
++                            raise
++                else:
++                    sys.stderr.write("fsh: Failed to connect to tunnel.\n")
++                    sys.exit(1)
++            
++        self.s.setblocking(0)
+         self.sock = self.s.fileno()
+         self.send_queue = []
+         self.receive_queue = []
+-	self.eos_seen = 0
++        self.eos_seen = 0
+         self.send("new %s\n" % fshlib.hollerith(command))
+         
+     def select_set(self):
+@@ -80,17 +82,17 @@
+ 
+     def select_action(self, r, w, e):
+         if self.sock in r:
+-	    if fshlib.read(self.sock, self.receive_queue, 4096) == -1:
++            if fshlib.read(self.sock, self.receive_queue, 4096) == -1:
+                 self.s.close()
+                 self.sock = -1
+ 
+         if self.sock in w:
+-	    if fshlib.write(self.sock, self.send_queue) == -1:
+-		self.s.close()
+-		self.sock = -1
++            if fshlib.write(self.sock, self.send_queue) == -1:
++                self.s.close()
++                self.sock = -1
+ 
+     def send(self, data):
+-	#os.write(debug, "enqueueing this: %s.\n" % data)
++    #os.write(debug, "enqueueing this: %s.\n" % data)
+         self.send_queue.append(data)
+         if self.sock == -1:
+             self.send_queue = []
+@@ -98,12 +100,12 @@
+     def poll_response(self):
+         [cmd, data] = fshlib.parse_line(self.receive_queue, 0)
+ 
+-	# If half a command got through when we lost the tunnel, remove it.
+-	if cmd == None and self.sock == -1:
+-	    self.receive_queue = []
++        # If half a command got through when we lost the tunnel, remove it.
++        if cmd == None and self.sock == -1:
++            self.receive_queue = []
+ 
+-	if cmd == "eos":
+-	    self.eos_seen = 1
++        if cmd == "eos":
++            self.eos_seen = 1
+ 
+         return [cmd, data]
+ 
+@@ -127,12 +129,12 @@
+         self.stdin_fd = 0
+         self.stdout_fd = 1
+         self.stderr_fd = 2
+-	fshlib.set_nonblocking(self.stdin_fd)
+-	fshlib.set_nonblocking(self.stdout_fd)
+-	fshlib.set_nonblocking(self.stderr_fd)
++        fshlib.set_nonblocking(self.stdin_fd)
++        fshlib.set_nonblocking(self.stdout_fd)
++        fshlib.set_nonblocking(self.stderr_fd)
+         self.epipe_seen = 0
+-	self.stdout_pending_close = 0
+-	self.stderr_pending_close = 0
++        self.stdout_pending_close = 0
++        self.stderr_pending_close = 0
+ 
+     def select_set(self):
+         r = []
+@@ -149,52 +151,52 @@
+         if self.stdin_fd in r:
+             wanted = min(4096, self.stdin_quota - self.stdin_counter)
+             assert(wanted > 0)
+-	    queue = []
+-	    if fshlib.read(self.stdin_fd, queue, wanted) == -1:
++        queue = []
++        if fshlib.read(self.stdin_fd, queue, wanted) == -1:
+                 os.close(self.stdin_fd)
+                 self.stdin_fd = -1
+                 srv.send("eof-stdin\n")
+-	    elif len(queue) > 0:
+-		assert(len(queue) == 1)
+-                srv.send("stdin %s\n" % fshlib.hollerith(queue[0]))
+-                self.stdin_counter = self.stdin_counter + len(queue[0])
++        elif len(queue) > 0:
++            assert(len(queue) == 1)
++            srv.send("stdin %s\n" % fshlib.hollerith(queue[0]))
++            self.stdin_counter = self.stdin_counter + len(queue[0])
+ 
+         if self.stdout_fd in w:
+-	    sz = fshlib.write(self.stdout_fd, self.stdout_queue)
+-	    if sz == -1:
+-		srv.send("eof-stdout\n")
+-		os.close(self.stdout_fd)
+-		self.stdout_fd = -1
+-	        #os.write(debug, "epipe seen I\n")
+-		self.epipe_seen = 1
+-	    else:
+-		self.stdout_counter = self.stdout_counter + sz
++            sz = fshlib.write(self.stdout_fd, self.stdout_queue)
++            if sz == -1:
++                srv.send("eof-stdout\n")
++                os.close(self.stdout_fd)
++                self.stdout_fd = -1
++                #os.write(debug, "epipe seen I\n")
++                self.epipe_seen = 1
++            else:
++                self.stdout_counter = self.stdout_counter + sz
+ 
+-	    #os.write(debug, "successful write of %d bytes.\n" % sz)
++            #os.write(debug, "successful write of %d bytes.\n" % sz)
+             if self.stdout_pending_close and self.stdout_queue == []:
+-		#os.write(debug, "closing stdout due to pend.\n")
++                #os.write(debug, "closing stdout due to pend.\n")
+                 os.close(self.stdout_fd)
+                 self.stdout_fd = -1
+-	    #os.write(debug, "hmm.\n")
++            #os.write(debug, "hmm.\n")
+             if self.stdout_fd != -1 and \
+                (self.stdout_quota - self.stdout_counter) < fshlib.QUOTA/2:
+ 
+-		#os.write(debug, "increasing quota.\n")
++                #os.write(debug, "increasing quota.\n")
+                 self.stdout_quota = self.stdout_quota + fshlib.QUOTA
+                 srv.send("stdout-flow %s\n" % fshlib.hollerith(
+                     self.stdout_quota))
+-		#os.write(debug, "increased quota.\n")
++                #os.write(debug, "increased quota.\n")
+ 
+         if self.stderr_fd in w:
+-	    sz = fshlib.write(self.stderr_fd, self.stderr_queue)
+-	    if sz == -1:
+-		srv.send("eof-stderr\n")
+-		os.close(self.stderr_fd)
+-		self.stderr_fd = -1
+-		#os.write(debug, "epipe seen II\n")
+-		self.epipe_seen = 1
+-	    else:
+-		self.stderr_counter = self.stderr_counter + sz
++            sz = fshlib.write(self.stderr_fd, self.stderr_queue)
++            if sz == -1:
++                srv.send("eof-stderr\n")
++                os.close(self.stderr_fd)
++                self.stderr_fd = -1
++                #os.write(debug, "epipe seen II\n")
++                self.epipe_seen = 1
++            else:
++                self.stderr_counter = self.stderr_counter + sz
+             self.stderr_counter = self.stderr_counter + sz
+             if self.stderr_pending_close and self.stderr_queue == []:
+                 os.close(self.stderr_fd)
+@@ -207,12 +209,12 @@
+                     self.stderr_quota))
+ 
+     def stdout_send(self, data):
+-	if data != "":
+-	    self.stdout_queue.append(data)
++        if data != "":
++            self.stdout_queue.append(data)
+ 
+     def stderr_send(self, data):
+-	if data != "":
+-	    self.stderr_queue.append(data)
++        if data != "":
++            self.stderr_queue.append(data)
+ 
+     def eof_stdin(self):
+         if self.stdin_fd != -1:
+@@ -221,21 +223,21 @@
+ 
+     def eof_stdout(self):
+         self.stdout_pending_close = 1
+-	if self.stdout_queue == [] and self.stdout_fd != -1:
+-	    os.close(self.stdout_fd)
+-	    self.stdout_fd = -1
++        if self.stdout_queue == [] and self.stdout_fd != -1:
++            os.close(self.stdout_fd)
++            self.stdout_fd = -1
+ 
+     def eof_stderr(self):
+-	#os.write(debug, "eof_stderr: start\n")
++        #os.write(debug, "eof_stderr: start\n")
+         self.stderr_pending_close = 1
+-	#os.write(debug, "eof_stderr: I\n")
+-	if self.stderr_queue == [] and self.stderr_fd != -1:
+-	    #os.write(debug, "eof_stderr: II (%d, %d)\n" % (debug, self.stderr_fd))
+-	    os.close(self.stderr_fd)
+-	    #os.write(debug, "eof_stderr: III\n")
+-	    self.stderr_fd = -1
+-	    #os.write(debug, "eof_stderr: IV\n")
+-	#os.write(debug, "eof_stderr: V\n")
++        #os.write(debug, "eof_stderr: I\n")
++        if self.stderr_queue == [] and self.stderr_fd != -1:
++            #os.write(debug, "eof_stderr: II (%d, %d)\n" % (debug, self.stderr_fd))
++            os.close(self.stderr_fd)
++            #os.write(debug, "eof_stderr: III\n")
++            self.stderr_fd = -1
++            #os.write(debug, "eof_stderr: IV\n")
++        #os.write(debug, "eof_stderr: V\n")
+ 
+     def stdin_flow(self, data):
+         self.stdin_quota = data
+@@ -243,18 +245,18 @@
+     def drained(self):
+         return self.stdout_fd == -1 and self.stderr_fd == -1
+ 
+-def docmd(method, login, use_l_flag, server, command, fshd_timeout):
+-    rem = remote(method, login, use_l_flag, server, command, fshd_timeout)
++def docmd(method, login, use_l_flag, server, command, fshd_timeout, port, use_p_flag):
++    rem = remote(method, login, use_l_flag, server, command, fshd_timeout, port, use_p_flag)
+     loc = local_side()
+     exitval = None
+     tunnel_lost = 0
+     while 1:
+-	#os.write(debug, "at top of main loop\n")
++        #os.write(debug, "at top of main loop\n")
+         while 1:
+             cmd, data = rem.poll_response()
+             if cmd == None:
+                 break
+-	    #os.write(debug, "got cmd: %s (%s)\n" % (cmd, data))
++            #os.write(debug, "got cmd: %s (%s)\n" % (cmd, data))
+             if cmd == "stdout":
+                 loc.stdout_send(data)
+             elif cmd == "stderr":
+@@ -271,65 +273,66 @@
+                 # What do we do here?
+                 exitval = string.atoi(data)
+             elif cmd == "eos":
+-		#os.write(debug, "eos: start\n")
++                #os.write(debug, "eos: start\n")
+                 loc.eof_stdin()
+-		#os.write(debug, "eos: stdin closed\n")
++                #os.write(debug, "eos: stdin closed\n")
+                 loc.eof_stdout()
+-		#os.write(debug, "eos: stdout closed\n")
++                #os.write(debug, "eos: stdout closed\n")
+                 loc.eof_stderr()
+-		#os.write(debug, "eos: stderr closed\n")
++                #os.write(debug, "eos: stderr closed\n")
+                 rem.close()
+-		#os.write(debug, "eos: rem closed\n")
++                #os.write(debug, "eos: rem closed\n")
+             elif cmd == "stdin-flow":
+                 loc.stdin_flow(string.atoi(data))
+             else:
+                 raise "syntax error from server:" + str(cmd) + ":" + str(data)
+ 
+-	#os.write(debug, "main loop: commands performed\n")
++    #os.write(debug, "main loop: commands performed\n")
+ 
+-        if loc.drained() and rem.drained():
+-            if exitval != None:
+-                if loc.epipe_seen and exitval == 0:
+-		    #os.write(debug, "epipe apparently seen\n")
+-                    sys.exit(1)
+-                else:
+-		    #os.write(debug, "exiting with %d\n" % exitval)
+-                    sys.exit(exitval)
++    if loc.drained() and rem.drained():
++        if exitval != None:
++            if loc.epipe_seen and exitval == 0:
++                #os.write(debug, "epipe apparently seen\n")
++                sys.exit(1)
+             else:
+-                raise "don't know what to exit with"
++                #os.write(debug, "exiting with %d\n" % exitval)
++                sys.exit(exitval)
++        else:
++            raise "don't know what to exit with"
+ 
+-	if rem.drained() and not rem.eos_seen and not tunnel_lost:
+-	    # We lost contact in mid-session.
+-	    # Schedule a shutdown of the client, but allow any pending
+-	    # data to be transmitted.
+-	    loc.eof_stdin()
+-	    loc.eof_stdout()
+-	    loc.stderr_send("Connection to fsh tunnel lost.\n")
+-	    loc.eof_stderr()
+-	    exitval = 1
+-	    tunnel_lost = 1
+-
+-        r0, w0, e0 = rem.select_set()
+-        r1, w1, e1 = loc.select_set()
+-	#os.write(debug, "main loop: entering select\n")
+-        r, w, e = select.select(r0 + r1, w0 + w1, e0 + e1, 30)
+-	#os.write(debug, "main loop: dealing with remote select\n")
+-        rem.select_action(r, w, e)
+-	#os.write(debug, "main loop: dealing with local select\n")
+-        loc.select_action(r, w, e, rem)
+-	#os.write(debug, "main loop: end of loop\n")
++    if rem.drained() and not rem.eos_seen and not tunnel_lost:
++        # We lost contact in mid-session.
++        # Schedule a shutdown of the client, but allow any pending
++        # data to be transmitted.
++        loc.eof_stdin()
++        loc.eof_stdout()
++        loc.stderr_send("Connection to fsh tunnel lost.\n")
++        loc.eof_stderr()
++        exitval = 1
++        tunnel_lost = 1
++
++    r0, w0, e0 = rem.select_set()
++    r1, w1, e1 = loc.select_set()
++    #os.write(debug, "main loop: entering select\n")
++    r, w, e = select.select(r0 + r1, w0 + w1, e0 + e1, 30)
++    #os.write(debug, "main loop: dealing with remote select\n")
++    rem.select_action(r, w, e)
++    #os.write(debug, "main loop: dealing with local select\n")
++    loc.select_action(r, w, e, rem)
++    #os.write(debug, "main loop: end of loop\n")
+         
+ def usage(ret):
+     sys.stderr.write(
+-	"fsh: usage: fsh [options] host command [args...]\n"
+-	"            fsh { -h | --help }\n"
+-	"            fsh { -V | --version }\n")
++    "fsh: usage: fsh [options] host command [args...]\n"
++    "            fsh { -h | --help }\n"
++    "            fsh { -V | --version }\n")
+     if ret == 0:
+         sys.stderr.write(
+             "Options:\n"
+             "  -r method             Use ``method'' (e.g. ``rsh'') instead "
+             "of ssh.\n"
+             "  -l login              Log in as user ``login''.\n"
++            "  -p port               Use port number ``port''.\n"
+             "  -T --timeout=timeout  Set idle timeout for fshd (in seconds); exit when "
+             "no\n                        session has existed for this long. "
+             "0 disables.\n")
+@@ -338,17 +341,19 @@
+ def main():
+     method = "ssh"
+     login = None
++    port = 22
+     use_l_flag = 0
++    use_p_flag = 0
+     print_version = 0
+     fshd_timeout = None
+ 
+     # First, look for options before the host.
+     try:
+-	opts, args = getopt.getopt(sys.argv[1:], "hr:l:VT:",
++        opts, args = getopt.getopt(sys.argv[1:], "hr:l:VT:p:",
+                                    ["version", "help", "timeout="])
+     except getopt.error, msg:
+-	sys.stderr.write(str(msg) + "\n")
+-	sys.exit(1)
++        sys.stderr.write(str(msg) + "\n")
++        sys.exit(1)
+ 
+     # For historical reasons, we have to look for options after the
+     # host name as well.  This is ugly, but this syntax is widely
+@@ -367,28 +372,31 @@
+     
+ 
+     for opt, val in opts + opts2:
+-	if opt == "-r":
+-	    method = val
+-	elif opt == "-l":
+-	    login = val
+-	    use_l_flag = 1
+-	elif opt == "-V" or opt == "--version":
+-	    print_version = 1
+-	elif opt == "-h" or opt == "--help":
+-	    usage(0)
++        if opt == "-r":
++            method = val
++        elif opt == "-l":
++            login = val
++            use_l_flag = 1
++        elif opt == "-p":
++            port = val
++            use_p_flag = 1
++        elif opt == "-V" or opt == "--version":
++            print_version = 1
++        elif opt == "-h" or opt == "--help":
++            usage(0)
+         elif opt == "-T" or opt == "--timeout":
+             fshd_timeout = val
+         else:
+             assert 0
+ 
+     if print_version:
+-	fshlib.print_version("fsh")
++        fshlib.print_version("fsh")
+     if len(args) < 1 or host == None:
+-	usage(1)
++        usage(1)
+     if login == None:
+-	login = getpass.getuser()
++        login = getpass.getuser()
+     docmd(method, login, use_l_flag, host, string.join(args),
+-          fshd_timeout)
++          fshd_timeout, port, use_p_flag)
+ 
+ if __name__ == "__main__":
+     #global debug
+diff -Naur fsh-1.2.old/fshd.py fsh-1.2/fshd.py
+--- fsh-1.2.old/fshd.py	Fri Oct  8 23:16:53 2004
++++ fsh-1.2/fshd.py	Sun Oct 10 14:04:37 2004
+@@ -30,72 +30,75 @@
+ import fshconfig
+ 
+ class remote:
+-    def __init__(self, method, login, server, background_wanted):
++    def __init__(self, method, login, server, background_wanted, port):
+         self.__background_wanted = background_wanted
+-	in_fd, self.w = os.pipe()
+-	self.r, out_fd = os.pipe()
+-	self.child = os.fork()
+-	if self.child == 0:
+-	    # child
++        in_fd, self.w = os.pipe()
++        self.r, out_fd = os.pipe()
++        self.child = os.fork()
++        if self.child == 0:
++            # child
+             os.close(self.w)
+             os.close(self.r)
+-	    cmd = [method]
+-	    if login != 0:
+-		cmd = cmd + ["-l", login]
+-	    cmd = cmd + [server, 'in.fshd']
+-	    os.dup2(in_fd, 0)
+-	    os.dup2(out_fd, 1)
+-	    os.close(in_fd)
+-	    os.close(out_fd)
+-	    os.execvp(method, cmd)
+-	    sys.exit(1)
+-	# parent
+-	os.close(in_fd)
+-	os.close(out_fd)
+-	fshlib.set_nonblocking(self.w)
+-	fshlib.set_nonblocking(self.r)
+-	self.send_queue = []
+-	self.receive_queue = []
++            cmd = [method]
++            if login != 0:
++                cmd = cmd + ["-l", login]
++            if port != 22:
++                print "Port is " + str(port)
++                cmd = cmd + ["-p", str(port)]
++            cmd = cmd + [server, 'in.fshd']
++            os.dup2(in_fd, 0)
++            os.dup2(out_fd, 1)
++            os.close(in_fd)
++            os.close(out_fd)
++            os.execvp(method, cmd)
++            sys.exit(1)
++        # parent
++        os.close(in_fd)
++        os.close(out_fd)
++        fshlib.set_nonblocking(self.w)
++        fshlib.set_nonblocking(self.r)
++        self.send_queue = []
++        self.receive_queue = []
+         self.state = 0
+ 
+     def send(self, data):
+-	if data != "":
+-	    self.send_queue.append(data)
+-	if self.w == -1:
+-	    self.send_queue = []
++        if data != "":
++            self.send_queue.append(data)
++        if self.w == -1:
++            self.send_queue = []
+ 
+     def select_action(self, r, w, e):
+-	if self.w in w:
+-	    if fshlib.write(self.w, self.send_queue) == -1:
+-		os.close(self.w)
+-		self.w = -1
+-		print "End of file writing to remote system."
+-
+-	if self.r in r:
+-	    if fshlib.read(self.r, self.receive_queue, 4096) == -1:
+-		print "Tunnel closed."
+-		os.close(self.r)
+-		self.r = -1
++        if self.w in w:
++            if fshlib.write(self.w, self.send_queue) == -1:
++                os.close(self.w)
++                self.w = -1
++                print "End of file writing to remote system."
++
++        if self.r in r:
++            if fshlib.read(self.r, self.receive_queue, 4096) == -1:
++                print "Tunnel closed."
++                os.close(self.r)
++                self.r = -1
+ 
+     def select_set(self):
+-	# Return a tuple of three lists of file descriptors: the read,
+-	# write and exception fd sets.
+-	r = []
+-	w = []
+-	if self.w != -1 and self.send_queue != []:
+-	    w.append(self.w)
+-	if self.r != -1:
+-	    r.append(self.r)
+-	return (r, w, [])
++        # Return a tuple of three lists of file descriptors: the read,
++        # write and exception fd sets.
++        r = []
++        w = []
++        if self.w != -1 and self.send_queue != []:
++            w.append(self.w)
++        if self.r != -1:
++            r.append(self.r)
++        return (r, w, [])
+ 
+     def __readline(self):
+-	if len(self.receive_queue) == 0:
+-	    return None
++        if len(self.receive_queue) == 0:
++            return None
+         ix = string.find(self.receive_queue[0], "\n")
+         if ix == -1 and len(self.receive_queue) > 1:
+-	    self.receive_queue = [string.join(self.receive_queue, "")]
+-	    ix = string.find(self.receive_queue[0], "\n")
+-	if ix == -1:
++            self.receive_queue = [string.join(self.receive_queue, "")]
++            ix = string.find(self.receive_queue[0], "\n")
++        if ix == -1:
+             return None
+         res = self.receive_queue[0][:ix]
+         self.receive_queue[0] = self.receive_queue[0][ix+1:]
+@@ -110,12 +113,12 @@
+                 if self.__background_wanted:
+                     background()
+                 self.state = 1
+-		print "Connection established"
++                print "Connection established"
+                 break
+         return fshlib.parse_line(self.receive_queue, 1)
+ 
+     def is_closed(self):
+-	return self.r == -1 or self.w == -1
++        return self.r == -1 or self.w == -1
+ 
+ class client:
+     def __init__(self, socket):
+@@ -123,7 +126,7 @@
+         self.socket_object = socket
+         self.send_queue = []
+         self.receive_queue = []
+-	self.pending_close = 0
++        self.pending_close = 0
+ 
+     def select_set(self):
+         r = []
+@@ -143,19 +146,19 @@
+         if self.socket == -1:
+             return 0
+         if self.socket in r:
+-	    if fshlib.read(self.socket, self.receive_queue, 4096) == -1:
+-		self.socket_object.close()
+-		self.socket = -1
++            if fshlib.read(self.socket, self.receive_queue, 4096) == -1:
++                self.socket_object.close()
++                self.socket = -1
+                 return 1
+ 
+         if self.socket in w:
+-	    if fshlib.write(self.socket, self.send_queue) == -1:
+-		self.socket_object.close()
+-		self.socket = -1
+-		return 1
+-	    if self.pending_close and self.send_queue == []:
+-		self.socket_object.close()
+-		self.socket = -1
++            if fshlib.write(self.socket, self.send_queue) == -1:
++                self.socket_object.close()
++                self.socket = -1
++                return 1
++            if self.pending_close and self.send_queue == []:
++                self.socket_object.close()
++                self.socket = -1
+ 
+         return 0
+                 
+@@ -164,25 +167,25 @@
+         return fshlib.parse_line(self.receive_queue, 0)
+ 
+     def send(self, data):
+-	if data != "":
+-	    self.send_queue.append(data)
+-	if self.socket == -1:
+-	    self.send_queue = []
++        if data != "":
++            self.send_queue.append(data)
++        if self.socket == -1:
++            self.send_queue = []
+ 
+     def close(self):
+-	self.pending_close = 1
++        self.pending_close = 1
+ 
+     def is_closed(self):
+-	return self.socket == -1
++        return self.socket == -1
+ 
+     def drained(self):
+-	return self.send_queue == []
++        return self.send_queue == []
+ 
+ class fshd:
+     def __init__(self, server, method, login, use_l_flag, background_wanted,
+-                 timeout):
+-	# Connect to server using method.  Parse away leading
+-	# noice until we receive "^fsh ".  Check the version number.
++                 timeout, port):
++        # Connect to server using method.  Parse away leading
++        # noice until we receive "^fsh ".  Check the version number.
+         sockname, sockdir = fshlib.fshd_socket(server, method, login)
+         try:
+             os.mkdir(sockdir, 0700)
+@@ -196,17 +199,17 @@
+                 os.chmod(sockdir, 0700)
+             else:
+                 raise
+-	self.r = remote(method, use_l_flag and login, server,
+-                        background_wanted)
++        self.r = remote(method, use_l_flag and login, server,
++                        background_wanted, port)
+         self.sessions = {}
+         self.listen = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+-	self.listen.setblocking(0)
++        self.listen.setblocking(0)
+         self.listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+-	try:
+-	    os.unlink(sockname)
+-	except os.error, (eno, emsg):
+-	    if eno != errno.ENOENT:
+-		raise
++        try:
++            os.unlink(sockname)
++        except os.error, (eno, emsg):
++            if eno != errno.ENOENT:
++                raise
+         self.listen.bind(sockname)
+         self.listen.listen(3)
+         self.__timeout = timeout
+@@ -238,20 +241,20 @@
+     def toploop(self):
+         try:
+             while 1:
+-		drained = self.r.is_closed()
++                drained = self.r.is_closed()
+                 r, w, e = self.r.select_set()
+                 r.append(self.listen.fileno())
+                 live = 0
+                 for s in self.sessions.keys():
+-		    if drained and not self.sessions[s].drained():
+-			drained = 0
++                    if drained and not self.sessions[s].drained():
++                        drained = 0
+                     r1, w1, e1, live1 = self.sessions[s].select_set()
+                     r = r + r1
+                     w = w + w1
+                     e = e + e1
+                     live = live + live1
+-		if drained:
+-		    sys.exit(0)
++                if drained:
++                    sys.exit(0)
+                 if live > 0:
+                     self.cancel_timer()
+                 else:
+@@ -262,11 +265,11 @@
+                 self.r.select_action(r, w, e)
+                 if self.listen.fileno() in r:
+                     sock, addr = self.listen.accept()
+-		    sock.setblocking(0)
+-		    s = 1
+-		    while (self.sessions.has_key(s) and \
+-			   not self.sessions[s].is_closed()):
+-			s = s + 1
++                    sock.setblocking(0)
++                    s = 1
++                    while (self.sessions.has_key(s) and \
++                           not self.sessions[s].is_closed()):
++                        s = s + 1
+                     print s, "start"
+                     self.sessions[s] = client(sock)
+                 while 1:
+@@ -274,17 +277,17 @@
+                     if cmd == None:
+                         break
+                     elif cmd in ["stdout", "stderr", "exit", "signal-exit", \
+-				 "stdin-flow"]:
+-			self.sessions[s].send("%s %s\n" % (
+-			    cmd, fshlib.hollerith(data)))
+-		    elif cmd in ["eof-stdin", "eof-stdout", "eof-stderr"]:
+-			self.sessions[s].send("%s\n" % cmd)
+-		    elif cmd == "eos":
+-			self.sessions[s].send("eos\n")
+-			self.sessions[s].close()
+-			print s, "EOS"
+-		    else:
+-			print "Unknown command from in.fshd:", cmd
++                                 "stdin-flow"]:
++                        self.sessions[s].send("%s %s\n" % (
++                            cmd, fshlib.hollerith(data)))
++                    elif cmd in ["eof-stdin", "eof-stdout", "eof-stderr"]:
++                        self.sessions[s].send("%s\n" % cmd)
++                    elif cmd == "eos":
++                        self.sessions[s].send("eos\n")
++                        self.sessions[s].close()
++                        print s, "EOS"
++                    else:
++                        print "Unknown command from in.fshd:", cmd
+                 for s in self.sessions.keys():
+                     if self.sessions[s].select_action(r, w, e) == 1:
+                         # fsh died, so kill this session.
+@@ -298,8 +301,8 @@
+                         else:
+                             self.r.send("%s %d %s\n" % (
+                                 cmd, s, fshlib.hollerith(data)))
+-			    if cmd == "new":
+-				print s, "$", data
++                            if cmd == "new":
++                                print s, "$", data
+         except KeyboardInterrupt:
+             for s in self.sessions.keys():
+                 self.sessions[s].send("eos\n")
+@@ -307,32 +310,32 @@
+ 
+ def background():
+     try:
+-	signal.signal(signal.SIGTTOU, signal.SIG_IGN)
++        signal.signal(signal.SIGTTOU, signal.SIG_IGN)
+     except:
+-	pass
++        pass
+     try:
+-	signal.signal(signal.SIGTTIN, signal.SIG_IGN)
++        signal.signal(signal.SIGTTIN, signal.SIG_IGN)
+     except:
+-	pass
++        pass
+     try:
+-	signal.signal(signal.SIGTSTP, signal.SIG_IGN)
++        signal.signal(signal.SIGTSTP, signal.SIG_IGN)
+     except:
+-	pass
++        pass
+ 
+     if os.fork() > 0:
+-	os._exit(0)	# parent
++        os._exit(0)        # parent
+ 
+     try:
+-	os.setsid()
++        os.setsid()
+     except:
+-	pass
++        pass
+ 
+     for i in range(3):
+-    	try:
+-	    os.close(i)
+-	except os.error, (eno, emsg):
+-	    if eno != errno.EBADF:
+-		raise
++        try:
++            os.close(i)
++        except os.error, (eno, emsg):
++            if eno != errno.EBADF:
++                raise
+     fd = os.open("/dev/null", os.O_RDWR)
+     assert fd == 0
+     fd = os.dup(0)
+@@ -353,9 +356,9 @@
+ 
+ def usage(ret):
+     sys.stderr.write(
+-	"fshd: usage: fshd [options] host\n"
+-	"             fshd { -h | --help }\n"
+-	"             fshd { -V | --version }\n")
++        "fshd: usage: fshd [options] host\n"
++        "             fshd { -h | --help }\n"
++        "             fshd { -V | --version }\n")
+     if ret == 0:
+         sys.stderr.write(
+             "Options:\n"
+@@ -363,6 +366,7 @@
+             "  -r method             Use ``method'' (e.g. ``rsh'') instead "
+             "of ssh.\n"
+             "  -l login              Log in as user ``login''.\n"
++            "  -p port               Use port ``port''.\n"
+             "  -T --timeout=timeout  Set idle timeout (in seconds); exit when "
+             "no session\n                        has existed for this long. "
+             "0 disables the timeout.\n")
+@@ -373,38 +377,41 @@
+     method = "ssh"
+     login = None
+     use_l_flag = 0
++    port = 22
+     print_version = 0
+     b_flag = 0
+     timeout = fshconfig.default_fshd_timeout
+     try:
+-	opts, args = getopt.getopt(sys.argv[1:], "hr:l:bVT:",
++        opts, args = getopt.getopt(sys.argv[1:], "hr:l:bVT:p:",
+                                    ["version", "help", "background",
+                                     "timeout="])
+     except getopt.error, msg:
+-	sys.stderr.write(str(msg) + "\n")
+-	sys.exit(1)
++        sys.stderr.write(str(msg) + "\n")
++        sys.exit(1)
+     for opt, val in opts:
+-	if opt == "-r":
+-	    method = fshlib.shell_unquote(val)
+-	elif opt == "-l":
+-	    login = val
+-	    use_l_flag = 1
+-	elif opt == "-b" or opt == "--background":
+-	    b_flag = 1
+-	elif opt == "-V" or opt == "--version":
+-	    print_version = 1
+-	elif opt == "-h" or opt == "--help":
+-	    usage(0)
++        if opt == "-r":
++            method = fshlib.shell_unquote(val)
++        elif opt == "-l":
++            login = val
++            use_l_flag = 1
++        elif opt == "-p":
++            port = val
++        elif opt == "-b" or opt == "--background":
++            b_flag = 1
++        elif opt == "-V" or opt == "--version":
++            print_version = 1
++        elif opt == "-h" or opt == "--help":
++            usage(0)
+         elif opt == "-T" or opt == "--timeout":
+             timeout = string.atof(val)
+         else:
+             assert 0
+     if print_version:
+-	fshlib.print_version("fshd")
++        fshlib.print_version("fshd")
+     if len(args) != 1:
+-	usage(1)
++        usage(1)
+     if login == None:
+-	login = getpass.getuser()
++        login = getpass.getuser()
+ 
+     for i in open_fds():
+         if i > 2:
+@@ -414,7 +421,7 @@
+                 if eno != errno.EBADF:
+                     raise
+ 
+-    s = fshd(args[0], method, login, use_l_flag, b_flag, timeout)
++    s = fshd(args[0], method, login, use_l_flag, b_flag, timeout, port)
+     s.toploop()
+ 
+ if __name__ == '__main__':
