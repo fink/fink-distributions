@@ -1,78 +1,114 @@
 Info3: <<
-Package: iplike-pg%type_pkg[postgresql]
-Version: 1.0.8
-Revision: 1
-Type: postgresql(8.0 8.1 8.2 8.3)
+Package: iplike-pg%type_pkg[pg]
+Version: 2.0.2
+Revision: 2
+Distribution: 10.4, 10.5, 10.6
+Description: PostgreSQL IP address query interface
+Type: pg(8.0 8.1 8.2 8.3 8.4 9.0 9.1)
+License: GPL
+Maintainer: Benjamin Reed <iplike@fink.raccoonfink.com>
 
-Conflicts: opennms-pgsql74, opennms-pgsql80, opennms-pgsql81, opennms-pgsql82
-Replaces: opennms-pgsql74, opennms-pgsql80, opennms-pgsql81, opennms-pgsql82
-Provides: opennms-pgsql
-Source: mirror:sourceforge:opennms/iplike-%v.tar.gz
-Source-MD5: 85bcafd5e96a79e7d0ab6eee0b4b0b75
-PatchFile: %{Ni}.patch
-PatchFile-MD5: 862416abf12d6ddb9652df157e3b4ec3
-
-BuildDepends: <<
-	autoconf (>= 2.60-1),
-	automake1.10,
-	fink (>= 0.24.12),
-	libtool2,
-	(%type_raw[postgresql] <= 8.0) postgresql%type_pkg[postgresql]-unified-dev,
-	(%type_raw[postgresql] >= 8.1) postgresql%type_pkg[postgresql]-dev,
-<<
 Depends: <<
-	(%type_raw[postgresql] <= 7.4) postgresql%type_pkg[postgresql]-unified-shlibs,
-	(%type_raw[postgresql] >= 8.1) postgresql%type_pkg[postgresql]-shlibs,
+	(%type_raw[pg] <= 7.4) postgresql%type_pkg[pg]-unified-shlibs,
+	(%type_raw[pg] >= 8.1) postgresql%type_pkg[pg]-shlibs
+<<
+BuildDepends: <<
+	autoconf2.6,
+	automake1.11,
+	fink (>= 0.30.2-1),
+	libtool2,
+	(%type_raw[pg] <= 8.0) postgresql%type_pkg[pg]-unified-dev,
+	(%type_raw[pg] >= 8.1) postgresql%type_pkg[pg]-dev
+<<
+Provides: opennms-pgsql
+Conflicts: <<
+	opennms-pgsql74,
+	opennms-pgsql80,
+	opennms-pgsql81,
+	opennms-pgsql82
+<<
+Replaces: <<
+	opennms-pgsql74,
+	opennms-pgsql80,
+	opennms-pgsql81,
+	opennms-pgsql82
 <<
 
+Source: mirror:sourceforge:opennms/iplike-%v.tar.gz
+Source-MD5: 89a7760f22ccc60a7d07ce85a2cdad55
 PatchScript: <<
-#!/bin/sh -ev
-	%{default_script}
-
-	IPLIKE_VERSION=`echo %type_raw[postgresql] | sed -e 's,\.,_,g'`
+	#!/bin/sh -ev
+	
+	IPLIKE_VERSION=`echo %type_raw[pg] | sed -e 's,\.,_,g'`
 	perl -pi -e "s,iplike_la,iplike_${IPLIKE_VERSION}_la,g" Makefile.am
-	perl -pi -e 's,iplike[^_]la,iplike-%type_raw[postgresql].la,g' Makefile.am install_iplike.sh.in
-	perl -pi -e 's,/psql,/psql-%type_raw[postgresql],' install_iplike.sh.in
+	perl -pi -e 's,iplike[^_]la,iplike-%type_raw[pg].la,g' Makefile.am install_iplike.sh.in
+	if [ "%type_pkg[pg]" -lt 84 ]; then
+	perl -pi -e 's,/psql,/psql-%type_raw[pg],' install_iplike.sh.in
+	fi
 	perl -pi -e 's,AM_RPM_INIT,,' configure.ac
+	
+	autoreconf -fvi
+<<
 
-	%p/bin/aclocal -I m4
-	%p/bin/glibtoolize --automake --copy
-	%p/bin/autoheader
-	%p/bin/autoconf
-	%p/bin/automake --add-missing --copy
+UseMaxBuildJobs: true
+ConfigureParams: --disable-dependency-tracking (%m != x86_64) --with-jvm-arch=32 (%m = x86_64) --with-jvm-arch=64
+CompileScript: <<
+	#!/bin/sh -ex
+	
+	if [ "%type_pkg[pg]" -ge 84 ]; then
+	real_pg_config="%p/opt/postgresql-%type_raw[pg]/bin/pg_config"
+	else
+	real_pg_config="%p/bin/pg_config-%type_raw[pg]"
+	fi
+	# fangism's workaround for having %p be symlinked
+	if readlink %p
+	then
+		echo "Detected that %p is symlink, working around pg_config readlink..."
+		p_link=`readlink %p`
+		mkdir opt-bin
+		pushd opt-bin
+			{ echo '#!/bin/sh'
+			echo "exec $real_pg_config \"\$@\" | sed -e \"s|$p_link|%p|g\""
+			} > alt_pg_config
+			chmod +x alt_pg_config
+		popd
+		real_pg_config=opt-bin/alt_pg_config
+	fi
+	EXTRA_ARGS="--with-pgsql=$real_pg_config"
+	./configure %c $EXTRA_ARGS
+	make
 <<
 
 InstallScript: <<
-	make install DESTDIR="%d"
-	mv %i/sbin/install_iplike.sh %i/sbin/install_iplike_%type_pkg[postgresql].sh
+make install DESTDIR="%d"
+mv %i/sbin/install_iplike.sh %i/sbin/install_iplike_%type_pkg[pg].sh
 <<
 
 PostInstScript: <<
-	cat <<END
+cat <<END
 *** NOTE ***
 
 WARNING: this package will not work until you run
-%p/sbin/install_iplike_%type_pkg[postgresql].sh with the appropriate options.
+%p/sbin/install_iplike_%type_pkg[pg].sh with the appropriate options.
 
-See \`%p/sbin/install_iplike_%type_pkg[postgresql].sh -h\` for more information.
+See \`%p/sbin/install_iplike_%type_pkg[pg].sh -h\` for more information.
 
 END
 <<
-
 PostRmScript: <<
+if [ "$1" != "upgrade" ]; then
 	cat <<END
 *** NOTE ***
 
 WARNING: Don't forget to remove the IPLIKE function from your database!
-
+END
+fi
 <<
 
 Homepage: http://www.opennms.org/
-Maintainer: Benjamin Reed <iplike@fink.racoonfink.com>
-Description: PostgreSQL IP address query interface
 DescDetail: <<
 This package contains a PostgreSQL function for doing complex
 IP address queries on a text field.
 <<
-License: GPL
 <<
+
