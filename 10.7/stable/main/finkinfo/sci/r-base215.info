@@ -1,0 +1,212 @@
+Info2: <<
+Package: r-base215
+Version: 2.15.0
+Revision: 1
+Description: R Framework
+Maintainer:  BABA Yoshihiko <babayoshihiko@mac.com>
+Depends: %N-shlibs (=%v-%r)
+BuildDepends: fink (>= 0.28.1), gcc46-compiler, bzip2-dev, libgettext8-dev, libiconv-dev, libncurses5, libjpeg8, libpng15, pcre, pkgconfig, readline5, tcltk-dev, x11-dev
+
+Source: http://cran.r-project.org/src/base/R-2/R-%v.tar.gz
+Source-MD5: 905f638990492618559202cc1e48a867
+PatchFile: %n.patch
+PatchFile-MD5: 81f9fc3bc5834d89b1472b71ce799f9f
+# PatchScript: sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
+SourceDirectory: R-%v
+
+ConfigureParams: <<
+  --libdir='%p/lib' --mandir='${prefix}/share/man' \
+  --with-blas="-framework vecLib -dylib_file /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLAPACK.dylib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libLAPACK.dylib" \
+  --with-lapack \
+  --with-aqua --enable-R-framework=%p/Library/Frameworks \
+  --with-system-bzlib --with-system-pcre --with-system-zlib \
+  --with-x --x-includes=/usr/X11R6/include --x-libraries=/usr/X11R6/lib \
+  --with-tcl-config=%p/lib/tclConfig.sh --with-tk-config=%p/lib/tkConfig.sh
+<< 
+CompileScript: <<
+  #!/bin/sh -efv
+  
+  export F77=%p/bin/gfortran-fsf-4.6
+  
+  unset R_HOME
+  ./configure %c
+  make
+<<
+InfoTest: <<
+  TestScript: <<
+  #!/bin/sh -efv
+    # don't leak from already-installed package
+    unset R_HOME
+
+    make -k check
+  <<
+<<
+InstallScript: <<
+  #!/bin/sh -ex
+  FW_VER=`echo %v | sed -e's/[\.][0-9]$//'`
+  
+  # prefix=%i/Library/Frameworks
+  make install DESTDIR=%d
+  
+  cd %i
+  
+  # Fix path
+  perl -pi -e 's|%i|%p|g' Library/Frameworks/R.framework/Resources/bin/R
+  perl -pi -e "s,Resources,Versions/$FW_VER/Resources,g" Library/Frameworks/R.framework/Resources/bin/R
+  if [[ $( sw_vers -productVersion ) > 10.5 ]]; then
+    perl -pi -e 's|# export PATH|export PATH|' Library/Frameworks/R.framework/Resources/bin/R
+  fi
+
+  # Fix install_name in libR.dylib
+  install_name_tool -id "%p/Library/Frameworks/R.framework/Versions/$FW_VER/Resources/lib/libR.dylib" Library/Frameworks/R.framework/Versions/$FW_VER/Resources/lib/libR.dylib
+
+  # Move site-library out of R
+  pushd Library/Frameworks/R.framework/Resources/
+  ln -s %p/lib/R/site-library site-library
+  popd
+  
+  # Make more version specific symlink 
+  pushd Library/Frameworks/R.framework/Versions/
+  ln -s $FW_VER %v
+  popd
+  
+  # Fix install names in libs and modules
+  pushd Library/Frameworks/R.framework/Versions/$FW_VER/Resources/library/
+  LIBS="class cluster foreign grDevices grid KernSmooth lattice MASS Matrix methods mgcv nlme nnet rpart spatial splines stats survival tcltk tools "
+  for LIB in $LIBS;
+    do
+        install_name_tool -id %p/Library/Frameworks/R.framework/Versions/$FW_VER/Resources/library/$LIB/libs/$LIB.dylib $LIB/libs/$LIB.dylib
+    done
+  popd
+  
+  pushd Library/Frameworks/R.framework/Versions/$FW_VER/Resources/modules
+  install_name_tool -id %p/Library/Frameworks/R.framework/Versions/$FW_VER/Resources/modules/internet.dylib internet.dylib
+  install_name_tool -id %p/Library/Frameworks/R.framework/Versions/$FW_VER/Resources/modules/lapack.dylib lapack.dylib
+  install_name_tool -id %p/Library/Frameworks/R.framework/Versions/$FW_VER/Resources/modules/R_X11.dylib R_X11.dylib
+  install_name_tool -id %p/Library/Frameworks/R.framework/Versions/$FW_VER/Resources/modules/vfonts.dylib vfonts.dylib
+  popd
+  
+  mkdir -p bin
+  pushd bin
+  ln -s %p/Library/Frameworks/R.framework/Versions/$FW_VER/Resources/bin/R R
+  popd
+  
+  mkdir -p share/man/man1
+  pushd share/man/man1
+  ln -s %p/Library/Frameworks/R.framework/Versions/$FW_VER/Resources/man1/R.1 R.1
+  popd
+  
+  # Keep the library folder safe. Users can install their libraries in $HOME/Library/R.
+  chmod 755 Library/Frameworks/R.framework/Resources/library
+  
+  # Satisfy validation
+  rm -rf Library/Frameworks/R.framework/Versions/2.15/Resources/library/Matrix/include
+
+  # AKH: fix install_names
+  cd %i/Library/Frameworks/R.framework/Versions/2.15/Resources/library
+  install_name_tool -id \
+  		%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/grDevices/libs/cairo.dylib \
+ 		grDevices/libs/cairo.dylib
+  install_name_tool -id \
+  		%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/parallel/libs/parallel.dylib \
+ 		parallel/libs/parallel.dylib
+<<
+RunTimeVars: <<
+  R_HOME: %p/Library/Frameworks/R.framework/Resources
+<<
+
+SplitOff: <<
+  Package: %N-shlibs
+  Description: R Libraries
+  Depends: gcc46-shlibs, bzip2-shlibs, libgettext8-shlibs, libiconv, libjpeg8-shlibs, libpng15-shlibs, pcre-shlibs, readline5-shlibs, tcltk
+  Files: <<
+  Library/Frameworks/R.framework/Versions/2.15/Resources/lib
+  Library/Frameworks/R.framework/Versions/2.15/Resources/library
+  Library/Frameworks/R.framework/Versions/2.15/Resources/modules
+  <<
+  Shlibs: <<
+  %p/Library/Frameworks/R.framework/Versions/2.15/Resources/lib/libR.dylib 2.15.0 %n (>= 2.15.0-1)
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/class/libs/class.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/cluster/libs/cluster.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/foreign/libs/foreign.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/grDevices/libs/cairo.dylib 
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/grDevices/libs/grDevices.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/grid/libs/grid.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/KernSmooth/libs/KernSmooth.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/lattice/libs/lattice.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/MASS/libs/MASS.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/Matrix/libs/Matrix.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/methods/libs/methods.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/mgcv/libs/mgcv.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/nlme/libs/nlme.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/nnet/libs/nnet.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/parallel/libs/parallel.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/rpart/libs/rpart.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/spatial/libs/spatial.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/splines/libs/splines.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/stats/libs/stats.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/survival/libs/survival.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/tcltk/libs/tcltk.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/library/tools/libs/tools.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/modules/internet.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/modules/lapack.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/modules/R_X11.dylib
+  !%p/Library/Frameworks/R.framework/Versions/2.15/Resources/modules/vfonts.dylib
+  <<
+<<
+
+SplitOff2: <<
+  Package: %N-dev
+  Description: R Headers
+  Depends: %N-shlibs (=%v-%r)
+  Replaces: %N, r-base
+  BuildDependsOnly: True
+  Files: <<
+  Library/Frameworks/R.framework/Versions/2.15/Resources/include
+  Library/Frameworks/R.framework/Versions/2.15/Headers
+  lib/pkgconfig
+  <<
+<<
+SplitOff3: <<
+  Package: r-base
+  Description: Language and environment for statistical computing and graphics
+  Depends: %N (=%v-%r)
+  Files: <<
+  Library/Frameworks/R.framework/R
+  Library/Frameworks/R.framework/Headers
+  Library/Frameworks/R.framework/Libraries
+  Library/Frameworks/R.framework/PrivateHeaders
+  Library/Frameworks/R.framework/Resources
+  Library/Frameworks/R.framework/Versions/Current
+  bin
+  share
+  <<
+<<
+
+
+DescDetail: <<
+R is similar to S, which was developed at Bell Laboratories by John
+Chambers et al. It provides a wide variety of statistical and
+graphical techniques (linear and nonlinear modelling, statistical
+tests, time series analysis, classification, clustering, ...).  R is
+designed as a true computer language with control-flow constructions
+for iteration and alternation, and it allows users to add additional
+functionality by defining new functions. For computationally intensive
+tasks, C and Fortran code can be linked and called at run time.
+
+The "recommended" R packages are now included in the distribution, so
+there is no longer a need for a r-recommended package.  If you already
+have installed an earlier version of r-recommended, remove it before
+installing this package.
+
+Builds R Framework, installs in %p/Library/Frameworks.
+
+R.app no longer included in the R source distribution.  To install, go 
+to http://cran.r-project.org/bin/macosx/, download and install R-GUI.dmg.
+You will then need to edit Info.plist inside the app bundle to point
+to %p/Library/R.Framework (instead of /Library/R.Framework).
+<<
+DescPackaging: 'pdflatex' is needed to make NEWS.pdf
+License: GPL
+Homepage: http://cran.R-project.org/
+<<
