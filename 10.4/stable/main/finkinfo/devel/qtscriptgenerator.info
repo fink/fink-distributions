@@ -1,0 +1,129 @@
+Info4: <<
+Package: qtscriptgenerator-%type_pkg[qt]
+Version: 0.2.0
+Revision: 1
+Description: QtScript binding generator
+Type: qt (x11 mac)
+License: GPL/LGPL
+Maintainer: Benjamin Reed <qtscriptgenerator@fink.racoonfink.com>
+
+Depends: <<
+	libiconv,
+	libpng15-shlibs,
+	qt4-base-%type_pkg[qt]-qtcore-shlibs (>= 4.7.3-1),
+	qt4-base-%type_pkg[qt]-qtscript-shlibs (>= 4.7.3-1),
+	qt4-base-%type_pkg[qt]-qtxml-shlibs (>= 4.7.3-1),
+	%N-runtime (>= %v-%r)
+<<
+BuildDepends: <<
+	fink (>= 0.29.7-1),
+	kde4-buildenv (>= 4.4.0-1),
+	libiconv-dev,
+	libpng15,
+	phonon-%type_pkg[qt] (>= 4.5.0-1),
+	qt4-base-%type_pkg[qt] (>= 4.7.3-1),
+	qtwebkit-%type_pkg[qt] (>= 2.0.0-4),
+	system-openssl-dev,
+	(%type_pkg[qt] = x11) x11-dev
+<<
+GCC: 4.0
+
+Source: http://qtscriptgenerator.googlecode.com/files/qtscriptgenerator-src-%v.tar.gz
+Source-MD5: 9f82b0aa212f7938de37df46cd27165c
+PatchFile: qtscriptgenerator.patch
+PatchFile-MD5: cd67c3e310f3a92cee104e9ae878c25f
+
+SetMAKEFLAGS: -j1
+NoSetMAKEFLAGS: true
+CompileScript: <<
+#!/bin/sh -ev
+
+	export KDE4_PREFIX="%p" KDE4_TYPE="%type_pkg[qt]"
+	. %p/sbin/kde4-buildenv.sh
+	set -v
+	export QTDIR="%p/lib/qt4-%type_pkg[qt]"
+
+	pushd generator
+		qmake
+		make debug CC="$CC" CXX="$CXX" LINK="$CXX"
+		./generator --include-paths=%p/lib/qt4-%type_pkg[qt]/include
+	popd
+	pushd qtbindings
+		qmake
+		# I'm a dirty cheater!
+		make qs_eval/Makefile
+		cat <<END >> qs_eval/Makefile
+
+release: all
+
+debug: all
+
+END
+
+		# fix for current phonon (holy hell this is ugly--
+                # dmacks doesn't understand the templates at all!)
+		cat <<'EOPERL' > ugly-patcher
+/^template <>/../^};/ ? $ts .= $_ : print;  # extract a struct in $ts
+if (/^};/) {
+  # got the whole struct
+  if ( $ts !~ /struct QMetaTypeId< QPair<QByteArray,QString> >/
+    && $ts !~ /struct QMetaTypeId< QList<QPair<QByteArray,QString> > >/
+  ) {
+    # only include in file it if it's not one of the ones we want to exclude
+    # (duplicate of external dep's public headers causes build failure)
+    print $ts;
+  }
+  $ts="";
+}
+EOPERL
+		perl -ni.bak ugly-patcher ../generated_cpp/com_trolltech_qt_phonon/qtscript_PlatformPlugin.cpp ../generated_cpp/com_trolltech_qt_phonon/qtscriptshell_PlatformPlugin.cpp
+		
+		make CC="$CC" CXX="$CXX" LINK="$CXX" release debug
+	popd
+	pushd tools/qsexec/src
+		qmake
+		make CC="$CC" CXX="$CXX" LINK="$CXX"
+	popd
+<<
+
+InstallScript: <<
+#!/bin/sh -ev
+
+	install -d -m 755 %i/lib/qt4-%type_pkg[qt]/bin
+	mv generator/generator tools/qsexec/qsexec %i/lib/qt4-%type_pkg[qt]/bin/
+
+	install -d -m 755 %i/lib/qt4-%type_pkg[qt]/lib
+	mv plugins %i/lib/qt4-%type_pkg[qt]
+
+	install -d -m 755 %i/share/doc/%N
+	mv doc %i/share/doc/%N/API
+	mv examples %i/share/doc/%N
+<<
+DocFiles: LICENSE* README*
+SplitOff: <<
+	Package: %N-runtime
+	Description: Runtime QtScript plugins
+	Depends: <<
+		libiconv,
+		libpng15-shlibs,
+		phonon-%type_pkg[qt]-shlibs (>= 4.5.0-1),
+		qt4-base-%type_pkg[qt]-qtcore-shlibs (>= 4.7.3-1),
+		qt4-base-%type_pkg[qt]-qtgui-shlibs (>= 4.7.3-1),
+		qt4-base-%type_pkg[qt]-qtnetwork-shlibs (>= 4.7.3-1),
+		qt4-base-%type_pkg[qt]-qtopengl-shlibs (>= 4.7.3-1),
+		qt4-base-%type_pkg[qt]-qtscript-shlibs (>= 4.7.3-1),
+		qt4-base-%type_pkg[qt]-qtsql-shlibs (>= 4.7.3-1),
+		qt4-base-%type_pkg[qt]-qtsvg-shlibs (>= 4.7.3-1),
+		qt4-base-%type_pkg[qt]-qtxml-shlibs (>= 4.7.3-1),
+		qtwebkit-%type_pkg[qt]-shlibs (>= 2.0.0-4),
+		(%type_pkg[qt] = x11) x11-shlibs
+	<<
+	Files: lib/qt4-%type_pkg[qt]/plugins
+<<
+
+DescPackaging: <<
+	Patch for compatibility with recent phonon. See:
+	http://code.google.com/p/qtscriptgenerator/issues/detail?id=74
+<<
+<<
+
