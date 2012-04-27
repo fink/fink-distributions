@@ -2,7 +2,7 @@ Info2: <<
 Package: octave%type_pkg[-atlas]%type_pkg[-x11]
 Type: -atlas (boolean), oct(3.2.4), gcc (4.7), -x11 (boolean)
 Version: 3.2.4
-Revision: 3013
+Revision: 3014
 Maintainer: Alexander Hansen <alexkhansen@users.sourceforge.net>
 
 BuildDepends: <<
@@ -136,12 +136,13 @@ using std::size_t;' liboctave/oct-alloc.h
 	sed -i.orig -e '/truncate_int/s|\(return\) \(truncate_int\)|\1 octave_int_base<T>::\2|' \
 		liboctave/oct-inttypes.h
 	sed -i.orig -e 's|template static|template|g' liboctave/eigs-base.cc
+	# gcc4.7 carps about inlining an explicit instantiation
+	perl -pi.orig -e 's/(template.*)inline/\1/' src/pr-output.cc
 <<
 
 GCC: 4.0
-UseMaxBuildJobs: false
-SetCC: flag-sort -r gcc
-SetCXX: flag-sort -r g++
+SetCC: flag-sort -r %p/bin/gcc-fsf-%type_raw[gcc]
+SetCXX: flag-sort -r %p/bin/g++-fsf-%type_raw[gcc]
 SetLDFLAGS: -Wl,-dead_strip_dylibs
 SetLIBS: -lGraphicsMagick
 
@@ -180,7 +181,15 @@ CompileScript: <<
  	then export FFLAGS='-O3 -ff2c'
  	else export FFLAGS='-O3'
  fi
- %{default_script}
+ ./configure %c
+ make octave-bug 
+ make octave-config 
+ make mkoctfile
+ make libcruft 
+ make liboctave
+ make -j1 src
+ make -j1 scripts
+ make -j1 doc
  fink-package-precedence --depfile-ext='\.d$' --prohibit-bdep=%{Ni},%{Ni}-atlas,%{Ni}%type_raw[oct]-dev,%{Ni}%type_raw[oct]-atlas-dev,%{Ni}305-dev,%{Ni}305-atlas-dev,saclib-gcc46,saclib src
 <<
 
@@ -232,12 +241,8 @@ InstallScript: <<
  do 
  	perl -pi -e 's|%p/bin/sed|/usr/bin/env sed|g' $file
  done
- # generate Fink-gcc enabled mkoctfile
+ # generate Fink-gcc-version tagged mkoctfile for compatibility
  cp mkoctfile-%type_raw[oct] mkoctfile-%type_raw[oct]-gcc%type_raw[gcc]
- perl -pi -e \
- 's,oct\-cc,%p/bin/gcc-fsf-%type_raw[gcc],g; \
-  s,oct\-cxx,%p/bin/g++-fsf-%type_raw[gcc],g' \
-    mkoctfile-%type_raw[oct]-gcc%type_raw[gcc] 
  # create convenience symlink
  ln -s mkoctfile-%type_raw[oct]-gcc%type_raw[gcc] mkoctfile-gcc%type_raw[gcc] 
 <<
@@ -406,36 +411,8 @@ SplitOff2: <<
 	DocFiles: BUGS ChangeLog README ROADMAP SENDING-PATCHES COPYING
 	PostInstScript: <<
 		cd %p/bin
-		osversion=`uname -r | cut -d. -f1`
-		case $osversion in
-			11) perl -p -e 's,COMPILER,%p/var/lib/fink/path-prefix-clang/cc,' \
-							%p/share/%{Ni}/%v/scripts/oct-compiler.in > %p/bin/oct-cc
-				perl -p -e 's,COMPILER,%p/var/lib/fink/path-prefix-clang/c++,' \
-							%p/share/%{Ni}/%v/scripts/oct-compiler.in > %p/bin/oct-cxx
-				chmod a+x oct-cc oct-cxx ;;
-			10) perl -p -e 's,COMPILER,%p/var/lib/fink/path-prefix-10.6/cc,' \
-							%p/share/%{Ni}/%v/scripts/oct-compiler.in > %p/bin/oct-cc
-				perl -p -e 's,COMPILER,%p/var/lib/fink/path-prefix-10.6/c++,' \
-							%p/share/%{Ni}/%v/scripts/oct-compiler.in > %p/bin/oct-cxx
-				chmod a+x oct-cc oct-cxx ;;
-			9)  if [ "%m" = "x86_64" ]
-					# use 10.6 compiler wrappers on 10.5/x86_64	
-				then 
-					perl -p -e 's,COMPILER,%p/var/lib/fink/path-prefix-10.6/cc,' \
-								%p/share/%{Ni}/%v/scripts/oct-compiler.in > %p/bin/oct-cc
-					perl -p -e 's,COMPILER,%p/var/lib/fink/path-prefix-10.6/c++,' \
-								%p/share/%{Ni}/%v/scripts/oct-compiler.in > %p/bin/oct-cxx
-					chmod a+x oct-cc oct-cxx
-			 	else
-			 		# default cc compilers on powerpc and i386 builds with proper arch.
-					ln -s /usr/bin/gcc oct-cc
-					perl -p -e 's,COMPILER,%p/var/lib/fink/path-prefix-g++-4.0/c++,' \
-								%p/share/%{Ni}/%v/scripts/oct-compiler.in > %p/bin/oct-cxx 
-					chmod a+x oct-cxx
-				fi ;;
-			# fangism--feel free to update this
-			*)  printf "You will need to generate your own %p/bin/oct-cc and %p/bin/oct-cxx symlinks.\n" ;;
-		esac
+		ln -s %p/bin/gcc-fsf-%type_raw[gcc] oct-cc
+		ln -s %p/bin/g++-fsf-%type_raw[gcc] oct-cxx
 	<<
 	PreRmScript: <<
 		if [ -e %p/bin/oct-cc ]
@@ -714,6 +691,13 @@ Switch to using gcc47.  Since octave-forge packages for octave < 3.6.0
 link to whatever gcc4N Octave is using, and also since some other packages
 actually use gcc-4.N, add "liboctave-gcc47-dev" and "liboctave-gcc47" 
 Provides, to make sure that things stay in sync; the latter isn't used yet.
+
+As of revision 3014:
+Doesn't build on 10.5/powerpc with Xcode's gcc, with missing symbols in
+linking to libgfortran.  However, it _does_ work, if we use gcc-fsf-4.7
+instead, so we'll go with that option for all platforms.
+
+
 <<
 Homepage: http://www.octave.org/
 License: GPL3
