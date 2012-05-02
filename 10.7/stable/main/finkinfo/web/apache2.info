@@ -1,0 +1,869 @@
+Package: apache2
+Version: 2.2.22
+Revision: 1
+###
+Provides: httpd
+BuildDepends: libaprutil.0-dev, libapr.0-dev, libpcap1, libpcre1, pkgconfig, openssl, openssl100-dev, openldap24-dev
+Depends: %N-mpm-prefork (= %v-%r) | %N-mpm-worker (= %v-%r) | %N-mpm-event (= %v-%r), %N.2-common (= %v-%r)
+###
+Source: mirror:apache:httpd/httpd-%v.tar.gz
+Source-MD5: d77fa5af23df96a8af68ea8114fa6ce1
+###
+PatchFile: %n.patch
+PatchFile-MD5: 5a853d0244c3ff37796616a8f9fb5905
+PatchScript: <<
+  sed -e 's,@FINKPREFIX@,%p,g' %{PatchFile} | patch -p1
+
+  ## decode new icons
+  for i in %b/fink/icons/*.txt; do cd %b/fink/icons; uudecode < $i; done
+
+  ### FIX DARWIN LAYOUT
+  perl -pi -e 's,/usr,,g' config.layout
+  perl -pi -e 's,/libexec\+,/lib/apache2/modules,g' config.layout
+  perl -pi -e 's,/Library/WebServer,\$\{exec_prefix\}/share/apache2,g' config.layout
+  perl -pi -e 's,/etc\+,\$\{prefix\}/etc/apache2,g' config.layout
+  perl -pi -e 's,/share/httpd/build,/share/apache2/build,g' config.layout
+  perl -pi -e 's,\$\{prefix\}/share/httpd/icons,\$\{datadir\}/icons,g' config.layout
+  perl -pi -e 's,\$\{prefix\}/share/httpd/error,\$\{datadir\}/error,g' config.layout
+  perl -pi -e 's,\$\{datadir\}/Documents,\$\{prefix\}/share/apache2/default-site,g' config.layout
+  perl -pi -e 's,\$\{datadir\}/share/httpd/manual,\$\{htdocsdir\}/manual,g' config.layout
+  perl -pi -e 's,\$\{datadir\}/CGI-Executables,\$\{prefix\}/lib/cgi-bin,g' config.layout
+  perl -pi -e 's,/include\+,/include/apache2,g' config.layout
+  perl -pi -e 's,/var,\$\{prefix\}/var/run,g' config.layout
+  perl -pi -e 's,\$\{localstatedir\}/run,\$\{prefix\}/var/run,g' config.layout
+  perl -pi -e 's,\$\{localstatedir\}/log\+,\$\{prefix\}/var/log/apache2,g' config.layout
+  perl -pi -e 's,\$\{runtimedir\}/proxy,\$\{prefix\}/var/cache/apache2/proxy,g' config.layout
+
+  ### Force use of awk over gawk
+  perl -pi -e 's,gawk mawk nawk awk,awk mawk nawk gawk,g' configure
+
+  ### Force system ssl for mod_ssl
+#  perl -pi -e 's,-lssl ,-L%p/lib/system-openssl/lib/ -lssl ,g' configure
+#  perl -pi -e 's,-export-symbols-regex ssl_module,,g' configure
+
+  ### fix perl path for example cgis
+  perl -pi -e 's,usr\/local\/bin\/perl,usr\/bin\/perl,g' docs/cgi-examples/printenv
+
+  ### Fix userdir example to use defult OS X Setup
+  perl -pi -e 's,\/home\/,\/Users\/,g' docs/conf/extra/httpd-userdir.conf.in
+  perl -pi -e 's,public_html,Sites,g' docs/conf/extra/httpd-userdir.conf.in
+<<
+###
+DocFiles: ABOUT_APACHE LICENSE CHANGES INSTALL LAYOUT README* VERSIONING
+###
+ConfigureParams: <<
+--enable-authn-alias=shared --enable-authnz-ldap=shared \
+--enable-disk-cache=shared --enable-cache=shared \
+--enable-mem-cache=shared --enable-file-cache=shared \
+--enable-cern-meta=shared --enable-dumpio=shared --enable-ext-filter=shared \
+--enable-charset-lite=shared --enable-cgi=shared \
+--enable-dav-lock=shared --enable-log-forensic=shared \
+--enable-ldap=shared --enable-proxy=shared \
+--enable-proxy-connect=shared --enable-proxy-ftp=shared \
+--enable-proxy-http=shared --enable-proxy-ajp=shared \
+--enable-proxy-scgi=shared \
+--enable-proxy-balancer=shared --enable-ssl=shared \
+--enable-authn-dbm=shared --enable-authn-anon=shared \
+--enable-authn-dbd=shared --enable-authn-file=shared \
+--enable-authn-default=shared --enable-authz-host=shared \
+--enable-authz-groupfile=shared --enable-authz-user=shared \
+--enable-authz-dbm=shared --enable-authz-owner=shared \
+--enable-authnz-ldap=shared --enable-authz-default=shared \
+--enable-auth-basic=shared --enable-auth-digest=shared \
+--enable-dbd=shared --enable-deflate=shared \
+--enable-include=shared --enable-filter=shared \
+--enable-env=shared --enable-mime-magic=shared \
+--enable-expires=shared --enable-headers=shared \
+--enable-ident=shared --enable-usertrack=shared \
+--enable-unique-id=shared --enable-setenvif=shared \
+--enable-version=shared --enable-status=shared \
+--enable-autoindex=shared --enable-asis=shared \
+--enable-info=shared --enable-cgid=shared \
+--enable-dav=shared --enable-dav-fs=shared \
+--enable-vhost-alias=shared --enable-negotiation=shared \
+--enable-dir=shared --enable-imagemap=shared \
+--enable-actions=shared --enable-speling=shared \
+--enable-userdir=shared --enable-alias=shared \
+--enable-rewrite=shared --enable-mime=shared \
+--enable-substitute=shared  --enable-reqtimeout=shared
+<<
+CompileScript: <<
+#!/bin/sh -ex
+### All the actual compile stuff is in the InstallScript to keep things cleaner
+  if [ -e %p/include/httpd.h ]; then 
+    echo "" 
+    echo "::: You have an OLD version of fink apache2 installed." 
+    echo "::: Please \"fink remove apache2\" and retry!" 
+    echo "" 
+    exit 1 
+  fi
+<<
+InstallScript: <<
+#!/bin/sh -ex
+
+COMMON_CONFARGS="--enable-layout=Darwin --enable-so \
+	--with-program-name=apache2 \
+	--with-ldap=yes --with-ldap-include=%p/include\
+	--with-ldap-lib=%p/lib \
+	--with-suexec-caller=www \
+	--with-suexec-bin=%p/lib/apache2/suexec \
+	--with-suexec-docroot=%p/var/www \
+	--with-suexec-userdir=Sites \
+	--with-suexec-logfile=%p/var/log/apache2/suexec.log \
+	--enable-suexec=shared \
+	--enable-log-config=static --enable-logio=static \
+	--with-apr=%p/bin/apr-1-config \
+	--with-apr-util=%p/bin/apu-1-config \
+	--with-pcre=yes \
+	--enable-pie";
+
+prefork_CONFARGS="--enable-modules=none";
+
+threaded_CONFARGS="%c";
+
+MPMS="worker prefork event";
+
+for i in $MPMS; do
+	mkdir %b/fink/$i;
+	cp -a `find . -maxdepth 1 -mindepth 1 -not -name fink` %b/fink/$i;
+	if [ "$$i" = "prefork" ] ; then
+		cd %b/fink/$i && ./configure $COMMON_CONFARGS --with-mpm=$i $prefork_CONFARGS;
+	else
+		cd %b/fink/$i && ./configure $COMMON_CONFARGS --with-mpm=$i $threaded_CONFARGS;
+	fi
+	cd %b/fink/$i && make;
+	cd %b/fink/$i && make install DESTDIR=%d;
+	perl -pi -e 's,get_vars\(\"sbindir\"\) \. \"/envvars\",\"%p/etc/apache2/envvars\",g' %i/sbin/apxs
+	mv %i/sbin/envvars* %i/share/apache2/build/
+	mv %i/share/apache2/build/envvars %i/etc/apache2/
+	mkdir %i/lib/apache2/mpm-$i;
+	mv %i/sbin/apache2 %i/lib/apache2/mpm-$i/apache2;
+	mv %i/lib/apache2/modules/httpd.exp %i/lib/apache2/modules/httpd.exp-$i;
+	mv %i/include %i/include-$i;
+	mv %i/share/apache2/build %i/share/apache2/build-$i;
+	rm -f %i/share/apache2/build-$i/envvars-std;
+	mv %i/sbin/apxs %i/sbin/apxs2-$i;
+	cd server; make clean; cd -;
+done
+
+mkdir -p %i/share/apache2/build;
+mv %b/fink/worker/support/envvars-std %i/share/apache2/build;
+chmod +x %i/share/apache2/build/envvars-std;
+mv %i/etc/apache2/mime.types %i/etc/mime.types;
+rm -rf %i/include-event;
+rm -rf %i/share/apache2/build-event;
+rm -rf %i/sbin/apxs2-event;
+rm -rf %i/lib/apache2/modules/httpd.exp-event;
+rm -rf %i/lib/apache2/modules/httpd.exp-prefork;
+mv %i/lib/apache2/modules/httpd.exp-worker %i/lib/apache2/modules/httpd.exp;
+
+mv %i/share/man/man1/apxs.1 %i/share/man/man1/apxs2-prefork.1
+cp %i/share/man/man1/apxs2-prefork.1 %i/share/man/man1/apxs2-worker.1
+
+# config stuff
+rm -rf %i/etc/apache2/*.conf
+
+# move the html manual to a more suitable location
+mkdir -p %i/share/doc/apache2-doc
+mv %i/share/apache2/default-site/manual %i/share/doc/apache2-doc/manual
+# Convert it to a better layout
+perl %b/fink/convert_docs %i/share/doc/apache2-doc/manual
+
+# fink html manual
+grep -rl apachectl %i/share/doc/apache2-doc/manual | xargs perl -pi -e 's/apachectl(?!\.html)/apache2ctl/g'
+
+# ssl stuff
+mkdir -p %i/share/ssl-cert
+cp %b/fink/ssleay.cnf %i/share/ssl-cert/ssleay.cnf
+install -m 755 %b/fink/ssl-certificate %i/sbin/make-ssl-cert
+
+# This is needed to apache and apache2 and co-exist
+mkdir -p %i/etc/apache2/mods-available
+mkdir -p %i/etc/apache2/mods-enabled
+mkdir -p %i/etc/apache2/sites-available
+mkdir -p %i/etc/apache2/sites-enabled
+mkdir -p %i/etc/apache2/conf.d
+mkdir -p %i/share/apache2/config
+mkdir -p %i/var/lock/apache2
+mkdir -p %i/var/cache/apache2/proxy
+mkdir -p %i/var/log/apache2
+mkdir -p %i/var/run/apache2
+mkdir -p %i/var/www
+
+rm %i/share/man/man8/apachectl.8
+rm %i/share/man/man8/httpd.8
+
+mv %i/sbin/ab %i/bin/ab
+mv %i/sbin/dbmmanage %i/bin/dbmmanage
+mv %i/sbin/htdbm %i/bin/htdbm
+mv %i/sbin/htdigest %i/bin/htdigest
+mv %i/sbin/htpasswd %i/bin/htpasswd
+mv %i/sbin/logresolve %i/bin/logresolve
+
+cp %b/fink/worker/support/check_forensic %i/sbin
+chmod +x %i/sbin/check_forensic
+cp %b/fink/worker/support/split-logfile %i/sbin
+chmod +x %i/sbin/split-logfile
+if [ -f %i/sbin/apache2ctl ] ; then
+  rm %i/sbin/apache2ctl;
+fi
+if [ -f %i/sbin/apachectl ] ; then
+  rm %i/sbin/apachectl;
+fi
+cp %b/fink/apache2ctl %i/sbin
+chmod +x %i/sbin/apache2ctl
+ln -s %p/sbin/apache2ctl %i/sbin/apachectl
+
+
+mkdir -p %i/share/man/man8
+cp %b/fink/*.8 %i/share/man/man8
+
+cp %b/fink/icons/*.png %i/share/apache2/icons/
+
+mv %i/sbin/suexec %i/lib/apache2/suexec
+chmod 4754 %i/lib/apache2/suexec
+
+cp -R %b/fink/config-dir/* %i/etc/apache2/
+
+mv %i/etc/apache2/extra %i/share/apache2/config
+mv %i/etc/apache2/original %i/share/apache2/config
+
+chmod +x %i/lib/cgi-bin/*
+
+if [ -f %i/etc/apache2/envvars ] ; then
+	rm %i/etc/apache2/envvars;
+fi
+install -m644 %b/fink/config-dir/envvars %i/etc/apache2/envvars
+if [ -f %i/etc/apache2/magic ] ; then
+	rm %i/etc/apache2/magic;
+fi
+install -m644 %b/fink/config-dir/magic %i/etc/apache2/magic
+if [ -f %i/etc/apache2/ports.conf ] ; then
+	rm %i/etc/apache2/ports.conf;
+fi
+install -m644 %b/fink/config-dir/ports.conf %i/etc/apache2/ports.conf
+if [ -f %i/etc/apache2/apache2.conf ] ; then
+	rm %i/etc/apache2/apache2.conf;
+fi
+install -m644 %b/fink/config-dir/apache2.conf %i/etc/apache2/apache2.conf
+install -m755 %b/fink/a2enmod %i/sbin/a2enmod
+ln -s %p/sbin/a2enmod %i/sbin/a2dismod
+ln -s %p/sbin/a2enmod %i/sbin/a2ensite
+ln -s %p/sbin/a2enmod %i/sbin/a2dissite
+
+cp %b/fink/apache2-doc.conf %i/etc/apache2/conf.d/apache2-doc
+
+chmod 4750 %i/lib/apache2/suexec
+
+mkdir -p %i/etc/logrotate.d
+cp %b/fink/logrotate %i/etc/logrotate.d/apache2
+
+mkdir -p %i/etc/bash_completion.d
+install -m755 %b/fink/bash_completion %i/etc/bash_completion.d/apache2
+<<
+###
+SplitOff: <<
+  Package: ssl-cert
+  Depends: openssl
+  Description: Simple wrapper for OpenSSL
+  DescDetail: <<
+This package enables unattended installs of packages that need to create SSL
+certificates.
+
+It is a simple wrapper for OpenSSL's certificate request utility that feeds it
+with the correct user variables.
+  <<
+  DocFiles: LICENSE
+  ConfFiles: <<
+    %p/share/ssl-cert/ssleay.cnf
+  <<
+  Files: <<
+    share/ssl-cert
+    share/man/man8/make-ssl-cert.8
+    sbin/make-ssl-cert
+  <<
+<<
+SplitOff2: <<
+  Package: %N-suexec
+  Depends: %N.2-common (= %v-%r)
+  Description: Standard suexec program for Apache 2 mod_suexec
+  DescDetail: <<
+Provides the standard suexec helper program for mod_suexec. This version is
+compiled with document root /var/www and userdir suffix public_html.
+  <<
+  Files: <<
+    lib/apache2/suexec
+    share/man/man8/suexec.8
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+if [ "$1" != "configure" ]; then
+	exit 0
+fi
+
+chgrp www %p/lib/apache2/suexec
+
+exit 0
+  <<
+<<
+SplitOff3: <<
+  Package: %N-doc
+  Description: Apache HTTP Server documentation
+  DescDetail: <<
+This package provides the documentation for Apache 2. For more details see the
+apache2 package description.
+
+See http://localhost/manual/index.html.en for more info after install.
+  <<
+  ConfFiles: %p/etc/apache2/conf.d/apache2-doc
+  Files: <<
+    share/doc/apache2-doc
+    etc/apache2/conf.d/apache2-doc
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+if [ "$1" = "upgrade" ]; then
+	%p/sbin/apache2ctl restart
+fi
+  <<
+  PostRmScript: <<
+if [ "$1" = "upgrade" ]; then
+	%p/sbin/apache2ctl restart
+fi
+  <<
+<<
+SplitOff4: <<
+  Package: %N-prefork-dev
+  BuildDependsOnly: true
+  Depends: %N.2-common (= %v-%r)
+  Conflicts: %N-threaded-dev
+  Replaces: %N-threaded-dev
+  Description: Apache2 Developement headers - non-threaded MPM 
+  DescDetail: <<
+This package provides the development headers and apxs2 binary for
+apache2-mpm-prefork; see the apache2 package description for more details.
+
+This should only be used when you absolutely *must* support a non-threaded
+environment (for PHP, for example).
+  <<
+  InstallScript: <<
+    mkdir -p %i/sbin
+    mkdir -p %i/share/man/man1
+    mkdir -p %i/share/apache2
+    mv %I/include-prefork %i/include
+    mv %I/sbin/apxs2-prefork %i/sbin/apxs2
+    mv %I/share/man/man1/apxs2-prefork.1 %i/share/man/man1/apxs2.1
+    mv %I/share/apache2/build-prefork %i/share/apache2/build
+  <<
+  DocFiles: LICENSE
+<<
+SplitOff5: <<
+  Package: %N-threaded-dev
+  BuildDependsOnly: true
+  Depends: %N.2-common (= %v-%r)
+  Conflicts: %N-prefork-dev
+  Replaces: %N-prefork-dev
+  Description: Apache2 Developement headers - threaded MPM 
+  DescDetail: <<
+This package provides the development headers and apxs2 binary for threaded
+versions of apache2; see the apache2 package description for more details.
+  <<
+  InstallScript: <<
+    mkdir -p %i/sbin
+    mkdir -p %i/share/man/man1
+    mkdir -p %i/share/apache2
+    mv %I/include-worker %i/include
+    mv %I/sbin/apxs2-worker %i/sbin/apxs2
+    mv %I/share/man/man1/apxs2-worker.1 %i/share/man/man1/apxs2.1
+    mv %I/share/apache2/build-worker %i/share/apache2/build
+  <<
+  DocFiles: LICENSE
+<<
+SplitOff6: <<
+  Package: %N.2-common
+  Depends: %N-utils (= %v-%r), %N.2-bin (= %v-%r), bash-completion, daemonic, file, logrotate, ssl-cert
+  ConfFiles: <<
+    %p/etc/apache2/mods-available/actions.conf
+    %p/etc/apache2/mods-available/actions.load
+    %p/etc/apache2/mods-available/alias.conf
+    %p/etc/apache2/mods-available/alias.load
+    %p/etc/apache2/mods-available/asis.load
+    %p/etc/apache2/mods-available/auth_basic.load
+    %p/etc/apache2/mods-available/auth_digest.load
+    %p/etc/apache2/mods-available/authn_alias.load
+    %p/etc/apache2/mods-available/authn_anon.load
+    %p/etc/apache2/mods-available/authn_dbd.load
+    %p/etc/apache2/mods-available/authn_dbm.load
+    %p/etc/apache2/mods-available/authn_default.load
+    %p/etc/apache2/mods-available/authn_file.load
+    %p/etc/apache2/mods-available/authnz_ldap.load
+    %p/etc/apache2/mods-available/authz_dbm.load
+    %p/etc/apache2/mods-available/authz_default.load
+    %p/etc/apache2/mods-available/authz_groupfile.load
+    %p/etc/apache2/mods-available/authz_host.load
+    %p/etc/apache2/mods-available/authz_owner.load
+    %p/etc/apache2/mods-available/authz_user.load
+    %p/etc/apache2/mods-available/autoindex.conf
+    %p/etc/apache2/mods-available/autoindex.load
+    %p/etc/apache2/mods-available/cache.load
+    %p/etc/apache2/mods-available/cern_meta.load
+    %p/etc/apache2/mods-available/cgid.conf
+    %p/etc/apache2/mods-available/cgid.load
+    %p/etc/apache2/mods-available/cgi.load
+    %p/etc/apache2/mods-available/charset_lite.load
+    %p/etc/apache2/mods-available/dav_fs.conf
+    %p/etc/apache2/mods-available/dav_fs.load
+    %p/etc/apache2/mods-available/dav.load
+    %p/etc/apache2/mods-available/dav_lock.load
+    %p/etc/apache2/mods-available/dbd.load
+    %p/etc/apache2/mods-available/deflate.conf
+    %p/etc/apache2/mods-available/deflate.load
+    %p/etc/apache2/mods-available/dir.conf
+    %p/etc/apache2/mods-available/dir.load
+    %p/etc/apache2/mods-available/disk_cache.conf
+    %p/etc/apache2/mods-available/disk_cache.load
+    %p/etc/apache2/mods-available/dump_io.load
+    %p/etc/apache2/mods-available/env.load
+    %p/etc/apache2/mods-available/expires.load
+    %p/etc/apache2/mods-available/ext_filter.load
+    %p/etc/apache2/mods-available/file_cache.load
+    %p/etc/apache2/mods-available/filter.load
+    %p/etc/apache2/mods-available/headers.load
+    %p/etc/apache2/mods-available/ident.load
+    %p/etc/apache2/mods-available/imagemap.load
+    %p/etc/apache2/mods-available/include.load
+    %p/etc/apache2/mods-available/info.conf
+    %p/etc/apache2/mods-available/info.load
+    %p/etc/apache2/mods-available/ldap.conf
+    %p/etc/apache2/mods-available/ldap.load
+    %p/etc/apache2/mods-available/log_forensic.load
+    %p/etc/apache2/mods-available/mem_cache.conf
+    %p/etc/apache2/mods-available/mem_cache.load
+    %p/etc/apache2/mods-available/mime.conf
+    %p/etc/apache2/mods-available/mime.load
+    %p/etc/apache2/mods-available/mime_magic.conf
+    %p/etc/apache2/mods-available/mime_magic.load
+    %p/etc/apache2/mods-available/negotiation.conf
+    %p/etc/apache2/mods-available/negotiation.load
+    %p/etc/apache2/mods-available/proxy_ajp.load
+    %p/etc/apache2/mods-available/proxy_balancer.conf
+    %p/etc/apache2/mods-available/proxy_balancer.load
+    %p/etc/apache2/mods-available/proxy.conf
+    %p/etc/apache2/mods-available/proxy_connect.load
+    %p/etc/apache2/mods-available/proxy_ftp.conf
+    %p/etc/apache2/mods-available/proxy_ftp.load
+    %p/etc/apache2/mods-available/proxy_http.load
+    %p/etc/apache2/mods-available/proxy.load
+    %p/etc/apache2/mods-available/proxy_scgi.load
+    %p/etc/apache2/mods-available/reqtimeout.conf
+    %p/etc/apache2/mods-available/reqtimeout.load
+    %p/etc/apache2/mods-available/rewrite.load
+    %p/etc/apache2/mods-available/setenvif.conf
+    %p/etc/apache2/mods-available/setenvif.load
+    %p/etc/apache2/mods-available/speling.load
+    %p/etc/apache2/mods-available/ssl.conf
+    %p/etc/apache2/mods-available/ssl.load
+    %p/etc/apache2/mods-available/status.conf
+    %p/etc/apache2/mods-available/status.load
+    %p/etc/apache2/mods-available/substitute.load
+    %p/etc/apache2/mods-available/suexec.load
+    %p/etc/apache2/mods-available/unique_id.load
+    %p/etc/apache2/mods-available/userdir.conf
+    %p/etc/apache2/mods-available/userdir.load
+    %p/etc/apache2/mods-available/usertrack.load
+    %p/etc/apache2/mods-available/version.load
+    %p/etc/apache2/mods-available/vhost_alias.load
+    %p/etc/apache2/apache2.conf
+    %p/etc/apache2/conf.d/charset
+    %p/etc/apache2/conf.d/localized-error-pages
+    %p/etc/apache2/conf.d/other-vhosts-access-log
+    %p/etc/apache2/conf.d/security
+    %p/etc/apache2/envvars
+    %p/etc/apache2/magic
+    %p/etc/apache2/ports.conf
+    %p/etc/apache2/sites-available/default
+    %p/etc/apache2/sites-available/default-ssl
+    %p/etc/bash_completion.d/apache2
+    %p/etc/logrotate.d/apache2
+    %p/etc/mime.types
+  <<
+  Files: <<
+    etc/apache2/apache2.conf
+    etc/apache2/conf.d
+    etc/apache2/envvars
+    etc/apache2/magic
+    etc/apache2/mods-available
+    etc/apache2/ports.conf
+    etc/apache2/sites-available
+    etc/bash_completion.d
+    etc/logrotate.d
+    etc/mime.types
+    var
+    lib/cgi-bin
+    share/apache2
+    share/man/man8/a2dismod.8
+    share/man/man8/a2dissite.8
+    share/man/man8/a2enmod.8
+    share/man/man8/a2ensite.8
+    share/man/man8/apache2.8
+    share/man/man8/apache2ctl.8
+    share/man/man8/apachectl.8
+    sbin/apache2ctl
+    sbin/apachectl
+    sbin/a2dismod
+    sbin/a2enmod
+    sbin/a2dissite
+    sbin/a2ensite
+  <<
+  DocFiles: ABOUT_APACHE LICENSE CHANGES INSTALL LAYOUT README* VERSIONING
+  DaemonicName: apache2
+  DaemonicFile: <<
+   <service>
+    <description>Apache2 web server</description>
+    <message>Apache2 web server</message>
+
+    <daemon name="apache2">
+      <executable background="yes">%p/sbin/apache2ctl</executable>
+      <parameters> -k start</parameters>
+    </daemon>
+   </service>
+  <<
+  PreInstScript: <<
+if [ -f %p/etc/apache2/httpd.conf ]; then
+	# Check to see it's not just a place holder
+	if [ `stat -c %%s %p/etc/apache2/httpd.conf` -gt 368 ]; then
+		echo ""
+		echo "WARNING: the modules and base directory have changed.  This will"
+		echo "         affect the logs, htdocs, cgi-bin, etc directories.  You"
+		echo "         *MUST*  update your config files, by choosing 'Y' at the"
+		echo "         conf file update prompt, or by updating your current conf"
+		echo "         conf files to reflect the changes."
+		echo ""
+		/bin/echo  "Do you want to continue [Y/n] ? \c";
+		read CONTINUECHOICE
+		case $CONTINUECHOICE in
+			y|Y|'' ) ;;
+			* ) exit 1 ;;
+		esac 
+	fi
+fi
+exit 0
+  <<
+  PostInstScript: <<
+if [ "$1" != "configure" ]; then
+	exit 0
+fi
+
+mod_is_enabled() {
+	test -L %p/etc/apache2/mods-enabled/$1.load
+}
+
+# Note, this line catches new installs as well as upgrades
+if dpkg --compare-versions "$2" lt 2.2.3-3.1; then
+        a2enmod -q alias
+        a2enmod -q autoindex
+        a2enmod -q dir
+        a2enmod -q env
+        a2enmod -q mime
+        a2enmod -q negotiation
+        a2enmod -q setenvif
+        a2enmod -q status
+        a2enmod -q auth_basic
+        a2enmod -q deflate
+
+        # Those come from mod_auth:
+        a2enmod -q authz_default
+        a2enmod -q authz_user
+        a2enmod -q authz_groupfile
+        a2enmod -q authn_file
+
+        # This comes from mod_access:
+        a2enmod -q authz_host
+fi
+
+if [ -n "$2" ] && dpkg --compare-versions "$2" lt 2.2.15-4~ ; then
+        echo activating new config files ...
+        for a in ldap proxy_balancer proxy_ftp ; do
+                if mod_is_enabled $a && [ ! -e %p/etc/apache2/mods-enabled/$a.conf ] ; then
+                        a2enmod -q $a
+                fi
+        done
+        echo " done."
+fi
+
+# Note, this line catches new installs as well as upgrades
+if dpkg --compare-versions "$2" lt 2.2.7-1~0; then
+        if [ ! -e %p/var/www/index.html  -a \
+             ! -h %p/var/www/index.html  -a \
+             ! -e %p/var/www/index.cgi   -a \
+             ! -e %p/var/www/index.pl    -a \
+             ! -e %p/var/www/index.php   -a \
+             ! -e %p/var/www/index.xhtml -a \
+             ! -e %p/var/www/index.htm ] ; then
+                cp %p/share/apache2/default-site/index.html %p/var/www/index.html
+		chown www:www %p/var/www/index.html
+        fi
+fi
+
+# DavLockDB format change
+if dpkg --compare-versions "$2" lt 2.2.14-3~; then
+        rm -f %p/var/lock/apache2/DAVLock.dir %p/var/lock/apache2/DAVLock.pag
+fi
+
+# Note, this line catches new installs as well as upgrades
+if dpkg --compare-versions "$2" lt 2.2.15-1~0; then
+        a2enmod -q reqtimeout
+fi
+
+[ -f %p/etc/apache2/httpd.conf ] || touch %p/etc/apache2/httpd.conf
+
+#set up default site and dummy error and access logs
+if [ "$2" = "<unknown>" -o -z "$2" ]; then
+	if [ ! -L %p/etc/apache2/sites-enabled/000-default -a \
+	     ! -f %p/etc/apache2/sites-enabled/000-default ]; then
+		ln -s %p/etc/apache2/sites-available/default %p/etc/apache2/sites-enabled/000-default
+	fi
+	touch %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+	chown www:www %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+	chmod 0640 %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+fi
+
+chown -R root:www %p/var/lock/apache2
+chown -R www:www %p/var/cache/apache2
+chown -R www:www %p/var/log/apache2
+chmod 755 %p/var/log/apache2
+chmod 644 %p/var/log/apache2/*.log
+chown -R root:www %p/var/run/apache2
+chown root:www %p/lib/apache2/suexec
+chown -R www:www %p/var/www
+
+exit 0
+  <<
+  PostRmScript: <<
+if [ "$1" = "purge" ]
+then
+	rm -rf %p/var/cache/apache2
+	rm -rf %p/var/lib/apache2
+	rm -rf %p/var/log/apache2
+	rm -rf %p/var/lock/apache2
+	rm -rf %p/var/run/apache2
+	# /etc mess
+	rm -f %p/etc/default/apache2
+	for i in `find %p/etc/apache2 -type l`; do
+		rm -f "$i"
+	done
+fi
+
+exit 0
+  <<
+  Description: Apache HTTP Server common files
+  DescDetail: <<
+The Apache Software Foundation's goal is to build a secure, efficient and
+extensible HTTP server as standards-compliant open source software. The result
+has long been the number one web server on the Internet.
+
+This package contains the configuration and support scripts. However, it does
+*not* include the server itself; for this you need to install one of the
+apache2-mpm-* packages, such as worker or prefork.
+  <<
+<<
+###
+SplitOff7: <<
+  Package: %N-utils
+  Depends: libapr.0-shlibs, libaprutil.0-shlibs, openssl100-shlibs
+  Files: <<
+    bin
+    sbin
+    share
+  <<
+  DocFiles: LICENSE
+  Description: Utility programs for webservers
+  DescDetail: <<
+Provides some add-on programs useful for any webserver.  These include:
+  - ab (Apache benchmark tool)
+  - logresolve (Resolve IP addresses to hostname in logfiles)
+  - htpasswd (Manipulate basic authentication files)
+  - htdigest (Manipulate digest authentication files)
+  - dbmmanage (Manipulate basic authentication files in DBM format, using perl)
+  - htdbm (Manipulate basic authentication files in DBM format, using APR)
+  - rotatelogs (Periodically stop writing to a logfile and open a new one)
+  - split-logfile (Split a single log including multiple vhosts)
+  - checkgid (Checks whether the caller can setgid to the specified group)
+  - check_forensic (Extract mod_log_forensic output from apache log files)
+  <<
+<<
+###
+SplitOff8: <<
+  Package: %N.2-bin
+  Depends: libapr.0-shlibs, libaprutil.0-shlibs, libaprutil.0-sqlite3 | libaprutil.0-postgresql, libpcre1-shlibs, openldap24-shlibs, openssl100-shlibs
+  Description: Apache HTTP Server common binary files
+  DescDetail: <<
+The Apache Software Foundation's goal is to build a secure, efficient and
+extensible HTTP server as standards-compliant open source software. The result
+has long been the number one web server on the Internet.
+
+This package contains all binaries but no configuration or support scripts. To
+get a stand-alone server, you need to install one of the apache2-mpm-*
+packages, such as worker or prefork. Other packages like gnome-user-share may
+bring their own Apache configuration, though.
+  <<
+  Files: <<
+    lib
+  <<
+  DocFiles: LICENSE
+<<
+###
+SplitOff9: <<
+  Package: %N-mpm-prefork
+  Provides: apache2
+  Depends: %N.2-bin (= %v-%r), %N.2-common (= %v-%r)
+  Replaces: apache2-mpm-worker, apache2-mpm-event
+  Conflicts: apache2-mpm-worker, apache2-mpm-event
+  Description: Apache HTTP Server - traditional non-threaded model [RECOMMENDED]
+  DescDetail: <<
+Each Apache Multi-Processing Module provides a different "flavor" of web server
+binary, compiled with a different processing model.
+
+The prefork MPM provides a non-threaded implementation using a variable number
+of processes where each process handles only one connection at the same time.
+It is not as fast as threaded models, but is considered to be more stable. It
+is appropriate for sites that need to maintain compatibility with
+non-thread-safe libraries, and is the best MPM for isolating each request, so
+that a problem with a single request will not affect any other.
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+if [ "$1" = "upgrade" ]; then
+	%p/bin/daemonic update apache2
+	%p/sbin/apache2ctl restart
+fi
+
+update-alternatives --install %p/sbin/apache2 apache2 %p/lib/apache2/mpm-prefork/apache2 60
+
+%p/bin/daemonic enable apache2
+
+if [ -f /Library/StartupItems/daemonic-apache2/daemonic-apache2 ]
+then
+	%p/sbin/apache2ctl restart
+fi
+
+exit 0
+  <<
+  PreRmScript: <<
+if [ $1 != "upgrade" ]
+then
+	%p/sbin/apache2ctl stop
+	%p/bin/daemonic disable apache2
+	update-alternatives --remove apache2 %p/lib/apache2/mpm-prefork/apache2
+fi
+
+exit 0
+  <<
+<<
+###
+SplitOff10: <<
+  Package: %N-mpm-worker
+  Provides: apache2
+  Depends: %N.2-bin (= %v-%r), %N.2-common (= %v-%r)
+  Replaces: apache2-mpm-prefork, apache2-mpm-event
+  Conflicts: apache2-mpm-prefork, apache2-mpm-event
+  Description: Apache HTTP Server - high speed threaded model
+  DescDetail: <<
+Each Apache Multi-Processing Module provides a different "flavor" of web server
+binary, compiled with a different processing model.
+
+The worker MPM provides the default threaded implementation. It is recommended
+especially for high-traffic sites because it is faster and has a smaller memory
+footprint than the traditional prefork MPM.
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+if [ "$1" = "upgrade" ]; then
+	%p/bin/daemonic update apache2
+	%p/sbin/apache2ctl restart
+fi
+
+update-alternatives --install %p/sbin/apache2 apache2 %p/lib/apache2/mpm-worker/apache2 60
+
+%p/bin/daemonic enable apache2
+
+if [ -f /Library/StartupItems/daemonic-apache2/daemonic-apache2 ]
+then
+	%p/sbin/apache2ctl restart
+fi
+
+exit 0
+  <<
+  PreRmScript: <<
+if [ $1 != "upgrade" ]
+then
+	%p/sbin/apache2ctl stop
+	%p/bin/daemonic disable apache2
+	update-alternatives --remove apache2 %p/lib/apache2/mpm-worker/apache2
+fi
+
+exit 0
+  <<
+<<
+###
+SplitOff11: <<
+  Package: %N-mpm-event
+  Provides: apache2
+  Depends: %N.2-bin (= %v-%r), %N.2-common (= %v-%r)
+  Replaces: apache2-mpm-prefork, apache2-mpm-worker
+  Conflicts: apache2-mpm-prefork, apache2-mpm-worker
+  Description: Apache HTTP Server - event driven model
+  DescDetail: <<
+Each Apache Multi-Processing Module provides a different "flavor" of web server
+binary, compiled with a different processing model.
+
+The event MPM is designed to allow more requests to be served simultaneously by
+passing off some processing work to supporting threads, freeing up the main
+threads to work on new requests. It is especially suitable for sites that see
+extensive KeepAlive traffic.
+
+This MPM is experimental and less tested than the worker and prefork MPMs.
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+if [ "$1" = "upgrade" ]; then
+	%p/bin/daemonic update apache2
+	%p/sbin/apache2ctl restart
+fi
+
+update-alternatives --install %p/sbin/apache2 apache2 %p/lib/apache2/mpm-event/apache2 60
+
+%p/bin/daemonic enable apache2
+
+if [ -f /Library/StartupItems/daemonic-apache2/daemonic-apache2 ]
+then
+	%p/sbin/apache2ctl restart
+fi
+
+exit 0
+  <<
+  PreRmScript: <<
+if [ $1 != "upgrade" ]
+then
+	%p/sbin/apache2ctl stop
+	%p/bin/daemonic disable apache2
+	update-alternatives --remove apache2 %p/lib/apache2/mpm-event/apache2
+fi
+
+exit 0
+  <<
+<<
+###
+Description: Apache HTTP Server metapackage
+DescDetail: <<
+The Apache Software Foundation's goal is to build a secure, efficient and
+extensible HTTP server as standards-compliant open source software. The result
+has long been the number one web server on the Internet.
+
+It features support for HTTPS, virtual hosting, CGI, SSI, IPv6, easy scripting
+and database integration, request/response filtering, many flexible
+authentication schemes, and more.
+<<
+License: BSD
+Homepage: http://www.apache.org
+Maintainer: Justin F. Hallett <thesin@users.sourceforge.net>
