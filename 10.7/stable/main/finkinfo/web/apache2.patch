@@ -2137,7 +2137,7 @@ diff -ruN httpd-2.2.22.orig/fink/config-dir/conf.d/security httpd-2.2.22/fink/co
 +
 diff -ruN httpd-2.2.22.orig/fink/config-dir/envvars httpd-2.2.22/fink/config-dir/envvars
 --- httpd-2.2.22.orig/fink/config-dir/envvars	1969-12-31 17:00:00.000000000 -0700
-+++ httpd-2.2.22/fink/config-dir/envvars	2012-05-01 16:21:11.000000000 -0600
++++ httpd-2.2.22/fink/config-dir/envvars	2012-05-10 16:21:07.000000000 -0600
 @@ -0,0 +1,37 @@
 +# envvars - default environment variables for apache2ctl
 +
@@ -2171,7 +2171,7 @@ diff -ruN httpd-2.2.22.orig/fink/config-dir/envvars httpd-2.2.22/fink/config-dir
 +
 +## The command to get the status for 'apache2ctl status'.
 +## Some packages providing 'www-browser' need '--dump' instead of '-dump'.
-+#export APACHE_LYNX='www-browser -dump'
++export APACHE_LYNX='lynx -dump'
 +
 +## If you need a higher file descriptor limit, uncomment and adjust the
 +## following line (default is 8192):
@@ -5125,6 +5125,1662 @@ diff -ruN httpd-2.2.22.orig/fink/make-ssl-cert.8 httpd-2.2.22/fink/make-ssl-cert
 +page was written for completness by Fabio M. Di Nitto
 +<fabbione@fabbione.net>, for the Debian GNU/Linux system
 +(but may be used by others).
+diff -ruN httpd-2.2.22.orig/fink/patches/CacheIgnoreURLSessionIdentifiers.patch httpd-2.2.22/fink/patches/CacheIgnoreURLSessionIdentifiers.patch
+--- httpd-2.2.22.orig/fink/patches/CacheIgnoreURLSessionIdentifiers.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/CacheIgnoreURLSessionIdentifiers.patch	2012-05-11 10:47:36.000000000 -0600
+@@ -0,0 +1,82 @@
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Fix CacheIgnoreURLSessionIdentifiers
++## DP: r892289, r897705 from upstream svn. Debian bug #556383
++
++--- a/modules/cache/cache_storage.c
+++++ b/modules/cache/cache_storage.c
++@@ -505,28 +505,60 @@
++                 && (*(param + len + 1) == '=')
++                 && !strchr(param + len + 2, '/')) {
++                 path = apr_pstrndup(p, path, param - path);
++-                break;
+++                continue;
++             }
++             /*
++              * Check if the identifier is in the querystring and cut it out.
++              */
++-            if (querystring
++-                && (param = strstr(querystring, *identifier))
++-                && (*(param + len) == '=')
++-                ) {
++-                char *amp;
++-
++-                if (querystring != param) {
++-                    querystring = apr_pstrndup(p, querystring,
++-                                               param - querystring);
+++            if (querystring) {
+++                /*
+++                 * First check if the identifier is at the beginning of the
+++                 * querystring and followed by a '='
+++                 */
+++                if (!strncmp(querystring, *identifier, len)
+++                    && (*(querystring + len) == '=')) {
+++                    param = querystring;
++                 }
++                 else {
++-                    querystring = "";
+++                    char *complete;
+++
+++                    /*
+++                     * In order to avoid subkey matching (PR 48401) prepend
+++                     * identifier with a '&' and append a '='
+++                     */
+++                    complete = apr_pstrcat(p, "&", *identifier, "=", NULL);
+++                    param = strstr(querystring, complete);
+++                    /* If we found something we are sitting on the '&' */
+++                    if (param) {
+++                        param++;
+++                    }
++                 }
++-                if ((amp = strchr(param + len + 1, '&'))) {
++-                    querystring = apr_pstrcat(p, querystring, amp + 1, NULL);
+++                if (param) {
+++                    char *amp;
+++
+++                    if (querystring != param) {
+++                        querystring = apr_pstrndup(p, querystring,
+++                                               param - querystring);
+++                    }
+++                    else {
+++                        querystring = "";
+++                    }
+++
+++                    if ((amp = strchr(param + len + 1, '&'))) {
+++                        querystring = apr_pstrcat(p, querystring, amp + 1, NULL);
+++                    }
+++                    else {
+++                        /*
+++                         * If querystring is not "", then we have the case
+++                         * that the identifier parameter we removed was the
+++                         * last one in the original querystring. Hence we have
+++                         * a trailing '&' which needs to be removed.
+++                         */
+++                        if (*querystring) {
+++                            querystring[strlen(querystring) - 1] = '\0';
+++                        }
+++                    }
++                 }
++-                break;
++             }
++         }
++     }
+diff -ruN httpd-2.2.22.orig/fink/patches/ab_num_requests.patch httpd-2.2.22/fink/patches/ab_num_requests.patch
+--- httpd-2.2.22.orig/fink/patches/ab_num_requests.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/ab_num_requests.patch	2012-05-11 10:48:37.000000000 -0600
+@@ -0,0 +1,42 @@
++## 082_ab_num_requests.dpatch by Stefan Fritsch <sf@debian.org>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Upstream r940526, Debian bug #541158
++
++--- a/support/ab.c
+++++ b/support/ab.c
++@@ -628,6 +628,10 @@
++ 
++ static void write_request(struct connection * c)
++ {
+++    if (started >= requests) {
+++        return;
+++    }
+++
++     do {
++         apr_time_t tnow;
++         apr_size_t l = c->rwrite;
++@@ -690,6 +694,7 @@
++         new_pollfd.client_data = c;
++         apr_pollset_add(readbits, &new_pollfd);
++     }
+++    started++;
++ }
++ 
++ /* --------------------------------------------------------- */
++@@ -1239,7 +1244,6 @@
++ 
++     /* connected first time */
++     c->state = STATE_CONNECTED;
++-    started++;
++ #ifdef USE_SSL
++     if (c->ssl) {
++         ssl_proceed_handshake(c);
++@@ -1768,7 +1772,6 @@
++                     }
++                     else {
++                         c->state = STATE_CONNECTED;
++-                        started++;
++ #ifdef USE_SSL
++                         if (c->ssl)
++                             ssl_proceed_handshake(c);
+diff -ruN httpd-2.2.22.orig/fink/patches/apache2_has_dso.patch httpd-2.2.22/fink/patches/apache2_has_dso.patch
+--- httpd-2.2.22.orig/fink/patches/apache2_has_dso.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/apache2_has_dso.patch	2012-05-11 11:21:41.000000000 -0600
+@@ -0,0 +1,38 @@
++## 009_apache2_has_dso by Adam Conrad <adconrad@0c3.net>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Make apxs usable without having apache2 installed.
++
++--- a/support/apxs.in
+++++ b/support/apxs.in
++@@ -198,18 +198,19 @@
++     ($httpd = $0) =~ s:support/apxs$::;
++ }
++ 
++-unless (-x "$httpd") {
++-	error("$httpd not found or not executable");
++-	exit 1;
++-}
+++#commented out for Debian GNU/Linux. We know that apache2 has dso support
+++#unless (-x "$httpd") {
+++#	error("$httpd not found or not executable");
+++#	exit 1;
+++#}
++ 
++-unless (grep /mod_so/, `. $envvars && $httpd -l`) {
++-    error("Sorry, no shared object support for Apache");
++-    error("available under your platform. Make sure");
++-    error("the Apache module mod_so is compiled into");
++-    error("your server binary `$httpd'.");
++-    exit 1;
++-}
+++#unless (grep /mod_so/, `. $envvars && $httpd -l`) {
+++#    error("Sorry, no shared object support for Apache");
+++#    error("available under your platform. Make sure");
+++#    error("the Apache module mod_so is compiled into");
+++#    error("your server binary `$httpd'.");
+++#    exit 1;
+++#}
++ 
++ sub get_config_vars{
++     my ($file, $rh_config) = @_;
+diff -ruN httpd-2.2.22.orig/fink/patches/apxs2_a2enmod.patch httpd-2.2.22/fink/patches/apxs2_a2enmod.patch
+--- httpd-2.2.22.orig/fink/patches/apxs2_a2enmod.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/apxs2_a2enmod.patch	2012-05-11 10:46:50.000000000 -0600
+@@ -0,0 +1,148 @@
++## 076_apxs2_a2enmo.dpatch by Stefan Fritsch <sf@debian.org>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Make apxs2 use a2enmod and /etc/apache2/mods-available
++
++--- a/support/apxs.in
+++++ b/support/apxs.in
++@@ -521,7 +521,7 @@
++ 	# $dir =~ s|^$CFG_PREFIX/?||;
++         $dir =~ s|(.)$|$1/|;
++ 	$t =~ s|\.la$|.so|;
++-        push(@lmd, sprintf("LoadModule %-18s %s", "${name}_module", "$dir$t"));
+++        push(@lmd, [ $name, sprintf("LoadModule %-18s %s", "${name}_module", "$dir$t") ] );
++     }
++ 
++     #   execute the commands
++@@ -529,108 +529,35 @@
++ 
++     #   activate module via LoadModule/AddModule directive
++     if ($opt_a or $opt_A) {
++-        if (not -f "$CFG_SYSCONFDIR/httpd.conf") {
++-            error("Config file $CFG_SYSCONFDIR/httpd.conf not found");
+++        if (not -d "$CFG_SYSCONFDIR/mods-available") {
+++            error("Config file $CFG_SYSCONFDIR/mods-available not found");
++             exit(1);
++         }
++ 
++-        open(FP, "<$CFG_SYSCONFDIR/httpd.conf") || die;
++-        my $content = join('', <FP>);
++-        close(FP);
++-
++-        if ($content !~ m|\n#?\s*LoadModule\s+|) {
++-            error("Activation failed for custom $CFG_SYSCONFDIR/httpd.conf file.");
++-            error("At least one `LoadModule' directive already has to exist.");
++-            exit(1);
++-        }
++-
++-        my $lmd;
++-        my $c = '';
++-        $c = '#' if ($opt_A);
++-        foreach $lmd (@lmd) {
++-            my $what = $opt_A ? "preparing" : "activating";
++-            my $lmd_re = $lmd;
++-            $lmd_re =~ s/\s+/\\s+/g;
++-
++-            if ($content !~ m|\n#?\s*$lmd_re|) {
++-                # check for open <containers>, so that the new LoadModule
++-                # directive always appears *outside* of an <container>.
++-
++-                my $before = ($content =~ m|^(.*\n)#?\s*LoadModule\s+[^\n]+\n|s)[0];
++-
++-                # the '()=' trick forces list context and the scalar
++-                # assignment counts the number of list members (aka number
++-                # of matches) then
++-                my $cntopen = () = ($before =~ m|^\s*<[^/].*$|mg);
++-                my $cntclose = () = ($before =~ m|^\s*</.*$|mg);
++-
++-                if ($cntopen == $cntclose) {
++-                    # fine. Last LoadModule is contextless.
++-                    $content =~ s|^(.*\n#?\s*LoadModule\s+[^\n]+\n)|$1$c$lmd\n|s;
++-                }
++-                elsif ($cntopen < $cntclose) {
++-                    error('Configuration file is not valid. There are sections'
++-                          . ' closed before opened.');
++-                    exit(1);
++-                }
++-                else {
++-                    # put our cmd after the section containing the last
++-                    # LoadModule.
++-                    my $found =
++-                    $content =~ s!\A (               # string and capture start
++-                                  (?:(?:
++-                                    ^\s*             # start of conf line with a
++-                                    (?:[^<]|<[^/])   # directive which does not
++-                                                     # start with '</'
++-
++-                                    .*(?:$)\n        # rest of the line.
++-                                                     # the '$' is in parentheses
++-                                                     # to avoid misinterpreting
++-                                                     # the string "$\" as
++-                                                     # perl variable.
++-
++-                                    )*               # catch as much as possible
++-                                                     # of such lines. (including
++-                                                     # zero)
++-
++-                                    ^\s*</.*(?:$)\n? # after the above, we
++-                                                     # expect a config line with
++-                                                     # a closing container (</)
++-
++-                                  ) {$cntopen}       # the whole pattern (bunch
++-                                                     # of lines that end up with
++-                                                     # a closing directive) must
++-                                                     # be repeated $cntopen
++-                                                     # times. That's it.
++-                                                     # Simple, eh? ;-)
++-
++-                                  )                  # capture end
++-                                 !$1$c$lmd\n!mx;
++-
++-                    unless ($found) {
++-                        error('Configuration file is not valid. There are '
++-                              . 'sections opened and not closed.');
++-                        exit(1);
++-                    }
+++        my $entry;
+++        foreach $entry (@lmd) {
+++            my ($name, $lmd) = @{$entry};
+++            my $filename = "$CFG_SYSCONFDIR/mods-available/$name.load";
+++            if (-f $filename) {
+++                my $cmd = "mv $filename $filename.bak~";
+++                if (system($cmd) != 0) {
+++                    die "'$cmd' failed\n";
++                 }
++-            } else {
++-                # replace already existing LoadModule line
++-                $content =~ s|^(.*\n)#?\s*$lmd_re[^\n]*\n|$1$c$lmd\n|s;
++             }
++-            $lmd =~ m|LoadModule\s+(.+?)_module.*|;
++-            notice("[$what module `$1' in $CFG_SYSCONFDIR/httpd.conf]");
+++
+++            notice("[preparing module `$name' in $filename]");
+++            open(FP, ">$filename") || die;
+++            print FP "$lmd\n";
+++            close(FP);
+++
+++            if ($opt_a) {
+++                my $cmd = "a2enmod $name";
+++                if (system($cmd) != 0) {
+++                    die "'$cmd' failed\n";
+++                }
+++            }               
+++
++         }
++-        if (@lmd) {
++-            if (open(FP, ">$CFG_SYSCONFDIR/httpd.conf.new")) {
++-                print FP $content;
++-                close(FP);
++-                system("cp $CFG_SYSCONFDIR/httpd.conf $CFG_SYSCONFDIR/httpd.conf.bak && " .
++-                       "cp $CFG_SYSCONFDIR/httpd.conf.new $CFG_SYSCONFDIR/httpd.conf && " .
++-                       "rm $CFG_SYSCONFDIR/httpd.conf.new");
++-            } else {
++-                notice("unable to open configuration file");
++-            }
++-	}
++     }
++ }
++ 
+diff -ruN httpd-2.2.22.orig/fink/patches/apxs2_libtool_fixtastic.patch httpd-2.2.22/fink/patches/apxs2_libtool_fixtastic.patch
+--- httpd-2.2.22.orig/fink/patches/apxs2_libtool_fixtastic.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/apxs2_libtool_fixtastic.patch	2012-05-11 10:36:01.000000000 -0600
+@@ -0,0 +1,25 @@
++## 034_apxs2_libtool_fixtastic by Peter Samuelson <peter@p12n.org>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Make libtool happier
++
++--- a/support/apxs.in
+++++ b/support/apxs.in
++@@ -410,7 +410,7 @@
++         $la =~ s|\.c$|.la|;
++         my $o = $s;
++         $o =~ s|\.c$|.o|;
++-        push(@cmds, "$libtool $ltflags --mode=compile $CFG_CC $cflags -I$CFG_INCLUDEDIR $apr_includedir $apu_includedir $opt -c -o $lo $s && touch $slo");
+++        push(@cmds, "$libtool $ltflags --mode=compile --tag=disable-static $CFG_CC $cflags -I$CFG_INCLUDEDIR $apr_includedir $apu_includedir $opt -c -o $lo $s && touch $slo");
++         unshift(@objs, $lo);
++     }
++ 
++@@ -447,7 +447,7 @@
++         $opt .= " -rpath $CFG_LIBEXECDIR -module -avoid-version $apr_ldflags";
++     }
++ 
++-    push(@cmds, "$libtool $ltflags --mode=link $CFG_CC -o $dso_file $opt $lo");
+++    push(@cmds, "$libtool $ltflags --mode=link --tag=disable-static $CFG_CC -o $dso_file $opt $lo");
++ 
++     #   execute the commands
++     &execute_cmds(@cmds);
+diff -ruN httpd-2.2.22.orig/fink/patches/apxs2_sucks_more.patch httpd-2.2.22/fink/patches/apxs2_sucks_more.patch
+--- httpd-2.2.22.orig/fink/patches/apxs2_sucks_more.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/apxs2_sucks_more.patch	2012-05-11 10:33:15.000000000 -0600
+@@ -0,0 +1,97 @@
++## 031_apxs2_sucks_more by Adam Conrad <adconrad@0c3.net>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Make apxs2 use httpd.conf, instead of apache2.conf, plus other random fixes.
++
++--- a/support/apxs.in
+++++ b/support/apxs.in
++@@ -189,7 +189,7 @@
++ my $httpd = get_vars("sbindir") . "/" . get_vars("progname");
++ $httpd = eval qq("$httpd");
++ $httpd = eval qq("$httpd");
++-my $envvars = get_vars("sbindir") . "/envvars";
+++my $envvars = "$CFG_SYSCONFDIR" . "/envvars";
++ $envvars = eval qq("$envvars");
++ $envvars = eval qq("$envvars");
++ 
++@@ -292,6 +292,7 @@
++     $data =~ s|%TARGET%|$CFG_TARGET|sg;
++     $data =~ s|%PREFIX%|$prefix|sg;
++     $data =~ s|%INSTALLBUILDDIR%|$installbuilddir|sg;
+++    $data =~ s|%DATADIR%|$datadir|sg;
++ 
++     my ($mkf, $mods, $src) = ($data =~ m|^(.+)-=#=-\n(.+)-=#=-\n(.+)|s);
++ 
++@@ -480,7 +481,7 @@
++         if ($opt_i) {
++ 	    push(@cmds, "$installbuilddir/instdso.sh SH_LIBTOOL='" .
++                  "$libtool' $f $CFG_LIBEXECDIR");
++-	    push(@cmds, "chmod 755 $CFG_LIBEXECDIR/$t");
+++	    push(@cmds, "chmod 644 $CFG_LIBEXECDIR/$t");
++         }
++ 
++         #   determine module symbolname and filename
++@@ -516,7 +517,8 @@
++             $filename = "mod_${name}.c";
++         }
++         my $dir = $CFG_LIBEXECDIR;
++-        $dir =~ s|^$CFG_PREFIX/?||;
+++        # Debian doesn't have a CFG_PREFIX, so this stuffs up:
+++	# $dir =~ s|^$CFG_PREFIX/?||;
++         $dir =~ s|(.)$|$1/|;
++ 	$t =~ s|\.la$|.so|;
++         push(@lmd, sprintf("LoadModule %-18s %s", "${name}_module", "$dir$t"));
++@@ -527,17 +529,17 @@
++ 
++     #   activate module via LoadModule/AddModule directive
++     if ($opt_a or $opt_A) {
++-        if (not -f "$CFG_SYSCONFDIR/$CFG_TARGET.conf") {
++-            error("Config file $CFG_SYSCONFDIR/$CFG_TARGET.conf not found");
+++        if (not -f "$CFG_SYSCONFDIR/httpd.conf") {
+++            error("Config file $CFG_SYSCONFDIR/httpd.conf not found");
++             exit(1);
++         }
++ 
++-        open(FP, "<$CFG_SYSCONFDIR/$CFG_TARGET.conf") || die;
+++        open(FP, "<$CFG_SYSCONFDIR/httpd.conf") || die;
++         my $content = join('', <FP>);
++         close(FP);
++ 
++         if ($content !~ m|\n#?\s*LoadModule\s+|) {
++-            error("Activation failed for custom $CFG_SYSCONFDIR/$CFG_TARGET.conf file.");
+++            error("Activation failed for custom $CFG_SYSCONFDIR/httpd.conf file.");
++             error("At least one `LoadModule' directive already has to exist.");
++             exit(1);
++         }
++@@ -616,15 +618,15 @@
++                 $content =~ s|^(.*\n)#?\s*$lmd_re[^\n]*\n|$1$c$lmd\n|s;
++             }
++             $lmd =~ m|LoadModule\s+(.+?)_module.*|;
++-            notice("[$what module `$1' in $CFG_SYSCONFDIR/$CFG_TARGET.conf]");
+++            notice("[$what module `$1' in $CFG_SYSCONFDIR/httpd.conf]");
++         }
++         if (@lmd) {
++-            if (open(FP, ">$CFG_SYSCONFDIR/$CFG_TARGET.conf.new")) {
+++            if (open(FP, ">$CFG_SYSCONFDIR/httpd.conf.new")) {
++                 print FP $content;
++                 close(FP);
++-                system("cp $CFG_SYSCONFDIR/$CFG_TARGET.conf $CFG_SYSCONFDIR/$CFG_TARGET.conf.bak && " .
++-                       "cp $CFG_SYSCONFDIR/$CFG_TARGET.conf.new $CFG_SYSCONFDIR/$CFG_TARGET.conf && " .
++-                       "rm $CFG_SYSCONFDIR/$CFG_TARGET.conf.new");
+++                system("cp $CFG_SYSCONFDIR/httpd.conf $CFG_SYSCONFDIR/httpd.conf.bak && " .
+++                       "cp $CFG_SYSCONFDIR/httpd.conf.new $CFG_SYSCONFDIR/httpd.conf && " .
+++                       "rm $CFG_SYSCONFDIR/httpd.conf.new");
++             } else {
++                 notice("unable to open configuration file");
++             }
++@@ -648,8 +650,8 @@
++ ##
++ 
++ builddir=.
++-top_srcdir=%PREFIX%
++-top_builddir=%PREFIX%
+++top_srcdir=%DATADIR%
+++top_builddir=%DATADIR%
++ include %INSTALLBUILDDIR%/special.mk
++ 
++ #   the used tools
+diff -ruN httpd-2.2.22.orig/fink/patches/dbm_read_hash_or_btree.patch httpd-2.2.22/fink/patches/dbm_read_hash_or_btree.patch
+--- httpd-2.2.22.orig/fink/patches/dbm_read_hash_or_btree.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/dbm_read_hash_or_btree.patch	2012-05-11 10:35:07.000000000 -0600
+@@ -0,0 +1,36 @@
++## 033_dbm_read_hash_or_btree by Adam Conrad <adconrad@0c3.net>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Be more liberal in the sorts of DBM files we accept.
++
++--- a/support/dbmmanage.in
+++++ b/support/dbmmanage.in
++@@ -25,7 +25,7 @@
++ BEGIN { @AnyDBM_File::ISA = qw(DB_File NDBM_File GDBM_File SDBM_File) }
++ use strict;
++ use Fcntl;
++-use AnyDBM_File ();
+++use DB_File ();
++ 
++ sub usage {
++     my $cmds = join "|", sort keys %dbmc::;
++@@ -155,7 +155,9 @@
++ my($mode, $flags) = $command =~
++     /^(?:view|check)$/ ? (0644, O_RDONLY) : (0644, O_RDWR|O_CREAT);
++ 
++-tie (%DB, "AnyDBM_File", $file, $flags, $mode) || die "Can't tie $file: $!";
+++tie (%DB, "DB_File", $file, $flags, $mode, $DB_File::DB_HASH) ||
+++    tie (%DB, "DB_File", $file, $flags, $mode, $DB_File::DB_BTREE) ||
+++    die "Can't tie $file: $!";
++ dbmc->$command();
++ untie %DB;
++ 
++@@ -167,7 +169,7 @@
++         srand (time ^ $$ or time ^ ($$ + ($$ << 15)));
++     }
++     else {
++-        for (qw(-xlwwa -le)) {
+++        for (qw(xlwwa -le)) {
++             `ps $_ 2>/dev/null`;
++             $psf = $_, last unless $?;
++         }
+diff -ruN httpd-2.2.22.orig/fink/patches/disablemods.patch httpd-2.2.22/fink/patches/disablemods.patch
+--- httpd-2.2.22.orig/fink/patches/disablemods.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/disablemods.patch	2012-05-11 10:40:09.000000000 -0600
+@@ -0,0 +1,58 @@
++## Stolen from the fedora package
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Support "--enable-modules=none" to build an httpd binary with 
++## DP: no optional modules enabled.
++
++--- a/acinclude.m4
+++++ b/acinclude.m4
++@@ -290,14 +290,19 @@
++ 
++   AC_ARG_ENABLE(modules,
++   APACHE_HELP_STRING(--enable-modules=MODULE-LIST,Space-separated list of modules to enable | "all" | "most"),[
++-    for i in $enableval; do
++-      if test "$i" = "all" -o "$i" = "most"; then
++-        module_selection=$i
++-      else
++-        i=`echo $i | sed 's/-/_/g'`
++-        eval "enable_$i=yes"
++-      fi
++-    done
+++    if test "$enableval" = "none"; then
+++       module_default=no
+++       module_selection=none
+++    else
+++      for i in $enableval; do
+++        if test "$i" = "all" -o "$i" = "most"; then
+++          module_selection=$i
+++        else
+++          i=`echo $i | sed 's/-/_/g'`
+++          eval "enable_$i=yes"
+++        fi
+++      done
+++    fi
++   ])
++   
++   AC_ARG_ENABLE(mods-shared,
++--- a/configure
+++++ b/configure
++@@ -7385,6 +7385,10 @@
++   # Check whether --enable-modules was given.
++ if test "${enable_modules+set}" = set; then :
++   enableval=$enable_modules;
+++  if test "$enableval" = "none"; then
+++     module_default=no
+++     module_selection=none
+++  else
++     for i in $enableval; do
++       if test "$i" = "all" -o "$i" = "most"; then
++         module_selection=$i
++@@ -7393,7 +7397,7 @@
++         eval "enable_$i=yes"
++       fi
++     done
++-
+++  fi
++ fi
++ 
++ 
+diff -ruN httpd-2.2.22.orig/fink/patches/fix_cacheenable.patch httpd-2.2.22/fink/patches/fix_cacheenable.patch
+--- httpd-2.2.22.orig/fink/patches/fix_cacheenable.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/fix_cacheenable.patch	2012-05-11 10:42:21.000000000 -0600
+@@ -0,0 +1,114 @@
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Bug #442266
++## DP: r821333,r821538,r821539 from upstream svn
++
++--- a/modules/cache/cache_util.c
+++++ b/modules/cache/cache_util.c
++@@ -29,41 +29,78 @@
++ /* Determine if "url" matches the hostname, scheme and port and path
++  * in "filter". All but the path comparisons are case-insensitive.
++  */
++-static int uri_meets_conditions(apr_uri_t filter, int pathlen, apr_uri_t url)
++-{
++-    /* Compare the hostnames */
++-    if(filter.hostname) {
++-        if (!url.hostname) {
++-            return 0;
++-        }
++-        else if (strcasecmp(filter.hostname, url.hostname)) {
++-            return 0;
++-        }
++-    }
+++static int uri_meets_conditions(const apr_uri_t filter, const int pathlen,
+++        const apr_uri_t url) {
++ 
++-    /* Compare the schemes */
++-    if(filter.scheme) {
++-        if (!url.scheme) {
++-            return 0;
++-        }
++-        else if (strcasecmp(filter.scheme, url.scheme)) {
+++    /* Scheme, hostname port and local part. The filter URI and the
+++     * URI we test may have the following shapes:
+++     *   /<path>
+++     *   <scheme>[:://<hostname>[:<port>][/<path>]]
+++     * That is, if there is no scheme then there must be only the path,
+++     * and we check only the path; if there is a scheme, we check the
+++     * scheme for equality, and then if present we match the hostname,
+++     * and then if present match the port, and finally the path if any.
+++     *
+++     * Note that this means that "/<path>" only matches local paths,
+++     * and to match proxied paths one *must* specify the scheme.
+++     */
+++
+++    /* Is the filter is just for a local path or a proxy URI? */
+++    if (!filter.scheme) {
+++        if (url.scheme || url.hostname) {
++             return 0;
++         }
++     }
++-
++-    /* Compare the ports */
++-    if(filter.port_str) {
++-        if (url.port_str && filter.port != url.port) {
+++    else {
+++        /* The URI scheme must be present and identical except for case. */
+++        if (!url.scheme || strcasecmp(filter.scheme, url.scheme)) {
++             return 0;
++         }
++-        /* NOTE:  ap_port_of_scheme will return 0 if given NULL input */
++-        else if (filter.port != apr_uri_port_of_scheme(url.scheme)) {
++-            return 0;
+++
+++        /* If the filter hostname is null or empty it matches any hostname,
+++         * if it begins with a "*" it matches the _end_ of the URI hostname
+++         * excluding the "*", if it begins with a "." it matches the _end_
+++         * of the URI * hostname including the ".", otherwise it must match
+++         * the URI hostname exactly. */
+++
+++        if (filter.hostname && filter.hostname[0]) {
+++            if (filter.hostname[0] == '.') {
+++                const size_t fhostlen = strlen(filter.hostname);
+++                const size_t uhostlen = url.hostname ? strlen(url.hostname) : 0;
+++
+++                if (fhostlen > uhostlen || strcasecmp(filter.hostname,
+++                        url.hostname + uhostlen - fhostlen)) {
+++                    return 0;
+++                }
+++            }
+++            else if (filter.hostname[0] == '*') {
+++                const size_t fhostlen = strlen(filter.hostname + 1);
+++                const size_t uhostlen = url.hostname ? strlen(url.hostname) : 0;
+++
+++                if (fhostlen > uhostlen || strcasecmp(filter.hostname + 1,
+++                        url.hostname + uhostlen - fhostlen)) {
+++                    return 0;
+++                }
+++            }
+++            else if (!url.hostname || strcasecmp(filter.hostname, url.hostname)) {
+++                return 0;
+++            }
++         }
++-    }
++-    else if(url.port_str && filter.scheme) {
++-        if (apr_uri_port_of_scheme(filter.scheme) == url.port) {
++-            return 0;
+++
+++        /* If the filter port is empty it matches any URL port.
+++         * If the filter or URL port are missing, or the URL port is
+++         * empty, they default to the port for their scheme. */
+++
+++        if (!(filter.port_str && !filter.port_str[0])) {
+++            /* NOTE:  ap_port_of_scheme will return 0 if given NULL input */
+++            const unsigned fport = filter.port_str ? filter.port
+++                    : apr_uri_port_of_scheme(filter.scheme);
+++            const unsigned uport = (url.port_str && url.port_str[0])
+++                    ? url.port : apr_uri_port_of_scheme(url.scheme);
+++
+++            if (fport != uport) {
+++                return 0;
+++            }
++         }
++     }
++ 
+diff -ruN httpd-2.2.22.orig/fink/patches/fix_segfault_in_ab.patch httpd-2.2.22/fink/patches/fix_segfault_in_ab.patch
+--- httpd-2.2.22.orig/fink/patches/fix_segfault_in_ab.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/fix_segfault_in_ab.patch	2012-05-11 10:41:30.000000000 -0600
+@@ -0,0 +1,17 @@
++## 067_fix_segfault_in_ab.dpatch by Ryan Niebur <ryanryan52@gmail.com>
++##
++## DP: Do not free what SSL_get_peer_cert_chain returns. It returns a
++## pointer to memory that is freed later on with the
++## session. (Bug#495982)
++## Forwarded: https://issues.apache.org/bugzilla/show_bug.cgi?id=46393
++
++--- a/support/ab.c
+++++ b/support/ab.c
++@@ -548,7 +548,6 @@
++         for (i=1; i<count; i++) {
++             cert = (X509 *)SK_VALUE(sk, i);
++             ssl_print_cert_info(bio_out, cert);
++-            X509_free(cert);
++     }
++     }
++     cert = SSL_get_peer_certificate(c->ssl);
+diff -ruN httpd-2.2.22.orig/fink/patches/fix_usage_message.patch httpd-2.2.22/fink/patches/fix_usage_message.patch
+--- httpd-2.2.22.orig/fink/patches/fix_usage_message.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/fix_usage_message.patch	2012-05-11 10:38:17.000000000 -0600
+@@ -0,0 +1,25 @@
++## 047_fix_usage_message.dpatch by Stefan Fritsch <sf@debian.org>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Add -X to the help message
++
++--- a/server/main.c
+++++ b/server/main.c
++@@ -353,7 +353,7 @@
++ #endif /* AP_MPM_WANT_SET_GRACEFUL_SHUTDOWN */
++ #endif
++     ap_log_error(APLOG_MARK, APLOG_STARTUP, 0, NULL,
++-                 "       %*s [-v] [-V] [-h] [-l] [-L] [-t] [-T] [-S]",
+++                 "       %*s [-v] [-V] [-h] [-l] [-L] [-t] [-T] [-S] [-X]",
++                  pad_len, " ");
++     ap_log_error(APLOG_MARK, APLOG_STARTUP, 0, NULL,
++                  "Options:");
++@@ -435,6 +435,8 @@
++                  "  -t                 : run syntax check for config files");
++     ap_log_error(APLOG_MARK, APLOG_STARTUP, 0, NULL,
++                 "  -T                 : start without DocumentRoot(s) check");
+++    ap_log_error(APLOG_MARK, APLOG_STARTUP, 0, NULL,
+++                "  -X                 : debug mode (only one worker, do not detach)");
++ 
++     destroy_and_exit_process(process, 1);
++ }
+diff -ruN httpd-2.2.22.orig/fink/patches/link_support_progs_with_lcrypt.patch httpd-2.2.22/fink/patches/link_support_progs_with_lcrypt.patch
+--- httpd-2.2.22.orig/fink/patches/link_support_progs_with_lcrypt.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/link_support_progs_with_lcrypt.patch	2012-05-11 10:44:52.000000000 -0600
+@@ -0,0 +1,35 @@
++## 074_support_link_lcrypt.dpatch by Stefan Fritsch <sf@debian.org>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Link support programs with -lcrypt where necessary. Required by
++## DP: binutils-gold (bug #553946)
++
++--- a/configure
+++++ b/configure
++@@ -14831,11 +14831,11 @@
++ 
++ fi
++ 
++-htpasswd_LTFLAGS=""
+++htpasswd_LTFLAGS="-lcrypt"
++ htdigest_LTFLAGS=""
++ rotatelogs_LTFLAGS=""
++ logresolve_LTFLAGS=""
++-htdbm_LTFLAGS=""
+++htdbm_LTFLAGS="-lcrypt"
++ ab_LTFLAGS=""
++ checkgid_LTFLAGS=""
++ htcacheclean_LTFLAGS=""
++--- a/support/config.m4
+++++ b/support/config.m4
++@@ -1,8 +1,8 @@
++-htpasswd_LTFLAGS=""
+++htpasswd_LTFLAGS="-lcrypt"
++ htdigest_LTFLAGS=""
++ rotatelogs_LTFLAGS=""
++ logresolve_LTFLAGS=""
++-htdbm_LTFLAGS=""
+++htdbm_LTFLAGS="-lcrypt"
++ ab_LTFLAGS=""
++ checkgid_LTFLAGS=""
++ htcacheclean_LTFLAGS=""
+diff -ruN httpd-2.2.22.orig/fink/patches/logresolve_linelength.patch httpd-2.2.22/fink/patches/logresolve_linelength.patch
+--- httpd-2.2.22.orig/fink/patches/logresolve_linelength.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/logresolve_linelength.patch	2012-05-11 10:39:14.000000000 -0600
+@@ -0,0 +1,75 @@
++## 052_logresolve_linelength.dpatch by Stefan Fritsch <sf@debian.org>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: remove limit of 1024 bytes per line #331631
++
++--- a/support/logresolve.c
+++++ b/support/logresolve.c
++@@ -82,7 +82,7 @@
++ #endif
++ 
++ static void cgethost(struct in_addr ipnum, char *string, int check);
++-static int get_line(char *s, int n);
+++static int get_line();
++ static void stats(FILE *output);
++ 
++ #ifdef BEOS
++@@ -90,11 +90,6 @@
++ #endif
++ 
++ 
++-/* maximum line length */
++-#ifndef MAXLINE
++-#define MAXLINE 1024
++-#endif
++-
++ /* maximum length of a domain name */
++ #ifndef MAXDNAME
++ #define MAXDNAME 256
++@@ -141,6 +136,8 @@
++ static int resolves = 0;
++ static int withname = 0;
++ static int errors[MAX_ERR + 3];
+++static size_t maxline=0;
+++static char *line = NULL;
++ 
++ /*
++  * cgethost - gets hostname by IP address, caching, and adding unresolvable
++@@ -287,14 +284,15 @@
++  * gets a line from stdin
++  */
++ 
++-static int get_line (char *s, int n)
+++static int get_line ()
++ {
+++    ssize_t len;
++     char *cp;
++ 
++-    if (!fgets(s, n, stdin))
+++    if ( (len = getline(&line, &maxline, stdin)) == -1 )
++         return (0);
++-    cp = strchr(s, '\n');
++-    if (cp)
+++    cp = line + len -1;
+++    if (*cp == '\n')
++         *cp = '\0';
++     return (1);
++ }
++@@ -302,7 +300,7 @@
++ int main (int argc, char *argv[])
++ {
++     struct in_addr ipnum;
++-    char *bar, hoststring[MAXDNAME + 1], line[MAXLINE], *statfile;
+++    char *bar, hoststring[MAXDNAME + 1], *statfile;
++     int i, check;
++ 
++ #if defined(WIN32) || (defined(NETWARE) && defined(USE_WINSOCK))
++@@ -337,7 +335,7 @@
++     for (i = 0; i < MAX_ERR + 2; i++)
++         errors[i] = 0;
++ 
++-    while (get_line(line, MAXLINE)) {
+++    while (get_line()) {
++         if (line[0] == '\0')
++             continue;
++         entries++;
+diff -ruN httpd-2.2.22.orig/fink/patches/make_include_safe.patch httpd-2.2.22/fink/patches/make_include_safe.patch
+--- httpd-2.2.22.orig/fink/patches/make_include_safe.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/make_include_safe.patch	2012-05-11 10:30:07.000000000 -0600
+@@ -0,0 +1,66 @@
++## 008_make_include_safe by Adam Conrad <adconrad@0c3.net>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Avoid including dpkg droppings in globbed includes.
++
++--- a/server/config.c
+++++ b/server/config.c
++@@ -34,6 +34,7 @@
++ #include "apr_portable.h"
++ #include "apr_file_io.h"
++ #include "apr_fnmatch.h"
+++#include "apr_lib.h"
++ 
++ #define APR_WANT_STDIO
++ #define APR_WANT_STRFUNC
++@@ -1543,6 +1544,30 @@
++     return strcmp(f1->fname,f2->fname);
++ }
++ 
+++static int fname_valid(const char *fname) {
+++    const unsigned char *c = fname;
+++    unsigned char bad_dpkg[] = "*.dpkg*";
+++
+++    if (!apr_isalnum(*c)) {
+++        return 0;
+++    }
+++    ++c;
+++    
+++    
+++    while (*c) {
+++        if (!apr_isalnum(*c) && *c!='_' && *c!='-' && *c!='.') {
+++            return 0;
+++        }
+++        ++c;
+++    }
+++
+++    if (!apr_fnmatch(bad_dpkg, fname, 0)) {
+++        return 0;
+++    }
+++
+++    return 1;
+++}
+++
++ static const char *process_resource_config_nofnmatch(server_rec *s,
++                                                      const char *fname,
++                                                      ap_directive_t **conftree,
++@@ -1586,7 +1611,8 @@
++         while (apr_dir_read(&dirent, APR_FINFO_DIRENT, dirp) == APR_SUCCESS) {
++             /* strip out '.' and '..' */
++             if (strcmp(dirent.name, ".")
++-                && strcmp(dirent.name, "..")) {
+++                && strcmp(dirent.name, "..")
+++                && fname_valid(dirent.name)) {
++                 fnew = (fnames *) apr_array_push(candidates);
++                 fnew->fname = ap_make_full_path(p, path, dirent.name);
++             }
++@@ -1714,7 +1740,8 @@
++             if (strcmp(dirent.name, ".")
++                 && strcmp(dirent.name, "..")
++                 && (apr_fnmatch(pattern, dirent.name,
++-                                APR_FNM_PERIOD) == APR_SUCCESS)) {
+++                                APR_FNM_PERIOD) == APR_SUCCESS)
+++                && fname_valid(dirent.name)) {
++                 fnew = (fnames *) apr_array_push(candidates);
++                 fnew->fname = ap_make_full_path(p, path, dirent.name);
++             }
+diff -ruN httpd-2.2.22.orig/fink/patches/mod_dav_trunk_fixes.patch httpd-2.2.22/fink/patches/mod_dav_trunk_fixes.patch
+--- httpd-2.2.22.orig/fink/patches/mod_dav_trunk_fixes.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/mod_dav_trunk_fixes.patch	2012-05-11 10:44:07.000000000 -0600
+@@ -0,0 +1,515 @@
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Various bug fixes for mod_dav/mod_dav_fs
++## DP: upstream svn revs 834018:835092 and 928403 in modules/dav
++## DP:
++## DP: *) mod_dav: Include uri when logging a PUT error due to connection abort.
++## DP:    PR 38149. [Stefan Fritsch]
++## DP:
++## DP: *) mod_dav: Return 409 instead of 500 for a LOCK request if the parent
++## DP:    resource does not exist or is not a collection. PR 43465. [Stefan Fritsch]
++## DP:
++## DP: *) mod_dav_fs: Return 409 instead of 500 for Litmus test case copy_nodestcoll
++## DP:    (a COPY request where the parent of the destination resource does not
++## DP:    exist). PR 39299. [Stefan Fritsch]
++## DP:
++## DP: *) mod_dav_fs: Don't delete the whole file if a PUT with content-range failed.
++## DP:    PR 42896. [Stefan Fritsch]
++## DP:
++## DP: *) mod_dav_fs: Make PUT create files atomically and no longer destroy the
++## DP:    old file if the transfer aborted. PR 39815. [Paul Querna, Stefan Fritsch]
++## DP:
++## DP: *) mod_dav_fs: Remove inode keyed locking as this conflicts with atomically
++## DP:    creating files. On systems with inode numbers, this is a format change of
++## DP:    the DavLockDB. The old DavLockDB must be deleted on upgrade.
++## DP:    [Stefan Fritsch]
++--- a/modules/dav/fs/lock.c
+++++ b/modules/dav/fs/lock.c
++@@ -48,9 +48,8 @@
++ **
++ ** KEY
++ **
++-** The database is keyed by a key_type unsigned char (DAV_TYPE_INODE or
++-** DAV_TYPE_FNAME) followed by inode and device number if possible,
++-** otherwise full path (in the case of Win32 or lock-null resources).
+++** The database is keyed by a key_type unsigned char (DAV_TYPE_FNAME)
+++** followed by the full path. The key_type DAV_TYPE_INODE is not used anymore.
++ **
++ ** VALUE
++ **
++@@ -82,7 +81,10 @@
++ #define DAV_LOCK_DIRECT         1
++ #define DAV_LOCK_INDIRECT       2
++ 
++-#define DAV_TYPE_INODE          10
+++/*
+++ * not used anymore
+++ * #define DAV_TYPE_INODE          10
+++ */
++ #define DAV_TYPE_FNAME          11
++ 
++ 
++@@ -372,12 +374,13 @@
++ }
++ 
++ /*
++-** dav_fs_build_fname_key
++-**
++-** Given a pathname, build a DAV_TYPE_FNAME lock database key.
+++** dav_fs_build_key:  Given a resource, return a apr_datum_t key
+++**    to look up lock information for this file.
++ */
++-static apr_datum_t dav_fs_build_fname_key(apr_pool_t *p, const char *pathname)
+++static apr_datum_t dav_fs_build_key(apr_pool_t *p,
+++                                    const dav_resource *resource)
++ {
+++    const char *pathname = dav_fs_pathname(resource);
++     apr_datum_t key;
++ 
++     /* ### does this allocation have a proper lifetime? need to check */
++@@ -394,46 +397,6 @@
++ }
++ 
++ /*
++-** dav_fs_build_key:  Given a resource, return a apr_datum_t key
++-**    to look up lock information for this file.
++-**
++-**    (inode/dev not supported or file is lock-null):
++-**       apr_datum_t->dvalue = full path
++-**
++-**    (inode/dev supported and file exists ):
++-**       apr_datum_t->dvalue = inode, dev
++-*/
++-static apr_datum_t dav_fs_build_key(apr_pool_t *p,
++-                                    const dav_resource *resource)
++-{
++-    const char *file = dav_fs_pathname(resource);
++-    apr_datum_t key;
++-    apr_finfo_t finfo;
++-    apr_status_t rv;
++-
++-    /* ### use lstat() ?? */
++-    /*
++-     * XXX: What for platforms with no IDENT (dev/inode)?
++-     */
++-    rv = apr_stat(&finfo, file, APR_FINFO_IDENT, p);
++-    if ((rv == APR_SUCCESS || rv == APR_INCOMPLETE)
++-        && ((finfo.valid & APR_FINFO_IDENT) == APR_FINFO_IDENT))
++-    {
++-        /* ### can we use a buffer for this? */
++-        key.dsize = 1 + sizeof(finfo.inode) + sizeof(finfo.device);
++-        key.dptr = apr_palloc(p, key.dsize);
++-        *key.dptr = DAV_TYPE_INODE;
++-        memcpy(key.dptr + 1, &finfo.inode, sizeof(finfo.inode));
++-        memcpy(key.dptr + 1 + sizeof(finfo.inode), &finfo.device,
++-               sizeof(finfo.device));
++-
++-        return key;
++-    }
++-
++-    return dav_fs_build_fname_key(p, file);
++-}
++-
++-/*
++ ** dav_fs_lock_expired:  return 1 (true) if the given timeout is in the past
++ **    or present (the lock has expired), or 0 (false) if in the future
++ **    (the lock has not yet expired).
++@@ -989,13 +952,8 @@
++ 
++ /*
++ ** dav_fs_remove_locknull_state:  Given a request, check to see if r->filename
++-**    is/was a lock-null resource.  If so, return it to an existant state.
++-**
++-**    ### this function is broken... it doesn't check!
++-**
++-**    In this implementation, this involves two things:
++-**    (a) remove it from the list in the appropriate .DAV/locknull file
++-**    (b) on *nix, convert the key from a filename to an inode.
+++**    is/was a lock-null resource.  If so, return it to an existant state, i.e.
+++**    remove it from the list in the appropriate .DAV/locknull file.
++ */
++ static dav_error * dav_fs_remove_locknull_state(
++     dav_lockdb *lockdb,
++@@ -1011,35 +969,6 @@
++         return err;
++     }
++ 
++-    {
++-        dav_lock_discovery *ld;
++-        dav_lock_indirect  *id;
++-        apr_datum_t key;
++-
++-        /*
++-        ** Fetch the lock(s) that made the resource lock-null. Remove
++-        ** them under the filename key. Obtain the new inode key, and
++-        ** save the same lock information under it.
++-        */
++-        key = dav_fs_build_fname_key(p, pathname);
++-        if ((err = dav_fs_load_lock_record(lockdb, key, DAV_CREATE_LIST,
++-                                           &ld, &id)) != NULL) {
++-            /* ### insert a higher-level error description */
++-            return err;
++-        }
++-
++-        if ((err = dav_fs_save_lock_record(lockdb, key, NULL, NULL)) != NULL) {
++-            /* ### insert a higher-level error description */
++-            return err;
++-        }
++-
++-        key = dav_fs_build_key(p, resource);
++-        if ((err = dav_fs_save_lock_record(lockdb, key, ld, id)) != NULL) {
++-            /* ### insert a higher-level error description */
++-            return err;
++-        }
++-    }
++-
++     return NULL;
++ }
++ 
++--- a/modules/dav/fs/repos.c
+++++ b/modules/dav/fs/repos.c
++@@ -27,6 +27,10 @@
++ #include <stdio.h>              /* for sprintf() */
++ #endif
++ 
+++#if APR_HAVE_UNISTD_H
+++#include <unistd.h>             /* for getpid() */
+++#endif
+++
++ #include "httpd.h"
++ #include "http_log.h"
++ #include "http_protocol.h"      /* for ap_set_* (in dav_fs_set_headers) */
++@@ -139,6 +143,11 @@
++ */
++ #define DAV_PROPID_FS_executable        1
++ 
+++/*
+++ * prefix for temporary files
+++ */
+++#define DAV_FS_TMP_PREFIX ".davfs.tmp" 
+++
++ static const dav_liveprop_spec dav_fs_props[] =
++ {
++     /* standard DAV properties */
++@@ -191,11 +200,14 @@
++     apr_pool_t *p;
++     apr_file_t *f;
++     const char *pathname;       /* we may need to remove it at close time */
+++    char *temppath;
+++    int unlink_on_error;
++ };
++ 
++ /* returns an appropriate HTTP status code given an APR status code for a
++  * failed I/O operation.  ### use something besides 500? */
++ #define MAP_IO2HTTP(e) (APR_STATUS_IS_ENOSPC(e) ? HTTP_INSUFFICIENT_STORAGE : \
+++                        APR_STATUS_IS_ENOENT(e) ? HTTP_CONFLICT : \
++                         HTTP_INTERNAL_SERVER_ERROR)
++ 
++ /* forward declaration for internal treewalkers */
++@@ -414,11 +426,24 @@
++     apr_file_close(inf);
++     apr_file_close(outf);
++ 
++-    if (is_move && apr_file_remove(src, p) != APR_SUCCESS) {
+++    if (is_move && (status = apr_file_remove(src, p)) != APR_SUCCESS) {
++         dav_error *err;
++         int save_errno = errno;   /* save the errno that got us here */
++ 
++-        if (apr_file_remove(dst, p) != APR_SUCCESS) {
+++        if (APR_STATUS_IS_ENOENT(status)) {
+++            /*
+++             * Something is wrong here but the result is what we wanted.
+++             * We definitely should not remove the destination file.
+++             */
+++             err = dav_new_error(p, HTTP_INTERNAL_SERVER_ERROR, 0,
+++                                 apr_psprintf(p, "Could not remove source "
+++                                              "file %s after move to %s. The "
+++                                              "server may be in an "
+++                                              "inconsistent state.", src, dst));
+++            err->save_errno = save_errno;
+++            return err;
+++        } 
+++        else if (apr_file_remove(dst, p) != APR_SUCCESS) {
++             /* ### ACK. this creates an inconsistency. do more!? */
++ 
++             /* ### use something besides 500? */
++@@ -500,9 +525,13 @@
++     dst = apr_pstrcat(p, dst, "/", dst_file, NULL);
++ 
++     /* copy/move the file now */
++-    if (is_move && src_finfo.device == dst_state_finfo.device) {
++-        /* simple rename is possible since it is on the same device */
++-        if (apr_file_rename(src, dst, p) != APR_SUCCESS) {
+++    if (is_move) {
+++        /* try simple rename first */
+++        rv = apr_file_rename(src, dst, p);
+++        if (APR_STATUS_IS_EXDEV(rv)) {
+++            return dav_fs_copymove_file(is_move, p, src, dst, NULL, NULL, pbuf);
+++        }
+++        if (rv != APR_SUCCESS) {
++             /* ### use something besides 500? */
++             return dav_new_error(p, HTTP_INTERNAL_SERVER_ERROR, 0,
++                                  "Could not move state file.");
++@@ -841,6 +870,34 @@
++             && ctx2->pathname[len1] == '/');
++ }
++ 
+++static apr_status_t tmpfile_cleanup(void *data) {
+++        dav_stream *ds = data;
+++        if (ds->temppath) {
+++                apr_file_remove(ds->temppath, ds->p);
+++        }
+++        return APR_SUCCESS;
+++}
+++
+++/* custom mktemp that creates the file with APR_OS_DEFAULT permissions */
+++static apr_status_t dav_fs_mktemp(apr_file_t **fp, char *templ, apr_pool_t *p)
+++{
+++    apr_status_t rv;
+++    int num = ((getpid() << 7) + (int)templ % (1 << 16) ) % ( 1 << 23 ) ;
+++    char *numstr = templ + strlen(templ) - 6;
+++
+++    ap_assert(numstr >= templ);
+++
+++    do {
+++        num = (num + 1) % ( 1 << 23 );
+++        snprintf(numstr, 7, "%06x", num);
+++        rv = apr_file_open(fp, templ,
+++                           APR_WRITE | APR_CREATE | APR_BINARY | APR_EXCL,
+++                           APR_OS_DEFAULT, p);
+++    } while (APR_STATUS_IS_EEXIST(rv));
+++        
+++    return rv;
+++}
+++
++ static dav_error * dav_fs_open_stream(const dav_resource *resource,
++                                       dav_stream_mode mode,
++                                       dav_stream **stream)
++@@ -865,7 +922,32 @@
++ 
++     ds->p = p;
++     ds->pathname = resource->info->pathname;
++-    rv = apr_file_open(&ds->f, ds->pathname, flags, APR_OS_DEFAULT, ds->p);
+++    ds->temppath = NULL;
+++    ds->unlink_on_error = 0;
+++
+++    if (mode == DAV_MODE_WRITE_TRUNC) {
+++        ds->temppath = apr_pstrcat(p, ap_make_dirstr_parent(p, ds->pathname),
+++                                   DAV_FS_TMP_PREFIX "XXXXXX", NULL);
+++        rv = dav_fs_mktemp(&ds->f, ds->temppath, ds->p);
+++        apr_pool_cleanup_register(p, ds, tmpfile_cleanup,
+++                                  apr_pool_cleanup_null);
+++    }
+++    else if (mode == DAV_MODE_WRITE_SEEKABLE) {
+++        rv = apr_file_open(&ds->f, ds->pathname, flags | APR_FOPEN_EXCL,
+++                           APR_OS_DEFAULT, ds->p);
+++        if (rv == APR_SUCCESS) {
+++            /* we have created a new file */
+++            ds->unlink_on_error = 1;
+++        }
+++        else if (APR_STATUS_IS_EEXIST(rv)) {
+++            rv = apr_file_open(&ds->f, ds->pathname, flags, APR_OS_DEFAULT,
+++                               ds->p);
+++        }
+++    }
+++    else {
+++        rv = apr_file_open(&ds->f, ds->pathname, flags, APR_OS_DEFAULT, ds->p);
+++    }
+++
++     if (rv != APR_SUCCESS) {
++         return dav_new_error(p, MAP_IO2HTTP(rv), 0,
++                              "An error occurred while opening a resource.");
++@@ -879,17 +961,33 @@
++ 
++ static dav_error * dav_fs_close_stream(dav_stream *stream, int commit)
++ {
+++    apr_status_t rv;
+++
++     apr_file_close(stream->f);
++ 
++     if (!commit) {
++-        if (apr_file_remove(stream->pathname, stream->p) != APR_SUCCESS) {
++-            /* ### use a better description? */
++-            return dav_new_error(stream->p, HTTP_INTERNAL_SERVER_ERROR, 0,
++-                                 "There was a problem removing (rolling "
++-                                 "back) the resource "
++-                                 "when it was being closed.");
+++        if (stream->temppath) {
+++            apr_pool_cleanup_run(stream->p, stream, tmpfile_cleanup);
+++        }
+++        else if (stream->unlink_on_error) {
+++            if (apr_file_remove(stream->pathname, stream->p) != APR_SUCCESS) {
+++                /* ### use a better description? */
+++                return dav_new_error(stream->p, HTTP_INTERNAL_SERVER_ERROR, 0,
+++                                     "There was a problem removing (rolling "
+++                                     "back) the resource "
+++                                     "when it was being closed.");
+++            }
++         }
++     }
+++    else if (stream->temppath) {
+++        rv = apr_file_rename(stream->temppath, stream->pathname, stream->p);
+++        if (rv) {
+++            return dav_new_error(stream->p, HTTP_INTERNAL_SERVER_ERROR, rv,
+++                                 "There was a problem writing the file "
+++                                 "atomically after writes.");
+++        }
+++        apr_pool_cleanup_kill(stream->p, stream, tmpfile_cleanup);
+++    }
++ 
++     return NULL;
++ }
++@@ -1201,7 +1299,7 @@
++     dav_resource_private *srcinfo = src->info;
++     dav_resource_private *dstinfo = dst->info;
++     dav_error *err;
++-    int can_rename = 0;
+++    apr_status_t rv;
++ 
++ #if DAV_DEBUG
++     if (src->hooks != dst->hooks) {
++@@ -1215,39 +1313,12 @@
++     }
++ #endif
++ 
++-    /* determine whether a simple rename will work.
++-     * Assume source exists, else we wouldn't get called.
++-     */
++-    if (dstinfo->finfo.filetype != 0) {
++-        if (dstinfo->finfo.device == srcinfo->finfo.device) {
++-            /* target exists and is on the same device. */
++-            can_rename = 1;
++-        }
++-    }
++-    else {
++-        const char *dirpath;
++-        apr_finfo_t finfo;
++-        apr_status_t rv;
++ 
++-        /* destination does not exist, but the parent directory should,
++-         * so try it
++-         */
++-        dirpath = ap_make_dirstr_parent(dstinfo->pool, dstinfo->pathname);
++-        /*
++-         * XXX: If missing dev ... then what test?
++-         * Really need a try and failover for those platforms.
++-         *
++-         */
++-        rv = apr_stat(&finfo, dirpath, APR_FINFO_DEV, dstinfo->pool);
++-        if ((rv == APR_SUCCESS || rv == APR_INCOMPLETE)
++-            && (finfo.valid & srcinfo->finfo.valid & APR_FINFO_DEV)
++-            && (finfo.device == srcinfo->finfo.device)) {
++-            can_rename = 1;
++-        }
++-    }
+++    /* try rename first */
+++    rv = apr_file_rename(srcinfo->pathname, dstinfo->pathname, srcinfo->pool);
++ 
++     /* if we can't simply rename, then do it the hard way... */
++-    if (!can_rename) {
+++    if (APR_STATUS_IS_EXDEV(rv)) {
++         if ((err = dav_fs_copymove_resource(1, src, dst, DAV_INFINITY,
++                                             response)) == NULL) {
++             /* update resource states */
++@@ -1260,20 +1331,16 @@
++         return err;
++     }
++ 
++-    /* a rename should work. do it, and move properties as well */
++-
++     /* no multistatus response */
++     *response = NULL;
++ 
++-    /* ### APR has no rename? */
++-    if (apr_file_rename(srcinfo->pathname, dstinfo->pathname,
++-                       srcinfo->pool) != APR_SUCCESS) {
+++    if (rv != APR_SUCCESS) {
++         /* ### should have a better error than this. */
++         return dav_new_error(srcinfo->pool, HTTP_INTERNAL_SERVER_ERROR, 0,
++                              "Could not rename resource.");
++     }
++ 
++-    /* update resource states */
+++    /* Rename did work. Update resource states and move properties as well */
++     dst->exists = 1;
++     dst->collection = src->collection;
++     src->exists = 0;
++@@ -1475,14 +1542,18 @@
++             /* ### need to authorize each file */
++             /* ### example: .htaccess is normally configured to fail auth */
++ 
++-            /* stuff in the state directory is never authorized! */
++-            if (!strcmp(dirent.name, DAV_FS_STATE_DIR)) {
+++            /* stuff in the state directory and temp files are never authorized! */
+++            if (!strcmp(dirent.name, DAV_FS_STATE_DIR) ||
+++                !strncmp(dirent.name, DAV_FS_TMP_PREFIX,
+++                         strlen(DAV_FS_TMP_PREFIX))) {
++                 continue;
++             }
++         }
++-        /* skip the state dir unless a HIDDEN is performed */
+++        /* skip the state dir and temp files unless a HIDDEN is performed */
++         if (!(params->walk_type & DAV_WALKTYPE_HIDDEN)
++-            && !strcmp(dirent.name, DAV_FS_STATE_DIR)) {
+++            && (!strcmp(dirent.name, DAV_FS_STATE_DIR) ||
+++                !strncmp(dirent.name, DAV_FS_TMP_PREFIX,
+++                         strlen(DAV_FS_TMP_PREFIX)))) {
++             continue;
++         }
++ 
++--- a/modules/dav/main/mod_dav.c
+++++ b/modules/dav/main/mod_dav.c
++@@ -998,7 +998,10 @@
++ 
++             if (rc != APR_SUCCESS) {
++                 err = dav_new_error(r->pool, HTTP_INTERNAL_SERVER_ERROR, 0,
++-                                    "Could not get next bucket brigade");
+++                                    apr_psprintf(r->pool,
+++                                                 "Could not get next bucket "
+++                                                 "brigade (URI: %s)",
+++                                                 ap_escape_html(r->pool, r->uri)));
++                 break;
++             }
++ 
++@@ -1021,8 +1024,10 @@
++                 rc = apr_bucket_read(b, &data, &len, APR_BLOCK_READ);
++                 if (rc != APR_SUCCESS) {
++                     err = dav_new_error(r->pool, HTTP_BAD_REQUEST, 0,
++-                                        "An error occurred while reading "
++-                                        "the request body.");
+++                                        apr_psprintf(r->pool,
+++                                                    "An error occurred while reading"
+++                                                    " the request body (URI: %s)",
+++                                                    ap_escape_html(r->pool, r->uri)));
++                     break;
++                 }
++ 
++@@ -2978,6 +2983,7 @@
++ {
++     dav_error *err;
++     dav_resource *resource;
+++    dav_resource *parent;
++     const dav_hooks_locks *locks_hooks;
++     int result;
++     int depth;
++@@ -3009,6 +3015,20 @@
++     if (err != NULL)
++         return dav_handle_err(r, err, NULL);
++ 
+++    /* Check if parent collection exists */
+++    if ((err = resource->hooks->get_parent_resource(resource, &parent)) != NULL) {
+++        /* ### add a higher-level description? */
+++        return dav_handle_err(r, err, NULL);
+++    }
+++    if (parent && (!parent->exists || parent->collection != 1)) {
+++        err = dav_new_error(r->pool, HTTP_CONFLICT, 0,
+++                           apr_psprintf(r->pool,
+++                                        "The parent resource of %s does not "
+++                                        "exist or is not a collection.", 
+++                                        ap_escape_html(r->pool, r->uri)));
+++        return dav_handle_err(r, err, NULL);
+++    }
+++
++     /*
++      * Open writable. Unless an error occurs, we'll be
++      * writing into the database.
+diff -ruN httpd-2.2.22.orig/fink/patches/mod_rewrite_literal_ipv6_redirect.patch httpd-2.2.22/fink/patches/mod_rewrite_literal_ipv6_redirect.patch
+--- httpd-2.2.22.orig/fink/patches/mod_rewrite_literal_ipv6_redirect.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/mod_rewrite_literal_ipv6_redirect.patch	2012-05-11 10:45:41.000000000 -0600
+@@ -0,0 +1,49 @@
++## 075_mod_rewrite_literal_ipv6_redirect.dpatch by Stefan Fritsch <sf@debian.org>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Add [] to literal ipv6 hosts in URLs (bug #557015)
++
++--- a/modules/mappers/mod_rewrite.c
+++++ b/modules/mappers/mod_rewrite.c
++@@ -840,6 +840,23 @@
++ }
++ 
++ /*
+++ * Get the current server name from the request for the purposes
+++ * of using in a URL.  If the server name is an IPv6 literal
+++ * address, it will be returned in URL format (e.g., "[fe80::1]").
+++ */
+++static const char *get_server_name_for_url(request_rec *r)
+++{
+++    const char *plain_server_name = ap_get_server_name(r);
+++
+++#if APR_HAVE_IPV6
+++    if (ap_strchr_c(plain_server_name, ':')) { /* IPv6 literal? */
+++        return apr_psprintf(r->pool, "[%s]", plain_server_name);
+++    }
+++#endif
+++    return plain_server_name;
+++}
+++
+++/*
++  * add 'http[s]://ourhost[:ourport]/' to URI
++  * if URI is still not fully qualified
++  */
++@@ -853,7 +870,7 @@
++         char *thisport;
++         int port;
++ 
++-        thisserver = ap_get_server_name(r);
+++        thisserver = get_server_name_for_url(r);
++         port = ap_get_server_port(r);
++         thisport = ap_is_default_port(port, r)
++                    ? ""
++@@ -4290,7 +4307,7 @@
++      */
++ 
++     /* add the canonical URI of this URL */
++-    thisserver = ap_get_server_name(r);
+++    thisserver = get_server_name_for_url(r);
++     port = ap_get_server_port(r);
++     if (ap_is_default_port(port, r)) {
++         thisport = "";
+diff -ruN httpd-2.2.22.orig/fink/patches/no_LD_LIBRARY_PATH.patch httpd-2.2.22/fink/patches/no_LD_LIBRARY_PATH.patch
+--- httpd-2.2.22.orig/fink/patches/no_LD_LIBRARY_PATH.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/no_LD_LIBRARY_PATH.patch	2012-05-11 10:36:48.000000000 -0600
+@@ -0,0 +1,15 @@
++## 038_no_LD_LIBRARY_PATH by Adam Conrad <adconrad@0c3.net>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Remove LD_LIBRARY_PATH from envvars-std
++
++--- a/support/envvars-std.in
+++++ b/support/envvars-std.in
++@@ -18,7 +18,4 @@
++ #
++ # This file is generated from envvars-std.in
++ #
++-@SHLIBPATH_VAR@="@exp_libdir@:$@SHLIBPATH_VAR@"
++-export @SHLIBPATH_VAR@
++-#
++ @OS_SPECIFIC_VARS@
+diff -ruN httpd-2.2.22.orig/fink/patches/suexec-CVE-2007-1742.patch httpd-2.2.22/fink/patches/suexec-CVE-2007-1742.patch
+--- httpd-2.2.22.orig/fink/patches/suexec-CVE-2007-1742.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/suexec-CVE-2007-1742.patch	2012-05-11 10:40:51.000000000 -0600
+@@ -0,0 +1,62 @@
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Fix race condition with chdir
++## DP: Fix /var/www* being accepted as docroot instead of /var/www/*
++## DP: (the same for public_html* instead of public_html/* )
++
++--- a/support/suexec.c
+++++ b/support/suexec.c
++@@ -42,6 +42,7 @@
++ #if APR_HAVE_UNISTD_H
++ #include <unistd.h>
++ #endif
+++#include <fcntl.h>
++ 
++ #include <stdio.h>
++ #include <stdarg.h>
++@@ -264,6 +265,7 @@
++     struct group *gr;       /* group entry holder        */
++     struct stat dir_info;   /* directory info holder     */
++     struct stat prg_info;   /* program info holder       */
+++    int cwdh;               /* handle to cwd             */
++ 
++     /*
++      * Start with a "clean" environment
++@@ -499,11 +501,16 @@
++         exit(111);
++     }
++ 
+++    if ( (cwdh = open(".", O_RDONLY)) == -1 ) {
+++        log_err("cannot open current working directory\n");
+++	exit(111);
+++    }
+++
++     if (userdir) {
++         if (((chdir(target_homedir)) != 0) ||
++             ((chdir(AP_USERDIR_SUFFIX)) != 0) ||
++             ((getcwd(dwd, AP_MAXPATH)) == NULL) ||
++-            ((chdir(cwd)) != 0)) {
+++            ((fchdir(cwdh)) != 0)) {
++             log_err("cannot get docroot information (%s)\n", target_homedir);
++             exit(112);
++         }
++@@ -511,12 +518,18 @@
++     else {
++         if (((chdir(AP_DOC_ROOT)) != 0) ||
++             ((getcwd(dwd, AP_MAXPATH)) == NULL) ||
++-            ((chdir(cwd)) != 0)) {
+++            ((fchdir(cwdh)) != 0)) {
++             log_err("cannot get docroot information (%s)\n", AP_DOC_ROOT);
++             exit(113);
++         }
++     }
++ 
+++    close(cwdh);
+++
+++    if (strlen(cwd) > strlen(dwd)) {
+++        strncat(dwd, "/", AP_MAXPATH);
+++        dwd[AP_MAXPATH-1] = '\0';
+++    }
++     if ((strncmp(cwd, dwd, strlen(dwd))) != 0) {
++         log_err("command not in docroot (%s/%s)\n", cwd, cmd);
++         exit(114);
+diff -ruN httpd-2.2.22.orig/fink/patches/suexec_is_shared.patch httpd-2.2.22/fink/patches/suexec_is_shared.patch
+--- httpd-2.2.22.orig/fink/patches/suexec_is_shared.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/suexec_is_shared.patch	2012-05-11 10:33:55.000000000 -0600
+@@ -0,0 +1,18 @@
++## 032_suexec_is_shared by Adam Conrad <adconrad@0c3.net>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Patch to allow suEXEC as shared.
++
++--- a/os/unix/unixd.c
+++++ b/os/unix/unixd.c
++@@ -266,6 +266,10 @@
++ 
++     /* Check for suexec */
++     unixd_config.suexec_enabled = 0;
+++    /* If mod_suexec isn't linked in, we shouldn't test for the binary */
+++    if (ap_find_linked_module("mod_suexec.c") == NULL) {
+++	return;
+++    }
++     if ((apr_stat(&wrapper, SUEXEC_BIN,
++                   APR_FINFO_NORM, ptemp)) != APR_SUCCESS) {
++         return;
+diff -ruN httpd-2.2.22.orig/fink/patches/suexec_log_cloexec.patch httpd-2.2.22/fink/patches/suexec_log_cloexec.patch
+--- httpd-2.2.22.orig/fink/patches/suexec_log_cloexec.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/suexec_log_cloexec.patch	2012-05-11 10:37:35.000000000 -0600
+@@ -0,0 +1,42 @@
++## suexec_log_cloexec.dpatch
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Patch to allow suexec to log after a cgi error (#312385)
++## DP: http://issues.apache.org/bugzilla/show_bug.cgi?id=10744
++
++--- a/support/suexec.c
+++++ b/support/suexec.c
++@@ -46,6 +46,7 @@
++ #include <stdio.h>
++ #include <stdarg.h>
++ #include <stdlib.h>
+++#include <fcntl.h>
++ 
++ #ifdef HAVE_PWD_H
++ #include <pwd.h>
++@@ -598,17 +599,14 @@
++ #endif /* AP_SUEXEC_UMASK */
++ 
++     /*
++-     * Be sure to close the log file so the CGI can't
++-     * mess with it.  If the exec fails, it will be reopened
++-     * automatically when log_err is called.  Note that the log
++-     * might not actually be open if AP_LOG_EXEC isn't defined.
++-     * However, the "log" cell isn't ifdef'd so let's be defensive
++-     * and assume someone might have done something with it
++-     * outside an ifdef'd AP_LOG_EXEC block.
++-     */
++-    if (log != NULL) {
++-        fclose(log);
++-        log = NULL;
+++     * ask fcntl(2) to set the FD_CLOEXEC flag on the log file,
+++     * so it'll be automagically closed if the exec() call succeeds.
+++     */
+++    fflush(log);
+++    setbuf(log,NULL);
+++    if(fcntl(fileno(log),F_SETFD,FD_CLOEXEC)==-1) {
+++      log_err("error: can't set close-on-exec flag");
+++      exit(122);
++     }
++ 
++     /*
+diff -ruN httpd-2.2.22.orig/fink/patches/usr_bin_perl_0wnz.patch httpd-2.2.22/fink/patches/usr_bin_perl_0wnz.patch
+--- httpd-2.2.22.orig/fink/patches/usr_bin_perl_0wnz.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/usr_bin_perl_0wnz.patch	2012-05-11 10:29:01.000000000 -0600
+@@ -0,0 +1,13 @@
++## 004_usr_bin_perl_0wnz_j00 by Adam Conrad <adconrad@0c3.net>
++##
++## All lines beginning with `## DP:' are a description of the patch.
++## DP: Call /usr/bin/perl in printenv, not /usr/local/bin/perl
++
++--- a/docs/cgi-examples/printenv
+++++ b/docs/cgi-examples/printenv
++@@ -1,4 +1,4 @@
++-#!/usr/local/bin/perl
+++#!/usr/bin/perl
++ ##
++ ##  printenv -- demo CGI program which just prints its environment
++ ##
 diff -ruN httpd-2.2.22.orig/fink/split-logfile.8 httpd-2.2.22/fink/split-logfile.8
 --- httpd-2.2.22.orig/fink/split-logfile.8	1969-12-31 17:00:00.000000000 -0700
 +++ httpd-2.2.22/fink/split-logfile.8	2012-05-01 10:37:08.000000000 -0600
