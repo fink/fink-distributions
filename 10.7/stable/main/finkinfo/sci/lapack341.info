@@ -1,0 +1,155 @@
+Info4: <<
+Package: lapack341
+Version: 3.4.1
+Revision: 1
+Type: gcc (4.7)
+Description: Reference L_APACK and BLAS libraries
+DescDetail: <<
+This package provides a reference implementation of the LAPACK and BLAS 
+libraries (as opposed to the optimized implementations from ATLAS or 
+Accelerate.framework).
+<<
+DescUsage: <<
+This package contains the static libraries and pkgconfig files.  
+
+The libraries have been renamed to avoid collisions with their
+counterparts from atlas, libblas.{a,dylib} -> librefblas.{a,dylib} and 
+liblapack.{a,dylib} -> libreflapack.{a.dylib}.
+
+To use the static libraries, you can specify e.g. 
+
+LAPACK_LIBS=-L%p/lib/lapack -lrefblas -lreflapack
+
+The documentation is mostly installed by the atlas-doc package.
+<<
+Maintainer: Alexander Hansen <alexkhansen@users.sourceforge.net>
+Homepage: http://www.netlib.org/lapack/
+
+BuildDependsOnly: true
+BuildDepends: gcc%type_pkg[gcc]-compiler
+Depends: %N-shlibs (=%V)
+
+Source: http://www.netlib.org/lapack/lapack-%v.tgz
+Source-MD5: 44c3869c38c8335c2b9c2a8bb276eb55
+
+PatchScript: <<
+#!/bin/sh -ev
+if [ "%m" = "x86_64" ] 
+	then m='-m64'
+	else m='-m32'
+fi
+perl -p -e "	s/gfortran/gfortran-fsf-%type_raw[gcc]/ ; \
+				s/(^OPTS\s+=\s+).*/\1-O2 -fimplicit-none -funroll-loops -fPIC $m/ ; \
+				s/gcc/gcc-fsf-%type_raw[gcc]/" \
+													< make.inc.example > make.inc
+perl -pi -e '	s,\@prefix\@,%p,; \
+				s,\@libdir\@,%p/lib/lapack/%v, ; \
+				s,\@LAPACK_VERSION\@,%v, ; \
+				s,-llapack,-lreflapack,' 			< lapack.pc.in > lapack.pc
+perl -pi -e '	s,\@prefix\@,%p,; \
+				s,\@libdir\@,%p/lib/lapack/%v, ; \
+				s,\@LAPACK_VERSION\@,%v,' 			< lapacke/lapacke.pc.in > lapacke.pc
+perl -pi -e '	s,\@prefix\@,%p,; \
+				s,\@libdir\@,%p/lib/lapack/%v, ; \
+				s,\@LAPACK_VERSION\@,%v, ; \
+				s,-lblas,-lrefblas,' 				< BLAS/blas.pc.in > blas.pc
+<<
+
+CompileScript: <<
+	#!/bin/sh -ev
+	make blaslib 
+	make variants 
+	make lapackelib
+	make lib 
+	make lapack_install
+	mkdir tmp
+	# build dylibs the old-fashioned way
+	# do librefblas first
+	if [ "%m" = "x86_64" ] 
+		then m='-m64 '
+		else m='-m32 '
+	fi
+	compilerlib="-L%p/lib/gcc%type_raw[gcc]/lib -lgfortran"
+	gfc='gfortran-fsf-%type_raw[gcc] -O2 -fimplicit-none -funroll-loops -fPIC -fno-common '$m
+	ldf='-Wl,-dead_strip_dylibs -dynamiclib -single_module -install_name '
+	gccc='gcc -O3 -Wl,-dead_strip_dylibs -dynamiclib -single_module -fno-common '$m'-install_name '
+	TMP=`%p/sbin/mktemp -d -p .` || exit 1
+	pushd TMP
+	ar -x ../librefblas.a
+	$gfc $ldf %p/lib/lapack/%v/librefblas.dylib  $compilerlib *.o -o ../librefblas.dylib
+	popd
+	TMP=`%p/sbin/mktemp -d -p .` || exit 1
+	pushd TMP
+	ar -x ../liblapack.a
+	$gfc $ldf %p/lib/lapack/%v/libreflapack.dylib  $compilerlib %b/librefblas.dylib *.o -o ../libreflapack.dylib
+	popd
+	TMP=`%p/sbin/mktemp -d -p .` || exit 1
+	pushd TMP
+	ar -x ../libtmglib.a
+	$gfc $ldf %p/lib/lapack/%v/libtmglib.dylib  $compilerlib %b/librefblas.dylib %b/libreflapack.dylib *.o -o ../libtmglib.dylib
+	popd
+	pushd TMP
+	ar -x ../liblapacke.a
+	$gccc %p/lib/lapack/%v/liblapacke.dylib  $compilerlib %b/libreflapack.dylib %b/librefblas.dylib *.o -o ../liblapacke.dylib
+	popd
+	for statlib in SRC/VARIANTS/LIB/*.a ; do
+		dynlib=lib`basename $statlib .a`.dylib
+		instname=%p/lib/lapack/%v/$dynlib
+		TMP=`%p/sbin/mktemp -d -p .` || exit 1
+		pushd TMP
+		ar -x ../$statlib
+		$gfc $ldf $instname $compilerlib %b/librefblas.dylib %b/libreflapack.dylib *.o  -o %b/$dynlib 
+		popd
+	done
+ <<
+
+InfoTest: TestScript: make -j1 blas_testing lapack_testing variants_testing || exit 2
+
+InstallScript: <<
+	#!/bin/sh -ev
+	install -d %i/lib/lapack/pkgconfig
+	install *.pc %i/lib/lapack/pkgconfig
+	install -d %i/lib/lapack/%v
+	install *.dylib %i/lib/lapack/%v
+	install *.a %i/lib/lapack
+	install SRC/VARIANTS/LIB/*.a %i/lib/lapack
+<<
+
+DocFiles: LICENSE  DOCS/lapacke.pdf  SRC/VARIANTS/README:README.variants
+License: BSD
+
+Splitoff: <<
+	Package: %N-shlibs
+	Files: lib/lapack/%v/*.dylib
+	Depends: gcc%type_pkg[gcc]-shlibs
+	Shlibs: <<
+		%p/lib/lapack/%v/libcholrl.dylib 0.0.0 %n (>=3.4.1-1)
+		%p/lib/lapack/%v/libcholtop.dylib 0.0.0 %n (>=3.4.1-1)
+        %p/lib/lapack/%v/libreflapack.dylib 0.0.0 %n (>=3.4.1-1)
+        %p/lib/lapack/%v/liblapacke.dylib 0.0.0 %n (>=3.4.1-1)
+        %p/lib/lapack/%v/liblucr.dylib 0.0.0 %n (>=3.4.1-1)
+        %p/lib/lapack/%v/liblull.dylib 0.0.0 %n (>=3.4.1-1)
+        %p/lib/lapack/%v/liblurec.dylib 0.0.0 %n (>=3.4.1-1)
+        %p/lib/lapack/%v/libqrll.dylib 0.0.0 %n (>=3.4.1-1)
+        %p/lib/lapack/%v/librefblas.dylib 0.0.0 %n (>=3.4.1-1)
+        %p/lib/lapack/%v/libtmglib.dylib 0.0.0 %n (>=3.4.1-1)
+	<<
+	DocFiles: LICENSE DOCS/lapacke.pdf SRC/VARIANTS/README:README.variants
+	DescUsage: <<
+		This package contains the shared libraries.  
+
+		The libraries have been renamed to avoid collisions with their
+		counterparts from atlas, libblas.{a,dylib} -> librefblas.{a,dylib} and 
+		liblapack.{a,dylib} -> libreflapack.{a.dylib}.
+
+		To use the shared libraries, you can either specify e.g. 
+		LAPACK_LIBS=-L%p/lib/lapack/%v -lrefblas -lreflapack
+
+		or use e.g.
+
+		export PKG_CONFIG_PATH=%p/lib/lapack/%v/pkgconfig:$PKG_CONFIG_PATH 
+		LAPACK_LIBS=`pkg-config --libs lapack`
+	<<
+<<
+
+<<
