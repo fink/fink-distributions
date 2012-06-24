@@ -984,6 +984,22 @@ diff -ruN dpkg-1.16.3.orig/scripts/Dpkg/Changelog/Parse.pm dpkg-1.16.3/scripts/D
      my $format = "debian";
      my $changelogfile = "debian/changelog";
      my $force = 0;
+diff -ruN dpkg-1.16.3.orig/scripts/Dpkg/Compression.pm dpkg-1.16.3/scripts/Dpkg/Compression.pm
+--- dpkg-1.16.3.orig/scripts/Dpkg/Compression.pm	2012-04-26 20:49:02.000000000 -0600
++++ dpkg-1.16.3/scripts/Dpkg/Compression.pm	2012-06-23 22:26:59.000000000 -0600
+@@ -50,9 +50,11 @@
+ =cut
+ 
+ my $COMP = {
++    # Fink doesn't have rsyncable bzip2/gzip yet
++    # "comp_prog" => [ "gzip", "--no-name", "--rsyncable" ],
+     "gzip" => {
+ 	"file_ext" => "gz",
+-	"comp_prog" => [ "gzip", "--no-name", "--rsyncable" ],
++	"comp_prog" => [ "gzip", "--no-name" ],
+ 	"decomp_prog" => [ "gunzip" ],
+ 	"default_level" => 9,
+     },
 diff -ruN dpkg-1.16.3.orig/scripts/Dpkg/Control/Types.pm dpkg-1.16.3/scripts/Dpkg/Control/Types.pm
 --- dpkg-1.16.3.orig/scripts/Dpkg/Control/Types.pm	2012-04-26 20:49:02.000000000 -0600
 +++ dpkg-1.16.3/scripts/Dpkg/Control/Types.pm	2012-06-23 20:20:30.000000000 -0600
@@ -1024,6 +1040,145 @@ diff -ruN dpkg-1.16.3.orig/scripts/Dpkg/Gettext.pm dpkg-1.16.3/scripts/Dpkg/Gett
  #
  # Redistribution and use in source and binary forms, with or without
  # modification, are permitted provided that the following conditions
+diff -ruN dpkg-1.16.3.orig/scripts/Dpkg/Shlibs/Cppfilt.pm dpkg-1.16.3/scripts/Dpkg/Shlibs/Cppfilt.pm
+--- dpkg-1.16.3.orig/scripts/Dpkg/Shlibs/Cppfilt.pm	2012-04-26 20:49:02.000000000 -0600
++++ dpkg-1.16.3/scripts/Dpkg/Shlibs/Cppfilt.pm	2012-06-24 07:55:24.000000000 -0600
+@@ -44,7 +44,7 @@
+     } else {
+ 	$filt = { from => undef, to => undef,
+ 	            last_symbol => "", last_result => "" };
+-	$filt->{pid} = spawn(exec => [ 'c++filt', "--format=$type" ],
++	$filt->{pid} = spawn(exec => [ 'c++filt', "--no-strip-underscore", "--format=$type" ],
+ 	                     from_pipe => \$filt->{from},
+ 	                     to_pipe => \$filt->{to});
+ 	internerr(_g("unable to execute %s"), "c++filt")
+diff -ruN dpkg-1.16.3.orig/scripts/Dpkg/Shlibs/Objdump.pm dpkg-1.16.3/scripts/Dpkg/Shlibs/Objdump.pm
+--- dpkg-1.16.3.orig/scripts/Dpkg/Shlibs/Objdump.pm	2012-04-26 20:49:02.000000000 -0600
++++ dpkg-1.16.3/scripts/Dpkg/Shlibs/Objdump.pm	2012-06-24 07:08:55.000000000 -0600
+@@ -91,29 +91,54 @@
+ 	    return $format{$file};
+ 	} else {
+ 	    my ($output, %opts, $pid, $res);
+-	    if ($OBJDUMP ne "objdump") {
+-		$opts{"error_to_file"} = "/dev/null";
+-	    }
+-	    $pid = spawn(exec => [ $OBJDUMP, "-a", "--", $file ],
+-			 env => { "LC_ALL" => "C" },
+-			 to_pipe => \$output, %opts);
+-	    while (<$output>) {
+-		chomp;
+-		if (/^\s*\S+:\s*file\s+format\s+(\S+)\s*$/) {
+-		    $format{$file} = $1;
+-		    $res = $format{$file};
+-		    last;
+-		}
+-	    }
+-	    close($output);
+-	    wait_child($pid, nocheck => 1);
+-	    if ($?) {
+-		subprocerr("objdump") if $OBJDUMP eq "objdump";
+-		local $OBJDUMP = "objdump";
+-		$res = get_format($file);
+-	    }
++            if (is_elf($file)) {
++	        if ($OBJDUMP ne "objdump") {
++		    $opts{"error_to_file"} = "/dev/null";
++	        }
++	        $pid = spawn(exec => [ $OBJDUMP, "-a", "--", $file ],
++			     env => { "LC_ALL" => "C" },
++			     to_pipe => \$output, %opts);
++	        while (<$output>) {
++		    chomp;
++		    if (/^\s*\S+:\s*file\s+format\s+(\S+)\s*$/) {
++		        $format{$file} = $1;
++		        $res = $format{$file};
++		        last;
++		    }
++	        }
++	        close($output);
++	        wait_child($pid, nocheck => 1);
++	        if ($?) {
++		    subprocerr("objdump") if $OBJDUMP eq "objdump";
++		    local $OBJDUMP = "objdump";
++		    $res = get_format($file);
++	        }
++	    } else if (is_dylib($file)) {
++                # we already know DYLIB so just need to see if it's 64bit
++	        $pid = spawn(exec => [ "otool", "-hv", "--", $file ],
++			     env => { "LC_ALL" => "C" },
++			     to_pipe => \$output, %opts);
++	        while (<$output>) {
++		    chomp;
++		    if (/^((MH|FAT)[A-Z_0-9]+)\s+([A-Z_0-9]+)\s+.*$/) {
++			# Need to check if it's fat for future since it could
++			# be 32 and 64, might need the magic too at some point
++			# but this is a start
++		        $format{$file} = "dylib-".lc($3);
++		        $res = $format{$file};
++		        last;
++                    }
++	        }
++	        close($output);
++	        wait_child($pid, nocheck => 1);
++	        if ($?) {
++		    subprocerr("objdump") if $OBJDUMP eq "objdump";
++		    local $OBJDUMP = "objdump";
++		    $res = get_format($file);
++	        }
++            }
+ 	    return $res;
+-	}
++        }
+     }
+ }
+ 
+@@ -128,6 +153,28 @@
+     return $result;
+ }
+ 
++sub is_dylib {
++    my ($file) = @_;
++    my ($output, %opts, $pid, $res);
++    my ($result) = (0);
++    $pid = spawn(exec => [ "otool", "-hv", "--", $file ],
++	         env => { "LC_ALL" => "C" },
++	         to_pipe => \$output, %opts);
++    while (<$output>) {
++	chomp;
++	if (/\s+DYLIB\s+/) {
++	    $result = 1;
++	    last;
++	}
++    }
++    close($output);
++    wait_child($pid, nocheck => 1);
++    if ($?) {
++	subprocerr("otool");
++    }
++    return $result;
++}
++
+ package Dpkg::Shlibs::Objdump::Object;
+ 
+ use Dpkg::Gettext;
+@@ -177,10 +224,13 @@
+     $self->{file} = $file;
+ 
+     local $ENV{LC_ALL} = 'C';
+-    open(my $objdump, "-|", $OBJDUMP, "-w", "-f", "-p", "-T", "-R", $file)
+-	|| syserr(_g("cannot fork for %s"), $OBJDUMP);
+-    my $ret = $self->parse_objdump_output($objdump);
+-    close($objdump);
++    if is_elf($file) {
++        open(my $objdump, "-|", $OBJDUMP, "-w", "-f", "-p", "-T", "-R", $file)
++	    || syserr(_g("cannot fork for %s"), $OBJDUMP);
++        my $ret = $self->parse_objdump_output($objdump);
++        close($objdump);
++    }
++    # Add dylib alternative here
+     return $ret;
+ }
+ 
 diff -ruN dpkg-1.16.3.orig/scripts/Dpkg/Shlibs.pm dpkg-1.16.3/scripts/Dpkg/Shlibs.pm
 --- dpkg-1.16.3.orig/scripts/Dpkg/Shlibs.pm	2012-04-26 20:49:02.000000000 -0600
 +++ dpkg-1.16.3/scripts/Dpkg/Shlibs.pm	2012-06-23 19:53:20.000000000 -0600
@@ -1077,6 +1232,20 @@ diff -ruN dpkg-1.16.3.orig/scripts/Dpkg/Vendor.pm dpkg-1.16.3/scripts/Dpkg/Vendo
  If that file doesn't exist, it returns undef.
  
  =cut
+diff -ruN dpkg-1.16.3.orig/scripts/dpkg-gensymbols.pl dpkg-1.16.3/scripts/dpkg-gensymbols.pl
+--- dpkg-1.16.3.orig/scripts/dpkg-gensymbols.pl	2012-04-26 20:49:03.000000000 -0600
++++ dpkg-1.16.3/scripts/dpkg-gensymbols.pl	2012-06-24 05:43:33.000000000 -0600
+@@ -200,6 +200,10 @@
+ 	    /(\.so\.|\.so$)/ && -f $_ &&
+ 	    Dpkg::Shlibs::Objdump::is_elf($_);
+ 	} map { "$libdir/$_" } readdir(DIR);
++	push @files, grep {
++	    /(\.dylib$)/ && -f $_ &&
++	    Dpkg::Shlibs::Objdump::is_dylib($_);
++	} map { "$libdir/$_" } readdir(DIR);
+ 	close(DIR);
+     }
+ }
 diff -ruN dpkg-1.16.3.orig/scripts/dpkg-shlibdeps.pl dpkg-1.16.3/scripts/dpkg-shlibdeps.pl
 --- dpkg-1.16.3.orig/scripts/dpkg-shlibdeps.pl	2012-04-26 20:49:03.000000000 -0600
 +++ dpkg-1.16.3/scripts/dpkg-shlibdeps.pl	2012-06-23 20:19:30.000000000 -0600
@@ -1583,6 +1752,18 @@ diff -ruN dpkg-1.16.3.orig/src/packages.c dpkg-1.16.3/src/packages.c
        if (possi->cyclebreak) {
          debug(dbg_depcondetail,"      break cycle so ok and found");
          found = found_ok;
+diff -ruN dpkg-1.16.3.orig/src/t/100_dpkg_divert.t dpkg-1.16.3/src/t/100_dpkg_divert.t
+--- dpkg-1.16.3.orig/src/t/100_dpkg_divert.t	2012-04-27 02:04:22.000000000 -0600
++++ dpkg-1.16.3/src/t/100_dpkg_divert.t	2012-06-23 22:10:38.000000000 -0600
+@@ -602,7 +602,7 @@
+     system("chmod 500 $admindir");
+     call_divert(["$testdir/foo"], expect_failure => 1, expect_stderr_like => qr/create.*new/);
+     system("chmod 755 $admindir; ln -s /dev/full $admindir/diversions-new");
+-    call_divert(["$testdir/foo"], expect_failure => 1, expect_stderr_like => qr/(write|flush|close).*new/);
++    call_divert(["$testdir/foo"], expect_failure => 1, expect_stderr_like => qr/create.*new/);
+ }
+ 
+ system("rm -f $admindir/diversions-new; mkdir $admindir/diversions-old");
 diff -ruN dpkg-1.16.3.orig/utils/install-info.c dpkg-1.16.3/utils/install-info.c
 --- dpkg-1.16.3.orig/utils/install-info.c	2012-04-26 20:49:03.000000000 -0600
 +++ dpkg-1.16.3/utils/install-info.c	2012-06-23 19:47:06.000000000 -0600
