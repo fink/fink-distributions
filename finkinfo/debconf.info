@@ -1,0 +1,274 @@
+Package: debconf
+Version: 1.5.43
+Revision: 1
+Type: perl
+###
+BuildDepends: gettext-tools, po-debconf, po4a, python27, python3, gawk
+Depends: dialog, gettext-tools
+Conflicts: cdebconf (<< 0.96), debconf-tiny, apt (<< 0.3.12.1), menu (<= 2.1.3-1), dialog (<< 0.9b-20020814-1), whiptail (<< 0.51.4-11), whiptail-utf8 (<= 0.50.17-13), debconf-utils (<< 1.3.22)
+Provides: debconf-2.0
+Replaces: debconf-tiny
+Suggests: bash-completion, net-ldap-pm5123, term-readline-gnu-pm5123
+###
+Source: mirror:debian:/pool/main/d/%n/%n_%v.tar.gz
+Source-MD5: f74dcba996bf7141bce870547a79a1e1
+SourceDirectory: %n-%v
+TarFilesRename: debconf-1.5.43/debconf$:debconf-1.5.43/debconf.tmp
+###
+PatchFile: %n.patch
+PatchFile-MD5: 735b68eff0f06444fc7258557515b920
+PatchScript: <<
+sed 's|@FINKPREFIX@|%p|g' < %{PatchFile} | patch -p1
+
+# perl is in lib not share
+perl -pi -e 's,share/perl5,lib/perl5,g' Makefile
+
+# Fix for phyton3 dir, use 3.2 for now as it's the most current, making a
+# python3 and python2 metapkg that installs the latest version with a links dir
+# to the python major would be more convient I think.
+perl -pi -e 's,python3,python3.2,g' Makefile
+
+# Use %p/bin not /usr/bin
+for i in %b/po/*.po; do \
+  perl -pi -e 's,/usr,%p,g' $i; \
+  perl -pi -e 's,/var,%p/var,g' $i; \
+  perl -pi -e 's,/etc,%p/etc,g' $i; \
+done 
+for i in %b/doc/man/po4a/*/*.po; do \
+  perl -pi -e 's,/usr,%p,g' $i; \
+  perl -pi -e 's,/var,%p/var,g' $i; \
+  perl -pi -e 's,/etc,%p/etc,g' $i; \
+done
+<<
+###
+CompileScript: <<
+make
+<<
+###
+InstallScript: <<
+#!/bin/sh -ev
+export PERL5LIB=.
+
+install -d -m 0755 %i/etc/apt/apt.conf.d
+install -m 0644 debian/apt.conf %i/etc/apt/apt.conf.d/70debconf
+install -d -m 0755 %i/etc/bash_completion.d
+install -m 0644 bash_completion %i/etc/bash_completion.d/debconf
+
+make prefix=%i install-utils
+make prefix=%i install-i18n
+make prefix=%i install-rest
+
+# Ok, move debconf to its correct name
+mv %i/bin/debconf.tmp %i/bin/debconf
+
+# make sure scripts can find fink-installed perl modules even if run
+# under apt or dpkg (vs from user's fink-configured shell): insert
+# fink's perlmod path before first use of a Debconf perlmod--dmacks
+perl -pi -e 's,^(\#\!/usr/bin/perl .*)$,$1\nuse lib "%p/lib/perl5";,' %i/bin/* %i/sbin/* %i/share/debconf/*
+
+install -d -m 0755 %d/DEBIAN
+po2debconf debian/templates > debian/templates.merged
+install -m 0755 debian/config %d/DEBIAN
+install -m 0644 debian/templates.merged %d/DEBIAN/templates
+
+# Install manpages
+for i in de es fr pt pt_BR ru; do \
+  install -d -m 0755 %i/share/man/$i/man1; \
+  install -d -m 0755 %i/share/man/$i/man3; \
+  install -d -m 0755 %i/share/man/$i/man5; \
+  install -d -m 0755 %i/share/man/$i/man7; \
+  install -d -m 0755 %i/share/man/$i/man8; \
+  for j in %b/doc/man/*.$i.[13578] %b/doc/man/gen/*.$i.[13578]; do \
+    if [ -f $j ]; then \
+      basen=$(basename $j); \
+      fname=$(echo $basen | sed "s,\.$i,,g"); \
+      pagenum=$(basename $j | awk -F . '{print $NF}'); \
+      install -m 0644 $j %i/share/man/${i}/man${pagenum}/${fname}; \
+      ### Need to remove them so the next part doesn't duplicate them
+      rm $j; \
+    fi; \
+  done; \
+done
+install -d -m 0755 %i/share/man/man1
+install -d -m 0755 %i/share/man/man3
+install -d -m 0755 %i/share/man/man5
+install -d -m 0755 %i/share/man/man7
+install -d -m 0755 %i/share/man/man8
+install -m 0644 %b/doc/man/gen/*.1 %i/share/man/man1;
+install -m 0644 %b/doc/man/*.3 %i/share/man/man3;
+install -m 0644 %b/doc/man/*.5 %i/share/man/man5;
+install -m 0644 %b/doc/man/*.7 %i/share/man/man7;
+install -m 0644 %b/doc/man/gen/*.8 %i/share/man/man8;
+install -m 0644 %b/doc/man/gen/Debconf::Client::ConfModule.3pm %i/share/man/man3/Debconf::Client::ConfModule.3;
+<<
+###
+ConfFiles: <<
+  %p/etc/debconf.conf
+  %p/etc/apt/apt.conf.d/70debconf
+  %p/etc/bash_completion.d/debconf
+<<
+DocFiles: debian/README.Debian debian/changelog debian/copyright
+###
+SplitOff: <<
+  Package: %N-utils
+  Depends: %N
+  Conflicts: debconf (<< 0.1.0)
+  Replaces: debconf (<< 0.1.0)
+  Files: <<
+    bin/debconf-[glm]*
+    share/man/man1/debconf-[glm]*
+    share/man/de/man1/debconf-[glm]*
+    share/man/es/man1/debconf-[glm]*
+    share/man/fr/man1/debconf-[glm]*
+    share/man/pt/man1/debconf-[glm]*
+    share/man/pt_BR/man1/debconf-[glm]*
+    share/man/ru/man1/debconf-[glm]*
+  <<
+  DocFiles: debian/README.Debian debian/changelog debian/copyright
+  Description: Debconf utilities
+  DescDetail: <<
+    This package contains some small utilities for debconf developers.
+  <<
+<<
+###
+SplitOff2: <<
+  Package: %N-i18n
+  Depends: %N, locale-gettext-pm5123, text-charwidth-pm5123, text-iconv-pm5123, text-wrapi18n-pm5123
+  Conflicts: debconf-english, debconf-utils (<< 1.3.22)
+  Replaces: debconf-english, debconf-utils (<< 1.3.22)
+  Files: <<
+    share/locale
+    share/man/de/man[18]
+    share/man/es/man[18]
+    share/man/fr/man[18]
+    share/man/pt/man[18]
+    share/man/pt_BR/man[18]
+    share/man/ru/man[18]
+  <<
+  DocFiles: debian/README.Debian debian/changelog debian/copyright
+  Description: Full internationalization support for debconf
+  DescDetail: <<
+This package provides full internationalization for debconf, including
+translations into all available languages, support for using translated debconf
+templates, and support for proper display of multibyte character sets.
+  <<
+<<
+###
+SplitOff3: <<
+  Package: %N-doc
+  Conflicts: debconf (<< 0.3.10)
+  Files: <<
+    share/man/man[357]
+    share/man/de
+    share/man/es
+    share/man/fr
+    share/man/pt
+    share/man/pt_BR
+    share/man/ru
+  <<
+  DocFiles: debian/README.Debian debian/changelog debian/copyright samples:examples doc/README* doc/CREDITS doc/TODO doc/namespace.txt doc/debconf.schema doc/passthrough.txt doc/hierarchy.txt
+  Description: Debconf documentation
+  DescDetail: <<
+This package contains lots of additional documentation for Debconf, including
+the debconf user's guide, documentation about using different backend databases
+via the %p/etc/debconf.conf file, and a developer's guide to debconf.
+  <<
+<<
+###
+PreInstScript: <<
+set -e
+
+# Move conffile.
+if [ -e %p/etc/apt/apt.conf.d/debconf ]; then
+	mv -f %p/etc/apt/apt.conf.d/debconf %p/etc/apt/apt.conf.d/70debconf
+fi
+<<
+PostInstScript: <<
+set -e
+
+if [ -z "$DEBIAN_HAS_FRONTEND" ] && [ "$1" = configure ] && [ -n "$2" ] && \
+   dpkg --compare-versions "$2" lt 1.1.0; then
+	# Transition from old database format before debconf starts up.
+	if dpkg --compare-versions "$2" lt 0.9.00; then
+		if [ -e %p/var/lib/debconf/config.db -o -e %p/var/lib/debconf/templates.db ]; then
+			%p/share/debconf/transition_db.pl
+		fi
+		# This package used to add itself to apt.conf. That could result in
+		# a zero-byte file, since it no longer does. Detect that and remove
+		# the file.
+		if [ ! -s %p/etc/apt/apt.conf ]; then
+			rm -f %p/etc/apt/apt.conf
+		fi
+	fi
+	
+	# Fix up broken db's before debconf starts up.
+	if dpkg --compare-versions "$2" lt 1.0.25; then
+		%p/share/debconf/fix_db.pl
+	fi
+	
+	# configdb splits into passworded and non-passworded parts, before debconf
+	# starts up. Do so only if the debconf.conf has the new databases in it.
+	if dpkg --compare-versions "$2" lt 1.1.0 &&
+	   perl -e 'use Debconf::Db; Debconf::Db->load; for (@ARGV) { exit 1 unless
+	            Debconf::DbDriver->driver($_) }' config passwords; then
+	   	# copies in only the passwords, of course
+	   	debconf-copydb config passwords
+		# makes a new config with only non-passwords in it
+		debconf-copydb config newconfig \
+			-c Name:newconfig \
+			-c Driver:File \
+			-c Reject-Type:password \
+			-c Filename:%p/var/cache/debconf/newconfig.dat \
+			-c Mode:644
+		mv -f %p/var/cache/debconf/newconfig.dat %p/var/cache/debconf/config.dat
+	fi
+fi
+
+. %p/share/debconf/confmodule
+
+if [ "$1" = configure ] && [ -n "$2" ] && dpkg --compare-versions "$2" lt 1.3.11; then
+	# Remove old debconf database, and associated cruft in /var/lib/debconf.
+	# In fact, the whole directory can go! Earlier versions of debconf in the
+	# 0.9.x series kept it just in case, so make sure to delete it on upgrade
+	# from any of those versions, or even older versions.
+	if dpkg --compare-versions "$2" lt 0.9.50; then
+		rm -rf %p/var/lib/debconf
+	fi
+
+	# Kill db cruft.
+	if dpkg --compare-versions "$2" lt 0.9.73; then
+		# It may not be present, if upgrading from long ago.
+		db_unregister foo/bar || true
+		db_unregister debconf/switch-to-slang || true
+	fi
+	if dpkg --compare-versions "$2" lt 1.3.11; then
+		db_unregister debconf/showold || true
+	fi
+
+	# The Text frontend became the Readline frontend.
+	if dpkg --compare-versions "$2" lt 1.0.10; then
+		db_get debconf/frontend || true
+		if [ "$RET" = Text ]; then
+			db_set debconf/frontend Readline || true
+		fi
+	fi
+fi
+<<
+PreRmScript: <<
+set -e
+
+# copied from %p/share/debhelper/autoscripts/prerm-python for now
+dpkg -L debconf |
+	awk '$0~/\.py$/ {print $0"c\n" $0"o"}' |
+	xargs rm -f >&2
+
+exit 0
+<<
+Description: Package configuration management system
+DescDetail: <<
+Debconf is a configuration management system for deb packages. Packages use
+debconf to ask questions when they are installed.
+<<
+License: GPL
+Homepage: http://packages.debian.org/unstable/admin/debconf.html
+Maintainer: Justin F. Hallett <thesin@users.sourceforge.net>
