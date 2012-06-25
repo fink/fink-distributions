@@ -1,0 +1,91 @@
+--- libtorrent-0.12.9-orig/rak/allocators.h	2011-06-21 22:37:15.000000000 -0700
++++ libtorrent-0.12.9/rak/allocators.h	2011-06-21 22:42:44.000000000 -0700
+@@ -77,8 +77,15 @@
+ 
+   static pointer alloc_size(size_type size) {
+     pointer ptr = NULL;
++#ifdef	HAVE_POSIX_MEMALIGN
+     int __UNUSED result = posix_memalign((void**)&ptr, LT_SMP_CACHE_BYTES, size);
+ 
++#elif	defined(__APPLE__)
++	// apple-darwin's malloc is already Altivec-aligned (16B)
++	ptr = static_cast<pointer>(malloc(size));
++#else
++#error	"Missing equivalent of posix_memalign()."
++#endif
+     return ptr;
+   }
+ 
+--- libtorrent-0.12.9-orig/src/torrent/thread_base.h	2011-06-21 23:12:25.000000000 -0700
++++ libtorrent-0.12.9/src/torrent/thread_base.h	2011-06-21 23:33:19.000000000 -0700
+@@ -37,6 +37,19 @@
+ #ifndef LIBTORRENT_THREAD_BASE_H
+ #define LIBTORRENT_THREAD_BASE_H
+ 
++#if (__GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 2))
++#if defined(__APPLE__)
++#define	USE_DARWIN_ATOMICS
++#endif
++#endif
++
++#ifdef	USE_DARWIN_ATOMICS
++#include <libkern/OSAtomic.h>
++#define	__sync_add_and_fetch(x, y)	OSAtomicIncrement32Barrier(x)
++#define	__sync_sub_and_fetch(x, y)	OSAtomicDecrement32Barrier(x)
++#define	__sync_lock_test_and_set(x, y)	OSAtomicTestAndSetBarrier(y, x)
++#endif
++
+ #include <pthread.h>
+ #include <sys/types.h>
+ #include <torrent/common.h>
+--- libtorrent-0.12.9-orig/src/net/socket_set.h	2011-06-26 21:28:11.000000000 -0700
++++ libtorrent-0.12.9/src/net/socket_set.h	2011-06-26 21:28:56.000000000 -0700
+@@ -53,12 +53,12 @@
+ 
+ // Propably should rename to EventSet...
+ 
+-class SocketSet : private std::vector<Event*, rak::cacheline_allocator<> > {
++class SocketSet : private std::vector<Event*, rak::cacheline_allocator<Event*> > {
+ public:
+   typedef uint32_t    size_type;
+ 
+-  typedef std::vector<Event*, rak::cacheline_allocator<> > base_type;
+-  typedef std::vector<size_type, rak::cacheline_allocator<> > Table;
++  typedef std::vector<Event*, rak::cacheline_allocator<Event*> > base_type;
++  typedef std::vector<size_type, rak::cacheline_allocator<size_type> > Table;
+ 
+   static const size_type npos = static_cast<size_type>(-1);
+ 
+--- libtorrent-0.12.9-orig/src/torrent/utils/extents.h	2011-07-16 17:26:37.000000000 -0700
++++ libtorrent-0.12.9/src/torrent/utils/extents.h	2011-07-17 00:28:48.000000000 -0700
+@@ -39,6 +39,19 @@
+ 
+ #include <tr1/array>
+ 
++#if (__GNUC__ == 4 && __GNUC_MINOR__ < 1 && __GNUC_PATCHLEVEL__ < 2)
++// apple-gcc-4.0.1 missing definition of std::tr1::array::assign
++namespace std {
++namespace tr1 {
++template<typename _Tp, size_t _Nm>
++void
++array<_Tp,_Nm>::assign(const value_type& v) {
++	std::fill_n(this->begin(), this->size(), v);
++}
++}	// end namespace tr1
++}	// end namespace std
++#endif
++
+ namespace torrent {
+ 
+ template <typename Key, typename Tp, unsigned int TableSize, unsigned int TableBits>
+--- libtorrent-0.12.9/src/torrent/poll_select.cc	2012-06-24 15:19:31.000000000 -0700
++++ libtorrent-0.12.9/src/torrent/poll_select.cc	2012-06-24 15:17:38.000000000 -0700
+@@ -123,7 +123,7 @@
+     SocketSet t4;
+   };
+ 
+-  block_type* block = new (rak::cacheline_allocator<>()) block_type;
++  block_type* block = new (rak::cacheline_allocator<void*>()) block_type;
+ 
+   PollSelect* p = new (&block->t1) PollSelect;
+ 
