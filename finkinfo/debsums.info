@@ -1,0 +1,155 @@
+Package: debsums
+Version: 2.0.51
+Revision: 1
+###
+BuildDepends: po-debconf, po4a
+Depends: debconf, file-fnmatch-pm, libdpkg-pm, ucf, anacron
+###
+Source: mirror:debian:pool/main/d/%n/%n_%v.tar.gz
+Source-MD5: 014a1bf7ec7bc1cce34688924d3a6b40
+SourceDirectory: %n-%v
+###
+PatchScript: <<
+perl -pi -e 's,/usr,%p,g' debian/cron.* debsums rdebsums debsums_gen debsums_init
+perl -pi -e 's,/etc,%p/etc,g' debian/cron.* debsums rdebsums debsums_gen debsums_init
+perl -pi -e 's,/var,%p/var,g' debian/cron.* debsums rdebsums debsums_gen debsums_init
+
+perl -pi -e 's,%p/bin/perl,/usr/bin/perl,g' debsums rdebsums debsums_gen debsums_init
+
+cd man && po4a --rm-backups po4a.cfg
+<<
+CompileScript: echo
+InstallScript: <<
+#!/bin/sh -ev
+install -d -m 0755 %i/sbin
+install -m 0755 debsums_gen debsums_init %i/sbin
+install -d -m 0755 %i/bin
+install -m 0755 debsums rdebsums %i/bin
+install -d -m 0755 %i/etc/default
+touch %i/etc/debsums-ignore
+install -m 0644 debian/default %i/etc/default/debsums
+install -d -m 0755 %i/etc/cron.daily
+install -d -m 0755 %i/etc/cron.monthly
+install -d -m 0755 %i/etc/cron.weekly
+install -m 0644 debian/cron.daily %i/etc/cron.daily
+install -m 0644 debian/cron.monthly %i/etc/cron.monthly
+install -m 0644 debian/cron.weekly %i/etc/cron.weekly
+
+for i in de es fr pt ru sv; do \
+  for j in 1 8; do \
+    install -d -m 0755 %i/share/man/$i/man$j; \
+    for page in `find %b -name \*.$i.$j`; do \
+      install -m 0644 $page %i/share/man/$i/man$j; \
+      ## remove them for the last part
+      rm -f $page; \
+    done; \
+  done; \
+done
+
+for i in 1 8; do \
+  install -d -m 0755 %i/share/man/man$i; \
+  for page in `find %b -name \*.$i`; do \
+    install -m 0644 $page %i/share/man/man$i; \
+  done; \
+done
+
+### Debconf
+install -d -m 0755 %d/DEBIAN
+po2debconf debian/templates > debian/templates.merged
+install -m 0644 debian/templates.merged %d/DEBIAN/templates
+
+cd %d && find * -type f ! -regex '^DEBIAN/.*' -print0 | xargs -r0 md5sum > %b/DEBIAN/md5sums
+<<
+PostInstScript: <<
+set -e
+
+# summary of how this script can be called:
+#        * <postinst> `configure' <most-recently-configured-version>
+#        * <old-postinst> `abort-upgrade' <new version>
+#        * <conflictor's-postinst> `abort-remove' `in-favour' <package>
+#          <new-version>
+#        * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
+#          <failed-install-package> <version> `removing'
+#          <conflicting-package> <version>
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+#
+
+. %p/share/debconf/confmodule
+
+APT_CONF=%p/etc/apt/apt.conf.d/90debsums
+case "$1" in
+    configure)
+        db_get debsums/apt-autogen || true
+        APT_CONF_TMP=`tempfile`
+        chmod 644 $APT_CONF_TMP
+        if [ "$RET" != true ]; then
+            echo -n '//' > $APT_CONF_TMP
+        fi
+        echo 'DPkg::Post-Invoke { "if [ -x %p/bin/debsums ]; then %p/bin/debsums --generate=nocheck -sp %p/var/cache/apt/archives; fi"; };' >> $APT_CONF_TMP
+        ucf --debconf-ok $APT_CONF_TMP $APT_CONF
+	rm -f $APT_CONF_TMP
+        ucfr debsums $APT_CONF
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0
+<<
+PostRmScript: <<
+set -e
+
+# summary of how this script can be called:
+#        * <postrm> `remove'
+#        * <postrm> `purge'
+#        * <old-postrm> `upgrade' <new-version>
+#        * <new-postrm> `failed-upgrade' <old-version>
+#        * <new-postrm> `abort-install'
+#        * <new-postrm> `abort-install' <old-version>
+#        * <new-postrm> `abort-upgrade' <old-version>
+#        * <disappearer's-postrm> `disappear' <r>overwrit>r> <new-version>
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+APT_CONF=%p/etc/apt/apt.conf.d/90debsums
+
+case "$1" in
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    ;;
+
+    purge)
+        for ext in '' '~' '%%' .bak .ucf-new .ucf-old .ucf-dist; do
+          rm -f $APT_CONF$ext
+        done
+        if which ucf >/dev/null; then
+          ucf --purge $APT_CONF
+        fi
+        if which ucfr >/dev/null; then
+          ucfr --purge debsums $APT_CONF
+        fi
+    ;;
+
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+esac
+
+exit 0
+<<
+ConfFiles: %p/etc/debsums-ignore %p/etc/default/debsums
+DocFiles: README debian/changelog debian/copyright
+Description: Tool for verification of deb files
+DescDetail: <<
+debsums can verify the integrity of installed package files against MD5
+checksums installed by the package, or generated from a .deb archive.
+<<
+License: GPL
+Maintainer: Justin F. Halett <thesin@lists.sourceforge.net>
+Homepage: http://packages.debian.org/unstable/debsums
