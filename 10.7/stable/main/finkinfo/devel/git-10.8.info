@@ -1,0 +1,182 @@
+Info2:<<
+Package: git
+Version: 1.7.11.1
+Revision: 1
+Type: pm 5.12.4
+Distribution: 10.8
+
+Depends: <<
+	expat1-shlibs,
+	libcurl4-shlibs (>= 7.25.0-1),
+	libgettext8-shlibs,
+	libiconv,
+	locale-textdomain-pm%type_pkg[pm],
+	libpcre1-shlibs,
+	openssl100-shlibs (>= 1.0.1c-1)
+<<
+BuildDepends: <<
+	expat1,
+	fink (>= 0.24.12),
+	gettext-tools,
+	libcurl4 (>= 7.25.0-1),
+	libgettext8-dev,
+	libiconv-dev,
+	libpcre1,
+	openssl100-dev (>= 1.0.1c-1)
+<<
+Replaces: git-core, git-cvsimport (<< 1.7.2.3-1002), git-archimport (<< 1.7.2.3-1002), git-svn (<< 1.7.2.3-1002)
+Conflicts: git-cvsimport (<< 1.7.2.3-1002), git-archimport (<< 1.7.2.3-1002), git-svn (<< 1.7.2.3-1002)
+
+Source: http://git-core.googlecode.com/files/git-%v.tar.gz
+Source-MD5: 2c5d85ec5b6e08986d942461debc9d6b
+Source2: http://git-core.googlecode.com/files/git-htmldocs-%v.tar.gz
+Source2-MD5: edb081c12c0024f6c26c479c0d289714
+Source2ExtractDir: doc
+Source3: http://git-core.googlecode.com/files/git-manpages-%v.tar.gz
+Source3-MD5: 64b54174fee05ba2b33571a70d74f1c3
+
+PatchFile: %n.patch
+PatchFile-MD5: 17a023de0c59ecd9f13fa2d605a192d2
+PatchScript: <<
+	#!/bin/bash -ev
+	%{default_script}
+	# Fix up paths in documentation to point to %p.
+	perl -pi -e 's,/usr/(share|bin)/git,%p/\1/git,g; s,/usr/libexec,%p/lib,g' ../man1/* ../doc/*
+	# Setting these variables in 'config.mak' lets Makefile import them
+	# automatically instead of always manually passing them to make.
+	cat >> config.mak << EOF
+NO_FINK=1
+NO_DARWIN_PORTS=1
+NO_SVN_TESTS=1
+GITWEB_CONFIG_SYSTEM=%p/gitweb.conf
+CC_LD_DYNPATH=-L
+AR=ar
+htmldir=share/doc/git
+NO_CROSS_DIRECTORY_HARDLINKS=1
+NO_INSTALL_HARDLINKS=1
+EOF
+	perl -pi -e 's/\"\$PERL\"/\$PERL/' git-instaweb.sh
+<<
+
+# Test suite hangs now when using multiple processes. :(
+UseMaxBuildJobs: false
+
+# Let configure do the work of setting up the environment instead of
+# patching and passing things manually to make.
+SetLDFLAGS: -Wl,-dead_strip_dylibs
+# Darwin needs no special flags for pthreads, so set flags to ' ' because
+# "-pthreads" causes problems for gcc-4.0.
+ConfigureParams: <<
+	--libexecdir='${exec_prefix}/lib' \
+	--enable-pthreads=' ' \
+	--without-python \
+	--with-tcltk='/usr/bin/wish' \
+	--with-openssl=%p \
+	--with-libpcre=%p
+<<
+
+CompileScript: <<
+	#!/bin/bash -ev
+	let version=`uname -r | cut -f 1 -d .`
+	if [ $version -eq 10 ]; then
+		./configure --with-perl='/usr/bin/arch -%m perl5.10.0' %c
+	elif [ $version -eq 11 ]; then
+		./configure --with-perl='/usr/bin/arch -%m perl5.12' %c
+	else 
+		./configure --with-perl='/usr/bin/perl' %c
+	fi
+	make
+	
+	# Build OS X Keychain integration.
+	cd contrib/credential/osxkeychain
+	make
+<<
+
+InfoTest: <<
+# 	TestDepends: <<
+# 		libwww-pm%type_pkg[pm],
+# 		svn-swig-pm%type_pkg[pm],
+# 		term-readkey-pm%type_pkg[pm]
+# 	<<
+
+	TestScript: <<
+		#!/bin/bash -ev
+		
+		# This hackery is needed to get svn tests working with multi-arch perl.
+		let version=`uname -r | cut -f 1 -d .`
+		if [ $version -eq 10 ]; then
+			cat > myperl << EOF
+#!/bin/sh
+exec /usr/bin/arch -%m perl5.10.0 "\$@"
+EOF
+			chmod +x myperl; PERL_PATH=`pwd`/myperl
+		elif [ $version -eq 11 ]; then
+			cat > myperl << EOF
+#!/bin/sh
+exec /usr/bin/arch -%m perl5.12 "\$@"
+EOF
+			chmod +x myperl; PERL_PATH=`pwd`/myperl
+		else
+			PERL_PATH=/usr/bin/perl
+		fi
+
+		if [ $UID = 0 ]; then
+			# Some tests fail when run as root.
+			GIT_SKIP_TESTS='t0001.25 t0004.2 t0004.3 t0004.4 t0004.5 t0070.3 t1004.13 t3700.21 t3700.22 t3700.23 t3700.24 t3700.25 t4201.2 t5302 t6000.3 t7300.26 t7403' make -k test PERL_PATH="$PERL_PATH" || exit 2
+		else
+			GIT_SKIP_TESTS="t4201.2 t5302 t6000.3 t7403" make -k test PERL_PATH="$PERL_PATH" || exit 2
+		fi
+	<<
+	TestSuiteSize: large
+<<
+
+InstallScript: <<
+	make install DESTDIR=%d
+	
+	mkdir -p %i/share/man %i/share/doc
+	cp -R ../man* %i/share/man
+	cp -R ../doc %i/share/doc/%n
+	mkdir -p %i/share/emacs/site-lisp
+	cp contrib/emacs/*.el %i/share/emacs/site-lisp
+	mkdir -p %i/etc/bash_completion.d
+	cp contrib/completion/git-completion.bash %i/etc/bash_completion.d/
+	install -m 755 contrib/credential/osxkeychain/git-credential-osxkeychain %i/lib/git-core
+	
+	# These go in separate packages.
+	rm %i/lib/git-core/git-cvsimport
+	rm %i/share/doc/%n/git-cvsimport.*
+	rm %i/share/man/man1/git-cvsimport.1
+	rm %i/lib/git-core/git-archimport
+	rm %i/share/doc/%n/git-archimport.*
+	rm %i/share/man/man1/git-archimport.1
+	rm %i/lib/git-core/git-svn
+	rm %i/share/doc/%n/git-svn.*
+	rm %i/share/man/man1/git-svn.1
+	rm %i/lib/git-core/git-send-email
+	rm %i/share/doc/%n/git-send-email.*
+	rm %i/share/man/man1/git-send-email.1
+<<
+
+UpdatePOD: true
+DocFiles: COPYING README contrib
+
+Description: Distributed version control system
+DescDetail: <<
+Git is an open source, distributed version control system designed to
+handle everything from small to very large projects with speed and
+efficiency.
+
+Every Git clone is a full-fledged repository with complete history and
+full revision tracking capabilities, not dependent on network access or
+a central server. Branching and merging are fast and easy to do.
+<<
+DescPackaging: <<
+Patched Makefile to use symlinks instead of hard links since it causes
+problems if %p is a symlink to a different volume.
+
+Previously maintained by Brendan Cully <brendan@finkproject.org>
+<<
+License: GPL
+Homepage: http://git-scm.com/
+Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
+<<
