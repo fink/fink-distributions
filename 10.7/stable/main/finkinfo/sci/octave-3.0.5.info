@@ -1,32 +1,60 @@
 Info2: <<
-Package: octave%type_pkg[-atlas]
-Type: -atlas (boolean), oct(3.0.5), gcc (4.7)
+Package: octave%type_pkg[-lapack]
+Type: -lapack (-atlas -ref .), oct(3.0.5), gcc (4.7)
 Version: 3.0.5
-Revision: 3017
+Revision: 3018
 Maintainer: Alexander Hansen <alexkhansen@users.sourceforge.net>
 
 Source: mirror:gnu:%{Ni}/%{Ni}-%v.tar.bz2
 Source-MD5: bfba44eeda8fa6e29c2bbcd2604c34eb
 
 BuildDepends: <<
-	glpk-dev, hdf5.7-oldapi, readline5, libncurses5, fftw3 (>= 3.1.1-7), libcurl4, 
-	libpcre1, gcc46-compiler, suitesparse, qhull5-dev, fink (>= 0.30.0-1), fink-package-precedence, sed,
-	(%type_raw[-atlas] = atlas) atlas (>=3.9.11-13), flag-sort
+	fftw3 (>= 3.1.1-7),
+	gcc%type_pkg[gcc]-compiler,
+	glpk-dev, 
+	hdf5.7-oldapi,
+	libcurl4, 
+	libncurses5,  
+	libpcre1,  
+ 	qhull5-dev,	
+ 	readline6, 
+ 	sed,
+	suitesparse, 
+	fink (>= 0.32.0-1), 
+	fink-package-precedence, 
+	flag-sort,
+	(%type_raw[-lapack] = -atlas) atlas (>=3.9.11-13),
+	(%type_raw[-lapack] = -ref) lapack341
 <<
-Depends: %{Ni}%type_pkg[oct]%type_pkg[-atlas] (=%v-%r)
+Depends: %{Ni}%type_pkg[oct]%type_pkg[-lapack] (=%v-%r)
 BuildConflicts: coot-dev, broken-gcc, lammpi-dev, fort77, 4ti2-dev
 Suggests: %{Ni}%type_pkg[oct]-docs
 Provides: <<
 								octave-interpreter,
-(%type_raw[-atlas] = -atlas) 	octave-interpreter-ptatlas,
-(%type_raw[-atlas] != -atlas) 	octave-interpreter-accelerate
+(%type_raw[-lapack] = -atlas) 	octave-interpreter-ptatlas,
+(%type_raw[-lapack] = .) 		octave-interpreter-accelerate,
+(%type_raw[-lapack] = -ref) 	octave-interpreter-ref
 <<
-
 Conflicts: <<
-	(%type_raw[-atlas] = atlas) %{Ni}, (%type_raw[-atlas] != -atlas) %{Ni}-atlas, 
-	%{Ni}3.0.2 ( << 3.0.2-5), %{Ni}3.0.2-atlas ( << 3.0.2-5) 
+	%{Ni}, 
+	%{Ni}-atlas,
+	%{Ni}-x11, 
+	%{Ni}-atlas-x11,
+	%{Ni}-ref, 
+	%{Ni}-ref-x11,
+	%{Ni}3.0.2 ( << 3.0.2-5), 
+	%{Ni}3.0.2-atlas ( << 3.0.2-5) 
 	<<
-Replaces: %{Ni}, %{Ni}-atlas, %{Ni}3.0.2 ( << 3.0.2-5), %{Ni}3.0.2-atlas ( << 3.0.2-5) 
+Replaces: <<
+	%{Ni}, 
+	%{Ni}-atlas,
+	%{Ni}-x11, 
+	%{Ni}-atlas-x11,
+	%{Ni}-ref, 
+	%{Ni}-ref-x11,
+	%{Ni}3.0.2 ( << 3.0.2-5), 
+	%{Ni}3.0.2-atlas ( << 3.0.2-5) 
+<<
 
 GCC: 4.0
 
@@ -65,7 +93,7 @@ PatchScript: <<
  				-e "s|%%OCTAVE_CONF_SH_LD%%|\"oct-cxx\"|" \
  					src/oct-conf.h.in mkoctfile*in	
     # Add the BLAS C library for the -atlas variant.
-    if [ "%type_pkg[-atlas]" = "-atlas" ]
+    if [ "%type_pkg[-lapack]" = "-atlas" ]
     	then sed -i.bak -e 's|%%OCTAVE_CONF_BLAS_LIBS%%|"-llapack -lf77blas -lcblas -latlas"|' \
     							src/oct-conf.h.in mkoctfile.in
     fi
@@ -85,14 +113,18 @@ CompileScript: <<
  export CFLAGS='-O3'
  export CXXFLAGS='-O3'
  export FFLAGS='-O3'
- if [ "%type_pkg[-atlas]" = "" ]
- then 
-	a='--with-lapack=-Wl,-framework,Accelerate --with-blas=-Wl,-framework,Accelerate'
-	export FFLAGS='-O3 -ff2c'
- else 
- 	a='--with-lapack=-lptlapack --with-blas=-lptf77blas'
-    export FFLAGS='-O3'
- fi
+ case "%type_raw[-lapack]" in
+ 	".") 
+		a='--with-lapack=-Wl,-framework,Accelerate --with-blas=-Wl,-framework,Accelerate'
+		export FFLAGS='-O3 -ff2c' ;;
+ 	"-atlas")
+ 		a='--with-lapack=-lptlapack --with-blas=-lptf77blas'
+    	export FFLAGS='-O3' ;;
+ 	"-ref")
+ 		export LDFLAGS="-L%p/lib/lapack/3.4.1 "$LDFLAGS
+ 		a='--with-lapack=-lreflapack --with-blas=-lrefblas'
+   		export FFLAGS='-O3' ;;
+ esac
  FLIBDIR="%p/lib/gcc%type_raw[gcc]/lib"
  ./configure FLIBS="-L${FLIBDIR} -lgfortran" %c $a
  make octave-bug 
@@ -136,8 +168,10 @@ InstallScript: <<
  sed -i.bak -e "s|flag-sort -r gcc|oct-cc|g" \
  			-e "s|flag-sort -r g++|oct-cxx|g" \
  			%i/bin/%{Ni}-bug-%v 
- # for the -atlas variant, add -lcblas to BLAS_LIBS:
- perl -pi -e 's/(BLAS_LIBS.*)\"/\1 -lcblas\"/' %i/bin/%{ni}-bug-%v
+ # for the -atlas variant, add -lcblas to BLAS_LIBS in octave-bug:
+ if [ "%type_pkg[-lapack]" = "-atlas" ]
+ 	then perl -pi -e 's/(BLAS_LIBS.*)\"/\1 -lcblas\"/' %i/bin/%{ni}-bug-%v
+ fi
  # move compiler wrapper over
  cp %b/oct-compiler.in %i/share/%{Ni}/%v/scripts
 
@@ -156,33 +190,44 @@ InstallScript: <<
  # create convenience symlink
  ln -s mkoctfile-%type_raw[oct]-gcc%type_raw[gcc] mkoctfile-gcc%type_raw[gcc] 
 <<
+
 InfoDocs: %{Ni}.info
-RuntimeVars: <<
- GNUTERM: aqua
-<<
 DocFiles: BUGS COPYING ChangeLog* NEWS* PROJECTS README ROADMAP SENDING-PATCHES THANKS
 
 SplitOff: <<
-	Package: octave%type_pkg[oct]%type_pkg[-atlas]-shlibs
+	Package: octave%type_pkg[oct]%type_pkg[-lapack]-shlibs
 	Conflicts: << 
-		(%type_raw[-atlas] = atlas) %{Ni}%type_pkg[oct]-shlibs, 
-		(%type_raw[-atlas] != atlas) %{Ni}%type_pkg[oct]-atlas-shlibs, 
-		(%type_raw[-atlas] = atlas) %{Ni} (<< 3.0.5-5), 
-		(%type_raw[-atlas] != atlas) %{Ni}-atlas (<< 3.0.5-5), 
-		%{Ni}3.0.2 ( << 3.0.2-5), %{Ni}3.0.2-atlas ( << 3.0.2-5)
+		%{Ni}%type_pkg[oct]-shlibs,
+		%{Ni}%type_pkg[oct]-atlas-shlibs,
+		%{Ni}%type_pkg[oct]-ref-shlibs,
+		%{Ni} (<< 3.0.5-5), 
+		%{Ni}-atlas (<< 3.0.5-5), 
+		%{Ni}3.0.2 ( << 3.0.2-5),
+		%{Ni}3.0.2-atlas ( << 3.0.2-5)
 	<<
 	Replaces: <<
-		(%type_raw[-atlas] = atlas) %{Ni}%type_pkg[oct]-shlibs, 
-		(%type_raw[-atlas] != atlas) %{Ni}%type_pkg[oct]-atlas-shlibs, 
-		%{Ni} (<< 3.0.5-5), %{Ni}-atlas (<< 3.0.5-5), 
-		%{Ni}3.0.2 ( << 3.0.2-5), %{Ni}3.0.2-atlas ( << 3.0.2-5)
+		%{Ni}%type_pkg[oct]-shlibs,
+		%{Ni}%type_pkg[oct]-atlas-shlibs,
+		%{Ni}%type_pkg[oct]-ref-shlibs,
+		%{Ni} (<< 3.0.5-5),	
+		%{Ni}-atlas (<< 3.0.5-5), 
+		%{Ni}3.0.2 ( << 3.0.2-5),
+		%{Ni}3.0.2-atlas ( << 3.0.2-5)
 	<<	
-	Depends:  fftw3-shlibs, gcc%type_pkg[gcc]-shlibs, hdf5.7-oldapi-shlibs, readline5-shlibs, 	(%type_raw[-atlas] = -atlas) atlas-shlibs (>= 3.9.11-3)
+	Depends:  <<
+		fftw3-shlibs, 
+		gcc%type_pkg[gcc]-shlibs, 
+		hdf5.7-oldapi-shlibs, 
+		readline6-shlibs, 	
+		(%type_raw[-lapack] = -atlas) atlas-shlibs (>= 3.9.11-3),
+		(%type_raw[-lapack] = -ref) lapack341-shlibs
+	<<
 	Provides: <<
 		liboctave%type_pkg[oct]-gcc%type_pkg[gcc],
 		liboctave%type_pkg[oct],
-		(%type_raw[-atlas] = -atlas) liboctave%type_pkg[oct]-ptatlas,
-		(%type_raw[-atlas] != -atlas) liboctave%type_pkg[oct]-accelerate
+		(%type_raw[-lapack] = -atlas) liboctave%type_pkg[oct]-ptatlas,
+		(%type_raw[-lapack] = -ref) liboctave%type_pkg[oct]-ref,
+		(%type_raw[-lapack] = .) liboctave%type_pkg[oct]-accelerate
 	<<
 	Files: <<
 		lib/%{Ni}-%v
@@ -196,76 +241,105 @@ SplitOff: <<
 	This package contains shared libraries which are used by the Octave
 	interpreter itself, as well as for packages that build against Octave, 
 	such as the various octave-forge packages.
-    Any package that either links to the libraries in %{Ni}%type_pkg[-atlas]-shlibs or 
-	installs an extension should Depend on %{Ni}%type_pkg[oct]%type_pkg[-atlas]-shlibs and BuildDepend
-	on %{Ni}%type_pkg[oct]%type_pkg[-atlas]-dev.  In addition, it will need to BuildDepend on
+    Any package that either links to the libraries in %{Ni}%type_pkg[-lapack]-shlibs or 
+	installs an extension should Depend on %{Ni}%type_pkg[oct]%type_pkg[-lapack]-shlibs and BuildDepend
+	on %{Ni}%type_pkg[oct]%type_pkg[-lapack]-dev.  In addition, it will need to BuildDepend on
 	hdf5.7-oldapi and fftw3.  
 	<<
 	DocFiles: BUGS ChangeLog README ROADMAP SENDING-PATCHES COPYING
 <<
 SplitOff2: <<
-	Package: octave%type_pkg[oct]%type_pkg[-atlas]-dev
-	Depends: octave%type_pkg[oct]%type_pkg[-atlas]-shlibs (=%v-%r), gcc%type_pkg[gcc]-compiler, (%type_raw[-atlas] = atlas) atlas (>= 3.8.1-1)
+	Package: octave%type_pkg[oct]%type_pkg[-lapack]-dev
+	Depends: octave%type_pkg[oct]%type_pkg[-lapack]-shlibs (=%v-%r), gcc%type_pkg[gcc]-compiler, (%type_raw[-lapack] = atlas) atlas (>= 3.8.1-1)
 	Conflicts: << 
-		(%type_raw[-atlas] = atlas) %{Ni}%type_pkg[oct]-dev, 
-		(%type_raw[-atlas] != atlas) %{Ni}%type_pkg[oct]-atlas-dev, 
-		(%type_raw[-atlas] = atlas) %{Ni} (<< 3.0.5-5), 
-		(%type_raw[-atlas] != atlas) %{Ni}-atlas (<< 3.0.5-5), 
-		%{Ni}3.0.2 ( << 3.0.2-5), %{Ni}3.0.2-atlas ( << 3.0.2-5),
+		%{Ni}305-dev, 
+		%{Ni}305-atlas-dev,
+		%{Ni}305-ref-dev,  
 		%{Ni}324-dev, 
-		%{Ni}324-atlas-dev, 
-		%{Ni}324-x11-dev, 
-		%{Ni}324-atlas-x11-dev, 
+		%{Ni}324-atlas-dev,
+		%{Ni}324-ref-dev,
+		%{Ni}324-x11-dev,
+		%{Ni}324-atlas-x11-dev,
+		%{Ni}324-ref-x11-dev,
 		%{Ni}343-dev, 
 		%{Ni}343-atlas-dev,
-		%{Ni}343-x11-dev, 
+		%{Ni}343-ref-dev,
+		%{Ni}343-x11-dev,
 		%{Ni}343-atlas-x11-dev,
+		%{Ni}343-ref-x11-dev,
 		%{Ni}360-dev, 
 		%{Ni}360-atlas-dev,
+		%{Ni}360-ref-dev,
 		%{Ni}360-x11-dev,
 		%{Ni}360-atlas-x11-dev,
+		%{Ni}360-ref-x11-dev,
 		%{Ni}361-dev, 
 		%{Ni}361-atlas-dev,
+		%{Ni}361-ref-dev,
 		%{Ni}361-x11-dev,
 		%{Ni}361-atlas-x11-dev,
-		%{Ni}362-dev, 
-		%{Ni}362-atlas-dev,
+		%{Ni}361-ref-x11-dev,		
+		%{Ni}362-dev,
 		%{Ni}362-x11-dev,
+		%{Ni}362-atlas-dev,
 		%{Ni}362-atlas-x11-dev,
-		mkoctfile%type_pkg[oct]-gcc46, mkoctfile%type_pkg[oct]-gcc46-atlas
+		%{Ni}362-ref-dev,
+		%{Ni}362-ref-x11-dev,
+		%{Ni} (<< 3.0.5-5), 
+		%{Ni}-atlas (<< 3.0.5-5), 
+		%{Ni}3.0.2 ( << 3.0.2-5), 
+		%{Ni}3.0.2-atlas ( << 3.0.2-5),
+		mkoctfile%type_pkg[oct]-gcc46, 
+		mkoctfile%type_pkg[oct]-gcc46-atlas
 	<<
 	Replaces: <<
-		(%type_raw[-atlas] = atlas) %{Ni}%type_pkg[oct]-dev, 
-		(%type_raw[-atlas] != atlas) %{Ni}%type_pkg[oct]-atlas-dev, 
-		%{Ni} (<< 3.0.5-5), %{Ni}-atlas (<< 3.0.5-5), 
-		%{Ni}3.0.2 ( << 3.0.2-5), %{Ni}3.0.2-atlas ( << 3.0.2-5),
+		%{Ni}305-dev, 
+		%{Ni}305-atlas-dev,
+		%{Ni}305-ref-dev,  
 		%{Ni}324-dev, 
-		%{Ni}324-atlas-dev, 
-		%{Ni}324-x11-dev, 
-		%{Ni}324-atlas-x11-dev, 
+		%{Ni}324-atlas-dev,
+		%{Ni}324-ref-dev,
+		%{Ni}324-x11-dev,
+		%{Ni}324-atlas-x11-dev,
+		%{Ni}324-ref-x11-dev,
 		%{Ni}343-dev, 
 		%{Ni}343-atlas-dev,
-		%{Ni}343-x11-dev, 
+		%{Ni}343-ref-dev,
+		%{Ni}343-x11-dev,
 		%{Ni}343-atlas-x11-dev,
+		%{Ni}343-ref-x11-dev,
 		%{Ni}360-dev, 
 		%{Ni}360-atlas-dev,
+		%{Ni}360-ref-dev,
 		%{Ni}360-x11-dev,
 		%{Ni}360-atlas-x11-dev,
+		%{Ni}360-ref-x11-dev,
 		%{Ni}361-dev, 
 		%{Ni}361-atlas-dev,
+		%{Ni}361-ref-dev,
 		%{Ni}361-x11-dev,
 		%{Ni}361-atlas-x11-dev,
-		%{Ni}362-dev, 
-		%{Ni}362-atlas-dev,
+		%{Ni}361-ref-x11-dev,		
+		%{Ni}362-dev,
 		%{Ni}362-x11-dev,
+		%{Ni}362-atlas-dev,
 		%{Ni}362-atlas-x11-dev,
-		mkoctfile%type_pkg[oct]-gcc46, mkoctfile%type_pkg[oct]-gcc46-atlas
+		%{Ni}362-ref-dev,
+		%{Ni}362-ref-x11-dev,
+		%{Ni} (<< 3.0.5-5), 
+		%{Ni}-atlas (<< 3.0.5-5), 
+		%{Ni}3.0.2 ( << 3.0.2-5), 
+		%{Ni}3.0.2-atlas ( << 3.0.2-5),
+		mkoctfile%type_pkg[oct]-gcc46,
+		mkoctfile%type_pkg[oct]-gcc46-atlas
 	<<
 	Provides: <<
 		liboctave%type_pkg[oct]-gcc%type_pkg[gcc]-dev,
 		liboctave%type_pkg[oct]-dev,
-		(%type_raw[-atlas] = -atlas) liboctave%type_pkg[oct]-ptatlas-dev,
-		(%type_raw[-atlas] != -atlas) liboctave%type_pkg[oct]-accelerate-dev
+		(%type_raw[-lapack] = -atlas) liboctave%type_pkg[oct]-ptatlas-dev,
+		(%type_raw[-lapack] = .) liboctave%type_pkg[oct]-accelerate-dev,
+		(%type_raw[-lapack] = -ref) liboctave%type_pkg[oct]-ref-dev,
+		(%type_raw[-lapack] = .) liboctave%type_pkg[oct]-accelerate-dev
 	<<
 	
 	BuildDependsOnly: true
@@ -338,32 +412,33 @@ SplitOff2: <<
 <<
 
 Splitoff3: <<
-	Package: octave%type_pkg[oct]%type_pkg[-atlas]
+	Package: octave%type_pkg[oct]%type_pkg[-lapack]
 	Depends: <<
-	%{Ni}%type_pkg[oct]%type_pkg[-atlas]-shlibs (=%v-%r),
+	%{Ni}%type_pkg[oct]%type_pkg[-lapack]-shlibs (=%v-%r),
 	glpk-shlibs, gnuplot (>=4.2.0) | gnuplot-nox | gnuplot-nogtk,  
 	fftw3-shlibs (>= 3.1.1-7), qhull5-shlibs,
 	ncurses, aquaterm, libcurl4-shlibs, 
 	libpcre1-shlibs,
-	(%type_raw[-atlas] = -atlas) atlas-shlibs (>= 3.8.1-1)
+	(%type_raw[-lapack] = -atlas) atlas-shlibs (>= 3.8.1-1)
 	<<
 	Conflicts: << 
-		(%type_raw[-atlas] = atlas) %{Ni}%type_pkg[oct], 
-		(%type_raw[-atlas] != atlas) %{Ni}%type_pkg[oct]-atlas, 
-		(%type_raw[-atlas] = atlas) %{Ni} (<< 3.0.5-5), 
-		(%type_raw[-atlas] != atlas) %{Ni}-atlas (<< 3.0.5-5), 
+		(%type_raw[-lapack] = atlas) %{Ni}%type_pkg[oct], 
+		(%type_raw[-lapack] != atlas) %{Ni}%type_pkg[oct]-atlas, 
+		(%type_raw[-lapack] = atlas) %{Ni} (<< 3.0.5-5), 
+		(%type_raw[-lapack] != atlas) %{Ni}-atlas (<< 3.0.5-5), 
 		%{Ni}3.0.2 ( << 3.0.2-5), %{Ni}3.0.2-atlas ( << 3.0.2-5)
 	<<
 	Replaces: <<
-		(%type_raw[-atlas] = atlas) %{Ni}%type_pkg[oct]-dev, 
-		(%type_raw[-atlas] != atlas) %{Ni}%type_pkg[oct]-atlas-dev, 
+		(%type_raw[-lapack] = atlas) %{Ni}%type_pkg[oct]-dev, 
+		(%type_raw[-lapack] != atlas) %{Ni}%type_pkg[oct]-atlas-dev, 
 		%{Ni} (<< 3.0.5-5), %{Ni}-atlas (<< 3.0.5-5), 
 		%{Ni}3.0.2 ( << 3.0.2-5), %{Ni}3.0.2-atlas ( << 3.0.2-5)
 	<<
 	Provides: <<
 									octave%type_pkg[oct]-interpreter,
-	(%type_raw[-atlas] = -atlas) 	octave%type_pkg[oct]-interpreter-ptatlas,
-	(%type_raw[-atlas] != -atlas) 	octave%type_pkg[oct]-interpreter-accelerate
+	(%type_raw[-lapack] = -atlas) 	octave%type_pkg[oct]-interpreter-ptatlas,
+	(%type_raw[-lapack] = -ref) 	octave%type_pkg[oct]-interpreter-ref,
+	(%type_raw[-lapack] = .) 	octave%type_pkg[oct]-interpreter-accelerate
 	<<
 	
 	Files: <<
@@ -379,11 +454,11 @@ Splitoff3: <<
  		GNUTERM: aqua
 		<<
 	DescUsage: <<
-	The %{Ni}%type_pkg[oct]%type_pkg[-atlas] package contains versioned
+	The %{Ni}%type_pkg[oct]%type_pkg[-lapack] package contains versioned
 	executables, in particular the "%{Ni}-%type_raw[oct]" executable,
 	as well as all of the core functionality of the Octave interpreter.  
 	Note that the GNU info file, which provides the core documentation, 
-	is installed as part of the "%{Ni}%type_pkg[oct]%type_pkg[-atlas]" package.
+	is installed as part of the "%{Ni}%type_pkg[oct]%type_pkg[-lapack]" package.
     
 	By default the plotting output (via gnuplot) is directed to AquaTerm. 
 	This can be overidden in your startup scripts, e.g.
@@ -412,7 +487,7 @@ Splitoff3: <<
 
 Description: MATLAB-like language for computations
 DescDetail: <<
-The %{Ni}%type_pkg[-atlas] package contains unversioned executables and an 
+The %{Ni}%type_pkg[-lapack] package contains unversioned executables and an 
 unversioned directory tree.  
 
 Octave provides a convenient command line interface for solving linear and 
@@ -549,6 +624,9 @@ We also replace "veclib" with "accelerate".
 
 As of Revision 3016:
 Move the RuntimeVars setup to the versioned executable package.
+
+As of Revision 3018: Some additional RuntimeDepends were needed for full 
+functionality.  Add reference LAPACK variant.
 <<
 Homepage: http://www.gnu.org/software/octave//
 License: GPL3
