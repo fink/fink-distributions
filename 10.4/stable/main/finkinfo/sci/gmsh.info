@@ -1,6 +1,7 @@
 Package: gmsh
-Version: 2.5.0
-Revision: 2
+Version: 2.6.0
+Revision: 1
+
 Depends: <<
 	fltk13-aqua-shlibs,
 	gmp5-shlibs,
@@ -8,7 +9,7 @@ Depends: <<
 	libpng14-shlibs,
 	lua51-shlibs,
 	libncurses5-shlibs,
-	readline5-shlibs
+	readline6-shlibs
 <<
 BuildDepends: <<
 	cmake,
@@ -18,49 +19,75 @@ BuildDepends: <<
 	libpng14,
 	lua51-dev,
 	libncurses5,
-	readline5
+	readline6
 <<
+Conflicts: gmsh2.5.0-shlibs
+Replaces: gmsh2.6.0-shlibs
+
 Source: http://www.geuz.org/%n/src/%n-%v-source.tgz
-Source-MD5: afa48c0296dba08641bc6312b0ccabf5
+Source-MD5: 404fc5ad6194b959c72ec9b0d9b190e7
 SourceDirectory: %n-%v-source
 
 GCC: 4.0
 
 PatchFile: %n.patch
-PatchFile-MD5: 8cc25ef1248f37664023e3e511cd10d5
+PatchFile-MD5: fa117d7ee3adb9f218ce08cb3f547819
 PatchScript: <<
-%{default_script}
-perl -pi -e 's|(void.*return)\s0\.|$1|g' Solver/linearSystemPETSc.h
+	%{default_script}
+	perl -pi -e 's|-framework vecLib|-framework Accelerate|' CMakeLists.txt
+	perl -pi -e 's|end\+|begin_+|g' contrib/gmm/gmm_interface.h
+	perl -pi -e 's|return;|return NULL;|' contrib/mmg3d/build/sources/ratio.c
 <<
-
-UseMaxBuildJobs: false
 
 CompileScript: <<
 #!/bin/sh -ev
 mkdir build
 cd build
-cmake	-DCMAKE_PREFIX_PATH=%p -DCMAKE_INSTALL_PREFIX=%i d ..
+cmake	-DCMAKE_PREFIX_PATH=%p \
+		-DCMAKE_INSTALL_PREFIX=%i \
+		-DENABLE_WRAP_PYTHON=no \
+		d ..
 make verbose=1
-make verbose=1 html
-make verbose=1 info
-make verbose=1 txt
+make verbose=1 shared
+make -j1 verbose=1 html
+make -j1 verbose=1 info
+make -j1 verbose=1 txt
 <<
 
 InstallScript: <<
 #!/bin/sh -ev
 pushd build
 make install
+
+#fix app bundle
+# move app bundle back into build directory 
+mv %i/Gmsh.app %b
+cp Info.plist %b/Gmsh.app/Contents
 popd
+cp %b/Fltk/MacIcons.icns %b/Gmsh.app/Contents/Resources/Gmsh.icns
+
+# put a copy of the executable in %p/bin for e.g. the Octave Forge
+# packages that expect a "gmsh" executable in the PATH.
+mkdir -p %i/bin
+cp -r  %b/Gmsh.app/Contents/MacOS/%n %i/bin
+chmod a+x %i/bin/%n
+
+# fix library up
+pushd %i/lib
+mv libGmsh.dylib libGmsh.%v.dylib
+ln -s libGmsh.%v.dylib libGmsh.dylib
+install_name_tool -id %p/lib/libGmsh.%v.dylib libGmsh.%v.dylib
+popd
+
 # put texinfo file in proper location for Fink
 mkdir -p %i/share/info
 cp doc/texinfo/%n.info %i/share/info/
-# clear out include directory since there's nothing to build
-# against in this package
-rm -rf %i/include
 <<
 
 DocFiles: doc/
 InfoDocs: %n.info
+AppBundles: Gmsh.app
+
 Homepage:  http://www.geuz.org/gmsh
 Maintainer: Alexander Hansen <alexkhansen@users.sourceforge.net>
 
@@ -82,25 +109,49 @@ DescDetail: <<
  capabilities.
 <<
 DescUsage: <<
-This package contains the '%n' executable and documentation, including demos
-and tutorial.
+This package contains the '%n' executable, an app bundle, and documentation
+including demos and tutorial material.
 <<
 DescPackaging: <<
 	Executable is built statically from the object files directly, rather than
-	via libraries, so there is no dependency on gmshX.Y.Z-shlibs.
+	via libraries, so there is no dependency on gmsh2.6.0-shlibs.
 
-	Oddly enough, clang complains about a void function with a return
-	value :-) so we patch that.
-
-	As of 2.5.0-2:  patch to install docs and executable in proper locations
-	using "make install".  Thanks to Nicholas Taylor for the patch.
-
-	Uses Veclib for BLAS.  It appears not to use Fink's ATLAS even when that's 
-	installed, so no -atlas variant currently.
+	Patch to install docs in their proper locations when using "make install".  
+	Thanks to Nicholas Taylor for the original form of the patch.  
 	
-	There appears to be something awry in gmsh-2.5.0-source/contrib/gmm/gmm_interface.h .
+	The app bundle build takes a lot of manual fiddling.
+
+	Patch contrib/mmg3d/build/sources/ratio.c where a non-void function has a 
+	return without a value.
+	
+	There appears to be something awry in contrib/gmm/gmm_interface.h .
 	clang from Xcode 4.3 decided that there was an error, and by inspection there
 	appears indeed to be one.  I implemented a patch which seemed to be correct in
 	context.
 	This file is currently still unchanged in upstream's SVN.
+
+	Uses vecLib for BLAS.  (we patch this to Accelerate)
+	It appears not to use Fink's ATLAS even when that's 
+	installed, so no -atlas variant currently.
+
+	Python binding is currently disabled because the package tries to mix Apple and
+	Fink Pythons.
+<<
+SplitOff: <<
+	Package: %N2.6.0-shlibs
+	Files: lib/libGmsh.%v.dylib
+	Shlibs: %p/lib/libGmsh.%v.dylib 0.0.0 %n (>= 2.6.0-1)
+	DocFiles: doc/LICENSE.txt
+	DescUsage: <<
+		This package contains a shared library.
 	<<
+<<
+SplitOff2: <<
+	Package: %N2.6.0-dev
+	Files: include lib
+	BuildDependsOnly: true
+	DocFiles: doc/LICENSE.txt
+	DescUsage: <<
+		This package contains build-time files (headers and unversioned dylib).
+	<<
+<<
