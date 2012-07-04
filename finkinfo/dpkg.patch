@@ -14,7 +14,7 @@ diff -ruN dpkg-1.16.4.3.orig/configure dpkg-1.16.4.3/configure
  { $as_echo "$as_me:${as_lineno-$LINENO}: checking dpkg cpu type" >&5
 diff -ruN dpkg-1.16.4.3.orig/dpkg-deb/build.c dpkg-1.16.4.3/dpkg-deb/build.c
 --- dpkg-1.16.4.3.orig/dpkg-deb/build.c	2012-06-13 23:18:31.000000000 -0600
-+++ dpkg-1.16.4.3/dpkg-deb/build.c	2012-07-02 16:14:45.000000000 -0600
++++ dpkg-1.16.4.3/dpkg-deb/build.c	2012-07-03 10:48:25.000000000 -0600
 @@ -299,6 +299,14 @@
    NULL
  };
@@ -409,7 +409,7 @@ diff -ruN dpkg-1.16.4.3.orig/dselect/methods/multicd/install dpkg-1.16.4.3/dsele
  ";
 diff -ruN dpkg-1.16.4.3.orig/dselect/pkgdepcon.cc dpkg-1.16.4.3/dselect/pkgdepcon.cc
 --- dpkg-1.16.4.3.orig/dselect/pkgdepcon.cc	2012-06-13 23:12:30.000000000 -0600
-+++ dpkg-1.16.4.3/dselect/pkgdepcon.cc	2012-07-02 16:51:09.000000000 -0600
++++ dpkg-1.16.4.3/dselect/pkgdepcon.cc	2012-07-03 10:39:12.000000000 -0600
 @@ -204,6 +204,17 @@
    return 2;
  }
@@ -428,7 +428,7 @@ diff -ruN dpkg-1.16.4.3.orig/dselect/pkgdepcon.cc dpkg-1.16.4.3/dselect/pkgdepco
  int packagelist::resolvedepcon(dependency *depends) {
    perpackagestate *best, *fixbyupgrade;
    deppossi *possi, *provider;
-@@ -371,6 +382,30 @@
+@@ -371,6 +382,29 @@
    int would;
    pkginfo::pkgwant want= pkginfo::want_purge;
  
@@ -442,9 +442,8 @@ diff -ruN dpkg-1.16.4.3.orig/dselect/pkgdepcon.cc dpkg-1.16.4.3/dselect/pkgdepco
 +    virt_pkg = fink_virt_pkg;
 +    while (virt_pkg)
 +    {
-+      if (0==strcmp(possi->ed->name,virt_pkg->pkgname)) {
-+        // Maybe use dbg_general instead of dbg_depcon?
-+        debug(dbg_depcon,"Found package : %s from VirtPackages.pm, depended by %s\n",virt_pkg->pkgname, possi->ed->name);
++      if (strcasecmp(possi->ed->name, virt_pkg->pkgname) == 0) {
++        debug(dbg_depcondetail,"Found package : %s from VirtPackages.pm, depended by %s\n",virt_pkg->pkgname, possi->ed->name);
 +        if (dpkg_version_relate(&virt_pkg->version,possi->verrel,&possi->version))
 +        {
 +          return 1;
@@ -1507,83 +1506,244 @@ diff -ruN dpkg-1.16.4.3.orig/src/packages.c dpkg-1.16.4.3/src/packages.c
        if (possi->cyclebreak) {
          debug(dbg_depcondetail,"      break cycle so ok and found");
          found = found_ok;
-diff -ruN dpkg-1.16.4.3.orig/src/patch dpkg-1.16.4.3/src/patch
---- dpkg-1.16.4.3.orig/src/patch	1969-12-31 17:00:00.000000000 -0700
-+++ dpkg-1.16.4.3/src/patch	2012-07-02 16:14:45.000000000 -0600
-@@ -0,0 +1,73 @@
-+--- help.c	2012-06-25 14:37:18.000000000 -0600
-++++ help.c.finktmp	2012-06-25 14:25:58.000000000 -0600
-+@@ -47,6 +47,19 @@
-+ #include "infodb.h"
-+ #include "main.h"
-+ 
-++/* FINK LOCAL start */
-++// SystemB setenv() crashes when value == 0, but this occasionally happens
-++// in dpkg.
-++int _setenv(const char *name, const char *value, int overwrite) {
-++  if(name == 0 || value == 0) {
-++    return 0;
-++  }
-++  return setenv(name, value, overwrite);
-++}
-++#undef setenv
-++#define setenv _setenv
-++/* FINK LOCAL end */
-++
-+ const char *const statusstrings[]= {
-+   [stat_notinstalled]    = N_("not installed"),
-+   [stat_configfiles]     = N_("not installed but configs remain"),
-+@@ -96,7 +109,9 @@
-+     TAR,
-+     FIND,
-+     BACKEND,
-++#ifndef __APPLE__
-+     "ldconfig",
-++#endif
-+ #if BUILD_START_STOP_DAEMON
-+     "start-stop-daemon",
-+ #endif
-+@@ -117,6 +132,14 @@
-+     const char *path, *path_end;
-+     size_t path_len;
-+ 
-++    /* FINK LOCAL start */
-++    if (strncmp(prog[0],"/",1)==0 && stat(*prog, &stab) == 0)
-++    {
-++      // prog is an absolute path which exists, accept it
-++      break;
-++    }
-++    /* FINK LOCAL end */
-++
-+     for (path = path_list; path; path = path_end ? path_end + 1 : NULL) {
-+       path_end = strchr(path, ':');
-+       path_len = path_end ? (size_t)(path_end - path) : strlen(path);
-+@@ -529,6 +579,25 @@
-+   debug(dbg_veryverbose, "dir_is_used_by_others '%s' (except %s)", file->name,
-+         pkg ? pkg_name(pkg, pnaw_always) : "<none>");
-+ 
-++  /* FINK LOCAL begin */
-++
-++  /*
-++   * Darwin has symlinks /etc -> /private/etc and /var -> /private/var
-++   * instead of actual /etc and /var dirs. If dpkg removes the last
-++   * pkg that it has record of having installed a file in one of those
-++   * top-level dirs, it will try to remove the dir (since it thinks
-++   * it's an empty dir) and it will succeed (since it's just unlinking
-++   * a symlink, not trying to remove a dir that is not actually
-++   * empty). That's Bad. Here we make sure these top-level dirs are
-++   * never thought to be empty.
-++   */
-++  if( !strcmp(file->name,"/etc") || !strcmp(file->name,"/tmp") || !strcmp(file->name,"/var") ) {
-++    debug(dbg_veryverbose, "dir_is_used_by_others precious!");
-++    return true;
-++  }
-++
-++  /* FINK LOCAL end */
-++
-+   iter = filepackages_iter_new(file);
-+   while ((other_pkg = filepackages_iter_next(iter))) {
-+     debug(dbg_veryverbose, "dir_is_used_by_others considering %s ...",
+diff -ruN dpkg-1.16.4.3.orig/src/script.c dpkg-1.16.4.3/src/script.c
+--- dpkg-1.16.4.3.orig/src/script.c	2012-06-13 23:12:34.000000000 -0600
++++ dpkg-1.16.4.3/src/script.c	2012-07-04 09:57:40.000000000 -0600
+@@ -143,7 +143,33 @@
+ 	pid_t pid;
+ 	int r;
+ 
+-	setexecute(cmd->filename, stab);
++	// if NULL, just want wrapper side-effect, no actual .deb script present
++	// side-effect = env set
++	if (cmd->filename)
++		setexecute(cmd->filename, stab);
++
++#define FINK_DPKG_SCRIPT_DIR "@FINKPREFIX@/lib/fink/dpkg-base-files"
++	// try to set up with wrapper
++	struct command finkcmd;
++	const char **argv = cmd->argv;
++	// determine wrapper-script pathname
++	char *finkscript;
++	asprintf(&finkscript, "%s/%s", FINK_DPKG_SCRIPT_DIR, cmd->argv[0]);
++	command_init(&finkcmd, finkscript, cmd->name);
++	command_add_arg(&finkcmd, cmd->argv[0]);
++	// if script exists we need to make it the first arg and shift
++	// the rest
++	if (cmd->filename) {
++		command_add_arg(&finkcmd, cmd->filename);
++	} else {
++		// must be blank string (NULL is end-of-array sentinel)
++		const char *null_script_path = "/usr/bin/true";
++		command_add_arg(&finkcmd, null_script_path);
++	}
++	// add the rest of the args
++	while (*++argv) {
++		command_add_arg(&finkcmd, *argv);
++	}
+ 
+ 	push_cleanup(cu_post_script_tasks, ehflag_bombout, NULL, 0, 0);
+ 
+@@ -155,11 +181,72 @@
+ 		    setenv("DPKG_RUNNING_VERSION", PACKAGE_VERSION, 1))
+ 			ohshite(_("unable to setenv for maintainer script"));
+ 
+-		cmd->filename = cmd->argv[0] = preexecscript(cmd);
+-		command_exec(cmd);
++		if (finkcmd.filename == NULL) {
++			ohshite(_("dpkg - error: could not allocate for fink script wrapper for %s.\n"), finkcmd.filename);
++		} else {
++			struct stat finkstab;
++			if (!stat(finkcmd.filename, &finkstab)) {
++				if ((finkstab.st_mode & 0555) == 0555) {
++					// only use it if it exists and is
++					// chmod a+rx
++					if (cmd->filename)
++						debug(dbg_scripts,"Wrapper script '%s' will be used around '%s'", finkcmd.filename, cmd->filename);
++					else
++						debug(dbg_scripts,"Wrapper script '%s' will be used alone as there is no '%s' script in deb", finkcmd.filename, cmd->argv[0]);
++		/*
++		  Global wrapper needs way to introspect name of package
++		  being manipulated. Normal .deb scripts could have this
++		  hard-coded in their script because this info is known at
++		  the time the .deb is constructed. Pass the name as an
++		  env var to the wrapper.
++		*/
++					setenv("FINK_PACKAGE_NAME", pkg->set->name, 1);
++
++					// it's good! set wrapper as actual
++					// runnable thing in narglist array
++					finkcmd.filename = finkcmd.argv[0] = preexecscript(&finkcmd);
++
++					command_exec(&finkcmd);
++				} else {
++					debug(dbg_scripts,"Wrapper script '%s' wrong perms", finkcmd.filename);
++					if (cmd->filename) {
++						debug(dbg_scripts,"...falling back to real script '%s'", cmd->filename);
++						debug(dbg_scripts,"...now running real script '%s'", cmd->filename);
++						cmd->filename = cmd->argv[0] = preexecscript(cmd);
++						command_exec(cmd);
++						/* This does a push_cleanup(). */
++						subproc_signals_setup(cmd->name);
++						r = subproc_wait_check(pid, cmd->name, warn);
++					} else {
++						debug(dbg_scripts,"...skipping over because no real script '%s'", cmd->filename);
++						exit(0);
++					}
++				}
++			} else {
++				debug(dbg_scripts,"Wrapper script '%s' does not exist", finkcmd.filename);
++				if (cmd->filename) {
++					debug(dbg_scripts,"...falling back to real script '%s'", cmd->filename);
++					debug(dbg_scripts,"...now running real script '%s'", cmd->filename);
++					cmd->filename = cmd->argv[0] = preexecscript(cmd);
++					command_exec(cmd);
++					/* This does a push_cleanup(). */
++					subproc_signals_setup(cmd->name);
++					r = subproc_wait_check(pid, cmd->name, warn);
++				} else {
++					debug(dbg_scripts,"...skipping over because no real script '%s'", cmd->filename);
++					exit(0);
++				}
++			}
++		}
+ 	}
+-	subproc_signals_setup(cmd->name); /* This does a push_cleanup(). */
+-	r = subproc_wait_check(pid, cmd->name, warn);
++
++	/* This does a push_cleanup(). */
++	subproc_signals_setup(finkcmd.name);
++	r = subproc_wait_check(pid, finkcmd.name, warn);
++
++	free(finkscript);
++	command_destroy(&finkcmd);
++
+ 	pop_cleanup(ehflag_normaltidy);
+ 
+ 	pop_cleanup(ehflag_normaltidy);
+@@ -179,20 +266,22 @@
+ 	scriptpath = pkg_infodb_get_file(pkg, &pkg->installed, scriptname);
+ 	sprintf(buf, _("installed %s script"), desc);
+ 
+-	command_init(&cmd, scriptpath, buf);
+-	command_add_arg(&cmd, scriptname);
+-	command_add_argv(&cmd, args);
+-
+ 	if (stat(scriptpath, &stab)) {
+-		command_destroy(&cmd);
+ 		if (errno == ENOENT) {
+ 			debug(dbg_scripts,
+ 			      "vmaintainer_script_installed nonexistent %s",
+ 			      scriptname);
+-			return 0;
+-		}
+-		ohshite(_("unable to stat %s `%.250s'"), buf, scriptpath);
++			/* FINK LOCAL begin */
++			// always call do_script (fink adds side-effects), but
++			// pass NULL if no actual script
++			scriptpath = NULL;
++		} else
++			ohshite(_("unable to stat %s `%.250s'"), buf, scriptpath);
+ 	}
++	command_init(&cmd, scriptpath, buf);
++	command_add_arg(&cmd, scriptname);
++	command_add_argv(&cmd, args);
++
+ 	do_script(pkg, &pkg->installed, &cmd, &stab, 0);
+ 
+ 	command_destroy(&cmd);
+@@ -251,22 +340,25 @@
+ 	strcpy(cidirrest, scriptname);
+ 	sprintf(buf, _("new %s script"), desc);
+ 
+-	va_start(args, cidirrest);
+-	command_init(&cmd, cidir, buf);
+-	command_add_arg(&cmd, scriptname);
+-	command_add_argv(&cmd, args);
+-	va_end(args);
+-
+ 	if (stat(cidir, &stab)) {
+-		command_destroy(&cmd);
+ 		if (errno == ENOENT) {
+ 			debug(dbg_scripts,
+ 			      "maintainer_script_new nonexistent %s '%s'",
+ 			      scriptname, cidir);
+-			return 0;
+-		}
+-		ohshite(_("unable to stat %s `%.250s'"), buf, cidir);
++			/* FINK LOCAL begin */
++			// always call do_script (fink adds side-effects), but
++			// pass NULL if no actual script
++			cidir = NULL;
++		} else
++			ohshite(_("unable to stat %s `%.250s'"), buf, cidir);
+ 	}
++
++	va_start(args, cidirrest);
++	command_init(&cmd, cidir, buf);
++	command_add_arg(&cmd, scriptname);
++	command_add_argv(&cmd, args);
++	va_end(args);
++
+ 	do_script(pkg, &pkg->available, &cmd, &stab, 0);
+ 
+ 	command_destroy(&cmd);
+@@ -289,28 +381,30 @@
+ 	oldscriptpath = pkg_infodb_get_file(pkg, &pkg->installed, scriptname);
+ 	sprintf(buf, _("old %s script"), desc);
+ 
+-	command_init(&cmd, oldscriptpath, buf);
+-	command_add_args(&cmd, scriptname, ifok,
+-	                 versiondescribe(&pkg->available.version, vdew_nonambig),
+-	                 NULL);
+-
+ 	if (stat(oldscriptpath, &stab)) {
+ 		if (errno == ENOENT) {
+ 			debug(dbg_scripts,
+ 			      "maintainer_script_alternative nonexistent %s '%s'",
+ 			      scriptname, oldscriptpath);
+-			command_destroy(&cmd);
+-			return 0;
+-		}
+-		warning(_("unable to stat %s '%.250s': %s"),
+-		        cmd.name, oldscriptpath, strerror(errno));
+-	} else {
+-		if (!do_script(pkg, &pkg->installed, &cmd, &stab, PROCWARN)) {
+-			command_destroy(&cmd);
+-			post_script_tasks();
+-			return 1;
++			/* FINK LOCAL begin */
++			// always call do_script (fink adds side-effects), but
++			// pass NULL if no actual script
++			oldscriptpath = NULL;
++		} else {
++			warning(_("unable to stat %s '%.250s': %s"),
++				cmd.name, oldscriptpath, strerror(errno));
+ 		}
+ 	}
++	command_init(&cmd, oldscriptpath, buf);
++	command_add_args(&cmd, scriptname, ifok,
++	                 versiondescribe(&pkg->available.version, vdew_nonambig),
++	                 NULL);
++
++	if (!do_script(pkg, &pkg->installed, &cmd, &stab, PROCWARN)) {
++		command_destroy(&cmd);
++		post_script_tasks();
++		return 1;
++	}
+ 	fprintf(stderr,
+ 	        _("dpkg - trying script from the new package instead ...\n"));
+ 
+@@ -323,6 +417,9 @@
+ 	                 versiondescribe(&pkg->installed.version, vdew_nonambig),
+ 	                 NULL);
+ 
++	// FINK if old-pkg fails, don't want to allow "success" of new
++	// solely because wrapper worked in new-pkg: loses important
++	// error-state that *should* fail loudly
+ 	if (stat(cidir, &stab)) {
+ 		command_destroy(&cmd);
+ 		if (errno == ENOENT)
 diff -ruN dpkg-1.16.4.3.orig/src/t/100_dpkg_divert.t dpkg-1.16.4.3/src/t/100_dpkg_divert.t
 --- dpkg-1.16.4.3.orig/src/t/100_dpkg_divert.t	2012-06-13 23:12:34.000000000 -0600
 +++ dpkg-1.16.4.3/src/t/100_dpkg_divert.t	2012-07-02 16:14:45.000000000 -0600
@@ -1621,7 +1781,7 @@ diff -ruN dpkg-1.16.4.3.orig/utils/install-info.c dpkg-1.16.4.3/utils/install-in
  	execv(WRAPPED, argv);
 diff -ruN dpkg-1.16.4.3.orig/utils/update-alternatives.c dpkg-1.16.4.3/utils/update-alternatives.c
 --- dpkg-1.16.4.3.orig/utils/update-alternatives.c	2012-06-17 02:27:15.000000000 -0600
-+++ dpkg-1.16.4.3/utils/update-alternatives.c	2012-07-02 17:21:55.000000000 -0600
++++ dpkg-1.16.4.3/utils/update-alternatives.c	2012-07-03 10:27:16.000000000 -0600
 @@ -1223,21 +1223,16 @@
  		}
  		ctx->modified = true;
