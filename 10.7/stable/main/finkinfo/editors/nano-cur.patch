@@ -1,0 +1,120 @@
+diff --unidirectional-new-file -U 0 -rx .svn nano_2_3_1/ChangeLog nano/ChangeLog
+--- nano_2_3_1/ChangeLog	2011-12-18 22:20:12.000000000 +0100
++++ nano/ChangeLog	2012-07-07 01:41:55.000000000 +0200
+@@ -0,0 +1,9 @@
++2012-02-05 Chris Allegretta <chrisa@asty.org>
++	* src/*: Fix overlapping strings highlighting each other.  new variables in edit_draw 
++	  (slmatcharray, pbegin, paintok), new logic (with repeated setting od values in the 
++	  array but its BFI after all).  FIXME: Need to create a new 'overlap'
++	* src/*: Fix a silly issue with the argument to nregcomp, as it's confusing to the caller
++	* src/nano.h: Change the color types to a compiler macro (COLORWIDTH), may not actually 
++	  even be worth doing, but someday who knows how wide a color curses implementation might 
++	  be, and maybe we'll even start checking for it in autoconf!
++
+diff --unidirectional-new-file -U 0 -rx .svn nano_2_3_1/src/nano.h nano/src/nano.h
+--- nano_2_3_1/src/nano.h	2011-12-18 22:20:10.000000000 +0100
++++ nano/src/nano.h	2012-07-07 01:41:55.000000000 +0200
+@@ -192,0 +193 @@
++#define COLORWIDTH short
+@@ -194 +195 @@
+-    short fg;
++    COLORWIDTH fg;
+@@ -196 +197 @@
+-    short bg;
++    COLORWIDTH bg;
+@@ -215 +216,3 @@
+-     int id;
++    bool overlap;
++	/* Is it acceptable for other regexes to overlap this one? */
++    int id;
+diff --unidirectional-new-file -U 0 -rx .svn nano_2_3_1/src/proto.h nano/src/proto.h
+--- nano_2_3_1/src/proto.h	2011-12-18 22:20:10.000000000 +0100
++++ nano/src/proto.h	2012-07-07 01:41:55.000000000 +0200
+@@ -554 +554 @@
+-bool nregcomp(const char *regex, int eflags);
++bool nregcomp(const char *regex, int cflags);
+diff --unidirectional-new-file -U 0 -rx .svn nano_2_3_1/src/rcfile.c nano/src/rcfile.c
+--- nano_2_3_1/src/rcfile.c	2011-12-18 22:20:10.000000000 +0100
++++ nano/src/rcfile.c	2012-07-07 01:41:55.000000000 +0200
+@@ -228 +228 @@
+-bool nregcomp(const char *regex, int eflags)
++bool nregcomp(const char *regex, int cflags)
+@@ -232 +232 @@
+-    int rc = regcomp(&preg, r, REG_EXTENDED | eflags);
++    int rc = regcomp(&preg, r, REG_EXTENDED | cflags);
+@@ -669 +669 @@
+-short color_to_short(const char *colorname, bool *bright)
++COLORWIDTH color_to_short(const char *colorname, bool *bright)
+@@ -671 +671 @@
+-    short mcolor = -1;
++    COLORWIDTH mcolor = -1;
+@@ -711 +711 @@
+-    short fg, bg;
++    COLORWIDTH fg, bg;
+@@ -861 +861 @@
+-            newcolor->id = endsyntax->nmultis;
++	    newcolor->id = endsyntax->nmultis;
+diff --unidirectional-new-file -U 0 -rx .svn nano_2_3_1/src/winio.c nano/src/winio.c
+--- nano_2_3_1/src/winio.c	2011-12-18 22:20:10.000000000 +0100
++++ nano/src/winio.c	2012-07-07 01:41:55.000000000 +0200
+@@ -2492,0 +2493,15 @@
++ 	int i, coloruid = 0; /* We need a unique color ID now */
++	static filestruct *lastptr = NULL;
++	static COLORWIDTH *slmatcharray = NULL;
++	    /* Array to track how much we've painted of the line for single line matches */
++
++	if (lastptr != fileptr || start == 0) {
++	    if (slmatcharray != NULL)
++		free(slmatcharray);
++	    slmatcharray = (COLORWIDTH *)nmalloc(strlenpt(fileptr->data) * sizeof(COLORWIDTH));
++
++	    /* Init slmatcharray */
++	    for (i = 0; i < strlenpt(fileptr->data); i++)
++		slmatcharray[i] = -1;
++	}
++
+@@ -2497 +2511,0 @@
+- 	    int i;
+@@ -2499 +2513 @@
+-            for (i = 0; i < openfile->syntax->nmultis; i++)
++	    for (i = 0; i < openfile->syntax->nmultis; i++)
+@@ -2500,0 +2515 @@
++
+@@ -2514,0 +2530 @@
++	    coloruid++;
+@@ -2522 +2538 @@
+-	    /* First case, tmpcolor is a single-line expression. */
++	    /* First case,tmpcolor is a single-line expression. */
+@@ -2530,0 +2547,2 @@
++		    bool paintok = TRUE;
++
+@@ -2539,0 +2558,2 @@
++
++
+@@ -2549,0 +2570,2 @@
++			size_t pbegin = strnlenpt(fileptr->data, startmatch.rm_so);
++
+@@ -2562 +2584,9 @@
+-			mvwaddnstr(edit, line, x_start, converted +
++			/* Check that the match is not preceeded by another previous
++			   (single line) match before proceeding to paint it */
++			if (slmatcharray[pbegin] != -1 && slmatcharray[pbegin] != coloruid)
++			    paintok = FALSE;
++
++			if (paintok == TRUE) {
++			    int p;
++
++			    mvwaddnstr(edit, line, x_start, converted +
+@@ -2563,0 +2594,4 @@
++			    for (p = pbegin; p < pbegin + (startmatch.rm_eo - startmatch.rm_so); p++) {
++				slmatcharray[p] = coloruid;  /* Add to our match array for the proper length */
++			    }
++			}
+@@ -2565 +2599,4 @@
+-		    k = startmatch.rm_eo;
++		    if (paintok)
++			k = startmatch.rm_eo;
++		    else
++			k = startmatch.rm_so + 1;
+@@ -2751,0 +2789 @@
++	lastptr = fileptr;
