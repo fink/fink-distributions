@@ -1,24 +1,89 @@
 Index: src/bin/mksh/Build.sh
-diff -u src/bin/mksh/Build.sh:1.484.2.2 src/bin/mksh/Build.sh:1.487
---- src/bin/mksh/Build.sh:1.484.2.2	Sat Jul 16 18:03:01 2011
-+++ src/bin/mksh/Build.sh	Fri Aug 26 10:24:51 2011
+diff -u src/bin/mksh/Build.sh:1.484.2.14 src/bin/mksh/Build.sh:1.579
+--- src/bin/mksh/Build.sh:1.484.2.14	Fri Apr  6 23:10:45 2012
++++ src/bin/mksh/Build.sh	Sun Jul  1 15:54:49 2012
 @@ -1,5 +1,5 @@
  #!/bin/sh
--srcversion='$MirOS: src/bin/mksh/Build.sh,v 1.484.2.2 2011/07/16 18:03:01 tg Exp $'
-+srcversion='$MirOS: src/bin/mksh/Build.sh,v 1.487 2011/08/26 10:24:51 tg Exp $'
+-srcversion='$MirOS: src/bin/mksh/Build.sh,v 1.484.2.14 2012/04/06 23:10:45 tg Exp $'
++srcversion='$MirOS: src/bin/mksh/Build.sh,v 1.579 2012/07/01 15:54:49 tg Exp $'
  #-
- # Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011
- #	Thorsten Glaser <tg@mirbsd.org>
-@@ -297,7 +297,7 @@
-     Rebuild.sh signames.inc test.sh x vv.out
+ # Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
+ #		2011, 2012
+@@ -58,9 +58,9 @@
  
- curdir=`pwd` srcdir=`dirname "$0"` check_categories=
--test -n "$dirname" || dirname=.
-+test -n "$srcdir" || srcdir=.
- dstversion=`sed -n '/define MKSH_VERSION/s/^.*"\(.*\)".*$/\1/p' $srcdir/sh.h`
+ rmf() {
+ 	for _f in "$@"; do
+-		case ${_f} in
+-		mksh.1) ;;
+-		*) rm -f "${_f}" ;;
++		case $_f in
++		Build.sh|check.pl|check.t|dot.mkshrc|*.c|*.h|mksh.1) ;;
++		*) rm -f "$_f" ;;
+ 		esac
+ 	done
+ }
+@@ -276,6 +276,12 @@
+ }
+ 
+ addsrcs() {
++	addsrcs_s=0
++	if test x"$1" = x"-s"; then
++		# optstatic
++		addsrcs_s=1
++		shift
++	fi
+ 	if test x"$1" = x"!"; then
+ 		fr=0
+ 		shift
+@@ -283,6 +289,13 @@
+ 		fr=1
+ 	fi
+ 	eval i=\$$1
++	if test $addsrcs_s = 1; then
++		if test -f "$2" || test -f "$srcdir/$2"; then
++			# always add $2, since it exists
++			fr=1
++			i=1
++		fi
++	fi
+ 	test $fr = "$i" && case " $SRCS " in
+ 	*\ $2\ *)	;;
+ 	*)		SRCS="$SRCS $2" ;;
+@@ -290,16 +303,9 @@
+ }
+ 
+ 
+-if test -d mksh || test -d mksh.exe; then
+-	echo "$me: Error: ./mksh is a directory!" >&2
+-	exit 1
+-fi
+-rmf a.exe* a.out* conftest.c *core core.* lft mksh* no *.bc *.ll *.o \
+-    Rebuild.sh signames.inc test.sh x vv.out
+-
+ curdir=`pwd` srcdir=`dirname "$0" 2>/dev/null` check_categories=
+ test -n "$srcdir" || srcdir=. # in case dirname does not exist
+-dstversion=`sed -n '/define MKSH_VERSION/s/^.*"\(.*\)".*$/\1/p' $srcdir/sh.h`
++dstversion=`sed -n '/define MKSH_VERSION/s/^.*"\([^"]*\)".*$/\1/p' $srcdir/sh.h`
+ add_cppflags -DMKSH_BUILDSH
  
  e=echo
-@@ -326,10 +326,6 @@
+@@ -309,6 +315,8 @@
+ cm=normal
+ optflags=-std-compile-opts
+ last=
++tfn=
++legacy=0
+ 
+ for i
+ do
+@@ -325,13 +333,13 @@
+ 		optflags=$i
+ 		last=
+ 		;;
++	t:*)
++		tfn=$i
++		last=
++		;;
  	:-c)
  		last=c
  		;;
@@ -28,8 +93,8 @@ diff -u src/bin/mksh/Build.sh:1.484.2.2 src/bin/mksh/Build.sh:1.487
 -		;;
  	:-g)
  		# checker, debug, valgrind build
- 		CPPFLAGS="$CPPFLAGS -DDEBUG"
-@@ -338,16 +334,6 @@
+ 		add_cppflags -DDEBUG
+@@ -340,15 +348,11 @@
  	:-j)
  		pm=1
  		;;
@@ -37,1034 +102,2716 @@ diff -u src/bin/mksh/Build.sh:1.484.2.2 src/bin/mksh/Build.sh:1.487
 -		cm=llvm
 -		optflags=-std-compile-opts
 -		echo "$me: Warning: '$i' is deprecated, use '-c llvm -O' instead!" >&2
--		;;
++	:-L)
++		legacy=1
+ 		;;
 -	:-llvm=*)
 -		cm=llvm
 -		optflags=`echo "x$i" | sed 's/^x-llvm=//'`
 -		echo "$me: Warning: '$i' is deprecated, use '-c llvm -o $llvm' instead!" >&2
--		;;
++	:+L)
++		legacy=0
+ 		;;
  	:-M)
  		cm=makefile
+@@ -365,6 +369,9 @@
+ 	:-r)
+ 		r=1
  		;;
-@@ -393,6 +379,10 @@
++	:-t)
++		last=t
++		;;
+ 	:-v)
+ 		echo "Build.sh $srcversion"
+ 		echo "for mksh $dstversion"
+@@ -385,17 +392,47 @@
+ 	exit 1
  fi
  
- test x"$TARGET_OS" = x"" && TARGET_OS=`uname -s 2>/dev/null || uname`
-+if test x"$TARGET_OS" = x""; then
-+	echo "$me: Set TARGET_OS, your uname is broken!" >&2
+-SRCS="lalloc.c edit.c eval.c exec.c expr.c funcs.c histrap.c"
+-SRCS="$SRCS jobs.c lex.c main.c misc.c shf.c syn.c tree.c var.c"
++test -z "$tfn" && if test $legacy = 0; then
++	tfn=mksh
++else
++	tfn=lksh
++fi
++if test -d $tfn || test -d $tfn.exe; then
++	echo "$me: Error: ./$tfn is a directory!" >&2
 +	exit 1
 +fi
- oswarn=
++rmf a.exe* a.out* conftest.c *core core.* lft ${tfn}* no *.bc *.ll *.o \
++    Rebuild.sh signames.inc test.sh x vv.out
++
++SRCS="lalloc.c eval.c exec.c expr.c funcs.c histrap.c jobs.c"
++SRCS="$SRCS lex.c main.c misc.c shf.c syn.c tree.c var.c"
++
++if test $legacy = 0; then
++	SRCS="$SRCS edit.c"
++	check_categories="$check_categories shell:legacy-no int:32"
++else
++	check_categories="$check_categories shell:legacy-yes"
++	add_cppflags -DMKSH_LEGACY_MODE
++	HAVE_PERSISTENT_HISTORY=0
++	HAVE_ISSET_MKSH_CONSERVATIVE_FDS=1	# from sh.h
++fi
+ 
+ if test x"$srcdir" = x"."; then
+ 	CPPFLAGS="-I. $CPPFLAGS"
+ else
+ 	CPPFLAGS="-I. -I'$srcdir' $CPPFLAGS"
+ fi
++test -n "$LDSTATIC" && if test -n "$LDFLAGS"; then
++	LDFLAGS="$LDFLAGS $LDSTATIC"
++else
++	LDFLAGS=$LDSTATIC
++fi
+ 
+-test x"$TARGET_OS" = x"" && TARGET_OS=`uname -s 2>/dev/null || uname`
+-if test x"$TARGET_OS" = x""; then
++if test -z "$TARGET_OS"; then
++	x=`uname -s 2>/dev/null || uname`
++	test x"$x" = x"`uname -n 2>/dev/null`" || TARGET_OS=$x
++fi
++if test -z "$TARGET_OS"; then
+ 	echo "$me: Set TARGET_OS, your uname is broken!" >&2
+ 	exit 1
+ fi
+@@ -403,7 +440,7 @@
  ccpc=-Wc,
  ccpl=-Wl,
-@@ -1179,7 +1169,7 @@
+ tsts=
+-ccpr='|| for _f in ${tcfn}*; do test x"${_f}" = x"mksh.1" || rm -f "${_f}"; done'
++ccpr='|| for _f in ${tcfn}*; do case $_f in Build.sh|check.pl|check.t|dot.mkshrc|*.c|*.h|mksh.1) ;; *) rm -f "$_f" ;; esac; done'
+ 
+ # Evil hack
+ if test x"$TARGET_OS" = x"Android"; then
+@@ -457,7 +494,9 @@
+ # Configuration depending on OS revision, on OSes that need them
+ case $TARGET_OS in
+ NEXTSTEP)
+-	test x"$TARGET_OSREV" = x"" && TARGET_OSREV=`hostinfo 2>&1 | sed -n '/^.*NeXT Mach \([0-9.]*\):.*$/s//\1/p'`
++	test x"$TARGET_OSREV" = x"" && TARGET_OSREV=`hostinfo 2>&1 | \
++	    grep 'NeXT Mach [0-9][0-9.]*:' | \
++	    sed 's/^.*NeXT Mach \([0-9][0-9.]*\):.*$/\1/'`
+ 	;;
+ QNX|SCO_SV)
+ 	test x"$TARGET_OSREV" = x"" && TARGET_OSREV=`uname -r`
+@@ -466,6 +505,12 @@
+ 
+ # Configuration depending on OS name
+ case $TARGET_OS in
++386BSD)
++	: ${HAVE_CAN_OTWO=0}
++	add_cppflags -DMKSH_NO_SIGSETJMP
++	add_cppflags -DMKSH_TYPEDEF_SIG_ATOMIC_T=int
++	add_cppflags -DMKSH_CONSERVATIVE_FDS
++	;;
+ AIX)
+ 	add_cppflags -D_ALL_SOURCE
+ 	: ${HAVE_SETLOCALE_CTYPE=0}
+@@ -482,10 +527,21 @@
+ 	esac
+ 	# BeOS has no real tty either
+ 	add_cppflags -DMKSH_UNEMPLOYED
++	add_cppflags -DMKSH_DISABLE_TTY_WARNING
++	# BeOS doesn't have different UIDs and GIDs
++	add_cppflags -DMKSH__NO_SETEUGID
+ 	;;
+ BSD/OS)
+ 	: ${HAVE_SETLOCALE_CTYPE=0}
+ 	;;
++Coherent)
++	oswarn="; it has major issues"
++	add_cppflags -DMKSH__NO_SYMLINK
++	check_categories="$check_categories nosymlink"
++	add_cppflags -DMKSH__NO_SETEUGID
++	add_cppflags -DMKSH_CONSERVATIVE_FDS
++	add_cppflags -DMKSH_DISABLE_TTY_WARNING
++	;;
+ CYGWIN*)
+ 	: ${HAVE_SETLOCALE_CTYPE=0}
+ 	;;
+@@ -498,6 +554,7 @@
+ FreeMiNT)
+ 	oswarn="; it has minor issues"
+ 	add_cppflags -D_GNU_SOURCE
++	add_cppflags -DMKSH_CONSERVATIVE_FDS
+ 	: ${HAVE_SETLOCALE_CTYPE=0}
+ 	;;
+ GNU)
+@@ -505,8 +562,8 @@
+ 	*tendracc*) ;;
+ 	*) add_cppflags -D_GNU_SOURCE ;;
+ 	esac
+-	# define NO_PATH_MAX to use Hurd-only functions
+-	add_cppflags -DNO_PATH_MAX
++	# define MKSH__NO_PATH_MAX to use Hurd-only functions
++	add_cppflags -DMKSH__NO_PATH_MAX
+ 	;;
+ GNU/kFreeBSD)
+ 	case $CC in
+@@ -565,6 +622,7 @@
+ 	add_cppflags -D_NEXT_SOURCE
+ 	add_cppflags -D_POSIX_SOURCE
+ 	: ${AWK=gawk} ${CC=cc -posix}
++	add_cppflags -DMKSH_NO_SIGSETJMP
+ 	# NeXTstep cannot get a controlling tty
+ 	add_cppflags -DMKSH_UNEMPLOYED
+ 	case $TARGET_OSREV in
+@@ -573,6 +631,7 @@
+ 		oswarn="; it needs libposix.a"
+ 		;;
+ 	esac
++	add_cppflags -DMKSH_CONSERVATIVE_FDS
+ 	;;
+ Ninix3)
+ 	# similar to Minix3
+@@ -599,6 +658,7 @@
+ 	add_cppflags -D_BSD_EXTENSION
+ 	add_cppflags -D_SUSV2_SOURCE
+ 	add_cppflags -DMKSH_ASSUME_UTF8; HAVE_ISSET_MKSH_ASSUME_UTF8=1
++	add_cppflags -DMKSH_NO_CMDLINE_EDITING
+ 	oswarn=' and will currently not work'
+ 	add_cppflags -DMKSH_UNEMPLOYED
+ 	;;
+@@ -630,6 +690,7 @@
+ 		oswarn="$oswarn$nl$TARGET_OS ${TARGET_OSREV}, please tell me what to do"
+ 		;;
+ 	esac
++	add_cppflags -DMKSH_CONSERVATIVE_FDS
+ 	: ${HAVE_SYS_SIGLIST=0} ${HAVE__SYS_SIGLIST=0}
+ 	;;
+ skyos)
+@@ -641,15 +702,18 @@
+ 	;;
+ syllable)
+ 	add_cppflags -D_GNU_SOURCE
++	add_cppflags -DMKSH_NO_SIGSUSPEND
+ 	oswarn=' and will currently not work'
+ 	;;
+ ULTRIX)
+ 	: ${CC=cc -YPOSIX}
+-	add_cppflags -Dssize_t=int
++	add_cppflags -DMKSH_TYPEDEF_SSIZE_T=int
++	add_cppflags -DMKSH_CONSERVATIVE_FDS
+ 	: ${HAVE_SETLOCALE_CTYPE=0}
+ 	;;
+ UnixWare|UNIX_SV)
+ 	# SCO UnixWare
++	add_cppflags -DMKSH_CONSERVATIVE_FDS
+ 	: ${HAVE_SYS_SIGLIST=0} ${HAVE__SYS_SIGLIST=0}
+ 	;;
+ UWIN*)
+@@ -660,6 +724,12 @@
+ 	oswarn="$oswarn${nl}platform itself is very flakey/unreliable"
+ 	: ${HAVE_SETLOCALE_CTYPE=0}
+ 	;;
++_svr4)
++	# generic target for SVR4 Unix with uname -s = uname -n
++	# this duplicates the * target below
++	oswarn='; it may or may not work'
++	test x"$TARGET_OSREV" = x"" && TARGET_OSREV=`uname -r`
++	;;
+ *)
+ 	oswarn='; it may or may not work'
+ 	test x"$TARGET_OSREV" = x"" && TARGET_OSREV=`uname -r`
+@@ -776,13 +846,24 @@
+ ct="ucode"
+ #elif defined(__USLC__)
+ ct="uslc"
++#elif defined(__LCC__)
++ct="lcc"
+ #else
+ ct="unknown"
+ #endif
+ ;
++const char *
++#if defined(__KLIBC__)
++et="klibc"
++#else
++et="unknown"
++#endif
++;
+ EOF
+ ct=untested
+-vv ']' "$CPP $CFLAGS $CPPFLAGS $NOWARN conftest.c | sed -n '/^ct *= */s//ct=/p' | tr -d \\\\015 >x"
++et=untested
++vv ']' "$CPP $CFLAGS $CPPFLAGS $NOWARN conftest.c | \
++    sed -n '/^[ce]t *= */s/\([ce]t\) *= */\1=/p' | tr -d \\\\015 >x"
+ sed 's/^/[ /' x
+ eval `cat x`
+ rmf x vv.out
+@@ -843,6 +924,10 @@
+ icc)
+ 	vv '|' "$CC $CFLAGS $CPPFLAGS $LDFLAGS $NOWARN $LIBS -V"
+ 	;;
++lcc)
++	vv '|' "$CC $CFLAGS $CPPFLAGS $LDFLAGS $NOWARN -v conftest.c $LIBS"
++	add_cppflags -D__inline__=__inline
++	;;
+ metrowerks)
+ 	echo >&2 'Warning: Metrowerks C compiler detected. This has not yet
+     been tested for compatibility with mksh. Continue at your
+@@ -934,7 +1019,19 @@
+ 	vv '|' "llc -version"
+ 	;;
+ esac
+-$e "$bi==> which compiler seems to be used...$ao $ui$ct$ao"
++case $et in
++klibc)
++	add_cppflags -DMKSH_NO_LIMITS
++	;;
++unknown)
++	# nothing special detected, don’t worry
++	unset et
++	;;
++*)
++	# huh?
++	;;
++esac
++$e "$bi==> which compiler seems to be used...$ao $ui$ct${et+ on $et}$ao"
+ rmf conftest.c conftest.o conftest a.out* a.exe* vv.out
+ 
+ #
+@@ -1054,7 +1151,6 @@
+ 	ac_flags 0 wnooverflow -Wno-overflow
+ 	ac_flags 1 fnostrictaliasing -fno-strict-aliasing
+ 	ac_flags 1 fstackprotectorall -fstack-protector-all
+-	ac_flags 1 fwrapv -fwrapv
+ 	test $cm = dragonegg && case " $CC $CFLAGS $LDFLAGS " in
+ 	*\ -fplugin=*dragonegg*) ;;
+ 	*) ac_flags 1 fplugin_dragonegg -fplugin=dragonegg ;;
+@@ -1151,6 +1247,7 @@
+ # flags common to a subset of compilers (run with -Werror on gcc)
+ if test 1 = $i; then
+ 	ac_flags 1 wall -Wall
++	ac_flags 1 fwrapv -fwrapv
+ fi
+ 
+ phase=x
+@@ -1245,24 +1342,6 @@
+ #
+ if ac_ifcpp 'ifdef MKSH_SMALL' isset_MKSH_SMALL '' \
+     "if a reduced-feature mksh is requested"; then
+-	# removed in R41
+-	case $ct in
+-	clang|icc|nwcc)
+-		ac_flags 1 fnoinline -fno-inline
+-		;;
+-	gcc)
+-		NOWARN=$DOWARN; phase=u
+-		ac_flags 1 fnoinline -fno-inline
+-		NOWARN=$save_NOWARN; phase=x
+-		;;
+-	sunpro)
+-		ac_flags 1 fnoinline -xinline=
+-		;;
+-	xlc)
+-		ac_flags 1 fnoinline -qnoinline
+-		;;
+-	esac
+-
+ 	: ${HAVE_NICE=0}
+ 	: ${HAVE_PERSISTENT_HISTORY=0}
+ 	check_categories="$check_categories smksh"
+@@ -1282,9 +1361,9 @@
+ ac_ifcpp 'ifdef MKSH_CONSERVATIVE_FDS' isset_MKSH_CONSERVATIVE_FDS '' \
+     'if traditional/conservative fd use is requested' && \
+     check_categories="$check_categories convfds"
+-ac_ifcpp 'ifdef MKSH_DISABLE_DEPRECATED' isset_MKSH_DISABLE_DEPRECATED '' \
+-    "if deprecated features are to be omitted" && \
+-    check_categories="$check_categories nodeprecated"
++#ac_ifcpp 'ifdef MKSH_DISABLE_DEPRECATED' isset_MKSH_DISABLE_DEPRECATED '' \
++#    "if deprecated features are to be omitted" && \
++#    check_categories="$check_categories nodeprecated"
+ 
+ #
+ # Environment: headers
+@@ -1304,6 +1383,7 @@
+ ac_header stdint.h stdarg.h
+ # include strings.h only if compatible with string.h
+ ac_header strings.h sys/types.h string.h
++ac_header termios.h
+ ac_header ulimit.h sys/types.h
+ ac_header values.h
+ 
+@@ -1406,23 +1486,23 @@
  		#define EXTERN
  		#define MKSH_INCLUDES_ONLY
  		#include "sh.h"
--		__RCSID("$MirOS: src/bin/mksh/Build.sh,v 1.484.2.2 2011/07/16 18:03:01 tg Exp $");
-+		__RCSID("$MirOS: src/bin/mksh/Build.sh,v 1.487 2011/08/26 10:24:51 tg Exp $");
+-		__RCSID("$MirOS: src/bin/mksh/Build.sh,v 1.484.2.14 2012/04/06 23:10:45 tg Exp $");
++		__RCSID("$MirOS: src/bin/mksh/Build.sh,v 1.579 2012/07/01 15:54:49 tg Exp $");
  		int main(void) { printf("Hello, World!\n"); return (0); }
  EOF
  	case $cm in
+ 	llvm)
+ 		v "$CC $CFLAGS $CPPFLAGS $NOWARN -emit-llvm -c conftest.c" || fv=0
+-		rmf mksh.s
+-		test $fv = 0 || v "llvm-link -o - conftest.o | opt $optflags | llc -o mksh.s" || fv=0
+-		test $fv = 0 || v "$CC $CFLAGS $LDFLAGS -o $tcfn mksh.s $LIBS $ccpr"
++		rmf $tfn.s
++		test $fv = 0 || v "llvm-link -o - conftest.o | opt $optflags | llc -o $tfn.s" || fv=0
++		test $fv = 0 || v "$CC $CFLAGS $LDFLAGS -o $tcfn $tfn.s $LIBS $ccpr"
+ 		;;
+ 	dragonegg)
+ 		v "$CC $CFLAGS $CPPFLAGS $NOWARN -S -flto conftest.c" || fv=0
+ 		test $fv = 0 || v "mv conftest.s conftest.ll"
+ 		test $fv = 0 || v "llvm-as conftest.ll" || fv=0
+-		rmf mksh.s
+-		test $fv = 0 || v "llvm-link -o - conftest.bc | opt $optflags | llc -o mksh.s" || fv=0
+-		test $fv = 0 || v "$CC $CFLAGS $LDFLAGS -o $tcfn mksh.s $LIBS $ccpr"
++		rmf $tfn.s
++		test $fv = 0 || v "llvm-link -o - conftest.bc | opt $optflags | llc -o $tfn.s" || fv=0
++		test $fv = 0 || v "$CC $CFLAGS $LDFLAGS -o $tcfn $tfn.s $LIBS $ccpr"
+ 		;;
+ 	combine)
+ 		v "$CC $CFLAGS $CPPFLAGS $LDFLAGS -fwhole-program --combine $NOWARN -o $tcfn conftest.c $LIBS $ccpr"
+@@ -1512,12 +1592,6 @@
+ 	}
+ EOF
+ 
+-ac_test mkstemp <<-'EOF'
+-	#include <stdlib.h>
+-	#include <unistd.h>
+-	int main(void) { char tmpl[] = "X"; return (mkstemp(tmpl)); }
+-EOF
+-
+ ac_test mmap lock_fcntl 0 'for mmap and munmap' <<-'EOF'
+ 	#include <sys/types.h>
+ 	#if HAVE_SYS_FILE_H
+@@ -1526,6 +1600,7 @@
+ 	#if HAVE_SYS_MMAN_H
+ 	#include <sys/mman.h>
+ 	#endif
++	#include <stddef.h>
+ 	#include <stdlib.h>
+ 	int main(void) { return ((void *)mmap(NULL, (size_t)0,
+ 	    PROT_READ, MAP_PRIVATE, 0, (off_t)0) == (void *)NULL ? 1 :
+@@ -1599,6 +1674,38 @@
+ 	int main(void) { gid_t gid = 0; return (setgroups(0, &gid)); }
+ EOF
+ 
++if test x"$et" = x"klibc"; then
++
++	ac_testn __rt_sigsuspend '' 'whether klibc uses RT signals' <<-'EOF'
++		#define MKSH_INCLUDES_ONLY
++		#include "sh.h"
++		extern int __rt_sigsuspend(const sigset_t *, size_t);
++		int main(void) { return (__rt_sigsuspend(NULL, 0)); }
++EOF
++
++	# no? damn! legacy crap ahead!
++
++	ac_testn __sigsuspend_s '!' __rt_sigsuspend 1 \
++	    'whether sigsuspend is usable (1/2)' <<-'EOF'
++		#define MKSH_INCLUDES_ONLY
++		#include "sh.h"
++		extern int __sigsuspend_s(sigset_t);
++		int main(void) { return (__sigsuspend_s(0)); }
++EOF
++	ac_testn __sigsuspend_xxs '!' __sigsuspend_s 1 \
++	    'whether sigsuspend is usable (2/2)' <<-'EOF'
++		#define MKSH_INCLUDES_ONLY
++		#include "sh.h"
++		extern int __sigsuspend_xxs(int, int, sigset_t);
++		int main(void) { return (__sigsuspend_xxs(0, 0, 0)); }
++EOF
++
++	if test "000" = "$HAVE___RT_SIGSUSPEND$HAVE___SIGSUSPEND_S$HAVE___SIGSUSPEND_XXS"; then
++		# no usable sigsuspend(), use pause() *ugh*
++		add_cppflags -DMKSH_NO_SIGSUSPEND
++	fi
++fi
++
+ ac_test strlcpy <<-'EOF'
+ 	#include <string.h>
+ 	int main(int ac, char *av[]) { return (strlcpy(*av, av[1],
+@@ -1646,11 +1753,15 @@
+ ac_testn compile_time_asserts_$$ '' 'whether compile-time assertions pass' <<-'EOF'
+ 	#define MKSH_INCLUDES_ONLY
+ 	#include "sh.h"
++	#ifndef CHAR_BIT
++	#define CHAR_BIT 8	/* defuse this test on really legacy systems */
++	#endif
+ 	struct ctasserts {
+ 	#define cta(name, assertion) char name[(assertion) ? 1 : -1]
+ /* this one should be defined by the standard */
+ cta(char_is_1_char, (sizeof(char) == 1) && (sizeof(signed char) == 1) &&
+     (sizeof(unsigned char) == 1));
++cta(char_is_8_bits, (CHAR_BIT) == 8);
+ /* the next assertion is probably not really needed */
+ cta(short_is_2_char, sizeof(short) == 2);
+ cta(short_size_no_matter_of_signedness, sizeof(short) == sizeof(unsigned short));
+@@ -1659,24 +1770,28 @@
+ cta(int_size_no_matter_of_signedness, sizeof(int) == sizeof(unsigned int));
+ 
+ cta(long_ge_int, sizeof(long) >= sizeof(int));
++cta(long_size_no_matter_of_signedness, sizeof(long) == sizeof(unsigned long));
+ 
++#ifndef MKSH_LEGACY_MODE
+ /* the next assertion is probably not really needed */
+ cta(ari_is_4_char, sizeof(mksh_ari_t) == 4);
+-/* but the next three are; we REQUIRE signed integer wraparound */
+-cta(ari_is_signed, (mksh_ari_t)-1 < (mksh_ari_t)0);
++/* but the next two are; we REQUIRE signed integer wraparound */
+ cta(ari_has_31_bit, 0 < (mksh_ari_t)(((((mksh_ari_t)1 << 15) << 15) - 1) * 2 + 1));
+ cta(ari_sign_32_bit_and_wrap,
+     (mksh_ari_t)(((((mksh_ari_t)1 << 15) << 15) - 1) * 2 + 1) >
+     (mksh_ari_t)(((((mksh_ari_t)1 << 15) << 15) - 1) * 2 + 2));
+ /* the next assertion is probably not really needed */
+ cta(uari_is_4_char, sizeof(mksh_uari_t) == 4);
+-/* but the next four are; we REQUIRE unsigned integer wraparound */
+-cta(uari_is_unsigned, (mksh_uari_t)-1 > (mksh_uari_t)0);
++/* but the next three are; we REQUIRE unsigned integer wraparound */
+ cta(uari_has_31_bit, 0 < (mksh_uari_t)(((((mksh_uari_t)1 << 15) << 15) - 1) * 2 + 1));
+ cta(uari_has_32_bit, 0 < (mksh_uari_t)(((((mksh_uari_t)1 << 15) << 15) - 1) * 4 + 3));
+ cta(uari_wrap_32_bit,
+     (mksh_uari_t)(((((mksh_uari_t)1 << 15) << 15) - 1) * 4 + 3) >
+     (mksh_uari_t)(((((mksh_uari_t)1 << 15) << 15) - 1) * 4 + 4));
++#endif
++/* these are always required */
++cta(ari_is_signed, (mksh_ari_t)-1 < (mksh_ari_t)0);
++cta(uari_is_unsigned, (mksh_uari_t)-1 > (mksh_uari_t)0);
+ 
+ cta(sizet_size_no_matter_of_signedness, sizeof(ssize_t) == sizeof(size_t));
+ cta(ptrdifft_sizet_same_size, sizeof(ptrdiff_t) == sizeof(size_t));
+@@ -1691,6 +1806,45 @@
+ eval test 1 = \$HAVE_COMPILE_TIME_ASSERTS_$$ || exit 1
+ 
+ #
++# extra checks for legacy mksh
++#
++if test $legacy = 1; then
++	ac_test long_32bit '' 'whether long is 32 bit wide' <<-'EOF'
++		#define MKSH_INCLUDES_ONLY
++		#include "sh.h"
++		#ifndef CHAR_BIT
++		#define CHAR_BIT 0
++		#endif
++		struct ctasserts {
++		#define cta(name, assertion) char name[(assertion) ? 1 : -1]
++			cta(char_is_8_bits, (CHAR_BIT) == 8);
++			cta(long_is_32_bits, sizeof(long) == 4);
++		};
++		int main(void) { return (sizeof(struct ctasserts)); }
++EOF
++
++	ac_test long_64bit '!' long_32bit 0 'whether long is 64 bit wide' <<-'EOF'
++		#define MKSH_INCLUDES_ONLY
++		#include "sh.h"
++		#ifndef CHAR_BIT
++		#define CHAR_BIT 0
++		#endif
++		struct ctasserts {
++		#define cta(name, assertion) char name[(assertion) ? 1 : -1]
++			cta(char_is_8_bits, (CHAR_BIT) == 8);
++			cta(long_is_64_bits, sizeof(long) == 8);
++		};
++		int main(void) { return (sizeof(struct ctasserts)); }
++EOF
++
++	case $HAVE_LONG_32BIT$HAVE_LONG_64BIT in
++	10) check_categories="$check_categories int:32" ;;
++	01) check_categories="$check_categories int:64" ;;
++	*) check_categories="$check_categories int:u" ;;
++	esac
++fi
++
++#
+ # runtime checks
+ # once this is more than one, check if we can do runtime
+ # checks (not cross-compiling) first to save on warnings
+@@ -1700,6 +1854,13 @@
+ if ac_testnnd silent_idivwrapv '' '(run-time) whether signed integer division overflows wrap silently' <<-'EOF'
+ 	#define MKSH_INCLUDES_ONLY
+ 	#include "sh.h"
++	#if !defined(MKSH_LEGACY_MODE) || HAVE_LONG_32BIT
++	#define IDIVWRAPV_VL	(mksh_uari_t)0x80000000UL
++	#elif HAVE_LONG_64BIT
++	#define IDIVWRAPV_VL	(mksh_uari_t)0x8000000000000000UL
++	#else
++	# error "cannot check this"
++	#endif
+ 	#ifdef SIGFPE
+ 	static void fpe_catcher(int) MKSH_A_NORETURN;
+ 	#endif
+@@ -1709,7 +1870,7 @@
+ 	#ifdef SIGFPE
+ 		signal(SIGFPE, fpe_catcher);
+ 	#endif
+-		o1 = ((mksh_ari_t)1 << 31);
++		o1 = (mksh_ari_t)IDIVWRAPV_VL;
+ 		o2 = -ac;
+ 		r1 = o1 / o2;
+ 		r2 = o1 % o2;
+@@ -1791,10 +1952,13 @@
+ int
+ mksh_cfg= NSIG
+ ;' >conftest.c
++	# GNU sed 2.03 segfaults when optimising this to sed -n
+ 	NSIG=`vq "$CPP $CFLAGS $CPPFLAGS $NOWARN conftest.c" | \
+-	    sed -n '/^mksh_cfg *=[	 ]*\([0-9x ()+-]*\).*$/s//\1/p'`
++	    grep '^mksh_cfg *=' | \
++	    sed 's/^mksh_cfg *=[	 ]*\([()0-9x+-][()0-9x+	 -]*\).*$/\1/'`
+ 	case $NSIG in
+-	*[\ \(\)+-]*) NSIG=`"$AWK" "BEGIN { print $NSIG }"` ;;
++	*mksh_cfg*) $e "Error: NSIG='$NSIG'"; NSIG=0 ;;
++	*[\ \(\)+-]*) NSIG=`"$AWK" "BEGIN { print $NSIG }" </dev/null` ;;
+ 	esac
+ 	printf=printf
+ 	(printf hallo) >/dev/null 2>&1 || printf=echo
+@@ -1805,8 +1969,8 @@
+ 	sigs="$sigs TRAP TSTP TTIN TTOU URG USR1 USR2 VTALRM WINCH XCPU XFSZ"
+ 	test 1 = $HAVE_CPP_DD && test $NSIG -gt 1 && sigs="$sigs "`vq \
+ 	    "$CPP $CFLAGS $CPPFLAGS $NOWARN -dD conftest.c" | \
+-	    grep '[	 ]SIG[A-Z0-9]*[	 ]' | \
+-	    sed 's/^\(.*[	 ]SIG\)\([A-Z0-9]*\)\([	 ].*\)$/\2/' | sort`
++	    grep '[	 ]SIG[A-Z0-9][A-Z0-9]*[	 ]' | \
++	    sed 's/^.*[	 ]SIG\([A-Z0-9][A-Z0-9]*\)[	 ].*$/\1/' | sort`
+ 	test $NSIG -gt 1 || sigs=
+ 	for name in $sigs; do
+ 		case $sigseenone in
+@@ -1817,9 +1981,11 @@
+ 		echo int >>conftest.c
+ 		echo mksh_cfg= SIG$name >>conftest.c
+ 		echo ';' >>conftest.c
++		# GNU sed 2.03 croaks on optimising this, too
+ 		vq "$CPP $CFLAGS $CPPFLAGS $NOWARN conftest.c" | \
+-		    sed -n '/^mksh_cfg *=[	 ]*\([0-9x]*\).*$/s//\1:'$name/p
+-	done | sed -e '/^:/d' -e 's/:/ /g' | while read nr name; do
++		    grep '^mksh_cfg *=' | \
++		    sed 's/^mksh_cfg *=[	 ]*\([0-9][0-9x]*\).*$/:\1 '$name/
++	done | sed -n '/^:[^ ]/s/^://p' | while read nr name; do
+ 		test $printf = echo || nr=`printf %d "$nr" 2>/dev/null`
+ 		test $nr -gt 0 && test $nr -le $NSIG || continue
+ 		case $sigseentwo in
+@@ -1834,11 +2000,12 @@
+ 	$e done.
+ fi
+ 
+-addsrcs '!' HAVE_STRLCPY strlcpy.c
++addsrcs -s '!' HAVE_STRLCPY strlcpy.c
+ addsrcs USE_PRINTF_BUILTIN printf.c
+ test 1 = "$USE_PRINTF_BUILTIN" && add_cppflags -DMKSH_PRINTF_BUILTIN
+ test 1 = "$HAVE_CAN_VERB" && CFLAGS="$CFLAGS -verbose"
+-add_cppflags -DMKSH_BUILD_R=406
++test -n "$LDSTATIC" && add_cppflags -DMKSH_OPTSTATIC
++add_cppflags -DMKSH_BUILD_R=409
+ 
+ $e $bi$me: Finished configuration testing, now producing output.$ao
+ 
+@@ -1846,8 +2013,8 @@
+ objs=
+ sp=
+ case $tcfn in
+-a.exe)	mkshexe=mksh.exe ;;
+-*)	mkshexe=mksh ;;
++a.exe)	mkshexe=$tfn.exe ;;
++*)	mkshexe=$tfn ;;
+ esac
+ case $curdir in
+ *\ *)	mkshshebang="#!./$mkshexe" ;;
+@@ -1860,13 +2027,14 @@
+ 	set -A check_categories -- $check_categories
+ 	pflag='$curdir/$mkshexe'
+ 	sflag='$srcdir/check.t'
+-	usee=0 Pflag=0 uset=0 vflag=0 xflag=0
+-	while getopts "C:e:fPp:s:t:v" ch; do case \$ch {
++	usee=0 Pflag=0 Sflag=0 uset=0 vflag=0 xflag=0
++	while getopts "C:e:fPp:Ss:t:v" ch; do case \$ch {
+ 	(C)	check_categories[\${#check_categories[*]}]=\$OPTARG ;;
+ 	(e)	usee=1; eflag=\$OPTARG ;;
+ 	(f)	check_categories[\${#check_categories[*]}]=fastbox ;;
+ 	(P)	Pflag=1 ;;
+ 	(p)	pflag=\$OPTARG ;;
++	(S)	Sflag=1 ;;
+ 	(s)	sflag=\$OPTARG ;;
+ 	(t)	uset=1; tflag=\$OPTARG ;;
+ 	(v)	vflag=1 ;;
+@@ -1874,7 +2042,7 @@
+ 	}
+ 	done
+ 	shift \$((OPTIND - 1))
+-	set -A args -- '$srcdir/check.pl' -p "\$pflag" -s "\$sflag"
++	set -A args -- '$srcdir/check.pl' -p "\$pflag"
+ 	x=
+ 	for y in "\${check_categories[@]}"; do
+ 		x=\$x,\$y
+@@ -1895,8 +2063,7 @@
+ 	(( vflag )) && args[\${#args[*]}]=-v
+ 	(( xflag )) && args[\${#args[*]}]=-x	# force usage by synerr
+ 	print Testing mksh for conformance:
+-	fgrep MirOS: '$srcdir/check.t'
+-	fgrep MIRBSD '$srcdir/check.t'
++	fgrep -e MirOS: -e MIRBSD "\$sflag"
+ 	print "This shell is actually:\\n\\t\$KSH_VERSION"
+ 	print 'test.sh built for mksh $dstversion'
+ 	cstr='\$os = defined \$^O ? \$^O : "unknown";'
+@@ -1919,7 +2086,17 @@
+ 			break
+ 		fi
+ 	done
+-	exec \$perli "\${args[@]}" "\$@"$tsts
++	(( Sflag )) || echo + \$perli "\${args[@]}" -s "\$sflag" "\$@"
++	(( Sflag )) || exec \$perli "\${args[@]}" -s "\$sflag" "\$@"$tsts
++	# use of the -S option for check.t split into multiple chunks
++	rv=0
++	for s in "\$sflag".*; do
++		echo + \$perli "\${args[@]}" -s "\$s" "\$@"
++		\$perli "\${args[@]}" -s "\$s" "\$@"$tsts
++		rc=\$?
++		(( rv = rv ? rv : rc ))
++	done
++	exit \$rv
+ EOF
+ chmod 755 test.sh
+ if test $cm = llvm; then
+@@ -1929,7 +2106,7 @@
+ else
+ 	emitbc=-c
+ fi
+-echo "# work around NeXTstep bug" >Rebuild.sh
++echo ": # work around NeXTstep bug" >Rebuild.sh
+ echo set -x >>Rebuild.sh
+ for file in $SRCS; do
+ 	op=`echo x"$file" | sed 's/^x\(.*\)\.c$/\1./'`
+@@ -1947,9 +2124,9 @@
+ done
+ case $cm in
+ dragonegg|llvm)
+-	echo "rm -f mksh.s" >>Rebuild.sh
+-	echo "llvm-link -o - $objs | opt $optflags | llc -o mksh.s" >>Rebuild.sh
+-	lobjs=mksh.s
++	echo "rm -f $tfn.s" >>Rebuild.sh
++	echo "llvm-link -o - $objs | opt $optflags | llc -o $tfn.s" >>Rebuild.sh
++	lobjs=$tfn.s
+ 	;;
+ *)
+ 	lobjs=$objs
+@@ -2028,32 +2205,32 @@
+ fi
+ case $cm in
+ dragonegg|llvm)
+-	rmf mksh.s
+-	v "llvm-link -o - $objs | opt $optflags | llc -o mksh.s"
++	rmf $tfn.s
++	v "llvm-link -o - $objs | opt $optflags | llc -o $tfn.s"
+ 	;;
+ esac
+ tcfn=$mkshexe
+ test $cm = combine || v "$CC $CFLAGS $LDFLAGS -o $tcfn $lobjs $LIBS $ccpr"
+ test -f $tcfn || exit 1
+-test 1 = $r || v "$NROFF -mdoc <'$srcdir/mksh.1' >mksh.cat1" || \
+-    rmf mksh.cat1
++test 1 = $r || v "$NROFF -mdoc <'$srcdir/mksh.1' >$tfn.cat1" || \
++    rmf $tfn.cat1
+ test 0 = $eq && v size $tcfn
+ i=install
+ test -f /usr/ucb/$i && i=/usr/ucb/$i
+ test 1 = $eq && e=:
+ $e
+ $e Installing the shell:
+-$e "# $i -c -s -o root -g bin -m 555 mksh /bin/mksh"
+-$e "# grep -x /bin/mksh /etc/shells >/dev/null || echo /bin/mksh >>/etc/shells"
++$e "# $i -c -s -o root -g bin -m 555 $tfn /bin/$tfn"
++$e "# grep -x /bin/$tfn /etc/shells >/dev/null || echo /bin/$tfn >>/etc/shells"
+ $e "# $i -c -o root -g bin -m 444 dot.mkshrc /usr/share/doc/mksh/examples/"
+ $e
+ $e Installing the manual:
+-if test -f mksh.cat1; then
+-	$e "# $i -c -o root -g bin -m 444 mksh.cat1" \
+-	    "/usr/share/man/cat1/mksh.0"
++if test -f $tfn.cat1; then
++	$e "# $i -c -o root -g bin -m 444 $tfn.cat1" \
++	    "/usr/share/man/cat1/$tfn.0"
+ 	$e or
+ fi
+-$e "# $i -c -o root -g bin -m 444 mksh.1 /usr/share/man/man1/mksh.1"
++$e "# $i -c -o root -g bin -m 444 mksh.1 /usr/share/man/man1/$tfn.1"
+ $e
+ $e Run the regression test suite: ./test.sh
+ $e Please also read the sample file dot.mkshrc and the fine manual.
+@@ -2070,6 +2247,7 @@
+ 				or -O3 -qstrict or -O2, per compiler
+ CPPFLAGS			default empty
+ LDFLAGS				default empty; added before sources
++LDSTATIC			set this to '-static'; default unset
+ LIBS				default empty; added after sources
+ 				[Interix] default: -lcrypt (XXX still needed?)
+ NOWARN				-Wno-error or similar
+@@ -2095,15 +2273,22 @@
+ MKSH_DEFAULT_EXECSHELL		"/bin/sh" (do not change)
+ MKSH_DEFAULT_TMPDIR		"/tmp" (do not change)
+ MKSH_DISABLE_DEPRECATED		disable code paths scheduled for later removal
++MKSH_DISABLE_TTY_WARNING	shut up warning about ctty if OS cant be fixed
+ MKSH_DONT_EMIT_IDSTRING		omit RCS IDs from binary
+ MKSH_MIDNIGHTBSD01ASH_COMPAT	set -o sh: additional compatibility quirk
+ MKSH_NOPROSPECTOFWORK		disable jobs, co-processes, etc. (do not use)
+ MKSH_NOPWNAM			skip PAM calls, for -static on eglibc, Solaris
++MKSH_NO_CMDLINE_EDITING		disable command line editing code entirely
+ MKSH_NO_DEPRECATED_WARNING	omit warning when deprecated stuff is run
+ MKSH_NO_EXTERNAL_CAT		omit hack to skip cat builtin when flags passed
+ MKSH_NO_LIMITS			omit ulimit code
++MKSH_NO_SIGSETJMP		define if sigsetjmp is broken or not available
++MKSH_NO_SIGSUSPEND		use sigprocmask+pause instead of sigsuspend
+ MKSH_SMALL			omit some code, optimise hard for size (slower)
+-MKSH_S_NOVI			disable Vi editing mode (default if MKSH_SMALL)
++MKSH_SMALL_BUT_FAST		disable some hard-for-size optim. (modern sys.)
++MKSH_S_NOVI=1			disable Vi editing mode (default if MKSH_SMALL)
++MKSH_TYPEDEF_SIG_ATOMIC_T	define to e.g. 'int' if sig_atomic_t is missing
++MKSH_TYPEDEF_SSIZE_T		define to e.g. 'long' if your OS has no ssize_t
+ MKSH_UNEMPLOYED			disable job control (but not jobs/co-processes)
+ 
+ === generic installation instructions ===
 Index: src/bin/mksh/check.t
-diff -u src/bin/mksh/check.t:1.474.2.2 src/bin/mksh/check.t:1.481
---- src/bin/mksh/check.t:1.474.2.2	Sat Jul 16 16:04:08 2011
-+++ src/bin/mksh/check.t	Sat Aug 27 18:06:38 2011
+diff -u src/bin/mksh/check.t:1.474.2.15 src/bin/mksh/check.t:1.550
+--- src/bin/mksh/check.t:1.474.2.15	Fri Apr  6 14:40:11 2012
++++ src/bin/mksh/check.t	Sun Jul  1 15:54:51 2012
 @@ -1,4 +1,4 @@
--# $MirOS: src/bin/mksh/check.t,v 1.474.2.2 2011/07/16 16:04:08 tg Exp $
-+# $MirOS: src/bin/mksh/check.t,v 1.481 2011/08/27 18:06:38 tg Exp $
+-# $MirOS: src/bin/mksh/check.t,v 1.474.2.15 2012/04/06 14:40:11 tg Exp $
++# $MirOS: src/bin/mksh/check.t,v 1.550 2012/07/01 15:54:51 tg Exp $
  # $OpenBSD: bksl-nl.t,v 1.2 2001/01/28 23:04:56 niklas Exp $
  # $OpenBSD: history.t,v 1.5 2001/01/28 23:04:56 niklas Exp $
  # $OpenBSD: read.t,v 1.3 2003/03/10 03:48:16 david Exp $
-@@ -25,7 +25,7 @@
- # http://www.research.att.com/~gsf/public/ifs.sh
+@@ -29,12 +29,22 @@
+ # http://www.freebsd.org/cgi/cvsweb.cgi/src/tools/regression/bin/test/regress.sh?rev=HEAD
  
  expected-stdout:
--	@(#)MIRBSD KSH R40 2011/07/16
-+	@(#)MIRBSD KSH R40 2011/08/27
+-	@(#)MIRBSD KSH R40 2012/04/06
++	@(#)MIRBSD KSH R40 2012/07/01
  description:
  	Check version of shell.
  stdin:
-@@ -1603,16 +1603,17 @@
- 	set +o sh
- 	x=foobar
- 	y=foobaz
--	echo "<${x%bar|baz},${y%bar|baz}>"
-+	z=fooba\?
-+	echo "<${x%bar|baz},${y%bar|baz},${z%\?}>"
- 	echo "<${x%ba(r|z)},${y%ba(r|z)}>"
- 	set -o sh
--	echo "<${x%bar|baz},${y%bar|baz}>"
-+	echo "<${x%bar|baz},${y%bar|baz},${z%\?}>"
- 	z='foo(bar'
- 	echo "<${z%(*}>"
- expected-stdout:
-+	<foo,foo,fooba>
- 	<foo,foo>
--	<foo,foo>
--	<foobar,foobaz>
-+	<foobar,foobaz,fooba>
- 	<foo>
+ 	echo $KSH_VERSION
+ name: KSH_VERSION
++category: shell:legacy-no
++---
++expected-stdout:
++	@(#)LEGACY KSH R40 2012/07/01
++description:
++	Check version of legacy shell.
++stdin:
++	echo $KSH_VERSION
++name: KSH_VERSION-legacy
++category: shell:legacy-yes
  ---
- name: eglob-substrpl-1
-@@ -5890,6 +5891,7 @@
- 	-DMKSH_ASSUME_UTF8=1 => not expected, please investigate
- 	-UMKSH_ASSUME_UTF8 => not expected, but if your OS is old,
- 	 try passing HAVE_SETLOCALE_CTYPE=0 to Build.sh
-+need-pass: no
- category: !os:hpux
- need-ctty: yes
- arguments: !-i!
-@@ -6557,7 +6559,7 @@
+ name: selftest-1
+ description:
+@@ -69,12 +79,29 @@
+ stdin:
+ 	set
+ ---
++name: selftest-legacy
++description:
++	Check some things in the LEGACY KSH
++category: shell:legacy-yes
++stdin:
++	set +o emacs
++	set +o vi
++	[[ "$(set +o) -o" = *"-o emacs -o"* ]] && echo 1=emacs
++	[[ "$(set +o) -o" = *"-o vi -o"* ]] && echo 1=vi
++	set -o emacs
++	set -o vi
++	[[ "$(set +o) -o" = *"-o emacs -o"* ]] && echo 2=emacs
++	[[ "$(set +o) -o" = *"-o vi -o"* ]] && echo 2=vi
++expected-stdout:
++	2=emacs
++	2=vi
++---
+ name: selftest-direct-builtin-call
+ description:
+ 	Check that direct builtin calls work
+ stdin:
+-	ln -s "$__progname" cat
+-	ln -s "$__progname" echo
++	ln -s "$__progname" cat || cp "$__progname" cat
++	ln -s "$__progname" echo || cp "$__progname" echo
+ 	./echo -c 'echo  foo' | ./cat -u
+ expected-stdout:
+ 	-c echo  foo
+@@ -297,6 +324,7 @@
+ name: arith-div-intmin-by-minusone
+ description:
+ 	Check division overflow wraps around silently
++category: int:32
+ stdin:
+ 	echo signed:$((-2147483648 / -1))r$((-2147483648 % -1)).
+ 	echo unsigned:$((# -2147483648 / -1))r$((# -2147483648 % -1)).
+@@ -304,6 +332,17 @@
+ 	signed:-2147483648r0.
+ 	unsigned:0r2147483648.
+ ---
++name: arith-div-intmin-by-minusone-64
++description:
++	Check division overflow wraps around silently
++category: int:64
++stdin:
++	echo signed:$((-9223372036854775808 / -1))r$((-9223372036854775808 % -1)).
++	echo unsigned:$((# -9223372036854775808 / -1))r$((# -9223372036854775808 % -1)).
++expected-stdout:
++	signed:-9223372036854775808r0.
++	unsigned:0r9223372036854775808.
++---
+ name: arith-assop-assoc-1
+ description:
+ 	Check associativity of assignment-operator operator
+@@ -318,6 +357,7 @@
+ name: arith-unsigned-1
+ description:
+ 	Check if unsigned arithmetics work
++category: int:32
+ stdin:
+ 	# signed vs unsigned
+ 	echo x1 $((-1)) $((#-1))
+@@ -355,6 +395,7 @@
+ name: arith-limit32-1
+ description:
+ 	Check if arithmetics are 32 bit
++category: int:32
+ stdin:
+ 	# signed vs unsigned
+ 	echo x1 $((-1)) $((#-1))
+@@ -379,6 +420,34 @@
+ 	x5 0 0
+ 	x6 1 1
+ ---
++name: arith-limit64-1
++description:
++	Check if arithmetics are 64 bit
++category: int:64
++stdin:
++	# signed vs unsigned
++	echo x1 $((-1)) $((#-1))
++	# calculating
++	typeset -i vs
++	typeset -Ui vu
++	vs=9223372036854775807; vu=9223372036854775807
++	echo x2 $vs $vu
++	let vs++ vu++
++	echo x3 $vs $vu
++	vs=18446744073709551615; vu=18446744073709551615
++	echo x4 $vs $vu
++	let vs++ vu++
++	echo x5 $vs $vu
++	let vs++ vu++
++	echo x6 $vs $vu
++expected-stdout:
++	x1 -1 18446744073709551615
++	x2 9223372036854775807 9223372036854775807
++	x3 -9223372036854775808 9223372036854775808
++	x4 -1 18446744073709551615
++	x5 0 0
++	x6 1 1
++---
+ name: bksl-nl-ign-1
+ description:
+ 	Check that \newline is not collapsed after #
+@@ -1036,7 +1105,7 @@
+ need-pass: no
+ # the mv command fails on Cygwin
+ # Hurd aborts the testsuite (permission denied)
+-category: !os:cygwin,!os:gnu,!os:msys
++category: !os:cygwin,!os:gnu,!os:msys,!nosymlink
+ file-setup: file 644 "x"
+ 	mkdir noread noread/target noread/target/subdir
+ 	ln -s noread link
+@@ -1489,6 +1558,19 @@
+ 	0 = 1 .
+ 	111 = 3 .
+ ---
++name: expand-weird-3
++description:
++	Check that trimming works with positional parameters (Debian #48453)
++stdin:
++	A=9999-02
++	B=9999
++	echo 1=${A#$B?}.
++	set -- $A $B
++	echo 2=${1#$2?}.
++expected-stdout:
++	1=02.
++	2=02.
++---
+ name: eglob-bad-1
+ description:
+ 	Check that globbing isn't done when glob has syntax error
+@@ -1895,7 +1977,7 @@
+ # breaks on FreeMiNT (cannot unlink dangling symlinks)
+ # breaks on MSYS (does not support symlinks)
+ # breaks on Dell UNIX 4.0 R2.2 (SVR4) where unlink also fails
+-category: !os:mint,!os:msys,!os:svr4.0
++category: !os:mint,!os:msys,!os:svr4.0,!nosymlink
+ file-setup: dir 755 "dir"
+ file-setup: symlink 644 "dir/abc"
+ 	non-existent-file
+@@ -3422,7 +3504,6 @@
+ name: integer-base-err-1
+ description:
+ 	Can't have 0 base (causes shell to exit)
+-category: nodeprecated
+ expected-exit: e != 0
+ stdin:
+ 	typeset -i i
+@@ -3432,19 +3513,6 @@
+ expected-stderr-pattern:
+ 	/^.*:.*0#4.*\n$/
+ ---
+-name: integer-base-err-1-deprecated
+-description:
+-	Can't have 0 base (causes shell to exit)
+-category: !nodeprecated
+-expected-exit: e != 0
+-stdin:
+-	typeset -i i
+-	i=3
+-	i=0#4
+-	echo $i
+-expected-stderr-pattern:
+-	/^.*octal is deprecated\n.*:.*0#4.*\n$/
+----
+ name: integer-base-err-2
+ description:
+ 	Can't have multiple bases in a 'constant' (causes shell to exit)
+@@ -3640,26 +3708,24 @@
+ 	64
+ 	64
+ ---
+-name: integer-base-check-flat-posix
++name: integer-base-check-flat
+ description:
+-	Check behaviour of POSuX bases
+-category: !nodeprecated
++	Check behaviour does not match POSuX, because a not type-safe
++	scripting language has *no* business interpreting "010" as octal
++category: shell:legacy-no
+ stdin:
+ 	echo :$((10)).$((010)).$((0x10)).
+ expected-stdout:
+-	:10.8.16.
+-expected-stderr-pattern:
+-	/octal is deprecated/
++	:10.10.16.
+ ---
+-name: integer-base-check-flat-right
++name: integer-base-check-flat-legacy
+ description:
+-	Check behaviour does not match POSuX, because a not type-safe
+-	scripting language has *no* business interpreting "010" as octal
+-category: nodeprecated
++	Check behaviour matches POSuX for LEGACY KSH
++category: shell:legacy-yes
+ stdin:
+ 	echo :$((10)).$((010)).$((0x10)).
+ expected-stdout:
+-	:10.10.16.
++	:10.8.16.
+ ---
+ name: integer-base-check-numeric-from
+ description:
+@@ -3766,6 +3832,7 @@
+ name: integer-arithmetic-span
+ description:
+ 	Check wraparound and size that is defined in mksh
++category: int:32
+ stdin:
+ 	echo s:$((2147483647+1)).$(((2147483647*2)+1)).$(((2147483647*2)+2)).
+ 	echo u:$((#2147483647+1)).$((#(2147483647*2)+1)).$((#(2147483647*2)+2)).
+@@ -3773,6 +3840,17 @@
+ 	s:-2147483648.-1.0.
+ 	u:2147483648.4294967295.0.
+ ---
++name: integer-arithmetic-span-64
++description:
++	Check wraparound and size that is defined in mksh
++category: int:64
++stdin:
++	echo s:$((9223372036854775807+1)).$(((9223372036854775807*2)+1)).$(((9223372036854775807*2)+2)).
++	echo u:$((#9223372036854775807+1)).$((#(9223372036854775807*2)+1)).$((#(9223372036854775807*2)+2)).
++expected-stdout:
++	s:-9223372036854775808.-1.0.
++	u:9223372036854775808.18446744073709551615.0.
++---
+ name: lineno-stdin
+ description:
+ 	See if $LINENO is updated and can be modified.
+@@ -4065,9 +4143,11 @@
+ 	(so quotes could also be used to hide hem).  The former is
+ 	easier, the later better...
+ stdin:
+-	echo $(echo \()
++	echo $(echo \( )
++	echo $(echo "(" )
+ expected-stdout:
+ 	(
++	(
+ ---
+ name: regression-9
+ description:
+@@ -4104,6 +4184,7 @@
+ 	but not 0 according to the getopt(1) manual page, ksh88, and
+ 	Bourne sh (such as /bin/sh on Solaris).
+ 	In mksh R39b, we honour POSIX except when -o sh is set.
++category: shell:legacy-no
+ stdin:
+ 	showf() {
+ 		[[ -o posix ]]; FPOSIX=$((1-$?))
+@@ -4127,6 +4208,38 @@
+ 	FPOSIX=0 FSH=1 rv=1
+ 	FPOSIX=1 FSH=0 rv=0
+ ---
++name: regression-10-legacy
++description:
++	The following:
++		set -- `false`
++		echo $?
++	should print 0 according to POSIX (dash, bash, ksh93, posh)
++	but not 0 according to the getopt(1) manual page, ksh88, and
++	Bourne sh (such as /bin/sh on Solaris).
++category: shell:legacy-yes
++stdin:
++	showf() {
++		[[ -o posix ]]; FPOSIX=$((1-$?))
++		[[ -o sh ]]; FSH=$((1-$?))
++		echo -n "FPOSIX=$FPOSIX FSH=$FSH "
++	}
++	set +o posix +o sh
++	showf
++	set -- `false`
++	echo rv=$?
++	set -o sh
++	showf
++	set -- `false`
++	echo rv=$?
++	set -o posix
++	showf
++	set -- `false`
++	echo rv=$?
++expected-stdout:
++	FPOSIX=0 FSH=0 rv=1
++	FPOSIX=0 FSH=1 rv=1
++	FPOSIX=1 FSH=0 rv=1
++---
+ name: regression-11
+ description:
+ 	The following:
+@@ -4532,7 +4645,7 @@
+ 	foo=stuff env | grep '^foo'
+ expected-exit: e != 0
+ expected-stderr-pattern:
+-	/.*read *only.*/
++	/read-only/
+ ---
+ name: regression-43
+ description:
+@@ -4847,7 +4960,8 @@
+ 	M
+ 	    xxx[1]=7
+ 	N
+-	    typeset -i xxx
++	    set -A xxx
++	    typeset -i xxx[1]
+ ---
+ name: regression-58
+ description:
+@@ -4948,6 +5062,9 @@
+ 		typeset -
+ 		echo FNORD-8
+ 	} | fgrep FNORD
++	fnord=(42 23)
++	typeset -p fnord
++	echo FNORD-9
+ expected-stdout:
+ 	FNORD-0
+ 	FNORD-1
+@@ -4998,6 +5115,10 @@
+ 	FNORD_G=7
+ 	FNORD_H=8
+ 	FNORD-8
++	set -A fnord
++	typeset fnord[0]=42
++	typeset fnord[1]=23
++	FNORD-9
+ ---
+ name: regression-64
+ description:
+@@ -5027,7 +5148,6 @@
+ name: regression-66
+ description:
+ 	Check that quoting is sane
+-	XXX not really in R40-stable
+ stdin:
+ 	ac_space=' '
+ 	ac_newline='
+@@ -5046,7 +5166,7 @@
+ 	done
+ expected-stdout:
+ 	ac_space=' '
+-	ac_newline='
++	ac_newline=$'\n'
+ ---
+ name: readonly-0
+ description:
+@@ -5064,7 +5184,7 @@
+ 	=
+ 	1 x .
+ expected-stderr-pattern:
+-	/read *only/
++	/read-only/
+ ---
+ name: readonly-1
+ description:
+@@ -5074,7 +5194,7 @@
+ expected-stdout:
+ 	aborted, 2
+ expected-stderr-pattern:
+-	/read *only/
++	/read-only/
+ ---
+ name: readonly-2a
+ description:
+@@ -5093,7 +5213,7 @@
+ expected-stdout:
+ 	2 .
+ expected-stderr-pattern:
+-	/read *only/
++	/read-only/
+ ---
+ name: readonly-3
+ description:
+@@ -5105,7 +5225,7 @@
+ 	0 x .
+ 	2 .
+ expected-stderr-pattern:
+-	/read *only/
++	/read-only/
+ ---
+ name: syntax-1
+ description:
+@@ -5807,10 +5927,10 @@
+ 	Check that sh mode is *not* automatically turned on
+ category: !binsh
+ stdin:
+-	ln -s "$__progname" ksh
+-	ln -s "$__progname" sh
+-	ln -s "$__progname" ./-ksh
+-	ln -s "$__progname" ./-sh
++	ln -s "$__progname" ksh || cp "$__progname" ksh
++	ln -s "$__progname" sh || cp "$__progname" sh
++	ln -s "$__progname" ./-ksh || cp "$__progname" ./-ksh
++	ln -s "$__progname" ./-sh || cp "$__progname" ./-sh
+ 	for shell in {,-}{,k}sh; do
+ 		print -- $shell $(./$shell +l -c \
+ 		    '[[ $(set +o) == *@(-o sh)@(| *) ]] && echo sh || echo nosh')
+@@ -5826,10 +5946,10 @@
+ 	Check that sh mode *is* automatically turned on
+ category: binsh
+ stdin:
+-	ln -s "$__progname" ksh
+-	ln -s "$__progname" sh
+-	ln -s "$__progname" ./-ksh
+-	ln -s "$__progname" ./-sh
++	ln -s "$__progname" ksh || cp "$__progname" ksh
++	ln -s "$__progname" sh || cp "$__progname" sh
++	ln -s "$__progname" ./-ksh || cp "$__progname" ./-ksh
++	ln -s "$__progname" ./-sh || cp "$__progname" ./-sh
+ 	for shell in {,-}{,k}sh; do
+ 		print -- $shell $(./$shell +l -c \
+ 		    '[[ $(set +o) == *@(-o sh)@(| *) ]] && echo sh || echo nosh')
+@@ -6335,6 +6455,17 @@
+ 	source='PATH=$PATH:. command .'
+ 	type='whence -v'
+ ---
++name: aliases-cmdline
++description:
++	Check that aliases work from the command line (Debian #517009)
++	Note that due to the nature of the lexing process, defining
++	aliases in COMSUBs then immediately using them, and things
++	like 'alias foo=bar && foo', still fail.
++stdin:
++	"$__progname" -c $'alias a="echo OK"\na'
++expected-stdout:
++	OK
++---
+ name: aliases-funcdef-1
+ description:
+ 	Check if POSIX functions take precedences over aliases
+@@ -7111,9 +7242,14 @@
+ 	typeset -i8 foo=10
+ 	bar=baz
  	unset baz
++	bla=foo
  	print ${foo@#} ${bar@#} ${baz@#} .
++	print ${foo@#123} ${bar@#456} ${baz@#789} .
++	print ${foo@#bla} ${bar@#bar} ${baz@#OPTIND} .
  expected-stdout:
 -	E76664C2 57F1BA9A 04808901 .
-+	D50219A0 20E5DB5B 00000001 .
++	D50219A0 20E5DB5B 00000000 .
++	554A1C76 004A212E CB209562 .
++	6B21CF91 20E5DB5B 124EA49D .
  ---
  name: varexpand-null-1
  description:
-Index: src/bin/mksh/dot.mkshrc
-diff -u src/bin/mksh/dot.mkshrc:1.63 src/bin/mksh/dot.mkshrc:1.65
---- src/bin/mksh/dot.mkshrc:1.63	Wed Jul  6 22:21:56 2011
-+++ src/bin/mksh/dot.mkshrc	Sat Aug 27 18:06:40 2011
-@@ -1,5 +1,5 @@
- # $Id$
--# $MirOS: src/bin/mksh/dot.mkshrc,v 1.63 2011/07/06 22:21:56 tg Exp $
-+# $MirOS: src/bin/mksh/dot.mkshrc,v 1.65 2011/08/27 18:06:40 tg Exp $
- #-
- # Copyright (c) 2002, 2003, 2004, 2006, 2007, 2008, 2009, 2010, 2011
- #	Thorsten Glaser <tg@mirbsd.org>
-@@ -29,10 +29,11 @@
- 
- 	(( e )) && print -n "$e|"
- }
--PS1='$(precmd)${USER:=$(ulimit -c 0;id -un 2>&-||print \?)}@${HOSTNAME%%.*}:$(
--	local d=${PWD:-?} n p=~; [[ $p = ?(*/) ]] || d=${d/#$p/~}
--	(( (${%d}>0 ? ${%d}: ${#d}) > (n = (COLUMNS/3<7 ? 7: COLUMNS/3)) )) && {
--	d=${d:(-n)}; p=...; } || p=; print -nr -- "$p$d") '"$PS1 "
-+PS1=$'\001\r''$(precmd)${USER:=$(ulimit -c 0; id -un 2>/dev/null || echo \?
-+	)}@${HOSTNAME%%.*}:$(local d=${PWD:-?} p=~; [[ $p = ?(*/) ]] || \
-+	d=${d/#$p/~}; local m=${%d} n p=...; (( m > 0 )) || m=${#d}
-+	(( m > (n = (COLUMNS/3 < 7 ? 7 : COLUMNS/3)) )) && d=${d:(-n)} || \
-+	p=; print -nr -- "$p$d") '"$PS1 "
- : ${MKSH:=$(whence -p mksh)}; export EDITOR HOSTNAME MKSH TERM USER
- alias ls=ls
- unalias ls
-@@ -316,6 +317,8 @@
- 	(( u )) || set -U
- }
- function Lnzaathash_end {
-+	((# Lnzathash_v *= 1025 ))
-+	((# Lnzathash_v ^= Lnzathash_v >> 6 ))
- 	((# Lnzathash_v += Lnzathash_v << 3 ))
- 	((# Lnzathash_v = (Lnzathash_v ^
- 	    (Lnzathash_v >> 11)) * 32769 ))
+@@ -8180,6 +8316,7 @@
+ description:
+ 	Verify that file descriptors > 2 are private for Korn shells
+ 	AT&T ksh93 does this still, which means we must keep it as well
++category: shell:legacy-no
+ file-setup: file 644 "test.sh"
+ 	echo >&3 Fowl
+ stdin:
+@@ -8202,6 +8339,18 @@
+ expected-stdout:
+ 	Fowl
+ ---
++name: fd-cloexec-3
++description:
++	Verify that file descriptors > 2 are not private for LEGACY KSH
++category: shell:legacy-yes
++file-setup: file 644 "test.sh"
++	echo >&3 Fowl
++stdin:
++	exec 3>&1
++	"$__progname" test.sh
++expected-stdout:
++	Fowl
++---
+ name: comsub-1a
+ description:
+ 	COMSUB are now parsed recursively, so this works
+@@ -9425,99 +9574,6 @@
+ 	11 0
+ 	12 0
+ ---
+-name: event-subst-1a
+-description:
+-	Check that '!' substitution in interactive mode works
+-category: !smksh,!nodeprecated
+-file-setup: file 755 "falsetto"
+-	#! /bin/sh
+-	echo molto bene
+-	exit 42
+-file-setup: file 755 "!false"
+-	#! /bin/sh
+-	echo si
+-need-ctty: yes
+-arguments: !-i!
+-stdin:
+-	export PATH=.:$PATH
+-	falsetto
+-	echo yeap
+-	!false
+-expected-exit: 42
+-expected-stdout:
+-	molto bene
+-	yeap
+-	molto bene
+-expected-stderr-pattern:
+-	/.*/
+----
+-name: event-subst-1b
+-description:
+-	Check that '!' substitution in interactive mode works
+-	even when a space separates it from the search command,
+-	which is not what GNU bash provides but required for the
+-	other regression tests below to check
+-category: !smksh,!nodeprecated
+-file-setup: file 755 "falsetto"
+-	#! /bin/sh
+-	echo molto bene
+-	exit 42
+-file-setup: file 755 "!"
+-	#! /bin/sh
+-	echo si
+-need-ctty: yes
+-arguments: !-i!
+-stdin:
+-	export PATH=.:$PATH
+-	falsetto
+-	echo yeap
+-	! false
+-expected-exit: 42
+-expected-stdout:
+-	molto bene
+-	yeap
+-	molto bene
+-expected-stderr-pattern:
+-	/.*/
+----
+-name: event-subst-2
+-description:
+-	Check that '!' substitution in interactive mode
+-	does not break things
+-category: !smksh,!nodeprecated
+-file-setup: file 755 "falsetto"
+-	#! /bin/sh
+-	echo molto bene
+-	exit 42
+-file-setup: file 755 "!"
+-	#! /bin/sh
+-	echo si
+-need-ctty: yes
+-arguments: !-i!
+-env-setup: !ENV=./Env!
+-file-setup: file 644 "Env"
+-	PS1=X
+-stdin:
+-	export PATH=.:$PATH
+-	falsetto
+-	echo yeap
+-	!false
+-	echo meow
+-	! false
+-	echo = $?
+-	if
+-	! false; then echo foo; else echo bar; fi
+-expected-stdout:
+-	molto bene
+-	yeap
+-	molto bene
+-	meow
+-	molto bene
+-	= 42
+-	foo
+-expected-stderr-pattern:
+-	/.*/
+----
+ name: event-subst-3
+ description:
+ 	Check that '!' substitution in noninteractive mode is ignored
+@@ -9550,7 +9606,6 @@
+ name: event-subst-0
+ description:
+ 	Check that '!' substitution in interactive mode is ignored
+-category: nodeprecated
+ need-ctty: yes
+ arguments: !-i!
+ file-setup: file 755 "falsetto"
+@@ -10201,6 +10256,31 @@
+ 	b
+ 	x
+ ---
++name: case-braces
++description:
++	Check that case end tokens are not mixed up (Debian #220272)
++stdin:
++	i=0
++	for value in 'x' '}' 'esac'; do
++		print -n "$((++i))($value)bourne "
++		case $value in
++		}) echo brace ;;
++		*) echo no ;;
++		esac
++		print -n "$((++i))($value)korn "
++		case $value {
++		esac) echo esac ;;
++		*) echo no ;;
++		}
++	done
++expected-stdout:
++	1(x)bourne no
++	2(x)korn no
++	3(})bourne brace
++	4(})korn no
++	5(esac)bourne no
++	6(esac)korn esac
++---
+ name: stateptr-underflow
+ description:
+ 	This check overflows an Xrestpos stored in a short in R40
 Index: src/bin/mksh/edit.c
-diff -u src/bin/mksh/edit.c:1.219 src/bin/mksh/edit.c:1.220
---- src/bin/mksh/edit.c:1.219	Sat Jul 16 18:15:45 2011
-+++ src/bin/mksh/edit.c	Sat Aug 27 18:06:41 2011
-@@ -1,4 +1,4 @@
--/*	$OpenBSD: edit.c,v 1.34 2010/05/20 01:13:07 fgsch Exp $	*/
-+;/*	$OpenBSD: edit.c,v 1.34 2010/05/20 01:13:07 fgsch Exp $	*/
- /*	$OpenBSD: edit.h,v 1.9 2011/05/30 17:14:35 martynas Exp $	*/
- /*	$OpenBSD: emacs.c,v 1.43 2011/03/14 21:20:01 okan Exp $	*/
- /*	$OpenBSD: vi.c,v 1.26 2009/06/29 22:50:19 martynas Exp $	*/
-@@ -25,7 +25,7 @@
+diff -u src/bin/mksh/edit.c:1.234 src/bin/mksh/edit.c:1.239
+--- src/bin/mksh/edit.c:1.234	Fri Apr  6 15:06:42 2012
++++ src/bin/mksh/edit.c	Sun Jul  1 15:54:53 2012
+@@ -26,7 +26,9 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/edit.c,v 1.219 2011/07/16 18:15:45 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/edit.c,v 1.220 2011/08/27 18:06:41 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/edit.c,v 1.234 2012/04/06 15:06:42 tg Exp $");
++#ifndef MKSH_NO_CMDLINE_EDITING
++
++__RCSID("$MirOS: src/bin/mksh/edit.c,v 1.239 2012/07/01 15:54:53 tg Exp $");
  
  /*
   * in later versions we might use libtermcap for this, but since external
-@@ -69,10 +69,10 @@
+@@ -69,6 +71,7 @@
+ 
  static int x_getc(void);
  static void x_putcf(int);
++static void x_modified(void);
  static void x_mode(bool);
--static int x_do_comment(char *, int, int *);
-+static int x_do_comment(char *, ssize_t, ssize_t *);
+ static int x_do_comment(char *, ssize_t, ssize_t *);
  static void x_print_expansions(int, char *const *, bool);
- static int x_cf_glob(int *, const char *, int, int, int *, int *, char ***);
--static int x_longest_prefix(int, char *const *);
-+static size_t x_longest_prefix(int, char *const *);
- static int x_basename(const char *, const char *);
- static void x_free_words(int, char **);
- static int x_escape(const char *, size_t, int (*)(const char *, size_t));
-@@ -188,9 +188,9 @@
-  * moved to the start of the line after (un)commenting.
-  */
- static int
--x_do_comment(char *buf, int bsize, int *lenp)
-+x_do_comment(char *buf, ssize_t bsize, ssize_t *lenp)
- {
--	int i, j, len = *lenp;
-+	ssize_t i, j, len = *lenp;
+@@ -85,7 +88,7 @@
+ #endif
  
- 	if (len == 0)
- 		/* somewhat arbitrary - it's what AT&T ksh does */
-@@ -607,10 +607,11 @@
- /*
-  * Find longest common prefix
-  */
--static int
-+static size_t
- x_longest_prefix(int nwords, char * const * words)
- {
--	int i, j, prefix_len;
-+	int i;
-+	size_t j, prefix_len;
- 	char *p;
- 
- 	if (nwords <= 0)
-@@ -2212,7 +2213,7 @@
- static int
- x_meta_yank(int c MKSH_A_UNUSED)
- {
--	int len;
-+	size_t len;
- 
- 	if ((x_last_command != XFUNC_yank && x_last_command != XFUNC_meta_yank) ||
- 	    killstack[killtp] == 0) {
-@@ -2907,7 +2908,7 @@
- x_comment(int c MKSH_A_UNUSED)
- {
- 	int oldsize = x_size_str(xbuf);
--	int len = xep - xbuf;
-+	ssize_t len = xep - xbuf;
- 	int ret = x_do_comment(xbuf, xend - xbuf, &len);
- 
- 	if (ret < 0)
-@@ -2929,7 +2930,8 @@
- {
- 	char *o_xbuf = xbuf, *o_xend = xend;
- 	char *o_xbp = xbp, *o_xep = xep, *o_xcp = xcp;
--	int vlen, lim = x_lastcp() - xbp;
-+	int lim = x_lastcp() - xbp;
-+	size_t vlen;
- 	char *v;
- 
- 	strdupx(v, KSH_VERSION, ATEMP);
-@@ -2945,7 +2947,7 @@
- 	xbp = o_xbp;
- 	xep = o_xep;
- 	xcp = o_xcp;
--	x_redraw(vlen);
-+	x_redraw((int)vlen);
- 
- 	if (c < 0)
- 		return (KSTD);
-@@ -3246,10 +3248,10 @@
- 
- struct edstate {
- 	char *cbuf;
--	int winleft;
--	int cbufsize;
--	int linelen;
--	int cursor;
-+	ssize_t winleft;
-+	ssize_t cbufsize;
-+	ssize_t linelen;
-+	ssize_t cursor;
+ #define x_flush()	shf_flush(shl_out)
+-#ifdef MKSH_SMALL
++#if defined(MKSH_SMALL) && !defined(MKSH_SMALL_BUT_FAST)
+ #define x_putc(c)	x_putcf(c)
+ #else
+ #define x_putc(c)	shf_putc((c), shl_out)
+@@ -1065,8 +1068,6 @@
+ #endif
  };
  
- static int vi_hook(int);
-@@ -3262,7 +3264,7 @@
- static int bracktype(int);
- static void save_cbuf(void);
- static void restore_cbuf(void);
--static int putbuf(const char *, int, int);
-+static int putbuf(const char *, ssize_t, int);
- static void del_range(int, int);
- static int findch(int, int, int, int);
- static int forwword(int);
-@@ -3402,7 +3404,7 @@
- struct macro_state {
- 	unsigned char *p;	/* current position in buf */
- 	unsigned char *buf;	/* pointer to macro(s) being expanded */
--	int len;		/* how much data in buffer */
-+	size_t len;		/* how much data in buffer */
- };
- static struct macro_state macro;
+-#ifdef MKSH_SMALL
+-static void x_modified(void);
+ static void
+ x_modified(void)
+ {
+@@ -1075,14 +1076,10 @@
+ 		modified = 1;
+ 	}
+ }
++
++#ifdef MKSH_SMALL
+ #define XFUNC_VALUE(f) (f)
+ #else
+-#define x_modified() do {			\
+-	if (!modified) {			\
+-		x_histp = histptr + 1;		\
+-		modified = 1;			\
+-	}					\
+-} while (/* CONSTCOND */ 0)
+ #define XFUNC_VALUE(f) (f & 0x7F)
+ #endif
  
-@@ -4681,7 +4683,7 @@
+@@ -3272,7 +3269,7 @@
+ 		if (edchars.quit >= 0)
+ 			bind_if_not_bound(0, edchars.quit, XFUNC_noop);
+ 	} else
+-		tcsetattr(tty_fd, TCSADRAIN, &tty_state);
++		mksh_tcset(tty_fd, &tty_state);
  }
  
- static int
--putbuf(const char *buf, int len, int repl)
-+putbuf(const char *buf, ssize_t len, int repl)
- {
- 	if (len == 0)
- 		return (0);
-@@ -4907,7 +4909,7 @@
- 		start--;
- 	anchored = *pat == '^' ? (++pat, 1) : 0;
- 	if ((hist = findhist(start, fwd, pat, anchored)) < 0) {
--		/* if (start != 0 && fwd && match(holdbuf, pat) >= 0) { */
-+		/* if (start != 0 && fwd && match(holdbuf, pat) >= 0) {} */
- 		/* XXX should strcmp be strncmp? */
- 		if (start != 0 && fwd && strcmp(holdbuf, pat) >= 0) {
- 			restore_cbuf();
-@@ -5168,7 +5170,8 @@
- complete_word(int cmd, int count)
- {
- 	static struct edstate *buf;
--	int rval, nwords, start, end, match_len, flags;
-+	int rval, nwords, start, end, flags;
-+	size_t match_len;
- 	char **words;
- 	char *match;
- 	bool is_unique;
+ #if !MKSH_S_NOVI
+@@ -5364,34 +5361,4 @@
+ 	}
+ }
+ #endif /* !MKSH_S_NOVI */
+-
+-void
+-x_mkraw(int fd, struct termios *ocb, bool forread)
+-{
+-	struct termios cb;
+-
+-	if (ocb)
+-		tcgetattr(fd, ocb);
+-	else
+-		ocb = &tty_state;
+-
+-	cb = *ocb;
+-	if (forread) {
+-		cb.c_lflag &= ~(ICANON) | ECHO;
+-	} else {
+-		cb.c_iflag &= ~(INLCR | ICRNL);
+-		cb.c_lflag &= ~(ISIG | ICANON | ECHO);
+-	}
+-#if defined(VLNEXT) && defined(_POSIX_VDISABLE)
+-	/* OSF/1 processes lnext when ~icanon */
+-	cb.c_cc[VLNEXT] = _POSIX_VDISABLE;
+-#endif
+-	/* SunOS 4.1.x & OSF/1 processes discard(flush) when ~icanon */
+-#if defined(VDISCARD) && defined(_POSIX_VDISABLE)
+-	cb.c_cc[VDISCARD] = _POSIX_VDISABLE;
+-#endif
+-	cb.c_cc[VTIME] = 0;
+-	cb.c_cc[VMIN] = 1;
+-
+-	tcsetattr(fd, TCSADRAIN, &cb);
+-}
++#endif /* !MKSH_NO_CMDLINE_EDITING */
 Index: src/bin/mksh/eval.c
-diff -u src/bin/mksh/eval.c:1.106 src/bin/mksh/eval.c:1.107
---- src/bin/mksh/eval.c:1.106	Sat Jul  2 17:57:02 2011
-+++ src/bin/mksh/eval.c	Sat Aug 27 18:06:42 2011
-@@ -22,7 +22,7 @@
+diff -u src/bin/mksh/eval.c:1.112.2.1 src/bin/mksh/eval.c:1.120
+--- src/bin/mksh/eval.c:1.112.2.1	Fri Apr  6 14:40:16 2012
++++ src/bin/mksh/eval.c	Thu Jun 28 20:03:20 2012
+@@ -23,7 +23,7 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/eval.c,v 1.106 2011/07/02 17:57:02 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/eval.c,v 1.107 2011/08/27 18:06:42 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/eval.c,v 1.112.2.1 2012/04/06 14:40:16 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/eval.c,v 1.120 2012/06/28 20:03:20 tg Exp $");
  
  /*
   * string expansion
-@@ -67,11 +67,11 @@
- static char *homedir(char *);
- #endif
- static void alt_expand(XPtrV *, char *, char *, char *, int);
--static size_t utflen(const char *);
-+static int utflen(const char *);
- static void utfincptr(const char *, mksh_ari_t *);
- 
- /* UTFMODE functions */
--static size_t
-+static int
- utflen(const char *s)
- {
- 	size_t n;
-@@ -84,7 +84,10 @@
- 		}
- 	} else
- 		n = strlen(s);
--	return (n);
+@@ -369,16 +369,43 @@
+ 					st->stype = stype;
+ 					st->base = Xsavepos(ds, dp);
+ 					st->f = f;
+-					st->var = x.var;
++					if (x.var == &vtemp) {
++						st->var = tempvar();
++						st->var->flag &= ~INTEGER;
++						/* can't fail here */
++						setstr(st->var,
++						    str_val(x.var),
++						    KSH_RETURN_ERROR | 0x4);
++					} else
++						st->var = x.var;
 +
-+	if (n > 2147483647)
-+		n = 2147483647;
-+	return ((int)n);
- }
- 
- static void
-@@ -581,8 +584,7 @@
- 						 */
- 						if (!Flag(FSH)) {
- 							*dp++ = MAGIC;
--							*dp++ = (char)('@' |
--							    0x80);
-+							*dp++ = '@' | 0x80;
- 						}
+ 					st->quotew = st->quotep = quote;
+ 					/* skip qualifier(s) */
+ 					if (stype)
+ 						sp += slen;
+ 					switch (stype & 0x17F) {
+ 					case 0x100 | '#':
++					    {
++						char *beg, *end;
++						mksh_ari_t seed;
++						register uint32_t h;
++
++						beg = wdcopy(sp, ATEMP);
++						end = beg + (wdscan(sp, CSUBST) - sp);
++						end[-2] = EOS;
++						end = wdstrip(beg, 0);
++						afree(beg, ATEMP);
++						evaluate(substitute(end, 0),
++						    &seed, KSH_UNWIND_ERROR, true);
++						/* hash with seed, for now */
++						h = seed;
++						NZATUpdateString(h,
++						    str_val(st->var));
++						NZAATFinish(h);
+ 						x.str = shf_smprintf("%08X",
+-						    (unsigned int)hash(str_val(st->var)));
++						    (unsigned int)h);
  						break;
- 					case '=':
-@@ -719,7 +721,7 @@
- 				/* open pattern: *(foo|bar) */
- 				/* Next char is the type of pattern */
- 				make_magic = 1;
--				c = *sp++ + 0x80;
-+				c = *sp++ | 0x80;
- 				break;
++					}
+ 					case '0': {
+ 						char *beg, *mid, *end, *stg;
+ 						mksh_ari_t from = 0, num = -1, flen, finc = 0;
+@@ -771,6 +798,7 @@
+ 		case XARGSEP:
+ 			type = XARG;
+ 			quote = 1;
++			/* FALLTHROUGH */
+ 		case XARG:
+ 			if ((c = *x.str++) == '\0') {
+ 				/*
+@@ -1419,7 +1447,7 @@
+ 			struct stat lstatb, statb;
+ 			int stat_done = 0;	 /* -1: failed, 1 ok */
  
- 			case SPAT:
-@@ -1474,8 +1476,7 @@
- 		DIR *dirp;
- 		struct dirent *d;
- 		char *name;
--		int len;
--		int prefix_len;
-+		size_t len, prefix_len;
- 
- 		/* xp = *xpp;	copy_non_glob() may have re-alloc'd xs */
- 		*xp = '\0';
+-			if (lstat(Xstring(*xs, xp), &lstatb) < 0)
++			if (mksh_lstat(Xstring(*xs, xp), &lstatb) < 0)
+ 				return;
+ 			/*
+ 			 * special case for systems which strip trailing
 Index: src/bin/mksh/exec.c
-diff -u src/bin/mksh/exec.c:1.94 src/bin/mksh/exec.c:1.95
---- src/bin/mksh/exec.c:1.94	Thu Jul  7 21:24:52 2011
-+++ src/bin/mksh/exec.c	Sat Aug 27 18:06:43 2011
-@@ -22,7 +22,7 @@
- 
- #include "sh.h"
- 
--__RCSID("$MirOS: src/bin/mksh/exec.c,v 1.94 2011/07/07 21:24:52 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/exec.c,v 1.95 2011/08/27 18:06:43 tg Exp $");
- 
- #ifndef MKSH_DEFAULT_EXECSHELL
- #define MKSH_DEFAULT_EXECSHELL	"/bin/sh"
-@@ -51,7 +51,7 @@
- 	int i;
- 	volatile int rv = 0, dummy = 0;
- 	int pv[2];
--	const char ** volatile ap;
-+	const char ** volatile ap = NULL;
- 	char ** volatile up;
- 	const char *s, *ccp;
- 	struct ioword **iowp;
-@@ -1215,7 +1215,7 @@
- 	const char *sp, *p;
- 	char *xp;
- 	XString xs;
--	int namelen;
-+	size_t namelen;
- 
- 	if (errnop)
- 		*errnop = 0;
-@@ -1550,11 +1550,11 @@
- 	int num_width;
- };
- 
--static char *select_fmt_entry(char *, int, int, const void *);
-+static char *select_fmt_entry(char *, size_t, int, const void *);
- 
- /* format a single select menu item */
- static char *
--select_fmt_entry(char *buf, int buflen, int i, const void *arg)
-+select_fmt_entry(char *buf, size_t buflen, int i, const void *arg)
- {
- 	const struct select_menu_info *smi =
- 	    (const struct select_menu_info *)arg;
-@@ -1572,7 +1572,8 @@
- {
- 	struct select_menu_info smi;
- 	const char * const *pp;
--	int acols = 0, aocts = 0, i, n;
-+	size_t acols = 0, aocts = 0, i;
-+	int n;
- 
- 	/*
- 	 * width/column calculations were done once and saved, but this
-@@ -1609,10 +1610,10 @@
- }
- 
- /* XXX: horrible kludge to fit within the framework */
--static char *plain_fmt_entry(char *, int, int, const void *);
-+static char *plain_fmt_entry(char *, size_t, int, const void *);
- 
- static char *
--plain_fmt_entry(char *buf, int buflen, int i, const void *arg)
-+plain_fmt_entry(char *buf, size_t buflen, int i, const void *arg)
- {
- 	strlcpy(buf, ((const char * const *)arg)[i], buflen);
- 	return (buf);
-@@ -1621,7 +1622,8 @@
- int
- pr_list(char * const *ap)
- {
--	int acols = 0, aocts = 0, i, n;
-+	size_t acols = 0, aocts = 0, i;
-+	int n;
- 	char * const *pp;
- 
- 	for (n = 0, pp = ap; *pp; n++, pp++) {
-Index: src/bin/mksh/expr.c
-diff -u src/bin/mksh/expr.c:1.47 src/bin/mksh/expr.c:1.48
---- src/bin/mksh/expr.c:1.47	Sat Dec 11 16:05:03 2010
-+++ src/bin/mksh/expr.c	Sat Aug 27 18:06:44 2011
-@@ -1,7 +1,7 @@
- /*	$OpenBSD: expr.c,v 1.21 2009/06/01 19:00:57 deraadt Exp $	*/
+diff -u src/bin/mksh/exec.c:1.97 src/bin/mksh/exec.c:1.99
+--- src/bin/mksh/exec.c:1.97	Sat Mar 31 17:29:58 2012
++++ src/bin/mksh/exec.c	Sun Jun 24 20:05:23 2012
+@@ -1,7 +1,8 @@
+ /*	$OpenBSD: exec.c,v 1.49 2009/01/29 23:27:26 jaredy Exp $	*/
  
  /*-
-- * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010
-+ * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011
+- * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011
++ * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
++ *		 2011, 2012
   *	Thorsten Glaser <tg@mirbsd.org>
   *
   * Provided that these terms and disclaimer and all copyright notices
-@@ -22,7 +22,7 @@
+@@ -22,7 +23,7 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/expr.c,v 1.47 2010/12/11 16:05:03 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/expr.c,v 1.48 2011/08/27 18:06:44 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/exec.c,v 1.97 2012/03/31 17:29:58 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/exec.c,v 1.99 2012/06/24 20:05:23 tg Exp $");
+ 
+ #ifndef MKSH_DEFAULT_EXECSHELL
+ #define MKSH_DEFAULT_EXECSHELL	"/bin/sh"
+@@ -1263,7 +1264,8 @@
+ 	int u = -1;
+ 	char *cp = iop->name;
+ 	int iotype = iop->flag & IOTYPE;
+-	int do_open = 1, do_close = 0, flags = 0;
++	bool do_open = true, do_close = false;
++	int flags = 0;
+ 	struct ioword iotmp;
+ 	struct stat statb;
+ 
+@@ -1305,7 +1307,7 @@
+ 		break;
+ 
+ 	case IOHERE:
+-		do_open = 0;
++		do_open = false;
+ 		/* herein() returns -2 if error has been printed */
+ 		u = herein(iop->heredoc, iop->flag & IOEVAL, NULL);
+ 		/* cp may have wrong name */
+@@ -1314,11 +1316,11 @@
+ 	case IODUP: {
+ 		const char *emsg;
+ 
+-		do_open = 0;
++		do_open = false;
+ 		if (*cp == '-' && !cp[1]) {
+ 			/* prevent error return below */
+ 			u = 1009;
+-			do_close = 1;
++			do_close = true;
+ 		} else if ((u = check_fd(cp,
+ 		    X_OK | ((iop->flag & IORDUP) ? R_OK : W_OK),
+ 		    &emsg)) < 0) {
+@@ -1330,7 +1332,7 @@
+ 			/* "dup from" == "dup to" */
+ 			return (0);
+ 		break;
+-	}
++	    }
+ 	}
+ 
+ 	if (do_open) {
+@@ -1467,10 +1469,10 @@
+ 	 * so temp doesn't get removed too soon).
+ 	 */
+ 	h = maketemp(ATEMP, TT_HEREDOC_EXP, &e->temps);
+-	if (!(shf = h->shf) || (fd = open(h->name, O_RDONLY, 0)) < 0) {
++	if (!(shf = h->shf) || (fd = open(h->tffn, O_RDONLY, 0)) < 0) {
+ 		i = errno;
+ 		warningf(true, "can't %s temporary file %s: %s",
+-		    !shf ? "create" : "open", h->name, strerror(i));
++		    !shf ? "create" : "open", h->tffn, strerror(i));
+ 		if (shf)
+ 			shf_close(shf);
+ 		/* special to iosetup(): don't print error */
+@@ -1486,7 +1488,8 @@
+ 	if (shf_close(shf) == EOF) {
+ 		i = errno;
+ 		close(fd);
+-		warningf(true, "%s: %s: %s", "write", h->name, strerror(i));
++		warningf(true, "can't %s temporary file %s: %s",
++		    "write", h->tffn, strerror(i));
+ 		/* special to iosetup(): don't print error */
+ 		return (-2);
+ 	}
+Index: src/bin/mksh/expr.c
+diff -u src/bin/mksh/expr.c:1.51.2.2 src/bin/mksh/expr.c:1.58
+--- src/bin/mksh/expr.c:1.51.2.2	Fri Apr  6 14:40:17 2012
++++ src/bin/mksh/expr.c	Thu Jun 28 20:17:36 2012
+@@ -23,7 +23,21 @@
+ 
+ #include "sh.h"
+ 
+-__RCSID("$MirOS: src/bin/mksh/expr.c,v 1.51.2.2 2012/04/06 14:40:17 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/expr.c,v 1.58 2012/06/28 20:17:36 tg Exp $");
++
++#if !HAVE_SILENT_IDIVWRAPV
++#if !defined(MKSH_LEGACY_MODE) || HAVE_LONG_32BIT
++#define IDIVWRAPV_VL	(mksh_uari_t)0x80000000UL
++#define IDIVWRAPV_VR	(mksh_uari_t)0xFFFFFFFFUL
++#elif HAVE_LONG_64BIT
++#define IDIVWRAPV_VL	(mksh_uari_t)0x8000000000000000UL
++#define IDIVWRAPV_VR	(mksh_uari_t)0xFFFFFFFFFFFFFFFFUL
++#else
++# warning "cannot guarantee integer division wraparound"
++#undef HAVE_SILENT_IDIVWRAPV
++#define HAVE_SILENT_IDIVWRAPV 1
++#endif
++#endif
  
  /* The order of these enums is constrained by the order of opinfo[] */
  enum token {
-@@ -141,12 +141,6 @@
- 	(mksh_ari_t)((x)->val.u op (y)->val.u) :	\
- 	(mksh_ari_t)((x)->val.i op (y)->val.i)		\
- )
--#define chvui(x, op)	do {			\
--	if (es->natural)			\
--		(x)->val.u = op (x)->val.u;	\
--	else					\
--		(x)->val.i = op (x)->val.i;	\
--} while (/* CONSTCOND */ 0)
- #define stvui(x, n)	do {			\
- 	if (es->natural)			\
- 		(x)->val.u = (n);		\
-@@ -315,11 +309,11 @@
- 			exprtoken(es);
- 			vl = intvar(es, evalexpr(es, P_PRIMARY));
- 			if (op == O_BNOT)
--				chvui(vl, ~);
-+				vl->val.i = ~vl->val.i;
- 			else if (op == O_LNOT)
--				chvui(vl, !);
-+				vl->val.i = !vl->val.i;
- 			else if (op == O_MINUS)
--				chvui(vl, -);
-+				vl->val.i = -vl->val.i;
- 			/* op == O_PLUS is a no-op */
- 		} else if (op == OPEN_PAREN) {
- 			exprtoken(es);
-@@ -505,7 +499,7 @@
- 		for (; ksh_isalnux(c); c = *cp)
- 			cp++;
- 		if (c == '[') {
--			int len;
-+			size_t len;
+@@ -160,7 +174,6 @@
+ static void exprtoken(Expr_state *);
+ static struct tbl *do_ppmm(Expr_state *, enum token, struct tbl *, bool);
+ static void assign_check(Expr_state *, enum token, struct tbl *);
+-static struct tbl *tempvar(void);
+ static struct tbl *intvar(Expr_state *, struct tbl *);
  
- 			len = array_ref_len(cp);
- 			if (len == 0)
-@@ -682,12 +676,12 @@
- 	return (width);
+ /*
+@@ -284,7 +297,7 @@
+ 
+ 	case ET_RDONLY:
+ 		warningf(true, "%s: %s %s",
+-		    es->expression, str, "applied to read only variable");
++		    es->expression, str, "applied to read-only variable");
+ 		break;
+ 
+ 	default: /* keep gcc happy */
+@@ -375,11 +388,11 @@
+ 			 * several compilers bitch around otherwise
+ 			 */
+ 			if (!es->natural &&
+-			    vl->val.u == (mksh_uari_t)0x80000000UL &&
+-			    vr->val.u == (mksh_uari_t)0xFFFFFFFFUL) {
++			    vl->val.u == IDIVWRAPV_VL &&
++			    vr->val.u == IDIVWRAPV_VR) {
+ 				/* -2147483648 / -1 = 2147483648 */
+ 				/* this ^ is really (1 << 31) though */
+-				res = (mksh_ari_t)(mksh_uari_t)0x80000000UL;
++				res = (mksh_ari_t)IDIVWRAPV_VL;
+ 			} else
+ #endif
+ 				res = bivui(vl, /, vr);
+@@ -389,8 +402,8 @@
+ #if !HAVE_SILENT_IDIVWRAPV
+ 			/* see O_DIV / O_DIVASN for the reason behind this */
+ 			if (!es->natural &&
+-			    vl->val.u == (mksh_uari_t)0x80000000UL &&
+-			    vr->val.u == (mksh_uari_t)0xFFFFFFFFUL) {
++			    vl->val.u == IDIVWRAPV_VL &&
++			    vr->val.u == IDIVWRAPV_VR) {
+ 				/* -2147483648 % -1 = 0 */
+ 				res = 0;
+ 			} else
+@@ -641,7 +654,7 @@
+ 		evalerr(es, ET_RDONLY, opinfo[(int)op].name);
  }
  
--int
-+size_t
- utf_mbswidth(const char *s)
+-static struct tbl *
++struct tbl *
+ tempvar(void)
  {
--	size_t len;
-+	size_t len, width = 0;
- 	unsigned int wc;
--	int width = 0, cw;
-+	int cw;
- 
- 	if (!UTFMODE)
- 		return (strlen(s));
+ 	struct tbl *vp;
 Index: src/bin/mksh/funcs.c
-diff -u src/bin/mksh/funcs.c:1.193 src/bin/mksh/funcs.c:1.196
---- src/bin/mksh/funcs.c:1.193	Tue Jul  5 20:12:18 2011
-+++ src/bin/mksh/funcs.c	Sat Aug 27 18:06:44 2011
+diff -u src/bin/mksh/funcs.c:1.204.2.2 src/bin/mksh/funcs.c:1.222
+--- src/bin/mksh/funcs.c:1.204.2.2	Fri Apr  6 14:40:18 2012
++++ src/bin/mksh/funcs.c	Mon Jun 25 16:34:58 2012
 @@ -38,7 +38,7 @@
  #endif
  #endif
  
--__RCSID("$MirOS: src/bin/mksh/funcs.c,v 1.193 2011/07/05 20:12:18 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/funcs.c,v 1.196 2011/08/27 18:06:44 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/funcs.c,v 1.204.2.2 2012/04/06 14:40:18 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/funcs.c,v 1.222 2012/06/25 16:34:58 tg Exp $");
  
  #if HAVE_KILLPG
  /*
-@@ -53,17 +53,29 @@
- 
- /* XXX conditions correct? */
- #if !defined(RLIM_INFINITY) && !defined(MKSH_NO_LIMITS)
--#define MKSH_NO_LIMITS
-+#define MKSH_NO_LIMITS	1
+@@ -60,6 +60,17 @@
+ #define c_ulimit	c_true
  #endif
  
- #ifdef MKSH_NO_LIMITS
--#define c_ulimit c_label
-+#define c_ulimit	c_true
- #endif
- 
- #if defined(ANDROID)
- static int c_android_lsmod(const char **);
- #endif
- 
++/* getn() that prints error */
 +static int
-+c_true(const char **wp MKSH_A_UNUSED)
++bi_getn(const char *as, int *ai)
 +{
-+	return (0);
++	int rv;
++
++	if (!(rv = getn(as, ai)))
++		bi_errorf("%s: %s", as, "bad number");
++	return (rv);
 +}
 +
-+static int
-+c_false(const char **wp MKSH_A_UNUSED)
-+{
-+	return (1);
-+}
-+
- /*
-  * A leading = means assignments before command are kept;
-  * a leading * means a POSIX special builtin;
-@@ -72,7 +84,7 @@
-  */
- const struct builtin mkshbuiltins[] = {
- 	{"*=.", c_dot},
--	{"*=:", c_label},
-+	{"*=:", c_true},
- 	{"[", c_test},
- 	{"*=break", c_brkcont},
- 	{T_gbuiltin, c_builtin},
-@@ -80,7 +92,7 @@
- 	{"*=eval", c_eval},
- 	{"*=exec", c_exec},
- 	{"*=exit", c_exitreturn},
--	{"+false", c_label},
-+	{"+false", c_false},
- 	{"*=return", c_exitreturn},
- 	{T_sgset, c_set},
- 	{"*=shift", c_shift},
-@@ -89,7 +101,7 @@
- 	{"+=wait", c_wait},
- 	{"+read", c_read},
- 	{"test", c_test},
--	{"+true", c_label},
-+	{"+true", c_true},
+ static int
+ c_true(const char **wp MKSH_A_UNUSED)
+ {
+@@ -100,7 +111,7 @@
+ 	{"+true", c_true},
  	{"ulimit", c_ulimit},
  	{"+umask", c_umask},
- 	{"*=unset", c_unset},
-@@ -132,7 +144,7 @@
+-	{"*=unset", c_unset},
++	{Tsgunset, c_unset},
+ 	/* no =: AT&T manual wrong */
+ 	{Tpalias, c_alias},
+ 	{"+cd", c_cd},
+@@ -108,7 +119,7 @@
+ 	{"chdir", c_cd},
+ 	{"+command", c_command},
+ 	{"echo", c_print},
+-	{"*=export", c_typeset},
++	{Tsgexport, c_typeset},
+ 	{"+fc", c_fc},
+ 	{"+getopts", c_getopts},
+ 	{"=global", c_typeset},
+@@ -120,7 +131,7 @@
+ 	{"printf", c_printf},
  #endif
- #ifdef __MirBSD__
- 	/* alias to "true" for historical reasons */
--	{"domainname", c_label},
-+	{"domainname", c_true},
+ 	{"pwd", c_pwd},
+-	{"*=readonly", c_typeset},
++	{Tsgreadonly, c_typeset},
+ 	{T_typeset, c_typeset},
+ 	{Tpunalias, c_unalias},
+ 	{"whence", c_whence},
+@@ -128,7 +139,9 @@
+ 	{"+bg", c_fgbg},
+ 	{"+fg", c_fgbg},
  #endif
- #if defined(ANDROID)
- 	{"lsmod", c_android_lsmod},
-@@ -201,7 +213,7 @@
- static Test_op ptest_isa(Test_env *, Test_meta);
- static const char *ptest_getopnd(Test_env *, Test_op, bool);
- static void ptest_error(Test_env *, int, const char *);
--static char *kill_fmt_entry(char *, int, int, const void *);
-+static char *kill_fmt_entry(char *, size_t, int, const void *);
- static void p_time(struct shf *, bool, long, int, int,
-     const char *, const char *)
-     MKSH_A_NONNULL((__nonnull__ (6, 7)));
-@@ -389,8 +401,7 @@
- 					/* generic function returned Unicode */
- 					char ts[4];
- 
--					c = utf_wctomb(ts, c - 0x100);
--					ts[c] = 0;
-+					ts[utf_wctomb(ts, c - 0x100)] = 0;
- 					for (c = 0; ts[c]; ++c)
- 						Xput(xs, xp, ts[c]);
- 					continue;
-@@ -1246,7 +1257,7 @@
- 
- /* format a single kill item */
- static char *
--kill_fmt_entry(char *buf, int buflen, int i, const void *arg)
-+kill_fmt_entry(char *buf, size_t buflen, int i, const void *arg)
- {
- 	const struct kill_info *ki = (const struct kill_info *)arg;
- 
-@@ -1317,7 +1328,8 @@
- 					shprintf("%d\n", n);
- 			}
- 		} else {
--			int w, j, mess_cols, mess_octs;
-+			ssize_t w, mess_cols, mess_octs;
-+			int j;
- 			struct kill_info ki;
- 
- 			for (j = NSIG, ki.num_width = 1; j >= 10; j /= 10)
-@@ -1522,17 +1534,6 @@
- 	return (rv);
++#ifndef MKSH_NO_CMDLINE_EDITING
+ 	{"bind", c_bind},
++#endif
+ 	{"cat", c_cat},
+ #if HAVE_MKNOD
+ 	{"mknod", c_mknod},
+@@ -540,7 +553,7 @@
+ 				    Talias);
+ 			if (!iam_whence && !vflag)
+ 				shprintf("%s %s=", Talias, id);
+-			print_value_quoted(tp->val.s);
++			print_value_quoted(shl_stdout, tp->val.s);
+ 			break;
+ 		case CFUNC:
+ 			if (vflag) {
+@@ -603,13 +616,16 @@
  }
  
--/**
-- * :, false and true
-- * ulimit if MKSH_NO_LIMITS
-- * domainname on MirBSD (hysterical raisins, just don't ask)
-- */
--int
--c_label(const char **wp)
--{
--	return (wp[0][0] == 'f' ? 1 : 0);
--}
+ /* typeset, global, export, and readonly */
++static void c_typeset_vardump(struct tbl *, uint32_t, int, bool, bool);
++static void c_typeset_vardump_recursive(struct block *, uint32_t, int, bool,
++    bool);
+ int
+ c_typeset(const char **wp)
+ {
+-	struct block *l;
+ 	struct tbl *vp, **p;
+ 	uint32_t fset = 0, fclr = 0, flag;
+-	int thing = 0, field = 0, base = 0, optc;
++	int thing = 0, field = 0, base = 0, i;
++	struct block *l;
+ 	const char *opts;
+ 	const char *fieldstr = NULL, *basestr = NULL;
+ 	bool localv = false, func = false, pflag = false, istset = true;
+@@ -652,9 +668,9 @@
+ 	 * Here, the number must follow the RLZi option, but is optional
+ 	 * (see the # kludge in ksh_getopt()).
+ 	 */
+-	while ((optc = ksh_getopt(wp, &builtin_opt, opts)) != -1) {
++	while ((i = ksh_getopt(wp, &builtin_opt, opts)) != -1) {
+ 		flag = 0;
+-		switch (optc) {
++		switch (i) {
+ 		case 'L':
+ 			flag = LJUST;
+ 			fieldstr = builtin_opt.optarg;
+@@ -780,8 +796,10 @@
+ 	}
+ 
+ 	/* set variables and attributes */
+-	if (wp[builtin_opt.optind]) {
+-		int i, rv = 0;
++	if (wp[builtin_opt.optind] &&
++	    /* not "typeset -p varname" */
++	    !(!func && pflag && !(fset | fclr))) {
++		int rv = 0;
+ 		struct tbl *f;
+ 
+ 		if (localv && !func)
+@@ -813,6 +831,7 @@
+ 		return (rv);
+ 	}
+ 
++	set_refflag = SRF_NOP;
+ 	/* list variables and attributes */
+ 
+ 	/* no difference at this point.. */
+@@ -831,137 +850,133 @@
+ 				shf_putc('\n', shl_stdout);
+ 			}
+ 		}
+-	} else {
+-		for (l = e->loc; l; l = l->next) {
+-			for (p = ktsort(&l->vars); (vp = *p++); ) {
+-				struct tbl *tvp;
+-				bool any_set = false;
+-				/*
+-				 * See if the parameter is set (for arrays, if any
+-				 * element is set).
+-				 */
+-				for (tvp = vp; tvp; tvp = tvp->u.array)
+-					if (tvp->flag & ISSET) {
+-						any_set = true;
+-						break;
+-					}
++	} else if (wp[builtin_opt.optind]) {
++		for (i = builtin_opt.optind; wp[i]; i++) {
++			varsearch(e->loc, &vp, wp[i], hash(wp[i]));
++			if (!vp)
++				continue;
++			c_typeset_vardump(vp, flag, thing, pflag, istset);
++		}
++	} else
++		c_typeset_vardump_recursive(e->loc, flag, thing, pflag, istset);
++	return (0);
++}
+ 
+-				/*
+-				 * Check attributes - note that all array elements
+-				 * have (should have?) the same attributes, so checking
+-				 * the first is sufficient.
+-				 *
+-				 * Report an unset param only if the user has
+-				 * explicitly given it some attribute (like export);
+-				 * otherwise, after "echo $FOO", we would report FOO...
+-				 */
+-				if (!any_set && !(vp->flag & USERATTRIB))
+-					continue;
+-				if (flag && (vp->flag & flag) == 0)
+-					continue;
+-				for (; vp; vp = vp->u.array) {
+-					/*
+-					 * Ignore array elements that aren't
+-					 * set unless there are no set elements,
+-					 * in which case the first is reported on
+-					 */
+-					if ((vp->flag&ARRAY) && any_set &&
+-					    !(vp->flag & ISSET))
+-						continue;
+-					/* no arguments */
+-					if (thing == 0 && flag == 0) {
+-						/*
+-						 * AT&T ksh prints things
+-						 * like export, integer,
+-						 * leftadj, zerofill, etc.,
+-						 * but POSIX says must
+-						 * be suitable for re-entry...
+-						 */
+-						shf_puts("typeset ", shl_stdout);
+-						if (((vp->flag&(ARRAY|ASSOC))==ASSOC))
+-							shprintf("%s ", "-n");
+-						if ((vp->flag&INTEGER))
+-							shprintf("%s ", "-i");
+-						if ((vp->flag&EXPORT))
+-							shprintf("%s ", "-x");
+-						if ((vp->flag&RDONLY))
+-							shprintf("%s ", "-r");
+-						if ((vp->flag&TRACE))
+-							shprintf("%s ", "-t");
+-						if ((vp->flag&LJUST))
+-							shprintf("-L%d ", vp->u2.field);
+-						if ((vp->flag&RJUST))
+-							shprintf("-R%d ", vp->u2.field);
+-						if ((vp->flag&ZEROFIL))
+-							shprintf("%s ", "-Z");
+-						if ((vp->flag&LCASEV))
+-							shprintf("%s ", "-l");
+-						if ((vp->flag&UCASEV_AL))
+-							shprintf("%s ", "-u");
+-						if ((vp->flag&INT_U))
+-							shprintf("%s ", "-U");
+-						shf_puts(vp->name, shl_stdout);
+-						if (pflag) {
+-							char *s = str_val(vp);
 -
+-							shf_putc('=', shl_stdout);
+-							/*
+-							 * AT&T ksh can't have
+-							 * justified integers...
+-							 */
+-							if ((vp->flag &
+-							    (INTEGER|LJUST|RJUST)) ==
+-							    INTEGER)
+-								shf_puts(s, shl_stdout);
+-							else
+-								print_value_quoted(s);
+-						}
+-						shf_putc('\n', shl_stdout);
+-						if (vp->flag & ARRAY)
+-							break;
+-					} else {
+-						if (pflag)
+-							shf_puts(istset ?
+-							    "typeset " :
+-							    (flag & EXPORT) ?
+-							    "export " :
+-							    "readonly ",
+-							    shl_stdout);
+-						if ((vp->flag&ARRAY) && any_set)
+-							shprintf("%s[%lu]",
+-							    vp->name,
+-							    arrayindex(vp));
+-						else
+-							shf_puts(vp->name, shl_stdout);
+-						if (thing == '-' && (vp->flag&ISSET)) {
+-							char *s = str_val(vp);
+-
+-							shf_putc('=', shl_stdout);
+-							/*
+-							 * AT&T ksh can't have
+-							 * justified integers...
+-							 */
+-							if ((vp->flag &
+-							    (INTEGER|LJUST|RJUST)) ==
+-							    INTEGER)
+-								shf_puts(s, shl_stdout);
+-							else
+-								print_value_quoted(s);
+-						}
+-						shf_putc('\n', shl_stdout);
+-					}
+-					/*
+-					 * Only report first 'element' of an array with
+-					 * no set elements.
+-					 */
+-					if (!any_set)
+-						break;
+-				}
++static void
++c_typeset_vardump_recursive(struct block *l, uint32_t flag, int thing,
++    bool pflag, bool istset)
++{
++	struct tbl **blockvars, *vp;
++
++	if (l->next)
++		c_typeset_vardump_recursive(l->next, flag, thing, pflag, istset);
++	blockvars = ktsort(&l->vars);
++	while ((vp = *blockvars++))
++		c_typeset_vardump(vp, flag, thing, pflag, istset);
++	/*XXX doesn’t this leak? */
++}
++
++static void
++c_typeset_vardump(struct tbl *vp, uint32_t flag, int thing, bool pflag,
++    bool istset)
++{
++	struct tbl *tvp;
++	int any_set = 0;
++	char *s;
++
++	/*
++	 * See if the parameter is set (for arrays, if any
++	 * element is set).
++	 */
++	for (tvp = vp; tvp; tvp = tvp->u.array)
++		if (tvp->flag & ISSET) {
++			any_set = 1;
++			break;
++		}
++
++	/*
++	 * Check attributes - note that all array elements
++	 * have (should have?) the same attributes, so checking
++	 * the first is sufficient.
++	 *
++	 * Report an unset param only if the user has
++	 * explicitly given it some attribute (like export);
++	 * otherwise, after "echo $FOO", we would report FOO...
++	 */
++	if (!any_set && !(vp->flag & USERATTRIB))
++		return;
++	if (flag && (vp->flag & flag) == 0)
++		return;
++	if (!(vp->flag & ARRAY))
++		/* optimise later conditionals */
++		any_set = 0;
++	do {
++		/*
++		 * Ignore array elements that aren't set unless there
++		 * are no set elements, in which case the first is
++		 * reported on
++		 */
++		if (any_set && !(vp->flag & ISSET))
++			continue;
++		/* no arguments */
++		if (!thing && !flag) {
++			if (any_set == 1) {
++				shprintf("%s %s %s\n", Tset, "-A", vp->name);
++				any_set = 2;
+ 			}
++			/*
++			 * AT&T ksh prints things like export, integer,
++			 * leftadj, zerofill, etc., but POSIX says must
++			 * be suitable for re-entry...
++			 */
++			shprintf("%s %s", Ttypeset, "");
++			if (((vp->flag & (ARRAY | ASSOC)) == ASSOC))
++				shprintf("%s ", "-n");
++			if ((vp->flag & INTEGER))
++				shprintf("%s ", "-i");
++			if ((vp->flag & EXPORT))
++				shprintf("%s ", "-x");
++			if ((vp->flag & RDONLY))
++				shprintf("%s ", "-r");
++			if ((vp->flag & TRACE))
++				shprintf("%s ", "-t");
++			if ((vp->flag & LJUST))
++				shprintf("-L%d ", vp->u2.field);
++			if ((vp->flag & RJUST))
++				shprintf("-R%d ", vp->u2.field);
++			if ((vp->flag & ZEROFIL))
++				shprintf("%s ", "-Z");
++			if ((vp->flag & LCASEV))
++				shprintf("%s ", "-l");
++			if ((vp->flag & UCASEV_AL))
++				shprintf("%s ", "-u");
++			if ((vp->flag & INT_U))
++				shprintf("%s ", "-U");
++		} else if (pflag) {
++			shprintf("%s %s", istset ? Ttypeset :
++			    (flag & EXPORT) ? Texport : Treadonly, "");
+ 		}
+-	}
+-	set_refflag = SRF_NOP;
+-	return (0);
++		if (any_set)
++			shprintf("%s[%lu]", vp->name, arrayindex(vp));
++		else
++			shf_puts(vp->name, shl_stdout);
++		if ((!thing && !flag && pflag) ||
++		    (thing == '-' && (vp->flag & ISSET))) {
++			s = str_val(vp);
++			shf_putc('=', shl_stdout);
++			/* AT&T ksh can't have justified integers... */
++			if ((vp->flag & (INTEGER | LJUST | RJUST)) == INTEGER)
++				shf_puts(s, shl_stdout);
++			else
++				print_value_quoted(shl_stdout, s);
++		}
++		shf_putc('\n', shl_stdout);
++
++		/*
++		 * Only report first 'element' of an array with
++		 * no set elements.
++		 */
++	} while (any_set && (vp = vp->u.array));
+ }
+ 
+ int
+@@ -1046,7 +1061,7 @@
+ 				shf_puts(ap->name, shl_stdout);
+ 				if (prefix != '+') {
+ 					shf_putc('=', shl_stdout);
+-					print_value_quoted(ap->val.s);
++					print_value_quoted(shl_stdout, ap->val.s);
+ 				}
+ 				shf_putc('\n', shl_stdout);
+ 			}
+@@ -1071,7 +1086,7 @@
+ 				shf_puts(ap->name, shl_stdout);
+ 				if (prefix != '+') {
+ 					shf_putc('=', shl_stdout);
+-					print_value_quoted(ap->val.s);
++					print_value_quoted(shl_stdout, ap->val.s);
+ 				}
+ 				shf_putc('\n', shl_stdout);
+ 			} else {
+@@ -1275,7 +1290,7 @@
+ 	/* assume old style options if -digits or -UPPERCASE */
+ 	if ((p = wp[1]) && *p == '-' && (ksh_isdigit(p[1]) ||
+ 	    ksh_isupper(p[1]))) {
+-		if (!(t = gettrap(p + 1, true))) {
++		if (!(t = gettrap(p + 1, false))) {
+ 			bi_errorf("bad signal '%s'", p + 1);
+ 			return (1);
+ 		}
+@@ -1470,6 +1485,7 @@
+ 	return (optc < 0 ? 1 : rv);
+ }
+ 
++#ifndef MKSH_NO_CMDLINE_EDITING
+ int
+ c_bind(const char **wp)
+ {
+@@ -1528,6 +1544,7 @@
+ 
+ 	return (rv);
+ }
++#endif
+ 
  int
  c_shift(const char **wp)
- {
+@@ -1768,7 +1785,7 @@
+ 	const char *ccp;
+ 	XString xs;
+ 	ptrdiff_t xsave = 0;
+-	struct termios tios;
++	mksh_ttyst tios;
+ 	bool restore_tios = false;
+ #if HAVE_SELECT
+ 	bool hastimeout = false;
+@@ -1869,7 +1886,7 @@
+ 
+ #if HAVE_SELECT
+ 	if (hastimeout) {
+-		gettimeofday(&tvlim, NULL);
++		mksh_TIME(tvlim);
+ 		timeradd(&tvlim, &tv, &tvlim);
+ 	}
+ #endif
+@@ -1881,7 +1898,7 @@
+ 
+ 		FD_ZERO(&fdset);
+ 		FD_SET(fd, &fdset);
+-		gettimeofday(&tv, NULL);
++		mksh_TIME(tv);
+ 		timersub(&tvlim, &tv, &tv);
+ 		if (tv.tv_sec < 0) {
+ 			/* timeout expired globally */
+@@ -2014,7 +2031,7 @@
+ 		vp = global(*wp);
+ 		if (vp->flag & RDONLY) {
+  c_read_splitro:
+-			bi_errorf("%s: %s", *wp, "is read only");
++			bi_errorf("read-only: %s", *wp);
+  c_read_spliterr:
+ 			rv = 2;
+ 			afree(cp, ATEMP);
+@@ -2145,7 +2162,7 @@
+ 	afree(allocd, ATEMP);
+ 	Xfree(xs, xp);
+ 	if (restore_tios)
+-		tcsetattr(fd, TCSADRAIN, &tios);
++		mksh_tcset(fd, &tios);
+ 	return (rv);
+ #undef is_ifsws
+ }
+@@ -2218,7 +2235,7 @@
+ 		for (p = sigtraps, i = NSIG+1; --i >= 0; p++)
+ 			if (p->trap != NULL) {
+ 				shf_puts("trap -- ", shl_stdout);
+-				print_value_quoted(p->trap);
++				print_value_quoted(shl_stdout, p->trap);
+ 				shprintf(" %s\n", p->name);
+ 			}
+ 		return (0);
+@@ -2280,7 +2297,7 @@
+ 	}
+ 
+ 	if (how == LEXIT && !really_exit && j_stopped_running()) {
+-		really_exit = 1;
++		really_exit = true;
+ 		how = LSHELL;
+ 	}
+ 
+@@ -2390,7 +2407,11 @@
+ 	 * if there are no command substitutions).
+ 	 * Switched ksh (!posix !sh) to POSIX in mksh R39b.
+ 	 */
++#ifdef MKSH_LEGACY_MODE
++	return (subst_exstat);
++#else
+ 	return (Flag(FSH) ? subst_exstat : 0);
++#endif
+ }
+ 
+ int
+@@ -2433,8 +2454,7 @@
+ 			afree(cp, ATEMP);
+ 
+ 			if ((vp->flag&RDONLY)) {
+-				warningf(true, "%s: %s", vp->name,
+-				    "is read only");
++				warningf(true, "read-only: %s", vp->name);
+ 				rv = 1;
+ 			} else
+ 				unset(vp, optc);
+@@ -2490,7 +2510,7 @@
+ 	struct rusage ru0, ru1, cru0, cru1;
+ 	struct timeval usrtime, systime, tv0, tv1;
+ 
+-	gettimeofday(&tv0, NULL);
++	mksh_TIME(tv0);
+ 	getrusage(RUSAGE_SELF, &ru0);
+ 	getrusage(RUSAGE_CHILDREN, &cru0);
+ 	if (t->left) {
+@@ -2507,7 +2527,7 @@
+ 		rv = execute(t->left, f | XTIME, xerrok);
+ 		if (t->left->type == TCOM)
+ 			tf |= t->left->str[0];
+-		gettimeofday(&tv1, NULL);
++		mksh_TIME(tv1);
+ 		getrusage(RUSAGE_SELF, &ru1);
+ 		getrusage(RUSAGE_CHILDREN, &cru1);
+ 	} else
+@@ -2596,6 +2616,7 @@
+ 		for (i = 0; i < NUFILE; i++) {
+ 			if (e->savefd[i] > 0)
+ 				close(e->savefd[i]);
++#ifndef MKSH_LEGACY_MODE
+ 			/*
+ 			 * keep all file descriptors > 2 private for ksh,
+ 			 * but not for POSIX or legacy/kludge sh
+@@ -2603,6 +2624,7 @@
+ 			if (!Flag(FPOSIX) && !Flag(FSH) && i > 2 &&
+ 			    e->savefd[i])
+ 				fcntl(i, F_SETFD, FD_CLOEXEC);
++#endif
+ 		}
+ 		e->savefd = NULL;
+ 	}
+@@ -2929,7 +2951,11 @@
+ 
+ 	/* -h or -L */
+ 	case TO_FILSYM:
++#ifdef MKSH__NO_SYMLINK
++		return (0);
++#else
+ 		return (lstat(opnd1, &b1) == 0 && S_ISLNK(b1.st_mode));
++#endif
+ 
+ 	/* -S */
+ 	case TO_FILSOCK:
+@@ -3572,11 +3598,6 @@
+ 	char *buf, *cp;
+ #define MKSH_CAT_BUFSIZ 4096
+ 
+-	if ((buf = malloc_osfunc(MKSH_CAT_BUFSIZ)) == NULL) {
+-		bi_errorf(Toomem, (unsigned long)MKSH_CAT_BUFSIZ);
+-		return (1);
+-	}
+-
+ 	/* parse options: POSIX demands we support "-u" as no-op */
+ 	while ((rv = ksh_getopt(wp, &builtin_opt, "u")) != -1) {
+ 		switch (rv) {
+@@ -3591,6 +3612,11 @@
+ 	wp += builtin_opt.optind;
+ 	rv = 0;
+ 
++	if ((buf = malloc_osfunc(MKSH_CAT_BUFSIZ)) == NULL) {
++		bi_errorf(Toomem, (unsigned long)MKSH_CAT_BUFSIZ);
++		return (1);
++	}
++
+ 	do {
+ 		if (*wp) {
+ 			fn = *wp++;
 Index: src/bin/mksh/histrap.c
-diff -u src/bin/mksh/histrap.c:1.109 src/bin/mksh/histrap.c:1.110
---- src/bin/mksh/histrap.c:1.109	Fri Apr 22 12:21:53 2011
-+++ src/bin/mksh/histrap.c	Sat Aug 27 18:06:45 2011
-@@ -26,7 +26,7 @@
+diff -u src/bin/mksh/histrap.c:1.122 src/bin/mksh/histrap.c:1.126
+--- src/bin/mksh/histrap.c:1.122	Fri Apr  6 13:29:00 2012
++++ src/bin/mksh/histrap.c	Sun Jun 24 19:47:11 2012
+@@ -27,7 +27,7 @@
  #include <sys/file.h>
  #endif
  
--__RCSID("$MirOS: src/bin/mksh/histrap.c,v 1.109 2011/04/22 12:21:53 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/histrap.c,v 1.110 2011/08/27 18:06:45 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/histrap.c,v 1.122 2012/04/06 13:29:00 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/histrap.c,v 1.126 2012/06/24 19:47:11 tg Exp $");
  
- /*-
-  * MirOS: This is the default mapping type, and need not be specified.
-@@ -63,7 +63,7 @@
- /* current history file: name, fd, size */
- static char *hname;
- static int histfd;
--static int hsize;
-+static size_t hsize;
- #endif
- 
- static const char T_not_in_history[] = "not in history";
-@@ -365,9 +365,9 @@
- 		strdupx(line, *hp, ATEMP);
- 	else {
- 		char *s, *s1;
--		int pat_len = strlen(pat);
--		int rep_len = strlen(rep);
--		int len;
-+		size_t pat_len = strlen(pat);
-+		size_t rep_len = strlen(rep);
-+		size_t len;
- 		XString xs;
- 		char *xp;
- 		bool any_subst = false;
-@@ -509,10 +509,10 @@
- int
- findhist(int start, int fwd, const char *str, int anchored)
- {
--	char	**hp;
--	int	maxhist = histptr - history;
--	int	incr = fwd ? 1 : -1;
--	int	len = strlen(str);
-+	char **hp;
-+	int maxhist = histptr - history;
-+	int incr = fwd ? 1 : -1;
-+	size_t len = strlen(str);
- 
- 	if (start < 0 || start >= maxhist)
- 		start = maxhist;
-@@ -700,6 +700,7 @@
- #if HAVE_PERSISTENT_HISTORY
- 	unsigned char *base;
- 	int lines, fd, rv = 0;
-+	off_t hfsize;
- #endif
- 
- 	if (Flag(FTALKING) == 0)
-@@ -725,7 +726,10 @@
- 
- 	(void)flock(histfd, LOCK_EX);
- 
--	hsize = lseek(histfd, (off_t)0, SEEK_END);
-+	hfsize = lseek(histfd, (off_t)0, SEEK_END);
-+	hsize = 1024 * 1048576;
-+	if (hfsize < (off_t)hsize)
-+		hsize = (size_t)hfsize;
- 
- 	if (hsize == 0) {
- 		/* add magic */
-@@ -774,7 +778,10 @@
- 		munmap((caddr_t)base, hsize);
+ Trap sigtraps[NSIG + 1];
+ static struct sigaction Sigact_ign;
+@@ -297,7 +297,7 @@
+ 	tf = maketemp(ATEMP, TT_HIST_EDIT, &e->temps);
+ 	if (!(shf = tf->shf)) {
+ 		bi_errorf("can't %s temporary file %s: %s",
+-		    "create", tf->name, strerror(errno));
++		    "create", tf->tffn, strerror(errno));
+ 		return (1);
  	}
- 	(void)flock(histfd, LOCK_UN);
--	hsize = lseek(histfd, (off_t)0, SEEK_END);
-+	hfsize = lseek(histfd, (off_t)0, SEEK_END);
-+	hsize = 1024 * 1048576;
-+	if (hfsize < (off_t)hsize)
-+		hsize = hfsize;
- #endif
+ 	for (hp = rflag ? hlast : hfirst;
+@@ -305,12 +305,12 @@
+ 		shf_fprintf(shf, "%s\n", *hp);
+ 	if (shf_close(shf) == EOF) {
+ 		bi_errorf("can't %s temporary file %s: %s",
+-		    "write", tf->name, strerror(errno));
++		    "write", tf->tffn, strerror(errno));
+ 		return (1);
+ 	}
+ 
+ 	/* Ignore setstr errors here (arbitrary) */
+-	setstr(local("_", false), tf->name, KSH_RETURN_ERROR);
++	setstr(local("_", false), tf->tffn, KSH_RETURN_ERROR);
+ 
+ 	/* XXX: source should not get trashed by this.. */
+ 	{
+@@ -329,13 +329,13 @@
+ 		char *xp;
+ 		ssize_t n;
+ 
+-		if (!(shf = shf_open(tf->name, O_RDONLY, 0, 0))) {
++		if (!(shf = shf_open(tf->tffn, O_RDONLY, 0, 0))) {
+ 			bi_errorf("can't %s temporary file %s: %s",
+-			    "open", tf->name, strerror(errno));
++			    "open", tf->tffn, strerror(errno));
+ 			return (1);
+ 		}
+ 
+-		if (stat(tf->name, &statb) < 0)
++		if (stat(tf->tffn, &statb) < 0)
+ 			n = 128;
+ 		else if ((off_t)statb.st_size > MKSH_MAXHISTFSIZE) {
+ 			bi_errorf("%s %s too large: %lu", Thistory,
+@@ -351,7 +351,7 @@
+ 		}
+ 		if (n < 0) {
+ 			bi_errorf("can't %s temporary file %s: %s",
+-			    "read", tf->name, strerror(shf_errno(shf)));
++			    "read", tf->tffn, strerror(shf_errno(shf)));
+  errout:
+ 			shf_close(shf);
+ 			return (1);
+@@ -475,7 +475,7 @@
+ 	return (history);
  }
  
-@@ -970,36 +977,34 @@
- static void
- writehistfile(int lno, char *cmd)
- {
--	int	sizenow;
--	unsigned char	*base;
--	unsigned char	*news;
--	int	bytes;
--	unsigned char	hdr[5];
-+	off_t sizenow;
-+	ssize_t bytes;
-+	unsigned char *base, *news, hdr[5];
+-#if !MKSH_S_NOVI
++#if !defined(MKSH_NO_CMDLINE_EDITING) && !MKSH_S_NOVI
+ /* current position in history[] */
+ static char **current;
  
- 	(void)flock(histfd, LOCK_EX);
- 	sizenow = lseek(histfd, (off_t)0, SEEK_END);
--	if (sizenow != hsize) {
-+	if ((sizenow <= (1024 * 1048576)) && ((size_t)sizenow != hsize)) {
- 		/*
- 		 *	Things have changed
- 		 */
--		if (sizenow > hsize) {
-+		if ((size_t)sizenow > hsize) {
- 			/* someone has added some lines */
--			bytes = sizenow - hsize;
--			base = (void *)mmap(NULL, sizenow, PROT_READ,
-+			bytes = (size_t)sizenow - hsize;
-+			base = (void *)mmap(NULL, (size_t)sizenow, PROT_READ,
- 			    MAP_FILE | MAP_PRIVATE, histfd, (off_t)0);
- 			if (base == (unsigned char *)MAP_FAILED)
- 				goto bad;
- 			news = base + hsize;
- 			if (*news != COMMAND) {
--				munmap((caddr_t)base, sizenow);
-+				munmap((caddr_t)base, (size_t)sizenow);
- 				goto bad;
- 			}
- 			hist_source->line--;
- 			histload(hist_source, news, bytes);
- 			hist_source->line++;
- 			lno = hist_source->line;
--			munmap((caddr_t)base, sizenow);
--			hsize = sizenow;
-+			munmap((caddr_t)base, (size_t)sizenow);
-+			hsize = (size_t)sizenow;
- 		} else {
- 			/* it has shrunk */
- 			/* but to what? */
-@@ -1020,7 +1025,10 @@
- 		if ((write(histfd, hdr, 5) != 5) ||
- 		    (write(histfd, cmd, bytes) != bytes))
- 			goto bad;
--		hsize = lseek(histfd, (off_t)0, SEEK_END);
-+		sizenow = lseek(histfd, (off_t)0, SEEK_END);
-+		hsize = 1024 * 1048576;
-+		if (sizenow < (off_t)hsize)
-+			hsize = (size_t)sizenow;
- 	}
- 	(void)flock(histfd, LOCK_UN);
- 	return;
+@@ -941,8 +941,10 @@
+ void
+ hist_finish(void)
+ {
+-	mksh_unlkfd(histfd);
+-	(void)close(histfd);
++	if (histfd >= 0) {
++		mksh_unlkfd(histfd);
++		(void)close(histfd);
++	}
+ 	histfd = -1;
+ }
+ #endif
+@@ -1373,6 +1375,8 @@
+ 	if (p->signal == ksh_SIGEXIT || p->signal == ksh_SIGERR)
+ 		return (1);
+ 
++	memset(&sigact, 0, sizeof(sigact));
++
+ 	/*
+ 	 * First time setting this signal? If so, get and note the current
+ 	 * setting.
 Index: src/bin/mksh/jobs.c
-diff -u src/bin/mksh/jobs.c:1.78.2.2 src/bin/mksh/jobs.c:1.81
---- src/bin/mksh/jobs.c:1.78.2.2	Sat Jul 16 23:37:59 2011
-+++ src/bin/mksh/jobs.c	Sat Aug 27 18:06:46 2011
+diff -u src/bin/mksh/jobs.c:1.84 src/bin/mksh/jobs.c:1.88
+--- src/bin/mksh/jobs.c:1.84	Mon Feb  6 17:49:52 2012
++++ src/bin/mksh/jobs.c	Fri May  4 22:34:50 2012
 @@ -22,7 +22,7 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/jobs.c,v 1.78.2.2 2011/07/16 23:37:59 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/jobs.c,v 1.81 2011/08/27 18:06:46 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/jobs.c,v 1.84 2012/02/06 17:49:52 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/jobs.c,v 1.88 2012/05/04 22:34:50 tg Exp $");
  
  #if HAVE_KILLPG
  #define mksh_killpg		killpg
-@@ -1059,7 +1059,7 @@
-     int flags,
+@@ -89,7 +89,7 @@
+ 	int32_t	age;		/* number of jobs started */
+ 	Coproc_id coproc_id;	/* 0 or id of coprocess output pipe */
+ #ifndef MKSH_UNEMPLOYED
+-	struct termios ttystat;	/* saved tty state for stopped jobs */
++	mksh_ttyst ttystat;	/* saved tty state for stopped jobs */
+ 	pid_t saved_ttypgrp;	/* saved tty process group for stopped jobs */
+ #endif
+ };
+@@ -329,11 +329,13 @@
+ 				kshpgrp = kshpid;
+ 			}
+ 		}
++#ifndef MKSH_DISABLE_TTY_WARNING
+ 		if (use_tty && !ttypgrp_ok)
+ 			warningf(false, "%s: %s", "warning",
+ 			    "won't have full job control");
++#endif
+ 		if (tty_fd >= 0)
+-			tcgetattr(tty_fd, &tty_state);
++			mksh_tcget(tty_fd, &tty_state);
+ 	} else {
+ 		ttypgrp_ok = false;
+ 		if (Flag(FTALKING))
+@@ -803,14 +805,14 @@
+ 		/* attach tty to job */
+ 		if (j->state == PRUNNING) {
+ 			if (ttypgrp_ok && (j->flags & JF_SAVEDTTY))
+-				tcsetattr(tty_fd, TCSADRAIN, &j->ttystat);
++				mksh_tcset(tty_fd, &j->ttystat);
+ 			/* See comment in j_waitj regarding saved_ttypgrp. */
+ 			if (ttypgrp_ok &&
+ 			    tcsetpgrp(tty_fd, (j->flags & JF_SAVEDTTYPGRP) ?
+ 			    j->saved_ttypgrp : j->pgrp) < 0) {
+ 				rv = errno;
+ 				if (j->flags & JF_SAVEDTTY)
+-					tcsetattr(tty_fd, TCSADRAIN, &tty_state);
++					mksh_tcset(tty_fd, &tty_state);
+ 				sigprocmask(SIG_SETMASK, &omask, NULL);
+ 				bi_errorf("%s %s(%d, %ld) %s: %s",
+ 				    "1st", "tcsetpgrp", tty_fd,
+@@ -832,7 +834,7 @@
+ 		if (!bg) {
+ 			j->flags &= ~JF_FG;
+ 			if (ttypgrp_ok && (j->flags & JF_SAVEDTTY))
+-				tcsetattr(tty_fd, TCSADRAIN, &tty_state);
++				mksh_tcset(tty_fd, &tty_state);
+ 			if (ttypgrp_ok && tcsetpgrp(tty_fd, kshpgrp) < 0)
+ 				warningf(true, "%s %s(%d, %ld) %s: %s",
+ 				    "fg: 2nd", "tcsetpgrp", tty_fd,
+@@ -1062,6 +1064,9 @@
      const char *where)
  {
--	int	rv;
-+	int rv;
+ 	int rv;
++#ifdef MKSH_NO_SIGSUSPEND
++	sigset_t omask;
++#endif
  
  	/*
  	 * No auto-notify on the job we are waiting on.
-@@ -1177,7 +1177,7 @@
- 	rv = j->status;
- 
- 	if ((flags & JW_PIPEST) && (j->proc_list != NULL)) {
--		size_t num = 0;
-+		uint32_t num = 0;
- 		Proc *p = j->proc_list;
- 		struct tbl *vp;
- 
-@@ -1542,9 +1542,10 @@
- static Job *
- j_lookup(const char *cp, int *ecodep)
- {
--	Job		*j, *last_match;
--	Proc		*p;
--	int		len, job = 0;
-+	Job *j, *last_match;
-+	Proc *p;
-+	size_t len;
-+	int job = 0;
- 
- 	if (ksh_isdigit(*cp)) {
- 		getn(cp, &job);
-Index: src/bin/mksh/lalloc.c
-diff -u src/bin/mksh/lalloc.c:1.17 src/bin/mksh/lalloc.c:1.18
---- src/bin/mksh/lalloc.c:1.17	Sun Mar 13 10:50:44 2011
-+++ src/bin/mksh/lalloc.c	Sat Aug 27 18:06:47 2011
-@@ -20,7 +20,7 @@
- 
- #include "sh.h"
- 
--__RCSID("$MirOS: src/bin/mksh/lalloc.c,v 1.17 2011/03/13 10:50:44 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/lalloc.c,v 1.18 2011/08/27 18:06:47 tg Exp $");
- 
- /* build with CPPFLAGS+= -DUSE_REALLOC_MALLOC=0 on ancient systems */
- #if defined(USE_REALLOC_MALLOC) && (USE_REALLOC_MALLOC == 0)
-@@ -62,13 +62,12 @@
-  fail:
- #endif
- #ifdef DEBUG
--			internal_warningf("rogue pointer %lX in ap %lX",
--			    (long)(ptrdiff_t)ptr, (long)(ptrdiff_t)ap);
-+			internal_warningf("rogue pointer %zX in ap %zX",
-+			    (size_t)ptr, (size_t)ap);
- 			/* try to get a coredump */
- 			abort();
+@@ -1078,7 +1083,14 @@
+ 	while (j->state == PRUNNING ||
+ 	    ((flags & JW_STOPPEDWAIT) && j->state == PSTOPPED)) {
+ #ifndef MKSH_NOPROSPECTOFWORK
++#ifdef MKSH_NO_SIGSUSPEND
++		sigprocmask(SIG_SETMASK, &sm_default, &omask);
++		pause();
++		/* note that handlers may run here so they need to know */
++		sigprocmask(SIG_SETMASK, &omask, NULL);
++#else
+ 		sigsuspend(&sm_default);
++#endif
  #else
--			internal_errorf("rogue pointer %lX",
--			    (long)(ptrdiff_t)ptr);
-+			internal_errorf("rogue pointer %zX", (size_t)ptr);
+ 		j_sigchld(SIGCHLD);
  #endif
+@@ -1120,7 +1132,7 @@
+ 				    (long)kshpgrp, "failed", strerror(errno));
+ 			if (j->state == PSTOPPED) {
+ 				j->flags |= JF_SAVEDTTY;
+-				tcgetattr(tty_fd, &j->ttystat);
++				mksh_tcget(tty_fd, &j->ttystat);
+ 			}
  		}
- 	return (ap);
-@@ -78,8 +77,7 @@
- aresize2(void *ptr, size_t fac1, size_t fac2, Area *ap)
- {
- 	if (notoktomul(fac1, fac2))
--		internal_errorf(T_intovfl, (unsigned long)fac1, '*',
--		    (unsigned long)fac2);
-+		internal_errorf(T_intovfl, fac1, '*', fac2);
- 	return (aresize(ptr, fac1 * fac2, ap));
+ #endif
+@@ -1136,9 +1148,9 @@
+ 			 */
+ 			if (j->state == PEXITED && j->status == 0 &&
+ 			    (j->flags & JF_USETTYMODE)) {
+-				tcgetattr(tty_fd, &tty_state);
++				mksh_tcget(tty_fd, &tty_state);
+ 			} else {
+-				tcsetattr(tty_fd, TCSADRAIN, &tty_state);
++				mksh_tcset(tty_fd, &tty_state);
+ 				/*-
+ 				 * Don't use tty mode if job is stopped and
+ 				 * later restarted and exits. Consider
+@@ -1244,6 +1256,12 @@
+ 	pid_t pid;
+ 	int status;
+ 	struct rusage ru0, ru1;
++#ifdef MKSH_NO_SIGSUSPEND
++	sigset_t omask;
++
++	/* this handler can run while SIGCHLD is not blocked, so block it now */
++	sigprocmask(SIG_BLOCK, &sm_sigchld, &omask);
++#endif
+ 
+ #ifndef MKSH_NOPROSPECTOFWORK
+ 	/*
+@@ -1255,7 +1273,7 @@
+ 	for (j = job_list; j; j = j->next)
+ 		if (j->ppid == procpid && !(j->flags & JF_STARTED)) {
+ 			held_sigchld = 1;
+-			return;
++			goto j_sigchld_out;
+ 		}
+ #endif
+ 
+@@ -1272,7 +1290,7 @@
+ 		 * or interrupted (-1)
+ 		 */
+ 		if (pid <= 0)
+-			return;
++			goto j_sigchld_out;
+ 
+ 		getrusage(RUSAGE_CHILDREN, &ru1);
+ 
+@@ -1315,6 +1333,12 @@
+ #else
+ 	    while (/* CONSTCOND */ 0);
+ #endif
++
++ j_sigchld_out:
++#ifdef MKSH_NO_SIGSUSPEND
++	sigprocmask(SIG_SETMASK, &omask, NULL);
++#endif
++	/* nothing */;
  }
  
+ /*
 Index: src/bin/mksh/lex.c
-diff -u src/bin/mksh/lex.c:1.153 src/bin/mksh/lex.c:1.155
---- src/bin/mksh/lex.c:1.153	Sat Jun  4 16:11:18 2011
-+++ src/bin/mksh/lex.c	Sat Aug 27 18:06:47 2011
-@@ -22,7 +22,7 @@
+diff -u src/bin/mksh/lex.c:1.160 src/bin/mksh/lex.c:1.165
+--- src/bin/mksh/lex.c:1.160	Sat Mar 31 17:29:59 2012
++++ src/bin/mksh/lex.c	Sun Jul  1 15:54:55 2012
+@@ -1,7 +1,8 @@
+ /*	$OpenBSD: lex.c,v 1.45 2011/03/09 09:30:39 okan Exp $	*/
+ 
+ /*-
+- * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011
++ * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
++ *		 2011, 2012
+  *	Thorsten Glaser <tg@mirbsd.org>
+  *
+  * Provided that these terms and disclaimer and all copyright notices
+@@ -22,7 +23,7 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/lex.c,v 1.153 2011/06/04 16:11:18 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/lex.c,v 1.155 2011/08/27 18:06:47 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/lex.c,v 1.160 2012/03/31 17:29:59 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/lex.c,v 1.165 2012/07/01 15:54:55 tg Exp $");
  
  /*
   * states while lexing word
-@@ -40,9 +40,10 @@
- #define SHEREDELIM	10	/* parsing <<,<<- delimiter */
- #define SHEREDQUOTE	11	/* parsing " in <<,<<- delimiter */
- #define SPATTERN	12	/* parsing *(...|...) pattern (*+?@!) */
--#define STBRACE		13	/* parsing ${...[#%]...} */
--#define SADELIM		14	/* like SBASE, looking for delimiter */
--#define SHERESTRING	15	/* parsing <<< string */
-+#define SADELIM		13	/* like SBASE, looking for delimiter */
-+#define SHERESTRING	14	/* parsing <<< string */
-+#define STBRACEKORN	15	/* parsing ${...[#%]...} !FSH */
-+#define STBRACEBOURNE	16	/* parsing ${...[#%]...} FSH */
- #define SINVALID	255	/* invalid state */
+@@ -130,7 +131,7 @@
+ 	return (cev);					\
+ }
  
- struct sretrace_info {
-@@ -196,6 +197,7 @@
- 	Lex_state states[STATE_BSIZE], *statep, *s2, *base;
- 	State_info state_info;
- 	int c, c2, state;
-+	size_t cz;
- 	XString ws;		/* expandable output word */
- 	char *wp;		/* output word pointer */
- 	char *sp, *dp;
-@@ -393,11 +395,11 @@
- 						ungetsc(c);
-  subst_command:
- 						sp = yyrecursive();
--						c2 = strlen(sp) + 1;
--						XcheckN(ws, wp, c2);
-+						cz = strlen(sp) + 1;
-+						XcheckN(ws, wp, cz);
- 						*wp++ = COMSUB;
--						memcpy(wp, sp, c2);
--						wp += c2;
-+						memcpy(wp, sp, cz);
-+						wp += cz;
- 					}
- 				} else if (c == '{') /*}*/ {
- 					*wp++ = OSUBST;
-@@ -456,9 +458,12 @@
- 					 * If this is a trim operation,
- 					 * treat (,|,) specially in STBRACE.
- 					 */
--					if (!Flag(FSH) && ctype(c, C_SUBOP2)) {
-+					if (ctype(c, C_SUBOP2)) {
- 						ungetsc(c);
--						PUSH_STATE(STBRACE);
-+						if (Flag(FSH))
-+							PUSH_STATE(STBRACEBOURNE);
-+						else
-+							PUSH_STATE(STBRACEKORN);
- 					} else {
- 						ungetsc(c);
- 						if (state == SDQUOTE)
-@@ -576,11 +581,11 @@
- 						*wp++ = QCHAR;
- 						*wp++ = c2;
- 					} else {
--						c = utf_wctomb(ts, c2 - 0x100);
--						ts[c] = 0;
--						for (c = 0; ts[c]; ++c) {
-+						cz = utf_wctomb(ts, c2 - 0x100);
-+						ts[cz] = 0;
-+						for (cz = 0; ts[cz]; ++cz) {
- 							*wp++ = QCHAR;
--							*wp++ = ts[c];
-+							*wp++ = ts[cz];
- 						}
- 					}
- 				}
-@@ -621,10 +626,10 @@
- 					POP_STATE();
+-#ifdef MKSH_SMALL
++#if defined(MKSH_SMALL) && !defined(MKSH_SMALL_BUT_FAST)
+ static int getsc(void);
  
- 					if ((c2 = getsc()) == /*(*/ ')') {
--						c = strlen(sp) - 2;
--						XcheckN(ws, wp, c);
--						memcpy(wp, sp + 1, c);
--						wp += c;
-+						cz = strlen(sp) - 2;
-+						XcheckN(ws, wp, cz);
-+						memcpy(wp, sp + 1, cz);
-+						wp += cz;
- 						afree(sp, ATEMP);
- 						*wp++ = '\0';
- 						break;
-@@ -687,19 +692,21 @@
- 			*wp++ = /*{*/ '}';
+ static int
+@@ -1282,6 +1283,7 @@
  			break;
  
--		case STBRACE:
--			/* Same as SBASE, except (,|,) treated specially */
--			if (c == /*{*/ '}') {
--				POP_STATE();
--				*wp++ = CSUBST;
--				*wp++ = /*{*/ '}';
--			} else if (c == '|') {
-+		/* Same as SBASE, except (,|,) treated specially */
-+		case STBRACEKORN:
-+			if (c == '|')
- 				*wp++ = SPAT;
--			} else if (c == '(') {
-+			else if (c == '(') {
- 				*wp++ = OPAT;
- 				/* simile for @ */
- 				*wp++ = ' ';
- 				PUSH_STATE(SPATTERN);
-+			} else /* FALLTHROUGH */
-+		case STBRACEBOURNE:
-+			  if (c == /*{*/ '}') {
-+				POP_STATE();
-+				*wp++ = CSUBST;
-+				*wp++ = /*{*/ '}';
- 			} else
- 				goto Sbase1;
+ 		case SSTRING:
++		case SSTRINGCMDLINE:
  			break;
-@@ -1132,9 +1139,9 @@
- 	if (iop->flag & IOHERESTR) {
- 		/* process the here string */
- 		iop->heredoc = xp = evalstr(iop->delim, DOBLANK);
--		c = strlen(xp) - 1;
--		memmove(xp, xp + 1, c);
--		xp[c] = '\n';
-+		xpos = strlen(xp) - 1;
-+		memmove(xp, xp + 1, xpos);
-+		xp[xpos] = '\n';
- 		return;
+ 
+ 		case SWORDS:
+@@ -1382,6 +1384,7 @@
  	}
- 
+ 	if (interactive)
+ 		change_winsz();
++#ifndef MKSH_NO_CMDLINE_EDITING
+ 	if (have_tty && (
+ #if !MKSH_S_NOVI
+ 	    Flag(FVI) ||
+@@ -1395,7 +1398,9 @@
+ 			nread = 0;
+ 		xp[nread] = '\0';
+ 		xp += nread;
+-	} else {
++	} else
++#endif
++	  {
+ 		if (interactive)
+ 			pprompt(prompt, 0);
+ 		else
+@@ -1440,25 +1445,6 @@
+ 		alarm(0);
+ 	}
+ 	cp = Xstring(s->xs, xp);
+-#if !defined(MKSH_SMALL) && !defined(MKSH_DISABLE_DEPRECATED)
+-	if (interactive && *cp == '!' && cur_prompt == PS1) {
+-		int linelen;
+-
+-		linelen = Xlength(s->xs, xp);
+-		XcheckN(s->xs, xp, Zfc_e_dash + /* NUL */ 1);
+-		/* reload after potential realloc */
+-		cp = Xstring(s->xs, xp);
+-		/* change initial '!' into space */
+-		*cp = ' ';
+-		/* NUL terminate the current string */
+-		*xp = '\0';
+-		/* move the actual string forward */
+-		memmove(cp + Zfc_e_dash, cp, linelen + /* NUL */ 1);
+-		xp += Zfc_e_dash;
+-		/* prepend it with "fc -e -" */
+-		memcpy(cp, Tfc_e_dash, Zfc_e_dash);
+-	}
+-#endif
+ 	s->start = s->str = cp;
+ 	strip_nuls(Xstring(s->xs, xp), Xlength(s->xs, xp));
+ 	/* Note: if input is all nulls, this is not eof */
 Index: src/bin/mksh/main.c
-diff -u src/bin/mksh/main.c:1.195.2.2 src/bin/mksh/main.c:1.198
---- src/bin/mksh/main.c:1.195.2.2	Sat Jul 16 16:04:11 2011
-+++ src/bin/mksh/main.c	Sat Aug 27 18:06:48 2011
-@@ -23,7 +23,7 @@
-  * of said person's immediate fault when using the work as intended.
-  */
- 
--#define	EXTERN
-+#define EXTERN
- #include "sh.h"
- 
- #if HAVE_LANGINFO_CODESET
-@@ -33,7 +33,7 @@
+diff -u src/bin/mksh/main.c:1.195.2.8 src/bin/mksh/main.c:1.225
+--- src/bin/mksh/main.c:1.195.2.8	Fri Apr  6 14:40:20 2012
++++ src/bin/mksh/main.c	Sun Jul  1 15:38:06 2012
+@@ -34,7 +34,7 @@
  #include <locale.h>
  #endif
  
--__RCSID("$MirOS: src/bin/mksh/main.c,v 1.195.2.2 2011/07/16 16:04:11 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/main.c,v 1.198 2011/08/27 18:06:48 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/main.c,v 1.195.2.8 2012/04/06 14:40:20 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/main.c,v 1.225 2012/07/01 15:38:06 tg Exp $");
  
  extern char **environ;
  
-@@ -131,12 +131,12 @@
- 	/* introduce variation */
- 	gettimeofday(&bufptr->tv, &bufptr->tz);
+@@ -47,6 +47,7 @@
+ #endif
+ 
+ static uint8_t isuc(const char *);
++static int main_init(int, const char *[], Source **, struct block **);
+ void chvt_reinit(void);
+ static void reclaim(void);
+ static void remove_temps(struct temp *);
+@@ -134,14 +135,14 @@
+ 	sigsetjmp(bufptr->jbuf, 1);
+ #endif
+ 	/* introduce variation (and yes, second arg MBZ for portability) */
+-	gettimeofday(&bufptr->tv, NULL);
++	mksh_TIME(bufptr->tv);
  
 -	oaat1_init_impl(h);
 +	NZATInit(h);
@@ -1079,167 +2826,427 @@ diff -u src/bin/mksh/main.c:1.195.2.2 src/bin/mksh/main.c:1.198
  
  	afree(cp, APERM);
  	return ((mksh_uari_t)h);
-@@ -377,6 +377,44 @@
- 			return (1);
+@@ -183,8 +184,8 @@
+ 	return (rv);
+ }
+ 
+-int
+-main(int argc, const char *argv[])
++static int
++main_init(int argc, const char *argv[], Source **sp, struct block **lp)
+ {
+ 	int argi, i;
+ 	Source *s = NULL;
+@@ -237,8 +238,8 @@
+ 
+ 	/* define built-in commands and see if we were called as one */
+ 	ktinit(APERM, &builtins,
+-	    /* currently 50 builtins -> 80% of 64 (2^6) */
+-	    6);
++	    /* currently up to 50 builtins: 75% of 128 = 2^7 */
++	    7);
+ 	for (i = 0; mkshbuiltins[i].name != NULL; i++)
+ 		if (!strcmp(ccp, builtin(mkshbuiltins[i].name,
+ 		    mkshbuiltins[i].func)))
+@@ -326,6 +327,7 @@
+ 	 */
+ 	Flag(FBRACEEXPAND) = 1;
+ 
++#ifndef MKSH_NO_CMDLINE_EDITING
+ 	/*
+ 	 * Set edit mode to emacs by default, may be overridden
+ 	 * by the environment or the user. Also, we want tab completion
+@@ -335,6 +337,7 @@
+ #if !MKSH_S_NOVI
+ 	Flag(FVITABCOMPLETE) = 1;
+ #endif
++#endif
+ 
+ 	/* import environment */
+ 	if (environ != NULL)
+@@ -458,7 +461,7 @@
+ 		/* auto-detect from environment variables, always */
+ 		utf_flag = 3;
+ 	} else if (Flag(FCOMMAND)) {
+-		s = pushs(SSTRING, ATEMP);
++		s = pushs(SSTRINGCMDLINE, ATEMP);
+ 		if (!(s->start = s->str = argv[argi++]))
+ 			errorf("%s %s", "-c", "requires an argument");
+ #ifdef MKSH_MIDNIGHTBSD01ASH_COMPAT
+@@ -516,7 +519,9 @@
+ 			utf_flag = 0;
+ #endif
+ 		}
++#ifndef MKSH_NO_CMDLINE_EDITING
+ 		x_init();
++#endif
  	}
  
-+#ifdef DEBUG
-+	/* test wraparound of arithmetic types */
-+	{
-+		volatile long xl;
-+		volatile unsigned long xul;
-+		volatile int xi;
-+		volatile unsigned int xui;
-+		volatile mksh_ari_t xa;
-+		volatile mksh_uari_t xua, xua2;
-+		volatile uint8_t xc;
-+
-+		xa = 2147483647;
-+		xua = 2147483647;
-+		++xa;
-+		++xua;
-+		xua2 = xa;
-+		xl = xa;
-+		xul = xua;
-+		xa = 0;
-+		xua = 0;
-+		--xa;
-+		--xua;
-+		xi = xa;
-+		xui = xua;
-+		xa = -1;
-+		xua = xa;
-+		++xa;
-+		++xua;
-+		xc = 0;
-+		--xc;
-+		if ((xua2 != 2147483648UL) ||
-+		    (xl != -2147483648L) || (xul != 2147483648UL) ||
-+		    (xi != -1) || (xui != 4294967295U) ||
-+		    (xa != 0) || (xua != 0) || (xc != 255))
-+			errorf("integer wraparound test failed");
-+	}
-+#endif
-+
- 	/* process this later only, default to off (hysterical raisins) */
- 	utf_flag = UTFMODE;
- 	UTFMODE = 0;
-@@ -561,6 +599,7 @@
+ #ifdef SIGWINCH
+@@ -618,7 +623,7 @@
+ 	}
+ 	Flag(FERREXIT) = errexit;
  
- 	/* doesn't return */
- 	shell(s, true);
-+	/* NOTREACHED */
+-	if (Flag(FTALKING))
++	if (Flag(FTALKING) && s)
+ 		hist_init(s);
+ 	else
+ 		/* set after ENV */
+@@ -626,15 +631,31 @@
+ 
+ 	alarm_init();
+ 
+-	if (Flag(FAS_BUILTIN))
+-		return (shcomexec(l->argv));
+-
+-	/* doesn't return */
+-	shell(s, true);
+-	/* NOTREACHED */
++	*sp = s;
++	*lp = l;
  	return (0);
  }
  
-@@ -1395,7 +1434,7 @@
- maketemp(Area *ap, Temp_type type, struct temp **tlist)
++/* this indirection barrier reduces stack usage during normal operation */
++
++int
++main(int argc, const char *argv[])
++{
++	int rv;
++	Source *s;
++	struct block *l;
++
++	if ((rv = main_init(argc, argv, &s, &l)) == 0) {
++		if (Flag(FAS_BUILTIN)) {
++			rv = shcomexec(l->argv);
++		} else {
++			shell(s, true);
++			/* NOTREACHED */
++		}
++	}
++	return (rv);
++}
++
+ int
+ include(const char *name, int argc, const char **argv, int intr_ok)
  {
- 	struct temp *tp;
--	int len;
-+	size_t len;
- 	int fd;
- 	char *pathname;
- 	const char *dir;
-@@ -1457,7 +1496,7 @@
- 		internal_errorf("hash table size limit reached");
- 
- 	/* calculate old size, new shift and new size */
--	osize = 1 << (tp->tshift++);
-+	osize = (size_t)1 << (tp->tshift++);
- 	i = osize << 1;
- 
- 	ntblp = alloc2(i, sizeof(struct tbl *), tp->areap);
-@@ -1511,7 +1550,7 @@
- 	size_t j, perturb, mask;
- 	struct tbl **pp, *p;
- 
--	mask = (1 << (tp->tshift)) - 1;
-+	mask = ((size_t)1 << (tp->tshift)) - 1;
- 	/* search for hash table slot matching name */
- 	j = (perturb = h) & mask;
- 	goto find_first_slot;
-@@ -1567,7 +1606,7 @@
- void
- ktwalk(struct tstate *ts, struct table *tp)
+@@ -718,19 +739,19 @@
+  * run the commands from the input source, returning status.
+  */
+ int
+-shell(Source * volatile s, volatile int toplevel)
++shell(Source * volatile s, volatile bool toplevel)
  {
--	ts->left = 1 << (tp->tshift);
-+	ts->left = (size_t)1 << (tp->tshift);
- 	ts->next = tp->tbls;
+ 	struct op *t;
+-	volatile int wastty = s->flags & SF_TTY;
+-	volatile int attempts = 13;
+-	volatile int interactive = Flag(FTALKING) && toplevel;
++	volatile bool wastty = tobool(s->flags & SF_TTY);
++	volatile uint8_t attempts = 13;
++	volatile bool interactive = Flag(FTALKING) && toplevel;
+ 	volatile bool sfirst = true;
+ 	Source *volatile old_source = source;
+ 	int i;
+ 
+ 	newenv(E_PARSE);
+ 	if (interactive)
+-		really_exit = 0;
++		really_exit = false;
+ 	switch ((i = kshsetjmp(e->jbuf))) {
+ 	case 0:
+ 		break;
+@@ -795,7 +816,7 @@
+ 				s->type = SSTDIN;
+ 			} else if (wastty && !really_exit &&
+ 			    j_stopped_running()) {
+-				really_exit = 1;
++				really_exit = true;
+ 				s->type = SSTDIN;
+ 			} else {
+ 				/*
+@@ -813,7 +834,7 @@
+ 			exstat = execute(t, 0, NULL);
+ 
+ 		if (t != NULL && t->type != TEOF && interactive && really_exit)
+-			really_exit = 0;
++			really_exit = false;
+ 
+ 		reclaim();
+ 	}
+@@ -998,7 +1019,7 @@
+ {
+ 	for (; tp != NULL; tp = tp->next)
+ 		if (tp->pid == procpid)
+-			unlink(tp->name);
++			unlink(tp->tffn);
  }
  
-@@ -1601,7 +1640,7 @@
- 	 * since the table is never entirely full, no need to reserve
- 	 * additional space for the trailing NULL appended below
- 	 */
--	i = 1 << (tp->tshift);
-+	i = (size_t)1 << (tp->tshift);
- 	p = alloc2(i, sizeof(struct tbl *), ATEMP);
- 	sp = tp->tbls;		/* source */
- 	dp = p;			/* dest */
+ /*
+@@ -1027,10 +1048,12 @@
+ #endif
+ 	  if ((tfd = open("/dev/tty", O_RDWR, 0)) < 0) {
+ 		tty_devtty = false;
++#ifndef MKSH_DISABLE_TTY_WARNING
+ 		if (need_tty)
+ 			warningf(false, "%s: %s %s: %s",
+ 			    "No controlling tty", "open", "/dev/tty",
+ 			    strerror(errno));
++#endif
+ 	}
+ 	if (tfd < 0) {
+ 		do_close = false;
+@@ -1039,8 +1062,10 @@
+ 		else if (isatty(2))
+ 			tfd = 2;
+ 		else {
++#ifndef MKSH_DISABLE_TTY_WARNING
+ 			if (need_tty)
+ 				warningf(false, "can't find tty fd");
++#endif
+ 			return;
+ 		}
+ 	}
+@@ -1055,7 +1080,7 @@
+ 		close(tty_fd);
+ 		tty_fd = -1;
+ 	} else if (init_ttystate)
+-		tcgetattr(tty_fd, &tty_state);
++		mksh_tcget(tty_fd, &tty_state);
+ 	if (do_close)
+ 		close(tfd);
+ }
+@@ -1482,42 +1507,61 @@
+ struct temp *
+ maketemp(Area *ap, Temp_type type, struct temp **tlist)
+ {
+-	struct temp *tp;
++	char *cp;
+ 	size_t len;
+-	int fd;
+-	char *pathname;
++	int i;
++	struct temp *tp;
+ 	const char *dir;
++	struct stat sb;
+ 
+ 	dir = tmpdir ? tmpdir : MKSH_DEFAULT_TMPDIR;
+-#if HAVE_MKSTEMP
+-	len = strlen(dir) + 6 + 10 + 1;
+-#else
+-	pathname = tempnam(dir, "mksh.");
+-	len = ((pathname == NULL) ? 0 : strlen(pathname)) + 1;
+-#endif
+-	/* reasonably sure that this will not overflow */
+-	tp = alloc(sizeof(struct temp) + len, ap);
+-	tp->name = (char *)&tp[1];
+-#if !HAVE_MKSTEMP
+-	if (pathname == NULL)
+-		tp->name[0] = '\0';
+-	else {
+-		memcpy(tp->name, pathname, len);
+-		free_ostempnam(pathname);
+-	}
+-#endif
+-	pathname = tp->name;
++	/* add "/shXXXXXX.tmp" plus NUL */
++	len = strlen(dir);
++	checkoktoadd(len, offsetof(struct temp, tffn[0]) + 14);
++	tp = alloc(offsetof(struct temp, tffn[0]) + 14 + len, ap);
++
+ 	tp->shf = NULL;
+-	tp->type = type;
+-#if HAVE_MKSTEMP
+-	shf_snprintf(pathname, len, "%s%s", dir, "/mksh.XXXXXXXXXX");
+-	if ((fd = mkstemp(pathname)) >= 0)
+-#else
+-	if (tp->name[0] && (fd = open(tp->name, O_CREAT | O_RDWR, 0600)) >= 0)
+-#endif
+-		tp->shf = shf_fdopen(fd, SHF_WR, NULL);
+ 	tp->pid = procpid;
++	tp->type = type;
++
++	if (stat(dir, &sb) || !S_ISDIR(sb.st_mode)) {
++		tp->tffn[0] = '\0';
++		goto maketemp_out;
++	}
++
++	cp = (void *)tp;
++	cp += offsetof(struct temp, tffn[0]);
++	memcpy(cp, dir, len);
++	cp += len;
++	memcpy(cp, "/shXXXXXX.tmp", 14);
++	/* point to the first of six Xes */
++	cp += 3;
++	/* generate random part of filename */
++	len = -1;
++	do {
++		i = rndget() % 36;
++		cp[++len] = i < 26 ? 'a' + i : '0' + i - 26;
++	} while (len < 5);
++
++	/* cyclically attempt to open a temporary file */
++	while ((i = open(tp->tffn, O_CREAT | O_EXCL | O_RDWR, 0600)) == -1) {
++		if (errno != EEXIST)
++			goto maketemp_out;
++		/* count down from z to a then from 9 to 0 */
++		while (cp[len] == '0')
++			if (!len--)
++				goto maketemp_out;
++		if (cp[len] == 'a')
++			cp[len] = '9';
++		else
++			--cp[len];
++		/* do another cycle */
++	}
++
++	/* shf_fdopen cannot fail, so no fd leak */
++	tp->shf = shf_fdopen(i, SHF_WR, NULL);
+ 
++ maketemp_out:
+ 	tp->next = *tlist;
+ 	*tlist = tp;
+ 	return (tp);
+@@ -1552,8 +1596,10 @@
+ 	/* multiplication cannot overflow: alloc2 checked that */
+ 	memset(ntblp, 0, i * sizeof(struct tbl *));
+ 
+-	/* table can get 80% full except when reaching its limit */
+-	tp->nfree = (tp->tshift == 30) ? 0x3FFF0000UL : ((i * 4) / 5);
++	/* table can get very full when reaching its size limit */
++	tp->nfree = (tp->tshift == 30) ? 0x3FFF0000UL :
++	    /* but otherwise, only 75% */
++	    ((i * 3) / 4);
+ 	tp->tbls = ntblp;
+ 	if (otblp == NULL)
+ 		return;
+@@ -1720,7 +1766,7 @@
+ 	struct timeval tv;
+ 
+ 	mksh_lockfd(shl_dbg_fd);
+-	gettimeofday(&tv, NULL);
++	mksh_TIME(tv);
+ 	shf_fprintf(shl_dbg, "[%d.%06d:%d] ", (int)tv.tv_sec, (int)tv.tv_usec,
+ 	    (int)getpid());
+ 	va_start(args, fmt);
+@@ -1731,3 +1777,34 @@
+ 	mksh_unlkfd(shl_dbg_fd);
+ }
+ #endif
++
++void
++x_mkraw(int fd, mksh_ttyst *ocb, bool forread)
++{
++	mksh_ttyst cb;
++
++	if (ocb)
++		mksh_tcget(fd, ocb);
++	else
++		ocb = &tty_state;
++
++	cb = *ocb;
++	if (forread) {
++		cb.c_lflag &= ~(ICANON) | ECHO;
++	} else {
++		cb.c_iflag &= ~(INLCR | ICRNL);
++		cb.c_lflag &= ~(ISIG | ICANON | ECHO);
++	}
++#if defined(VLNEXT) && defined(_POSIX_VDISABLE)
++	/* OSF/1 processes lnext when ~icanon */
++	cb.c_cc[VLNEXT] = _POSIX_VDISABLE;
++#endif
++	/* SunOS 4.1.x & OSF/1 processes discard(flush) when ~icanon */
++#if defined(VDISCARD) && defined(_POSIX_VDISABLE)
++	cb.c_cc[VDISCARD] = _POSIX_VDISABLE;
++#endif
++	cb.c_cc[VTIME] = 0;
++	cb.c_cc[VMIN] = 1;
++
++	mksh_tcset(fd, &cb);
++}
 Index: src/bin/mksh/misc.c
-diff -u src/bin/mksh/misc.c:1.167 src/bin/mksh/misc.c:1.171
---- src/bin/mksh/misc.c:1.167	Sun Jun 12 14:45:34 2011
-+++ src/bin/mksh/misc.c	Sat Aug 27 18:06:49 2011
-@@ -29,7 +29,7 @@
+diff -u src/bin/mksh/misc.c:1.167.2.5 src/bin/mksh/misc.c:1.195
+--- src/bin/mksh/misc.c:1.167.2.5	Fri Apr  6 14:40:22 2012
++++ src/bin/mksh/misc.c	Sun Jul  1 15:54:56 2012
+@@ -30,7 +30,20 @@
  #include <grp.h>
  #endif
  
--__RCSID("$MirOS: src/bin/mksh/misc.c,v 1.167 2011/06/12 14:45:34 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/misc.c,v 1.171 2011/08/27 18:06:49 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/misc.c,v 1.167.2.5 2012/04/06 14:40:22 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/misc.c,v 1.195 2012/07/01 15:54:56 tg Exp $");
++
++#define KSH_CHVT_FLAG
++#ifdef MKSH_SMALL
++#undef KSH_CHVT_FLAG
++#endif
++#ifdef TIOCSCTTY
++#define KSH_CHVT_CODE
++#define KSH_CHVT_FLAG
++#endif
++#ifdef MKSH_LEGACY_MODE
++#undef KSH_CHVT_CODE
++#undef KSH_CHVT_FLAG
++#endif
  
  /* type bits for unsigned char */
  unsigned char chtypes[UCHAR_MAX + 1];
-@@ -141,12 +141,12 @@
- 	int opts[NELEM(options)];
- };
+@@ -40,7 +53,7 @@
+ static int do_gmatch(const unsigned char *, const unsigned char *,
+     const unsigned char *, const unsigned char *);
+ static const unsigned char *cclass(const unsigned char *, int);
+-#ifdef TIOCSCTTY
++#ifdef KSH_CHVT_CODE
+ static void chvt(const char *);
+ #endif
  
--static char *options_fmt_entry(char *, int, int, const void *);
-+static char *options_fmt_entry(char *, size_t, int, const void *);
- static void printoptions(bool);
+@@ -226,6 +239,7 @@
+ 			j_change();
+ 	} else
+ #endif
++#ifndef MKSH_NO_CMDLINE_EDITING
+ 	  if ((
+ #if !MKSH_S_NOVI
+ 	    f == FVI ||
+@@ -236,7 +250,9 @@
+ #endif
+ 		    Flag(FEMACS) = Flag(FGMACS) = 0;
+ 		Flag(f) = (unsigned char)newval;
+-	} else if (f == FPRIVILEGED && oldval && !newval) {
++	} else
++#endif
++	  if (f == FPRIVILEGED && oldval && !newval) {
+ 		/* Turning off -p? */
  
- /* format a single select menu item */
- static char *
--options_fmt_entry(char *buf, int buflen, int i, const void *arg)
-+options_fmt_entry(char *buf, size_t buflen, int i, const void *arg)
- {
- 	const struct options_info *oi = (const struct options_info *)arg;
- 
-@@ -159,17 +159,17 @@
- static void
- printoptions(bool verbose)
- {
--	int i = 0;
-+	size_t i = 0;
- 
- 	if (verbose) {
--		int n = 0, len, octs = 0;
-+		ssize_t n = 0, len, octs = 0;
- 		struct options_info oi;
- 
- 		/* verbose version */
- 		shf_puts("Current option settings\n", shl_stdout);
- 
- 		oi.opt_width = 0;
--		while (i < (int)NELEM(options)) {
-+		while (i < NELEM(options)) {
- 			if (options[i].name) {
- 				oi.opts[n++] = i;
- 				len = strlen(options[i].name);
-@@ -199,7 +199,7 @@
- char *
- getoptions(void)
- {
--	unsigned int i;
-+	size_t i;
- 	char m[(int)FNFLAGS + 1];
- 	char *cp = m;
- 
-@@ -356,14 +356,6 @@
+ 		/*XXX this can probably be optimised */
+@@ -251,13 +267,11 @@
+ #else
+ 		/* seteuid, setegid, setgid don't EAGAIN on Linux */
+ 		ksheuid = kshuid = getuid();
+-#ifndef __BEOS__
+-		/* BeOS doesn't have different UIDs */
++#ifndef MKSH__NO_SETEUGID
+ 		seteuid(ksheuid);
+ #endif
+ 		DO_SETUID(setuid, (ksheuid));
+-#ifndef __BEOS__
+-		/* BeOS doesn't have different GIDs */
++#ifndef MKSH__NO_SETEUGID
+ 		setegid(kshegid);
+ #endif
+ 		setgid(kshegid);
+@@ -299,7 +313,7 @@
+ 		/* see cmd_opts[] declaration */
+ 		*p++ = 'o';
+ 		*p++ = ':';
+-#if !defined(MKSH_SMALL) || defined(TIOCSCTTY)
++#ifdef KSH_CHVT_FLAG
+ 		*p++ = 'T';
+ 		*p++ = ':';
+ #endif
+@@ -364,14 +378,6 @@
  				break;
  			}
  			i = option(go.optarg);
--#ifndef MKSH_NO_DEPRECATED_WARNING
+-#if !defined(MKSH_NO_DEPRECATED_WARNING) && !defined(MKSH_DISABLE_DEPRECATED)
 -			if ((enum sh_flag)i == FARC4RANDOM) {
 -				warningf(true, "Do not use set ±o arc4random,"
 -				    " it will be removed in the next version"
@@ -1250,45 +3257,257 @@ diff -u src/bin/mksh/misc.c:1.167 src/bin/mksh/misc.c:1.171
  			if ((i != (size_t)-1) && set == Flag(i))
  				/*
  				 * Don't check the context if the flag
-@@ -1081,10 +1073,10 @@
+@@ -388,11 +394,11 @@
+ 			}
+ 			break;
+ 
+-#if !defined(MKSH_SMALL) || defined(TIOCSCTTY)
++#ifdef KSH_CHVT_FLAG
+ 		case 'T':
+ 			if (what != OF_FIRSTTIME)
+ 				break;
+-#ifndef TIOCSCTTY
++#ifndef KSH_CHVT_CODE
+ 			errorf("no TIOCSCTTY ioctl");
+ #else
+ 			change_flag(FTALKING, OF_CMDLINE, 1);
+@@ -493,17 +499,6 @@
+ 	return (rv);
+ }
+ 
+-/* getn() that prints error */
+-int
+-bi_getn(const char *as, int *ai)
+-{
+-	int rv;
+-
+-	if (!(rv = getn(as, ai)))
+-		bi_errorf("%s: %s", as, "bad number");
+-	return (rv);
+-}
+-
+ /**
+  * pattern simplifications:
+  * - @(x) -> x (not @(x|y) though)
+@@ -1046,41 +1041,116 @@
+  * No trailing newline is printed.
   */
  void
- print_columns(struct shf *shf, int n,
--    char *(*func)(char *, int, int, const void *),
--    const void *arg, int max_oct, int max_col, bool prefcol)
-+    char *(*func)(char *, size_t, int, const void *),
-+    const void *arg, size_t max_oct, size_t max_col_, bool prefcol)
+-print_value_quoted(const char *s)
++print_value_quoted(struct shf *shf, const char *s)
  {
--	int i, r, c, rows, cols, nspace;
-+	int i, r, c, rows, cols, nspace, max_col;
- 	char *str;
+-	const char *p;
+-	bool inquote = false;
++	unsigned char c;
++	const unsigned char *p = (const unsigned char *)s;
++	bool inquote = true;
  
- 	if (n <= 0) {
-@@ -1094,6 +1086,14 @@
- 		return;
+ 	/* first, check whether any quotes are needed */
+-	for (p = s; *p; p++)
+-		if (ctype(*p, C_QUOTE))
+-			break;
+-	if (!*p) {
+-		/* nope, use the shortcut */
+-		shf_puts(s, shl_stdout);
+-		return;
+-	}
++	while ((c = *p++) >= 32)
++		if (ctype(c, C_QUOTE))
++			inquote = false;
++
++	p = (const unsigned char *)s;
++	if (c == 0) {
++		if (inquote) {
++			/* nope, use the shortcut */
++			shf_puts(s, shf);
++			return;
++		}
+ 
+-	/* quote via state machine */
+-	for (p = s; *p; p++) {
+-		if (*p == '\'') {
+-			/*
+-			 * multiple '''s or any ' at beginning of string
+-			 * look nicer this way than when simply substituting
+-			 */
+-			if (inquote) {
+-				shf_putc('\'', shl_stdout);
+-				inquote = false;
+-			}
+-			shf_putc('\\', shl_stdout);
+-		} else if (!inquote) {
+-			shf_putc('\'', shl_stdout);
+-			inquote = true;
++		/* otherwise, quote nicely via state machine */
++		while ((c = *p++) != 0) {
++			if (c == '\'') {
++				/*
++				 * multiple single quotes or any of them
++				 * at the beginning of a string look nicer
++				 * this way than when simply substituting
++				 */
++				if (inquote) {
++					shf_putc('\'', shf);
++					inquote = false;
++				}
++				shf_putc('\\', shf);
++			} else if (!inquote) {
++				shf_putc('\'', shf);
++				inquote = true;
++			}
++			shf_putc(c, shf);
++		}
++	} else {
++		unsigned int wc;
++		size_t n;
++
++		/* use $'...' quote format */
++		shf_putc('$', shf);
++		shf_putc('\'', shf);
++		while ((c = *p) != 0) {
++			if (c >= 0xC2) {
++				n = utf_mbtowc(&wc, (const char *)p);
++				if (n != (size_t)-1) {
++					p += n;
++					shf_fprintf(shf, "\\u%04X", wc);
++					continue;
++				}
++			}
++			++p;
++			switch (c) {
++			/* see unbksl() in this file for comments */
++			case 7:
++				c = 'a';
++				if (0)
++					/* FALLTHROUGH */
++			case '\b':
++				  c = 'b';
++				if (0)
++					/* FALLTHROUGH */
++			case '\f':
++				  c = 'f';
++				if (0)
++					/* FALLTHROUGH */
++			case '\n':
++				  c = 'n';
++				if (0)
++					/* FALLTHROUGH */
++			case '\r':
++				  c = 'r';
++				if (0)
++					/* FALLTHROUGH */
++			case '\t':
++				  c = 't';
++				if (0)
++					/* FALLTHROUGH */
++			case 11:
++				  c = 'v';
++				if (0)
++					/* FALLTHROUGH */
++			case '\033':
++				/* take E not e because \e is \ in *roff */
++				  c = 'E';
++				/* FALLTHROUGH */
++			case '\\':
++				shf_putc('\\', shf);
++
++				if (0)
++					/* FALLTHROUGH */
++			default:
++				  if (c < 32 || c > 0x7E) {
++					/* FALLTHROUGH */
++			case '\'':
++					shf_fprintf(shf, "\\x%02X", c);
++					break;
++				}
++
++				shf_putc(c, shf);
++				break;
++			}
+ 		}
+-		shf_putc(*p, shl_stdout);
++		inquote = true;
+ 	}
+ 	if (inquote)
+-		shf_putc('\'', shl_stdout);
++		shf_putc('\'', shf);
+ }
+ 
+ /*
+@@ -1231,7 +1301,7 @@
+ char *
+ ksh_get_wd(void)
+ {
+-#ifdef NO_PATH_MAX
++#ifdef MKSH__NO_PATH_MAX
+ 	char *rv, *cp;
+ 
+ 	if ((cp = get_current_dir_name())) {
+@@ -1264,7 +1334,7 @@
+ 	size_t len;
+ 	int llen;
+ 	struct stat sb;
+-#ifdef NO_PATH_MAX
++#ifdef MKSH__NO_PATH_MAX
+ 	size_t ldestlen = 0;
+ #define pathlen sb.st_size
+ #define pathcnd (ldestlen < (pathlen + 1))
+@@ -1332,7 +1402,7 @@
+ 		*xp = '\0';
+ 
+ 		/* lstat the current output, see if it's a symlink */
+-		if (lstat(Xstring(xs, xp), &sb)) {
++		if (mksh_lstat(Xstring(xs, xp), &sb)) {
+ 			/* lstat failed */
+ 			if (errno == ENOENT) {
+ 				/* because the pathname does not exist */
+@@ -1351,6 +1421,7 @@
+ 
+ 		/* check if we encountered a symlink? */
+ 		if (S_ISLNK(sb.st_mode)) {
++#ifndef MKSH__NO_SYMLINK
+ 			/* reached maximum recursion depth? */
+ 			if (!symlinks--) {
+ 				/* yep, prevent infinite loops */
+@@ -1360,7 +1431,7 @@
+ 
+ 			/* get symlink(7) target */
+ 			if (pathcnd) {
+-#ifdef NO_PATH_MAX
++#ifdef MKSH__NO_PATH_MAX
+ 				if (notoktoadd(pathlen, 1)) {
+ 					errno = ENAMETOOLONG;
+ 					goto notfound;
+@@ -1385,7 +1456,9 @@
+ 			if (ldest[0] != '/') {
+ 				/* symlink target is a relative path */
+ 				xp = Xrestpos(xs, xp, pos);
+-			} else {
++			} else
++#endif
++			  {
+ 				/* symlink target is an absolute path */
+ 				xp = Xstring(xs, xp);
+  beginning_of_a_pathname:
+@@ -1746,7 +1819,7 @@
+ 		return (2);
  	}
  
-+	if (max_col_ > 2147483647) {
-+#ifndef MKSH_SMALL
-+		internal_warningf("print_columns called with max_col=%zu > INT_MAX", max_col_);
-+#endif
-+		return;
-+	}
-+	max_col = (int)max_col_;
-+
- 	++max_oct;
- 	str = alloc(max_oct, ATEMP);
+-#ifdef NO_PATH_MAX
++#ifdef MKSH__NO_PATH_MAX
+ 	/* only a first guess; make_path will enlarge xs if necessary */
+ 	XinitN(xs, 1024, ATEMP);
+ #else
+@@ -1825,7 +1898,7 @@
+ }
  
-@@ -1457,7 +1457,7 @@
- 	int rval = 0;
- 	bool use_cdpath = true;
- 	char *plist;
--	int len, plen = 0;
-+	size_t len, plen = 0;
- 	char *xp = Xstring(*xsp, xp);
  
- 	if (!file)
-@@ -1875,9 +1875,9 @@
+-#ifdef TIOCSCTTY
++#ifdef KSH_CHVT_CODE
+ extern void chvt_reinit(void);
+ 
+ static void
+@@ -1892,9 +1965,9 @@
  	{
  		register uint32_t h;
  
@@ -1301,87 +3520,160 @@ diff -u src/bin/mksh/misc.c:1.167 src/bin/mksh/misc.c:1.171
  		rndset((long)h);
  	}
  	chvt_reinit();
-@@ -1885,12 +1885,18 @@
- #endif
- 
- #ifdef DEBUG
--char intsize_is_okay[sizeof(int) >= 4 ? 1 : -1];
--char intsizes_are_okay[sizeof(int) == sizeof(unsigned int) ? 1 : -1];
--char longsize_is_okay[sizeof(long) >= sizeof(int) ? 1 : -1];
--char longsizes_are_okay[sizeof(long) == sizeof(unsigned long) ? 1 : -1];
--char arisize_is_okay[sizeof(mksh_ari_t) == 4 ? 1 : -1];
--char uarisize_is_okay[sizeof(mksh_uari_t) == 4 ? 1 : -1];
-+#define assert_eq(name, a, b) char name[a == b ? 1 : -1]
-+#define assert_ge(name, a, b) char name[a >= b ? 1 : -1]
-+assert_ge(intsize_is_okay, sizeof(int), 4);
-+assert_eq(intsizes_are_okay, sizeof(int), sizeof(unsigned int));
-+assert_ge(longsize_is_okay, sizeof(long), sizeof(int));
-+assert_eq(arisize_is_okay, sizeof(mksh_ari_t), 4);
-+assert_eq(uarisize_is_okay, sizeof(mksh_uari_t), 4);
-+assert_eq(sizesizes_are_okay, sizeof(size_t), sizeof(ssize_t));
-+assert_eq(ptrsizes_are_okay, sizeof(ptrdiff_t), sizeof(void *));
-+assert_eq(ptrsize_is_sizet, sizeof(ptrdiff_t), sizeof(size_t));
-+/* formatting routines assume this */
-+assert_ge(ptr_fits_in_long, sizeof(long), sizeof(size_t));
- 
- char *
- strchr(char *p, int ch)
-@@ -1923,7 +1929,6 @@
+@@ -1933,7 +2006,7 @@
  }
  #endif
  
--#ifndef MKSH_ASSUME_UTF8
- #if !HAVE_STRCASESTR
- const char *
- stristr(const char *b, const char *l)
-@@ -1943,7 +1948,6 @@
- 	return (b - 1);
- }
- #endif
--#endif
- 
- #ifdef MKSH_SMALL
+-#ifdef MKSH_SMALL
++#if defined(MKSH_SMALL) && !defined(MKSH_SMALL_BUT_FAST)
  char *
+ strndup_i(const char *src, size_t len, Area *ap)
+ {
 Index: src/bin/mksh/mksh.1
-diff -u src/bin/mksh/mksh.1:1.269.2.4 src/bin/mksh/mksh.1:1.273
---- src/bin/mksh/mksh.1:1.269.2.4	Sat Jul 16 16:04:13 2011
-+++ src/bin/mksh/mksh.1	Sat Aug 13 22:19:40 2011
-@@ -1,4 +1,4 @@
--.\" $MirOS: src/bin/mksh/mksh.1,v 1.269.2.4 2011/07/16 16:04:13 tg Exp $
-+.\" $MirOS: src/bin/mksh/mksh.1,v 1.273 2011/08/13 22:19:40 tg Exp $
- .\" $OpenBSD: ksh.1,v 1.140 2011/04/23 10:14:59 sobrado Exp $
+diff -u src/bin/mksh/mksh.1:1.269.2.9 src/bin/mksh/mksh.1:1.288
+--- src/bin/mksh/mksh.1:1.269.2.9	Sat Dec 31 02:25:29 2011
++++ src/bin/mksh/mksh.1	Fri Jun 29 08:11:45 2012
+@@ -1,8 +1,8 @@
+-.\" $MirOS: src/bin/mksh/mksh.1,v 1.269.2.9 2011/12/31 02:25:29 tg Exp $
+-.\" $OpenBSD: ksh.1,v 1.141 2011/09/03 22:59:08 jmc Exp $
++.\" $MirOS: src/bin/mksh/mksh.1,v 1.288 2012/06/29 08:11:45 tg Exp $
++.\" $OpenBSD: ksh.1,v 1.143 2012/06/19 16:41:00 jmc Exp $
  .\"-
  .\" Copyright © 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
-@@ -72,7 +72,7 @@
+-.\"		2010, 2011
++.\"		2010, 2011, 2012
+ .\"	Thorsten Glaser <tg@mirbsd.org>
+ .\"
+ .\" Provided that these terms and disclaimer and all copyright notices
+@@ -28,6 +28,8 @@
+ .\" * ~ is size-reduced and placed atop in groff, so use \*(TI
+ .\" * ^ is size-reduced and placed atop in groff, so use \*(ha
+ .\" * \(en does not work in nroff, so use \*(en
++.\" * <>| are problematic, so redefine and use \*(Lt\*(Gt\*(Ba
++.\" Also make sure to use \& especially with two-letter words.
+ .\" The section after the "doc" macropackage has been loaded contains
+ .\" additional code to convene between the UCB mdoc macropackage (and
+ .\" its variant as BSD mdoc in groff) and the GNU mdoc macropackage.
+@@ -72,11 +74,13 @@
  .\" with -mandoc, it might implement .Mx itself, but we want to
  .\" use our own definition. And .Dd must come *first*, always.
  .\"
--.Dd $Mdocdate: July 16 2011 $
-+.Dd $Mdocdate: August 13 2011 $
+-.Dd $Mdocdate: December 31 2011 $
++.Dd $Mdocdate: June 29 2012 $
  .\"
- .\" Check which macro package we use
+-.\" Check which macro package we use
++.\" Check which macro package we use, and do other -mdoc setup.
  .\"
-@@ -926,7 +926,7 @@
- $ [[ $bar = "$baz" ]]; echo $?
- .Ed
+ .ie \n(.g \{\
++.	if \*[.T]utf8 .tr \[la]\*(Lt
++.	if \*[.T]utf8 .tr \[ra]\*(Gt
+ .	ie d volume-ds-1 .ds tT gnu
+ .	el .ds tT bsd
+ .\}
+@@ -153,7 +157,7 @@
+ .Nm
+ .Bk -words
+ .Op Fl +abCefhiklmnprUuvXx
+-.Op Fl T Ar /dev/ttyCn | \-
++.Op Fl T Ar /dev/ttyCn \*(Ba \-
+ .Op Fl +o Ar option
+ .Oo
+ .Fl c Ar string \*(Ba
+@@ -1064,6 +1068,12 @@
+ The alias expansion process stops when a word that is not an alias is found,
+ when a quoted word is found, or when an alias word that is currently being
+ expanded is found.
++Aliases are specifically an interactive feature: while they do happen
++to work in scripts and on the command line in some cases, aliases are
++expanded during lexing, so their use must be in a separate command tree
++from their definition; otherwise, the alias will not be found.
++Noticeably, command lists (separated by semicolon, in command substitutions
++also by newline) may be one same parse tree.
  .Pp
--Perhaps surprisingly, the first comparision succeeds,
-+Perhaps surprisingly, the first comparison succeeds,
- whereas the second doesn't.
- .El
- .El
-@@ -1617,8 +1617,8 @@
- .It Pf ${ Ns Ar name Ns @#}
+ The following command aliases are defined automatically by the shell:
+ .Bd -literal -offset indent
+@@ -1614,12 +1624,16 @@
+ must start with a space, opening parenthesis or digit to be recognised.
+ Cannot be applied to a vector.
+ .Pp
+-.It Pf ${ Ns Ar name Ns @#}
++.It Xo
++.Pf ${ Ar name
++.Pf @# Ns Oo Ar seed Oc Ns }
++.Xc
  The internal hash of the expansion of
- .Ar name .
+-.Ar name .
 -At the moment, this is OAAT1 (Bob Jenkins' one-at-a-time hash with
--an initialisation value of 0x00000100), this will change for R41.
-+At the moment, this is NZAT (a never-zero 32-bit hash based on
+-an initialisation value of 0x00000100), this will change for R41,
+-which will also introduce an explicit initial value.
++.Ar name ,
++with an optional (defaulting to zero)
++.Ar seed .
++At the moment, this is NZAAT (a 32-bit hash based on
 +Bob Jenkins' one-at-a-time hash), but this is not set.
  This is the hash the shell uses internally for its associative arrays.
  .El
  .Pp
-@@ -4041,11 +4041,6 @@
+@@ -2476,14 +2490,14 @@
+ .Ar number
+ is a number in the specified base.
+ Additionally, base-16 integers may be specified by prefixing them with
+-.Sq 0x Pq case-insensitive
++.Sq 0x
++.Pq case-insensitive
+ in all forms of arithmetic expressions, except as numeric arguments to the
+ .Ic test
+ built-in command.
+-Base-8 integers may be specified by prefixing them with
+-.Sq 0 ,
+-but this is deprecated and will be removed in the next version of
+-.Nm .
++It is discouraged to prefix numbers with a sole zero
++.Pq Sq 0 ,
++because some shells may interpret them as base-8 integers.
+ As a special
+ .Nm mksh
+ extension, numbers to the base of one are treated as either (8-bit
+@@ -2499,6 +2513,7 @@
+ .Dq 1#x
+ is also supported.
+ Note that NUL bytes (integral value of zero) cannot be used.
++An unset or empty parameter evaluates to 0 in integer context.
+ In Unicode mode, raw octets are mapped into the range EF80..EFFF as in
+ OPTU-8, which is in the PUA and has been assigned by CSUR for this use.
+ If more than one octet in ASCII mode, or a sequence of more than one
+@@ -3349,11 +3364,8 @@
+ and
+ .Fl s
+ is identical: re-execute the selected command without invoking an editor.
+-This command is usually accessed with the predefined
++This command is usually accessed with the predefined:
+ .Ic alias r=\*(aqfc \-e \-\*(aq
+-or (deprecated; will be removed RSN) by prefixing an interactive mode input line with
+-.Sq \&!
+-.Pq wbx extension .
+ .Pp
+ .It Ic fg Op Ar job ...
+ Resume the specified job(s) in the foreground.
+@@ -3639,7 +3651,7 @@
+ .Pp
+ .It Xo
+ .Ic read
+-.Op Fl A | Fl a
++.Op Fl A \*(Ba Fl a
+ .Op Fl d Ar x
+ .Oo Fl N Ar z \*(Ba
+ .Fl n Ar z Oc
+@@ -3758,7 +3770,7 @@
+ .Bd -literal -offset indent
+ find . \-type f \-print0 \*(Ba \e
+     while IFS= read \-d \*(aq\*(aq \-r filename; do
+-	print \-r \-\- "found <${filename#./}>"
++	print \-r \-\- "found \*(Lt${filename#./}\*(Gt"
+ done
+ .Ed
+ .Pp
+@@ -4030,11 +4042,6 @@
  Print commands and parameter assignments when they are executed, preceded by
  the value of
  .Ev PS4 .
@@ -1393,187 +3685,335 @@ diff -u src/bin/mksh/mksh.1:1.269.2.4 src/bin/mksh/mksh.1:1.273
  .It Fl o Ic bgnice
  Background jobs are run with lower priority.
  .It Fl o Ic braceexpand
-@@ -6257,7 +6252,7 @@
+@@ -6265,7 +6272,7 @@
  .Ed
  .Pp
  This document attempts to describe
--.Nm mksh\ R40b
+-.Nm mksh\ R40d
 +.Nm mksh\ R40+CVS
  and up,
  compiled without any options impacting functionality, such as
  .Dv MKSH_SMALL ,
+@@ -6280,4 +6287,5 @@
+ .Li \&#\&!/bin/mksh
+ .Pq or Li \&#ksh
+ IRC channel at
+-.Pa irc.freenode.net:6667 .
++.Pa irc.freenode.net
++.Pq Port 6697 SSL, 6667 unencrypted .
 Index: src/bin/mksh/sh.h
-diff -u src/bin/mksh/sh.h:1.484.2.3 src/bin/mksh/sh.h:1.493
---- src/bin/mksh/sh.h:1.484.2.3	Sat Jul 16 16:04:16 2011
-+++ src/bin/mksh/sh.h	Sat Aug 27 18:06:50 2011
-@@ -9,28 +9,28 @@
+diff -u src/bin/mksh/sh.h:1.484.2.18 src/bin/mksh/sh.h:1.572
+--- src/bin/mksh/sh.h:1.484.2.18	Fri Apr  6 15:24:15 2012
++++ src/bin/mksh/sh.h	Sun Jul  1 15:54:57 2012
+@@ -4,7 +4,7 @@
+ /*	$OpenBSD: tree.h,v 1.10 2005/03/28 21:28:22 deraadt Exp $	*/
+ /*	$OpenBSD: expand.h,v 1.6 2005/03/30 17:16:37 deraadt Exp $	*/
+ /*	$OpenBSD: lex.h,v 1.11 2006/05/29 18:22:24 otto Exp $	*/
+-/*	$OpenBSD: proto.h,v 1.33 2010/05/19 17:36:08 jasper Exp $	*/
++/*	$OpenBSD: proto.h,v 1.34 2012/06/27 07:17:19 otto Exp $	*/
+ /*	$OpenBSD: c_test.h,v 1.4 2004/12/20 11:34:26 otto Exp $	*/
  /*	$OpenBSD: tty.h,v 1.5 2004/12/20 11:34:26 otto Exp $	*/
  
- /*-
-- * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011
-+ * Copyright © 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011
-  *	Thorsten Glaser <tg@mirbsd.org>
-  *
-  * Provided that these terms and disclaimer and all copyright notices
-  * are retained or reproduced in an accompanying document, permission
-- * is granted to deal in this work without restriction, including un-
-+ * is granted to deal in this work without restriction, including un‐
-  * limited rights to use, publicly perform, distribute, sell, modify,
-  * merge, give away, or sublicence.
-  *
-- * This work is provided "AS IS" and WITHOUT WARRANTY of any kind, to
-+ * This work is provided “AS IS” and WITHOUT WARRANTY of any kind, to
-  * the utmost extent permitted by applicable law, neither express nor
-  * implied; without malicious intent or gross negligence. In no event
-  * may a licensor, author or contributor be held liable for indirect,
-  * direct, other damage, loss, or other issues arising in any way out
-  * of dealing in the work, even if advised of the possibility of such
-  * damage or existence of a defect, except proven that it results out
-- * of said person's immediate fault when using the work as intended.
-+ * of said person’s immediate fault when using the work as intended.
-  */
- 
- #ifdef __dietlibc__
- /* XXX imake style */
--#define _BSD_SOURCE	/* live, BSD, live! */
-+#define _BSD_SOURCE	/* live, BSD, live❣ */
+@@ -79,7 +79,12 @@
+ #if HAVE_STRINGS_H
+ #include <strings.h>
  #endif
- 
- #if HAVE_SYS_PARAM_H
-@@ -151,9 +151,9 @@
++#if HAVE_TERMIOS_H
+ #include <termios.h>
++#else
++/* shudder… */
++#include <termio.h>
++#endif
+ #include <time.h>
+ #if HAVE_ULIMIT_H
+ #include <ulimit.h>
+@@ -152,9 +157,9 @@
  #endif
  
  #ifdef EXTERN
--__RCSID("$MirOS: src/bin/mksh/sh.h,v 1.484.2.3 2011/07/16 16:04:16 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/sh.h,v 1.493 2011/08/27 18:06:50 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/sh.h,v 1.484.2.18 2012/04/06 15:24:15 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/sh.h,v 1.572 2012/07/01 15:54:57 tg Exp $");
  #endif
--#define MKSH_VERSION "R40 2011/07/16"
-+#define MKSH_VERSION "R40 2011/08/27"
+-#define MKSH_VERSION "R40 2012/04/06"
++#define MKSH_VERSION "R40 2012/07/01"
  
- #ifndef MKSH_INCLUDES_ONLY
- 
-@@ -164,8 +164,8 @@
- #undef RUSAGE_SELF
- #undef RUSAGE_CHILDREN
- #define rusage mksh_rusage
--#define RUSAGE_SELF	0
--#define RUSAGE_CHILDREN	-1
-+#define RUSAGE_SELF		0
-+#define RUSAGE_CHILDREN		-1
- 
- struct rusage {
- 	struct timeval ru_utime;
-@@ -476,7 +476,7 @@
+ /* arithmetic types: C implementation */
+ #if !HAVE_CAN_INTTYPES
+@@ -167,16 +172,21 @@
  #endif
  
- #if HAVE_STRCASESTR
--#define stristr(b,l)	((const char *)strcasestr((b), (l)))
-+#define stristr(b,l)		((const char *)strcasestr((b), (l)))
+ /* arithmetic types: shell arithmetics */
++#ifdef MKSH_LEGACY_MODE
+ /*
+- * NOTE: these are currently hard-coded to exactly 32 bit, do not change
+- *
+- * TODO: make these configurable, or add 64-bit arithmetic, somehow
+- * (on some operating environments, 64-bit types are needed for some
+- * things, such as the ulimit builtin, to work proper), except mksh
+- * must still be able to run on systems with no native 64-bit integers
++ * POSIX demands these to be the C environment's long type
++ */
++typedef long mksh_ari_t;
++typedef unsigned long mksh_uari_t;
++#else
++/*
++ * These types are exactly 32 bit wide; signed and unsigned
++ * integer wraparound, even across division and modulo, for
++ * any shell code using them, is guaranteed.
+  */
+ typedef int32_t mksh_ari_t;
+ typedef uint32_t mksh_uari_t;
++#endif
+ 
+ /* boolean type (no <stdbool.h> deliberately) */
+ typedef unsigned char mksh_bool;
+@@ -212,6 +222,14 @@
+ typedef void (*sig_t)(int);
  #endif
  
++#ifdef MKSH_TYPEDEF_SIG_ATOMIC_T
++typedef MKSH_TYPEDEF_SIG_ATOMIC_T sig_atomic_t;
++#endif
++
++#ifdef MKSH_TYPEDEF_SSIZE_T
++typedef MKSH_TYPEDEF_SSIZE_T ssize_t;
++#endif
++
+ /* un-do vendor damage */
+ 
+ #undef BAD		/* AIX defines that somewhere */
+@@ -276,7 +294,7 @@
+ #define ksh_isdash(s)	(((s) != NULL) && ((s)[0] == '-') && ((s)[1] == '\0'))
+ #define ksh_isspace(c)	((((c) >= 0x09) && ((c) <= 0x0D)) || ((c) == 0x20))
+ 
+-#ifdef NO_PATH_MAX
++#ifdef MKSH__NO_PATH_MAX
+ #undef PATH_MAX
+ #else
+ #ifndef PATH_MAX
+@@ -341,9 +359,40 @@
+ extern int __cdecl setegid(gid_t);
+ #endif
+ 
++#if defined(__COHERENT__)
++#ifndef O_ACCMODE
++/* this need not work everywhere, take care */
++#define O_ACCMODE	(O_RDONLY | O_WRONLY | O_RDWR)
++#endif
++#define mksh_TIME(tv) do {		\
++	(tv).tv_usec = 0;		\
++	(tv).tv_sec = time(NULL);	\
++} while (/* CONSTCOND */ 0)
++#else
++#define mksh_TIME(tv) gettimeofday(&(tv), NULL)
++#endif
++
++#ifdef MKSH__NO_SYMLINK
++#undef S_ISLNK
++#define S_ISLNK(m)	(/* CONSTCOND */ 0)
++#define mksh_lstat	stat
++#else
++#define mksh_lstat	lstat
++#endif
++
++#if HAVE_TERMIOS_H
++#define mksh_ttyst	struct termios
++#define mksh_tcget(fd,st) tcgetattr((fd), (st))
++#define mksh_tcset(fd,st) tcsetattr((fd), TCSADRAIN, (st))
++#else
++#define mksh_ttyst	struct termio
++#define mksh_tcget(fd,st) ioctl((fd), TCGETA, (st))
++#define mksh_tcset(fd,st) ioctl((fd), TCSETAW, (st))
++#endif
++
+ /* remove redundancies */
+ 
+-#if defined(MirBSD) && (MirBSD >= 0x08A8)
++#if defined(MirBSD) && (MirBSD >= 0x08A8) && !defined(MKSH_OPTSTATIC)
+ #define MKSH_mirbsd_wcwidth
+ #define utf_wcwidth(i) wcwidth((__WCHAR_TYPE__)i)
+ extern int wcwidth(__WCHAR_TYPE__);
+@@ -363,15 +412,6 @@
+ #define BIT(i)		(1 << (i))
+ #define NELEM(a)	(sizeof(a) / sizeof((a)[0]))
+ 
+-/* these shall be smaller than 100 */
+-#ifdef MKSH_CONSERVATIVE_FDS
+-#define NUFILE		32	/* Number of user-accessible files */
+-#define FDBASE		10	/* First file usable by Shell */
+-#else
+-#define NUFILE		56	/* Number of user-accessible files */
+-#define FDBASE		24	/* First file usable by Shell */
+-#endif
+-
+ /*
+  * Make MAGIC a char that might be printed to make bugs more obvious, but
+  * not a char that is used often. Also, can't use the high bit as it causes
+@@ -383,7 +423,14 @@
+ #define LINE		4096	/* input line size */
+ 
+ EXTERN const char *safe_prompt; /* safe prompt if PS1 substitution fails */
+-EXTERN const char initvsn[] E_INIT("KSH_VERSION=@(#)MIRBSD KSH " MKSH_VERSION);
++
++#ifdef MKSH_LEGACY_MODE
++#define KSH_VERSIONNAME	"LEGACY"
++#else
++#define KSH_VERSIONNAME	"MIRBSD"
++#endif
++EXTERN const char initvsn[] E_INIT("KSH_VERSION=@(#)" KSH_VERSIONNAME \
++    " KSH " MKSH_VERSION);
+ #define KSH_VERSION	(initvsn + /* "KSH_VERSION=@(#)" */ 16)
+ 
+ EXTERN const char digits_uc[] E_INIT("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+@@ -434,7 +481,7 @@
+ #define mkssert(e)	((void)0)
+ #endif
+ 
+-#if (!defined(MKSH_BUILDMAKEFILE4BSD) && !defined(MKSH_BUILDSH)) || (MKSH_BUILD_R != 406)
++#if (!defined(MKSH_BUILDMAKEFILE4BSD) && !defined(MKSH_BUILDSH)) || (MKSH_BUILD_R != 409)
+ #error Must run Build.sh to compile this.
+ int
+ im_sorry_dave(void)
+@@ -451,7 +498,7 @@
+ 	(dst) = (src) + utf_ptradj(src);				\
+ } while (/* CONSTCOND */ 0)
+ 
+-#ifdef MKSH_SMALL
++#if defined(MKSH_SMALL) && !defined(MKSH_SMALL_BUT_FAST)
+ #define strdupx(d, s, ap) do {						\
+ 	(d) = strdup_i((s), (ap));					\
+ } while (/* CONSTCOND */ 0)
+@@ -485,6 +532,17 @@
+ } while (/* CONSTCOND */ 0)
+ #endif
+ 
++#ifdef MKSH_LEGACY_MODE
++#ifndef MKSH_NO_CMDLINE_EDITING
++#define MKSH_NO_CMDLINE_EDITING	/* defined */
++#endif
++#ifndef MKSH_CONSERVATIVE_FDS
++#define MKSH_CONSERVATIVE_FDS	/* defined */
++#endif
++#undef MKSH_S_NOVI
++#define MKSH_S_NOVI		1
++#endif
++
  #ifdef MKSH_SMALL
-@@ -496,7 +496,7 @@
+ #ifndef MKSH_CONSERVATIVE_FDS
+ #define MKSH_CONSERVATIVE_FDS	/* defined */
+@@ -505,6 +563,15 @@
+ #define MKSH_UNEMPLOYED		1
  #endif
  
- #if defined(MKSH_NOPROSPECTOFWORK) && !defined(MKSH_UNEMPLOYED)
--#define MKSH_UNEMPLOYED
-+#define MKSH_UNEMPLOYED		1
++/* these shall be smaller than 100 */
++#ifdef MKSH_CONSERVATIVE_FDS
++#define NUFILE		32	/* Number of user-accessible files */
++#define FDBASE		10	/* First file usable by Shell */
++#else
++#define NUFILE		56	/* Number of user-accessible files */
++#define FDBASE		24	/* First file usable by Shell */
++#endif
++
+ /*
+  * simple grouping allocator
+  */
+@@ -527,12 +594,7 @@
+ #define free_ossetmode(p)	free(p)
  #endif
+ 
+-#if !HAVE_MKSTEMP
+-/* tempnam(3) -> free(3) */
+-#define free_ostempnam(p)	free(p)
+-#endif
+-
+-#ifdef NO_PATH_MAX
++#ifdef MKSH__NO_PATH_MAX
+ /* GNU libc: get_current_dir_name(3) -> free(3) */
+ #define free_gnu_gcdn(p)	free(p)
+ #endif
+@@ -570,7 +632,7 @@
+ /*
+  * parsing & execution environment
+  */
+-#if defined(NeXT) && !defined(__GLIBC__)
++#ifdef MKSH_NO_SIGSETJMP
+ #define kshjmp_buf	jmp_buf
+ #define kshsetjmp(jbuf)	_setjmp(jbuf)
+ #define kshlongjmp	_longjmp
+@@ -691,23 +753,32 @@
+ #define Tunalias	(Tpunalias + 1)		/* "unalias" */
+ EXTERN const char Tsgset[] E_INIT("*=set");
+ #define Tset		(Tsgset + 2)		/* "set" */
++EXTERN const char Tsgunset[] E_INIT("*=unset");
++#define Tunset		(Tsgunset + 2)		/* "unset" */
++EXTERN const char Tsgexport[] E_INIT("*=export");
++#define Texport		(Tsgexport + 2)		/* "export" */
++EXTERN const char Tsgreadonly[] E_INIT("*=readonly");
++#define Treadonly	(Tsgreadonly + 2)	/* "readonly" */
+ EXTERN const char Tgbuiltin[] E_INIT("=builtin");
+ #define Tbuiltin	(Tgbuiltin + 1)		/* "builtin" */
+ EXTERN const char T_function[] E_INIT(" function");
+ #define Tfunction	(T_function + 1)	/* "function" */
+ 
+-enum temp_type {
+-	TT_HEREDOC_EXP,	/* expanded heredoc */
+-	TT_HIST_EDIT	/* temp file used for history editing (fc -e) */
+-};
+-typedef enum temp_type Temp_type;
++typedef uint8_t Temp_type;
++/* expanded heredoc */
++#define TT_HEREDOC_EXP	0
++/* temp file used for history editing (fc -e) */
++#define TT_HIST_EDIT	1
++
+ /* temp/heredoc files. The file is removed when the struct is freed. */
+ struct temp {
+ 	struct temp *next;
+ 	struct shf *shf;
+-	char *name;
+-	int pid;	/* pid of process parsed here-doc */
++	/* pid of process parsed here-doc */
++	pid_t pid;
+ 	Temp_type type;
++	/* actually longer: name (variable length) */
++	char tffn[3];
+ };
  
  /*
-@@ -651,10 +651,10 @@
+@@ -786,7 +857,7 @@
+ EXTERN enum tmout_enum ksh_tmout_state E_INIT(TMOUT_EXECUTING);
+ 
+ /* For "You have stopped jobs" message */
+-EXTERN int really_exit;
++EXTERN bool really_exit;
+ 
+ /*
+  * fast character classes
+@@ -1000,6 +1071,8 @@
+ 	char name[4];
  };
- extern const struct shoption options[];
  
--/* null value for variable; comparision pointer for unset */
-+/* null value for variable; comparison pointer for unset */
- EXTERN char null[] I__("");
- /* helpers for string pooling */
--EXTERN const char T_intovfl[] I__("integer overflow %lu %c %lu prevented");
-+EXTERN const char T_intovfl[] I__("integer overflow %zu %c %zu prevented");
- EXTERN const char T_oomem[] I__("can't allocate %lu data bytes");
- #if defined(__GNUC__)
- /* trust this to have string pooling; -Wformat bitches otherwise */
-@@ -804,6 +804,10 @@
- #define GI_PLUS		BIT(1)	/* an option started with +... */
- #define GI_MINUSMINUS	BIT(2)	/* arguments were ended with -- */
- 
-+/* in case some OS defines these */
-+#undef optarg
-+#undef optind
++EXTERN struct tbl vtemp;
 +
- typedef struct {
- 	const char *optarg;
- 	int optind;
-@@ -930,14 +934,14 @@
- 	unsigned char *rp;	/* read: current position in buffer */
- 	unsigned char *wp;	/* write: current position in buffer */
- 	unsigned char *buf;	/* buffer */
-+	ssize_t bsize;		/* actual size of buf */
-+	ssize_t rbsize;		/* size of buffer (1 if SHF_UNBUF) */
-+	ssize_t rnleft;		/* read: how much data left in buffer */
-+	ssize_t wbsize;		/* size of buffer (0 if SHF_UNBUF) */
-+	ssize_t wnleft;		/* write: how much space left in buffer */
- 	int flags;		/* see SHF_* */
--	int rbsize;		/* size of buffer (1 if SHF_UNBUF) */
--	int rnleft;		/* read: how much data left in buffer */
--	int wbsize;		/* size of buffer (0 if SHF_UNBUF) */
--	int wnleft;		/* write: how much space left in buffer */
- 	int fd;			/* file descriptor */
- 	int errno_;		/* saved value of errno after error */
--	int bsize;		/* actual size of buf */
- };
+ /* common flag bits */
+ #define ALLOC		BIT(0)	/* val.s has been allocated */
+ #define DEFINED		BIT(1)	/* is defined in block */
+@@ -1397,6 +1470,7 @@
+ #define SWORDSEP	6	/* string[] separator */
+ #define SALIAS		7	/* alias expansion */
+ #define SREREAD		8	/* read ahead to be re-scanned */
++#define SSTRINGCMDLINE	9	/* string from "mksh -c ..." */
  
- extern struct shf shf_iob[];
-@@ -945,7 +949,7 @@
- struct table {
- 	Area *areap;		/* area to allocate entries */
- 	struct tbl **tbls;	/* hashed table items */
--	uint32_t nfree;		/* free table entries */
-+	size_t nfree;		/* free table entries */
- 	uint8_t tshift;		/* table size (2^tshift) */
- };
- 
-@@ -1291,9 +1295,9 @@
- 
- /* check if there are at least n bytes left */
- #define XcheckN(xs, xp, n) do {					\
--	int more = ((xp) + (n)) - (xs).end;			\
-+	ssize_t more = ((xp) + (n)) - (xs).end;			\
- 	if (more > 0)						\
--		(xp) = Xcheck_grow_(&(xs), (xp), (size_t)more);	\
-+		(xp) = Xcheck_grow_(&(xs), (xp), more);		\
+ /* Source.flags values */
+ #define SF_ECHO		BIT(0)	/* echo input to shlout */
+@@ -1485,34 +1559,45 @@
  } while (/* CONSTCOND */ 0)
  
- /* check for overflow, expand string */
-@@ -1449,9 +1453,9 @@
- #define	UNCTRL(x)	((x) ^ 0x40)				/* ASCII */
- 
- EXTERN Source *source;		/* yyparse/yylex source */
--EXTERN YYSTYPE	yylval;		/* result from yylex */
--EXTERN struct ioword *heres [HERES], **herep;
--EXTERN char	ident [IDENT+1];
-+EXTERN YYSTYPE yylval;		/* result from yylex */
-+EXTERN struct ioword *heres[HERES], **herep;
-+EXTERN char ident[IDENT+1];
- 
- #define HISTORYSIZE	500	/* size of saved history */
- 
-@@ -1467,40 +1471,62 @@
- #define notoktoadd(val, cnst)	((val) > (SIZE_MAX - (cnst)))
- #define checkoktoadd(val, cnst) do {					\
- 	if (notoktoadd((val), (cnst)))					\
--		internal_errorf(T_intovfl, (unsigned long)(val),	\
--		    '+', (unsigned long)(cnst));			\
-+		internal_errorf(T_intovfl, (size_t)(val),		\
-+		    '+', (size_t)(cnst));				\
- } while (/* CONSTCOND */ 0)
  
 -/* Bob Jenkins' one-at-a-time hash, with better start value */
 -#define oaat1_init_impl(h) do {						\
 -	(h) = 0x100;							\
-+
-+/* NZAT/NZAAT hashes based on Bob Jenkins' one-at-a-time hash */
++/* NZAAT hash based on Bob Jenkins' one-at-a-time hash */
 +
 +/* From: src/kern/include/nzat.h,v 1.2 2011/07/18 00:35:40 tg Exp $ */
 +
@@ -1628,15 +4068,6 @@ diff -u src/bin/mksh/sh.h:1.484.2.3 src/bin/mksh/sh.h:1.493
 -	(h) ^= (h) >> 11;						\
 -	(h) += (h) << 15;						\
 +
-+/* not zero after termination */
-+#define NZATFinish(h) do {					\
-+	if ((h) == 0)						\
-+		++(h);						\
-+	else							\
-+		NZAATFinish(h);					\
-+} while (/* CONSTCOND */ 0)
-+
-+/* NULs zählen an allen Teilen */
 +#define NZAATFinish(h) do {					\
 +	(h) += (h) << 10;					\
 +	(h) ^= (h) >> 6;					\
@@ -1645,910 +4076,596 @@ diff -u src/bin/mksh/sh.h:1.484.2.3 src/bin/mksh/sh.h:1.493
 +	(h) += (h) << 15;					\
  } while (/* CONSTCOND */ 0)
  
-+
- /* lalloc.c */
- void ainit(Area *);
- void afreeall(Area *);
-@@ -1546,7 +1572,7 @@
- size_t utf_mbtowc(unsigned int *, const char *);
- size_t utf_wctomb(char *, unsigned int);
- int utf_widthadj(const char *, const char **);
--int utf_mbswidth(const char *);
-+size_t utf_mbswidth(const char *);
- const char *utf_skipcols(const char *, int);
- size_t utf_ptradj(const char *);
- #ifndef MKSH_mirbsd_wcwidth
-@@ -1573,7 +1599,6 @@
+ 
+@@ -1526,14 +1611,16 @@
+ void *aresize2(void *, size_t, size_t, Area *);
+ void afree(void *, Area *);	/* can take NULL */
+ /* edit.c */
++#ifndef MKSH_NO_CMDLINE_EDITING
+ #ifndef MKSH_SMALL
+ int x_bind(const char *, const char *, bool, bool);
+ #else
+ int x_bind(const char *, const char *, bool);
+ #endif
+ void x_init(void);
+-void x_mkraw(int, struct termios *, bool);
+ int x_read(char *, size_t);
++#endif
++void x_mkraw(int, mksh_ttyst *, bool);
+ /* eval.c */
+ char *substitute(const char *, int);
+ char **eval(const char **, int);
+@@ -1567,6 +1654,7 @@
+ int utf_wcwidth(unsigned int);
+ #endif
+ int ksh_access(const char *, int);
++struct tbl *tempvar(void);
+ /* funcs.c */
+ int c_hash(const char **);
+ int c_pwd(const char **);
+@@ -1587,7 +1675,9 @@
+ int c_kill(const char **);
  void getopts_reset(int);
  int c_getopts(const char **);
++#ifndef MKSH_NO_CMDLINE_EDITING
  int c_bind(const char **);
--int c_label(const char **);
++#endif
  int c_shift(const char **);
  int c_umask(const char **);
  int c_dot(const char **);
-@@ -1735,8 +1760,8 @@
- void print_value_quoted(const char *);
+@@ -1629,7 +1719,7 @@
+ #if HAVE_PERSISTENT_HISTORY
+ void sethistfile(const char *);
+ #endif
+-#if !MKSH_S_NOVI
++#if !defined(MKSH_NO_CMDLINE_EDITING) && !MKSH_S_NOVI
+ char **histpos(void);
+ int histnum(int);
+ #endif
+@@ -1685,7 +1775,7 @@
+ /* main.c */
+ int include(const char *, int, const char **, int);
+ int command(const char *, int);
+-int shell(Source *volatile, int volatile);
++int shell(Source * volatile, volatile bool);
+ void unwind(int) MKSH_A_NORETURN;
+ void newenv(int);
+ void quitenv(struct shf *);
+@@ -1750,13 +1840,12 @@
+ void change_flag(enum sh_flag, int, unsigned int);
+ int parse_args(const char **, int, bool *);
+ int getn(const char *, int *);
+-int bi_getn(const char *, int *);
+ int gmatchx(const char *, const char *, bool);
+ int has_globbing(const char *, const char *);
+ int xstrcmp(const void *, const void *);
+ void ksh_getopt_reset(Getopt *, int);
+ int ksh_getopt(const char **, Getopt *, const char *);
+-void print_value_quoted(const char *);
++void print_value_quoted(struct shf *, const char *);
  char *quote_value(const char *);
  void print_columns(struct shf *, int,
--    char *(*)(char *, int, int, const void *),
--    const void *, int, int, bool);
-+    char *(*)(char *, size_t, int, const void *),
-+    const void *, size_t, size_t, bool);
- void strip_nuls(char *, int);
- ssize_t blocking_read(int, char *, size_t)
-     MKSH_A_BOUNDED(__buffer__, 2, 3);
-@@ -1755,13 +1780,13 @@
- struct shf *shf_open(const char *, int, int, int);
- struct shf *shf_fdopen(int, int, struct shf *);
- struct shf *shf_reopen(int, int, struct shf *);
--struct shf *shf_sopen(char *, int, int, struct shf *);
-+struct shf *shf_sopen(char *, ssize_t, int, struct shf *);
- int shf_close(struct shf *);
- int shf_fdclose(struct shf *);
- char *shf_sclose(struct shf *);
- int shf_flush(struct shf *);
--int shf_read(char *, int, struct shf *);
--char *shf_getse(char *, int, struct shf *);
-+ssize_t shf_read(char *, ssize_t, struct shf *);
-+char *shf_getse(char *, ssize_t, struct shf *);
+     char *(*)(char *, size_t, int, const void *),
+@@ -1770,7 +1859,7 @@
+ void simplify_path(char *);
+ void set_current_wd(const char *);
+ int c_cd(const char **);
+-#ifdef MKSH_SMALL
++#if defined(MKSH_SMALL) && !defined(MKSH_SMALL_BUT_FAST)
+ char *strdup_i(const char *, Area *);
+ char *strndup_i(const char *, size_t, Area *);
+ #endif
+@@ -1788,7 +1877,7 @@
+ char *shf_getse(char *, ssize_t, struct shf *);
  int shf_getchar(struct shf *s);
  int shf_ungetc(int, struct shf *);
- #ifdef MKSH_SMALL
-@@ -1772,16 +1797,16 @@
- #define shf_putc shf_putc_
- #endif
- int shf_putchar(int, struct shf *);
--int shf_puts(const char *, struct shf *);
--int shf_write(const char *, int, struct shf *);
--int shf_fprintf(struct shf *, const char *, ...)
-+ssize_t shf_puts(const char *, struct shf *);
-+ssize_t shf_write(const char *, ssize_t, struct shf *);
-+ssize_t shf_fprintf(struct shf *, const char *, ...)
-     MKSH_A_FORMAT(__printf__, 2, 3);
--int shf_snprintf(char *, int, const char *, ...)
-+ssize_t shf_snprintf(char *, ssize_t, const char *, ...)
-     MKSH_A_FORMAT(__printf__, 3, 4)
-     MKSH_A_BOUNDED(__string__, 1, 2);
- char *shf_smprintf(const char *, ...)
-     MKSH_A_FORMAT(__printf__, 1, 2);
--int shf_vfprintf(struct shf *, const char *, va_list)
-+ssize_t shf_vfprintf(struct shf *, const char *, va_list)
-     MKSH_A_FORMAT(__printf__, 2, 0);
- /* syn.c */
- void initkeywords(void);
-@@ -1790,7 +1815,7 @@
- char *yyrecursive(void);
- /* tree.c */
- void fptreef(struct shf *, int, const char *, ...);
--char *snptreef(char *, int, const char *, ...);
-+char *snptreef(char *, ssize_t, const char *, ...);
- struct op *tcopy(struct op *, Area *);
- char *wdcopy(const char *, Area *);
- const char *wdscan(const char *, int);
-@@ -1826,7 +1851,7 @@
- struct tbl *arraysearch(struct tbl *, uint32_t);
- char **makenv(void);
- void change_winsz(void);
--int array_ref_len(const char *);
-+size_t array_ref_len(const char *);
+-#ifdef MKSH_SMALL
++#if defined(MKSH_SMALL) && !defined(MKSH_SMALL_BUT_FAST)
+ int shf_getc(struct shf *);
+ int shf_putc(int, struct shf *);
+ #else
+@@ -1834,6 +1923,7 @@
+ void newblock(void);
+ void popblock(void);
+ void initvar(void);
++struct block *varsearch(struct block *, struct tbl **, const char *, uint32_t);
+ struct tbl *global(const char *);
+ struct tbl *local(const char *, bool);
+ char *str_val(struct tbl *);
+@@ -1855,6 +1945,7 @@
  char *arrayname(const char *);
  mksh_uari_t set_array(const char *, bool, const char **);
  uint32_t hash(const void *);
++mksh_ari_t rndget(void);
+ void rndset(long);
+ 
+ enum Test_op {
+@@ -1912,7 +2003,7 @@
+ 
+ EXTERN int tty_fd E_INIT(-1);	/* dup'd tty file descriptor */
+ EXTERN bool tty_devtty;		/* true if tty_fd is from /dev/tty */
+-EXTERN struct termios tty_state;	/* saved tty state */
++EXTERN mksh_ttyst tty_state;	/* saved tty state */
+ 
+ extern void tty_init(bool, bool);
+ extern void tty_close(void);
 Index: src/bin/mksh/sh_flags.h
-diff -u src/bin/mksh/sh_flags.h:1.8 src/bin/mksh/sh_flags.h:1.9
---- src/bin/mksh/sh_flags.h:1.8	Fri Feb 11 01:18:23 2011
-+++ src/bin/mksh/sh_flags.h	Sun Jun 12 15:37:10 2011
+diff -u src/bin/mksh/sh_flags.h:1.8.2.1 src/bin/mksh/sh_flags.h:1.12
+--- src/bin/mksh/sh_flags.h:1.8.2.1	Sat Nov 26 18:23:26 2011
++++ src/bin/mksh/sh_flags.h	Thu Jun 28 20:14:17 2012
 @@ -1,5 +1,5 @@
  #if defined(SHFLAGS_DEFNS)
--__RCSID("$MirOS: src/bin/mksh/sh_flags.h,v 1.8 2011/02/11 01:18:23 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/sh_flags.h,v 1.9 2011/06/12 15:37:10 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/sh_flags.h,v 1.8.2.1 2011/11/26 18:23:26 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/sh_flags.h,v 1.12 2012/06/28 20:14:17 tg Exp $");
  #define FN(sname,cname,ochar,flags)	/* nothing */
  #elif defined(SHFLAGS_ENUMS)
  #define FN(sname,cname,ochar,flags)	cname,
-@@ -21,9 +21,6 @@
+@@ -21,11 +21,6 @@
  /* -a	all new parameters are created with the export attribute */
  F0("allexport", FEXPORT, 'a', OF_ANY)
  
+-#ifndef MKSH_DISABLE_DEPRECATED
 -/* ./.	backwards compat: dummy, emits a warning */
 -FN("arc4random", FARC4RANDOM, 0, OF_ANY)
+-#endif
 -
  #if HAVE_NICE
  /* ./.	bgnice */
  FN("bgnice", FBGNICE, 0, OF_ANY)
-Index: src/bin/mksh/shf.c
-diff -u src/bin/mksh/shf.c:1.41.2.1 src/bin/mksh/shf.c:1.43
---- src/bin/mksh/shf.c:1.41.2.1	Sat Jul 16 13:16:46 2011
-+++ src/bin/mksh/shf.c	Sat Aug 27 18:06:51 2011
-@@ -1,7 +1,7 @@
- /*	$OpenBSD: shf.c,v 1.15 2006/04/02 00:48:33 deraadt Exp $	*/
+@@ -34,14 +29,18 @@
+ /* ./.	enable {} globbing (non-standard) */
+ FN("braceexpand", FBRACEEXPAND, 0, OF_ANY)
  
- /*-
-- * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009
-+ * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2011
-  *	Thorsten Glaser <tg@mirbsd.org>
-  *
-  * Provided that these terms and disclaimer and all copyright notices
-@@ -19,12 +19,12 @@
-  * damage or existence of a defect, except proven that it results out
-  * of said person's immediate fault when using the work as intended.
-  *-
-- * Use %lX instead of %p and floating point isn't supported at all.
-+ * Use %zX instead of %p and floating point isn't supported at all.
-  */
++#if !defined(MKSH_NO_CMDLINE_EDITING) || defined(MKSH_LEGACY_MODE)
+ /* ./.	Emacs command line editing mode */
+ FN("emacs", FEMACS, 0, OF_ANY)
++#endif
+ 
+ /* -e	quit on error */
+ FN("errexit", FERREXIT, 'e', OF_ANY)
+ 
++#if !defined(MKSH_NO_CMDLINE_EDITING) || defined(MKSH_LEGACY_MODE)
+ /* ./.	Emacs command line editing mode, gmacs variant */
+ FN("gmacs", FGMACS, 0, OF_ANY)
++#endif
+ 
+ /* ./.	reading EOF does not exit */
+ FN("ignoreeof", FIGNOREEOF, 0, OF_ANY)
+@@ -113,7 +112,7 @@
+ /* -v	echo input */
+ FN("verbose", FVERBOSE, 'v', OF_ANY)
+ 
+-#if !MKSH_S_NOVI
++#if !defined(MKSH_NO_CMDLINE_EDITING) || defined(MKSH_LEGACY_MODE)
+ /* ./.	Vi command line editing mode */
+ FN("vi", FVI, 0, OF_ANY)
+ 
+Index: src/bin/mksh/shf.c
+diff -u src/bin/mksh/shf.c:1.45 src/bin/mksh/shf.c:1.46
+--- src/bin/mksh/shf.c:1.45	Tue Oct 25 22:36:38 2011
++++ src/bin/mksh/shf.c	Sun Jul  1 15:55:00 2012
+@@ -24,7 +24,7 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/shf.c,v 1.41.2.1 2011/07/16 13:16:46 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/shf.c,v 1.43 2011/08/27 18:06:51 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/shf.c,v 1.45 2011/10/25 22:36:38 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/shf.c,v 1.46 2012/07/01 15:55:00 tg Exp $");
  
  /* flags to shf_emptybuf() */
  #define EB_READSW	0x01	/* about to switch to reading */
-@@ -39,7 +39,8 @@
- static int shf_fillbuf(struct shf *);
- static int shf_emptybuf(struct shf *, int);
- 
--/* Open a file. First three args are for open(), last arg is flags for
-+/*
-+ * Open a file. First three args are for open(), last arg is flags for
-  * this package. Returns NULL if file could not be opened, or if a dup
-  * fails.
-  */
-@@ -47,7 +48,8 @@
- shf_open(const char *name, int oflags, int mode, int sflags)
- {
- 	struct shf *shf;
--	int bsize = /* at most 512 */
-+	ssize_t bsize =
-+	    /* at most 512 */
- 	    sflags & SHF_UNBUF ? (sflags & SHF_RD ? 1 : 0) : SHF_BSIZE;
- 	int fd;
- 
-@@ -82,12 +84,11 @@
- 	return (shf_reopen(fd, sflags, shf));
+@@ -1042,7 +1042,7 @@
+ 	return (shf_error(shf) ? EOF : nwritten);
  }
  
--/* Set up the shf structure for a file descriptor. Doesn't fail. */
--struct shf *
--shf_fdopen(int fd, int sflags, struct shf *shf)
-+/* helper function for shf_fdopen and shf_reopen */
-+static void
-+shf_open_hlp(int fd, int *sflagsp, const char *where)
- {
--	int bsize = /* at most 512 */
--	    sflags & SHF_UNBUF ? (sflags & SHF_RD ? 1 : 0) : SHF_BSIZE;
-+	int sflags = *sflagsp;
- 
- 	/* use fcntl() to figure out correct read/write flags */
- 	if (sflags & SHF_GETFL) {
-@@ -109,11 +110,22 @@
- 				break;
- 			}
- 		}
-+		*sflagsp = sflags;
- 	}
- 
- 	if (!(sflags & (SHF_RD | SHF_WR)))
--		internal_errorf("%s: %s", "shf_fdopen", "missing read/write");
-+		internal_errorf("%s: %s", where, "missing read/write");
-+}
-+
-+/* Set up the shf structure for a file descriptor. Doesn't fail. */
-+struct shf *
-+shf_fdopen(int fd, int sflags, struct shf *shf)
-+{
-+	ssize_t bsize =
-+	    /* at most 512 */
-+	    sflags & SHF_UNBUF ? (sflags & SHF_RD ? 1 : 0) : SHF_BSIZE;
- 
-+	shf_open_hlp(fd, &sflags, "shf_fdopen");
- 	if (shf) {
- 		if (bsize) {
- 			shf->buf = alloc(bsize, ATEMP);
-@@ -144,33 +156,11 @@
- struct shf *
- shf_reopen(int fd, int sflags, struct shf *shf)
- {
--	int bsize = /* at most 512 */
-+	ssize_t bsize =
-+	    /* at most 512 */
- 	    sflags & SHF_UNBUF ? (sflags & SHF_RD ? 1 : 0) : SHF_BSIZE;
- 
--	/* use fcntl() to figure out correct read/write flags */
--	if (sflags & SHF_GETFL) {
--		int flags = fcntl(fd, F_GETFL, 0);
--
--		if (flags < 0)
--			/* will get an error on first read/write */
--			sflags |= SHF_RDWR;
--		else {
--			switch (flags & O_ACCMODE) {
--			case O_RDONLY:
--				sflags |= SHF_RD;
--				break;
--			case O_WRONLY:
--				sflags |= SHF_WR;
--				break;
--			case O_RDWR:
--				sflags |= SHF_RDWR;
--				break;
--			}
--		}
--	}
--
--	if (!(sflags & (SHF_RD | SHF_WR)))
--		internal_errorf("%s: %s", "shf_reopen", "missing read/write");
-+	shf_open_hlp(fd, &sflags, "shf_reopen");
- 	if (!shf || !shf->buf || shf->bsize < bsize)
- 		internal_errorf("%s: %s", "shf_reopen", "bad shf/buf/bsize");
- 
-@@ -188,16 +178,17 @@
- 	return (shf);
- }
- 
--/* Open a string for reading or writing. If reading, bsize is the number
-+/*
-+ * Open a string for reading or writing. If reading, bsize is the number
-  * of bytes that can be read. If writing, bsize is the maximum number of
-- * bytes that can be written. If shf is not null, it is filled in and
-- * returned, if it is null, shf is allocated. If writing and buf is null
-+ * bytes that can be written. If shf is not NULL, it is filled in and
-+ * returned, if it is NULL, shf is allocated. If writing and buf is NULL
-  * and SHF_DYNAMIC is set, the buffer is allocated (if bsize > 0, it is
-  * used for the initial size). Doesn't fail.
-- * When writing, a byte is reserved for a trailing null - see shf_sclose().
-+ * When writing, a byte is reserved for a trailing NUL - see shf_sclose().
-  */
- struct shf *
--shf_sopen(char *buf, int bsize, int sflags, struct shf *shf)
-+shf_sopen(char *buf, ssize_t bsize, int sflags, struct shf *shf)
- {
- 	/* can't have a read+write string */
- 	if (!(!(sflags & SHF_RD) ^ !(sflags & SHF_WR)))
-@@ -265,7 +256,8 @@
- 	return (ret);
- }
- 
--/* Close a string - if it was opened for writing, it is null terminated;
-+/*
-+ * Close a string - if it was opened for writing, it is NUL terminated;
-  * returns a pointer to the string and frees shf if it was allocated
-  * (does not free string if it was allocated).
-  */
-@@ -274,7 +266,7 @@
- {
- 	unsigned char *s = shf->buf;
- 
--	/* null terminate */
-+	/* NUL terminate */
- 	if (shf->flags & SHF_WR) {
- 		shf->wnleft++;
- 		shf_putc('\0', shf);
-@@ -284,7 +276,8 @@
- 	return ((char *)s);
- }
- 
--/* Un-read what has been read but not examined, or write what has been
-+/*
-+ * Un-read what has been read but not examined, or write what has been
-  * buffered. Returns 0 for success, EOF for (write) error.
-  */
+-#ifdef MKSH_SMALL
++#if defined(MKSH_SMALL) && !defined(MKSH_SMALL_BUT_FAST)
  int
-@@ -315,7 +308,8 @@
- 	return (0);
- }
- 
--/* Write out any buffered data. If currently reading, flushes the read
-+/*
-+ * Write out any buffered data. If currently reading, flushes the read
-  * buffer. Returns 0 for success, EOF for (write) error.
-  */
- static int
-@@ -332,7 +326,8 @@
- 	}
- 
- 	if (shf->flags & SHF_READING) {
--		if (flags & EB_READSW) /* doesn't happen */
-+		if (flags & EB_READSW)
-+			/* doesn't happen */
- 			return (0);
- 		ret = shf_flush(shf);
- 		shf->flags &= ~SHF_READING;
-@@ -340,8 +335,10 @@
- 	if (shf->flags & SHF_STRING) {
- 		unsigned char *nbuf;
- 
--		/* Note that we assume SHF_ALLOCS is not set if SHF_ALLOCB
--		 * is set... (changing the shf pointer could cause problems)
-+		/*
-+		 * Note that we assume SHF_ALLOCS is not set if
-+		 * SHF_ALLOCB is set... (changing the shf pointer could
-+		 * cause problems)
- 		 */
- 		if (!(flags & EB_GROW) || !(shf->flags & SHF_DYNAMIC) ||
- 		    !(shf->flags & SHF_ALLOCB))
-@@ -352,13 +349,12 @@
- 		shf->wp = nbuf + (shf->wp - shf->buf);
- 		shf->rbsize += shf->wbsize;
- 		shf->wnleft += shf->wbsize;
--		shf->wbsize *= 2;
-+		shf->wbsize <<= 1;
- 		shf->buf = nbuf;
- 	} else {
- 		if (shf->flags & SHF_WRITING) {
--			int ntowrite = shf->wp - shf->buf;
-+			ssize_t n, ntowrite = shf->wp - shf->buf;
- 			unsigned char *buf = shf->buf;
--			int n;
- 
- 			while (ntowrite > 0) {
- 				n = write(shf->fd, buf, ntowrite);
-@@ -370,8 +366,10 @@
- 					shf->errno_ = errno;
- 					shf->wnleft = 0;
- 					if (buf != shf->buf) {
--						/* allow a second flush
--						 * to work */
-+						/*
-+						 * allow a second flush
-+						 * to work
-+						 */
- 						memmove(shf->buf, buf,
- 						    ntowrite);
- 						shf->wp = shf->buf + ntowrite;
-@@ -438,21 +436,21 @@
- 	return (0);
- }
- 
--/* Read a buffer from shf. Returns the number of bytes read into buf,
-- * if no bytes were read, returns 0 if end of file was seen, EOF if
-- * a read error occurred.
-+/*
-+ * Read a buffer from shf. Returns the number of bytes read into buf, if
-+ * no bytes were read, returns 0 if end of file was seen, EOF if a read
-+ * error occurred.
-  */
--int
--shf_read(char *buf, int bsize, struct shf *shf)
-+ssize_t
-+shf_read(char *buf, ssize_t bsize, struct shf *shf)
+ shf_getc(struct shf *shf)
  {
--	int orig_bsize = bsize;
--	int ncopy;
-+	ssize_t ncopy, orig_bsize = bsize;
- 
- 	if (!(shf->flags & SHF_RD))
- 		internal_errorf("%s: flags 0x%X", "shf_read", shf->flags);
- 
- 	if (bsize <= 0)
--		internal_errorf("%s: %s %d", "shf_write", "bsize", bsize);
-+		internal_errorf("%s: %s %zd", "shf_write", "bsize", bsize);
- 
- 	while (bsize > 0) {
- 		if (shf->rnleft == 0 &&
-@@ -472,15 +470,17 @@
- 	    orig_bsize - bsize);
- }
- 
--/* Read up to a newline or EOF. The newline is put in buf; buf is always
-- * null terminated. Returns NULL on read error or if nothing was read before
-- * end of file, returns a pointer to the null byte in buf otherwise.
-+/*
-+ * Read up to a newline or EOF. The newline is put in buf; buf is always
-+ * NUL terminated. Returns NULL on read error or if nothing was read
-+ * before end of file, returns a pointer to the NUL byte in buf
-+ * otherwise.
-  */
- char *
--shf_getse(char *buf, int bsize, struct shf *shf)
-+shf_getse(char *buf, ssize_t bsize, struct shf *shf)
- {
- 	unsigned char *end;
--	int ncopy;
-+	ssize_t ncopy;
- 	char *orig_buf = buf;
- 
- 	if (!(shf->flags & SHF_RD))
-@@ -489,7 +489,8 @@
- 	if (bsize <= 0)
- 		return (NULL);
- 
--	--bsize;	/* save room for null */
-+	/* save room for NUL */
-+	--bsize;	
- 	do {
- 		if (shf->rnleft == 0) {
- 			if (shf_fillbuf(shf) == EOF)
-@@ -499,7 +500,7 @@
- 				return (buf == orig_buf ? NULL : buf);
- 			}
- 		}
--		end = (unsigned char *)memchr((char *) shf->rp, '\n',
-+		end = (unsigned char *)memchr((char *)shf->rp, '\n',
- 		    shf->rnleft);
- 		ncopy = end ? end - shf->rp + 1 : shf->rnleft;
- 		if (ncopy > bsize)
-@@ -527,7 +528,8 @@
- 	return (*shf->rp++);
- }
- 
--/* Put a character back in the input stream. Returns the character if
-+/*
-+ * Put a character back in the input stream. Returns the character if
-  * successful, EOF if there is no room.
-  */
- int
-@@ -546,8 +548,9 @@
- 	if (shf->rp == shf->buf)
- 		shf->rp = shf->buf + shf->rbsize;
- 	if (shf->flags & SHF_STRING) {
--		/* Can unget what was read, but not something different - we
--		 * don't want to modify a string.
-+		/*
-+		 * Can unget what was read, but not something different;
-+		 * we don't want to modify a string.
- 		 */
- 		if (shf->rp[-1] != c)
- 			return (EOF);
-@@ -562,8 +565,9 @@
- 	return (c);
- }
- 
--/* Write a character. Returns the character if successful, EOF if
-- * the char could not be written.
-+/*
-+ * Write a character. Returns the character if successful, EOF if the
-+ * char could not be written.
-  */
- int
- shf_putchar(int c, struct shf *shf)
-@@ -576,7 +580,7 @@
- 
- 	if (shf->flags & SHF_UNBUF) {
- 		unsigned char cc = (unsigned char)c;
--		int n;
-+		ssize_t n;
- 
- 		if (shf->fd < 0)
- 			internal_errorf("%s: %s", "shf_putchar", "no fd");
-@@ -604,10 +608,11 @@
- 	return (c);
- }
- 
--/* Write a string. Returns the length of the string if successful, EOF if
-- * the string could not be written.
-+/*
-+ * Write a string. Returns the length of the string if successful, EOF
-+ * if the string could not be written.
-  */
--int
-+ssize_t
- shf_puts(const char *s, struct shf *shf)
- {
- 	if (!s)
-@@ -617,16 +622,16 @@
- }
- 
- /* Write a buffer. Returns nbytes if successful, EOF if there is an error. */
--int
--shf_write(const char *buf, int nbytes, struct shf *shf)
-+ssize_t
-+shf_write(const char *buf, ssize_t nbytes, struct shf *shf)
- {
--	int n, ncopy, orig_nbytes = nbytes;
-+	ssize_t n, ncopy, orig_nbytes = nbytes;
- 
- 	if (!(shf->flags & SHF_WR))
- 		internal_errorf("%s: flags 0x%X", "shf_write", shf->flags);
- 
- 	if (nbytes < 0)
--		internal_errorf("%s: %s %d", "shf_write", "nbytes", nbytes);
-+		internal_errorf("%s: %s %zd", "shf_write", "nbytes", nbytes);
- 
- 	/* Don't buffer if buffer is empty and we're writting a large amount. */
- 	if ((ncopy = shf->wnleft) &&
-@@ -688,11 +693,11 @@
- 	return (orig_nbytes);
- }
- 
--int
-+ssize_t
- shf_fprintf(struct shf *shf, const char *fmt, ...)
- {
- 	va_list args;
--	int n;
-+	ssize_t n;
- 
- 	va_start(args, fmt);
- 	n = shf_vfprintf(shf, fmt, args);
-@@ -701,22 +706,23 @@
- 	return (n);
- }
- 
--int
--shf_snprintf(char *buf, int bsize, const char *fmt, ...)
-+ssize_t
-+shf_snprintf(char *buf, ssize_t bsize, const char *fmt, ...)
- {
- 	struct shf shf;
- 	va_list args;
--	int n;
-+	ssize_t n;
- 
- 	if (!buf || bsize <= 0)
--		internal_errorf("shf_snprintf: buf %lX, bsize %d",
--		    (long)(ptrdiff_t)buf, bsize);
-+		internal_errorf("shf_snprintf: buf %zX, bsize %zd",
-+		    (size_t)buf, bsize);
- 
- 	shf_sopen(buf, bsize, SHF_WR, &shf);
- 	va_start(args, fmt);
- 	n = shf_vfprintf(&shf, fmt, args);
- 	va_end(args);
--	shf_sclose(&shf); /* null terminates */
-+	/* NUL terminates */
-+	shf_sclose(&shf); 
- 	return (n);
- }
- 
-@@ -730,20 +736,11 @@
- 	va_start(args, fmt);
- 	shf_vfprintf(&shf, fmt, args);
- 	va_end(args);
--	return (shf_sclose(&shf)); /* null terminates */
-+	/* NUL terminates */
-+	return (shf_sclose(&shf));
- }
- 
--#undef FP			/* if you want floating point stuff */
--
--#ifndef DMAXEXP
--# define DMAXEXP	128	/* should be big enough */
--#endif
--
- #define BUF_SIZE	128
--/* must be > MAX(DMAXEXP, log10(pow(2, DSIGNIF))) + ceil(log10(DMAXEXP)) + 8
-- * (I think); since it's hard to express as a constant, just use a large buffer
-- */
--#define FPBUF_SIZE	(DMAXEXP+16)
- 
- #define	FL_HASH		0x001	/* '#' seen */
- #define FL_PLUS		0x002	/* '+' seen */
-@@ -755,19 +752,23 @@
- #define FL_DOT		0x080	/* '.' seen */
- #define FL_UPPER	0x100	/* format character was uppercase */
- #define FL_NUMBER	0x200	/* a number was formated %[douxefg] */
-+#define FL_SIZET	0x400	/* 'z' seen */
-+#define FM_SIZES	0x430	/* h/l/z mask */
- 
--
--int
-+ssize_t
- shf_vfprintf(struct shf *shf, const char *fmt, va_list args)
- {
- 	const char *s;
- 	char c, *cp;
--	int tmp = 0, field, precision, len, flags;
-+	int tmp = 0, flags;
-+	ssize_t field, precision, len;
- 	unsigned long lnum;
- 	/* %#o produces the longest output */
- 	char numbuf[(8 * sizeof(long) + 2) / 3 + 1];
- 	/* this stuff for dealing with the buffer */
--	int nwritten = 0;
-+	ssize_t nwritten = 0;
-+
-+#define VA(type) va_arg(args, type)
- 
- 	if (!fmt)
- 		return (0);
-@@ -779,13 +780,14 @@
- 			continue;
- 		}
- 		/*
--		 * This will accept flags/fields in any order - not
--		 * just the order specified in printf(3), but this is
--		 * the way _doprnt() seems to work (on bsd and sysV).
--		 * The only restriction is that the format character must
--		 * come last :-).
-+		 * This will accept flags/fields in any order - not just
-+		 * the order specified in printf(3), but this is the way
-+		 * _doprnt() seems to work (on BSD and SYSV). The only
-+		 * restriction is that the format character must come
-+		 * last :-).
- 		 */
--		flags = field = precision = 0;
-+		flags = 0;
-+		field = precision = 0;
- 		for ( ; (c = *fmt++) ; ) {
- 			switch (c) {
- 			case '#':
-@@ -815,7 +817,7 @@
- 				continue;
- 
- 			case '*':
--				tmp = va_arg(args, int);
-+				tmp = VA(int);
- 				if (flags & FL_DOT)
- 					precision = tmp;
- 				else if ((field = tmp) < 0) {
-@@ -825,19 +827,27 @@
- 				continue;
- 
- 			case 'l':
-+				flags &= ~FM_SIZES;
- 				flags |= FL_LONG;
- 				continue;
- 
- 			case 'h':
-+				flags &= ~FM_SIZES;
- 				flags |= FL_SHORT;
- 				continue;
-+
-+			case 'z':
-+				flags &= ~FM_SIZES;
-+				flags |= FL_SIZET;
-+				continue;
- 			}
- 			if (ksh_isdigit(c)) {
- 				tmp = c - '0';
- 				while (c = *fmt++, ksh_isdigit(c))
- 					tmp = tmp * 10 + c - '0';
- 				--fmt;
--				if (tmp < 0)		/* overflow? */
-+				if (tmp < 0)
-+					/* overflow? */
- 					tmp = 0;
- 				if (flags & FL_DOT)
- 					precision = tmp;
-@@ -851,7 +861,8 @@
- 		if (precision < 0)
- 			precision = 0;
- 
--		if (!c)		/* nasty format */
-+		if (!c)
-+			/* nasty format */
- 			break;
- 
- 		if (c >= 'A' && c <= 'Z') {
-@@ -862,26 +873,32 @@
- 		switch (c) {
- 		case 'd':
- 		case 'i':
-+			if (flags & FL_SIZET)
-+				lnum = (long)VA(ssize_t);
-+			else if (flags & FL_LONG)
-+				lnum = VA(long);
-+			else if (flags & FL_SHORT)
-+				lnum = (long)(short)VA(int);
-+			else
-+				lnum = (long)VA(int);
-+			goto integral;
-+
- 		case 'o':
- 		case 'u':
- 		case 'x':
-+			if (flags & FL_SIZET)
-+				lnum = VA(size_t);
-+			else if (flags & FL_LONG)
-+				lnum = VA(unsigned long);
-+			else if (flags & FL_SHORT)
-+				lnum = (unsigned long)(unsigned short)VA(int);
-+			else
-+				lnum = (unsigned long)VA(unsigned int);
-+
-+ integral:
- 			flags |= FL_NUMBER;
- 			cp = numbuf + sizeof(numbuf);
--			/*-
--			 * XXX any better way to do this?
--			 * XXX hopefully the compiler optimises this out
--			 *
--			 * For shorts, we want sign extend for %d but not
--			 * for %[oxu] - on 16 bit machines it doesn't matter.
--			 * Assumes C compiler has converted shorts to ints
--			 * before pushing them. XXX optimise this -tg
--			 */
--			if (flags & FL_LONG)
--				lnum = va_arg(args, unsigned long);
--			else if ((sizeof(int) < sizeof(long)) && (c == 'd'))
--				lnum = (long)va_arg(args, int);
--			else
--				lnum = va_arg(args, unsigned int);
-+
- 			switch (c) {
- 			case 'd':
- 			case 'i':
-@@ -937,19 +954,20 @@
- 					field = precision;
- 					flags |= FL_ZERO;
- 				} else
--					precision = len; /* no loss */
-+					/* no loss */
-+					precision = len;
- 			}
- 			break;
- 
- 		case 's':
--			if (!(s = va_arg(args, const char *)))
-+			if ((s = VA(const char *)) == NULL)
- 				s = "(null)";
- 			len = utf_mbswidth(s);
- 			break;
- 
- 		case 'c':
- 			flags &= ~FL_DOT;
--			numbuf[0] = (char)(va_arg(args, int));
-+			numbuf[0] = (char)(VA(int));
- 			s = numbuf;
- 			len = 1;
- 			break;
 Index: src/bin/mksh/syn.c
-diff -u src/bin/mksh/syn.c:1.67 src/bin/mksh/syn.c:1.68
---- src/bin/mksh/syn.c:1.67	Sun Jun  5 19:58:20 2011
-+++ src/bin/mksh/syn.c	Sat Aug 27 18:06:51 2011
-@@ -22,9 +22,10 @@
+diff -u src/bin/mksh/syn.c:1.73 src/bin/mksh/syn.c:1.77
+--- src/bin/mksh/syn.c:1.73	Tue Jan  3 15:32:08 2012
++++ src/bin/mksh/syn.c	Sun Jul  1 15:38:08 2012
+@@ -23,7 +23,7 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/syn.c,v 1.67 2011/06/05 19:58:20 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/syn.c,v 1.68 2011/08/27 18:06:51 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/syn.c,v 1.73 2012/01/03 15:32:08 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/syn.c,v 1.77 2012/07/01 15:38:08 tg Exp $");
  
  extern short subshell_nesting_level;
-+extern void yyskiputf8bom(void);
+ extern void yyskiputf8bom(void);
+@@ -52,7 +52,7 @@
+ static void syntaxerr(const char *) MKSH_A_NORETURN;
+ static void nesting_push(struct nesting_state *, int);
+ static void nesting_pop(struct nesting_state *);
+-static int assign_command(char *);
++static int assign_command(const char *);
+ static int inalias(struct source *);
+ static Test_op dbtestp_isa(Test_env *, Test_meta);
+ static const char *dbtestp_getopnd(Test_env *, Test_op, bool);
+@@ -73,6 +73,9 @@
+ #define tpeek(cf)	((reject) ? (symbol) : (REJECT, symbol = yylex(cf)))
+ #define musthave(c,cf)	do { if (token(cf) != (c)) syntaxerr(NULL); } while (/* CONSTCOND */ 0)
  
- struct nesting_state {
- 	int start_token;	/* token than began nesting (eg, FOR) */
-@@ -893,8 +894,6 @@
- struct op *
- compile(Source *s, bool skiputf8bom)
++static const char Tcbrace[] = "}";
++static const char Tesac[] = "esac";
++
+ static void
+ yyparse(void)
  {
--	extern void yyskiputf8bom(void);
--
- 	nesting.start_token = 0;
- 	nesting.start_line = 0;
- 	herep = heres;
+@@ -602,7 +605,20 @@
+ 	if (token(CONTIN | KEYWORD) != '(')
+ 		REJECT;
+ 	do {
+-		musthave(LWORD, 0);
++		switch (token(0)) {
++		case LWORD:
++			break;
++		case '}':
++		case ESAC:
++			if (symbol != endtok) {
++				strdupx(yylval.cp,
++				    symbol == '}' ? Tcbrace : Tesac, ATEMP);
++				break;
++			}
++			/* FALLTHROUGH */
++		default:
++			syntaxerr(NULL);
++		}
+ 		XPput(ptns, yylval.cp);
+ 	} while (token(0) == '|');
+ 	REJECT;
+@@ -760,7 +776,7 @@
+ 	{ "elif",	ELIF,	true },
+ 	{ "fi",		FI,	true },
+ 	{ "case",	CASE,	true },
+-	{ "esac",	ESAC,	true },
++	{ Tesac,	ESAC,	true },
+ 	{ "for",	FOR,	true },
+ 	{ Tselect,	SELECT,	true },
+ 	{ "while",	WHILE,	true },
+@@ -771,7 +787,7 @@
+ 	{ Tfunction,	FUNCTION, true },
+ 	{ "time",	TIME,	true },
+ 	{ "{",		'{',	true },
+-	{ "}",		'}',	true },
++	{ Tcbrace,	'}',	true },
+ 	{ "!",		BANG,	true },
+ 	{ "[[",		DBRACKET, true },
+ 	/* Lexical tokens (0[EOF], LWORD and REDIR handled specially) */
+@@ -794,7 +810,7 @@
+ 	struct tbl *p;
+ 
+ 	ktinit(APERM, &keywords,
+-	    /* currently 28 keywords -> 80% of 64 (2^6) */
++	    /* currently 28 keywords: 75% of 64 = 2^6 */
+ 	    6);
+ 	for (tt = tokentab; tt->name; tt++) {
+ 		if (tt->reserved) {
+@@ -914,13 +930,13 @@
+  *	$
+  */
+ static int
+-assign_command(char *s)
++assign_command(const char *s)
+ {
+ 	if (!*s)
+ 		return (0);
+ 	return ((strcmp(s, Talias) == 0) ||
+-	    (strcmp(s, "export") == 0) ||
+-	    (strcmp(s, "readonly") == 0) ||
++	    (strcmp(s, Texport) == 0) ||
++	    (strcmp(s, Treadonly) == 0) ||
+ 	    (strcmp(s, Ttypeset) == 0));
+ }
+ 
 Index: src/bin/mksh/tree.c
-diff -u src/bin/mksh/tree.c:1.49 src/bin/mksh/tree.c:1.50
---- src/bin/mksh/tree.c:1.49	Sun May 29 02:18:57 2011
-+++ src/bin/mksh/tree.c	Sat Aug 27 18:06:51 2011
-@@ -22,7 +22,7 @@
+diff -u src/bin/mksh/tree.c:1.52.4.3 src/bin/mksh/tree.c:1.61
+--- src/bin/mksh/tree.c:1.52.4.3	Sat Mar 24 21:22:45 2012
++++ src/bin/mksh/tree.c	Thu Jun 28 20:17:39 2012
+@@ -1,4 +1,4 @@
+-/*	$OpenBSD: tree.c,v 1.19 2008/08/11 21:50:35 jaredy Exp $	*/
++/*	$OpenBSD: tree.c,v 1.20 2012/06/27 07:17:19 otto Exp $	*/
+ 
+ /*-
+  * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
+@@ -23,7 +23,7 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/tree.c,v 1.49 2011/05/29 02:18:57 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/tree.c,v 1.50 2011/08/27 18:06:51 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/tree.c,v 1.52.4.3 2012/03/24 21:22:45 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/tree.c,v 1.61 2012/06/28 20:17:39 tg Exp $");
  
  #define INDENT	8
  
-@@ -386,7 +386,7 @@
+@@ -127,7 +127,7 @@
+ 		}
+ 		fptreef(shf, indent, "%Nesac ");
+ 		break;
+-#ifndef MKSH_NO_DEPRECATED_WARNING
++#ifdef DEBUG
+ 	case TELIF:
+ 		internal_errorf("TELIF in tree.c:ptree() unexpected");
+ 		/* FALLTHROUGH */
+@@ -850,9 +850,68 @@
+ }
  
- /* VARARGS */
- char *
--snptreef(char *s, int n, const char *fmt, ...)
-+snptreef(char *s, ssize_t n, const char *fmt, ...)
+ void
++dumpioact(struct shf *shf, struct op *t)
++{
++	struct ioword **ioact, *iop;
++
++	if ((ioact = t->ioact) == NULL)
++		return;
++
++	shf_puts("{IOACT", shf);
++	while ((iop = *ioact++) != NULL) {
++		int type = iop->flag & IOTYPE;
++#define DT(x) case x: shf_puts(#x, shf); break;
++#define DB(x) if (iop->flag & x) shf_puts("|" #x, shf);
++
++		shf_putc(';', shf);
++		switch (type) {
++		DT(IOREAD)
++		DT(IOWRITE)
++		DT(IORDWR)
++		DT(IOHERE)
++		DT(IOCAT)
++		DT(IODUP)
++		default:
++			shf_fprintf(shf, "unk%d", type);
++		}
++		DB(IOEVAL)
++		DB(IOSKIP)
++		DB(IOCLOB)
++		DB(IORDUP)
++		DB(IONAMEXP)
++		DB(IOBASH)
++		DB(IOHERESTR)
++		DB(IONDELIM)
++		shf_fprintf(shf, ",unit=%d", iop->unit);
++		if (iop->delim) {
++			shf_puts(",delim<", shf);
++			dumpwdvar(shf, iop->delim);
++			shf_putc('>', shf);
++		}
++		if (iop->name) {
++			if (iop->flag & IONAMEXP) {
++				shf_puts(",name=", shf);
++				print_value_quoted(shf, iop->name);
++			} else {
++				shf_puts(",name<", shf);
++				dumpwdvar(shf, iop->name);
++				shf_putc('>', shf);
++			}
++		}
++		if (iop->heredoc) {
++			shf_puts(",heredoc=", shf);
++			print_value_quoted(shf, iop->heredoc);
++		}
++#undef DT
++#undef DB
++	}
++	shf_putc('}', shf);
++}
++
++void
+ dumptree(struct shf *shf, struct op *t)
  {
- 	va_list va;
- 	struct shf shf;
+-	int i;
++	int i, j;
+ 	const char **w, *name;
+ 	struct op *t1;
+ 	static int nesting;
+@@ -865,6 +924,7 @@
+ 		name = "(null)";
+ 		goto out;
+ 	}
++	dumpioact(shf, t);
+ 	switch (t->type) {
+ #define OPEN(x) case x: name = #x; shf_puts(" {" #x ":", shf); /*}*/
+ 
+@@ -874,7 +934,7 @@
+ 			w = (const char **)t->vars;
+ 			while (*w) {
+ 				shf_putc('\n', shf);
+-				for (int j = 0; j < nesting; ++j)
++				for (j = 0; j < nesting; ++j)
+ 					shf_putc('\t', shf);
+ 				shf_fprintf(shf, " var%d<", i++);
+ 				dumpwdvar(shf, *w++);
+@@ -887,7 +947,7 @@
+ 			w = t->args;
+ 			while (*w) {
+ 				shf_putc('\n', shf);
+-				for (int j = 0; j < nesting; ++j)
++				for (j = 0; j < nesting; ++j)
+ 					shf_putc('\t', shf);
+ 				shf_fprintf(shf, " arg%d<", i++);
+ 				dumpwdvar(shf, *w++);
+@@ -927,7 +987,7 @@
+ 		w = t->args;
+ 		while (*w) {
+ 			shf_putc('\n', shf);
+-			for (int j = 0; j < nesting; ++j)
++			for (j = 0; j < nesting; ++j)
+ 				shf_putc('\t', shf);
+ 			shf_fprintf(shf, " arg%d<", i++);
+ 			dumpwdvar(shf, *w++);
+@@ -942,7 +1002,7 @@
+ 			w = (const char **)t->vars;
+ 			while (*w) {
+ 				shf_putc('\n', shf);
+-				for (int j = 0; j < nesting; ++j)
++				for (j = 0; j < nesting; ++j)
+ 					shf_putc('\t', shf);
+ 				shf_fprintf(shf, " var%d<", i++);
+ 				dumpwdvar(shf, *w++);
+@@ -957,7 +1017,7 @@
+ 		i = 0;
+ 		for (t1 = t->left; t1 != NULL; t1 = t1->right) {
+ 			shf_putc('\n', shf);
+-			for (int j = 0; j < nesting; ++j)
++			for (j = 0; j < nesting; ++j)
+ 				shf_putc('\t', shf);
+ 			shf_fprintf(shf, " sub%d[(", i);
+ 			w = (const char **)t1->vars;
+@@ -968,6 +1028,7 @@
+ 				++w;
+ 			}
+ 			shf_putc(')', shf);
++			dumpioact(shf, t);
+ 			shf_putc('\n', shf);
+ 			dumptree(shf, t1->left);
+ 			shf_fprintf(shf, " ;%c/%d]", t1->u.charflag, i++);
+@@ -994,6 +1055,7 @@
+ 		shf_putc('\n', shf);
+ 		dumptree(shf, t->left);
+ 		t = t->right;
++		dumpioact(shf, t);
+ 		if (t->left != NULL) {
+ 			shf_puts(" /TTHEN:\n", shf);
+ 			dumptree(shf, t->left);
+@@ -1001,6 +1063,7 @@
+ 		if (t->right && t->right->type == TELIF) {
+ 			shf_puts(" /TELIF:", shf);
+ 			t = t->right;
++			dumpioact(shf, t);
+ 			goto dumpif;
+ 		}
+ 		if (t->right != NULL) {
 Index: src/bin/mksh/var.c
-diff -u src/bin/mksh/var.c:1.130.2.1 src/bin/mksh/var.c:1.131
---- src/bin/mksh/var.c:1.130.2.1	Thu Jul  7 21:42:20 2011
-+++ src/bin/mksh/var.c	Sat Aug 27 18:06:52 2011
-@@ -26,7 +26,7 @@
+diff -u src/bin/mksh/var.c:1.130.2.8 src/bin/mksh/var.c:1.152
+--- src/bin/mksh/var.c:1.130.2.8	Sat Mar 24 21:22:46 2012
++++ src/bin/mksh/var.c	Sun Jul  1 15:38:09 2012
+@@ -27,7 +27,7 @@
  #include <sys/sysctl.h>
  #endif
  
--__RCSID("$MirOS: src/bin/mksh/var.c,v 1.130.2.1 2011/07/07 21:42:20 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/var.c,v 1.131 2011/08/27 18:06:52 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/var.c,v 1.130.2.8 2012/03/24 21:22:46 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/var.c,v 1.152 2012/07/01 15:38:09 tg Exp $");
  
  /*-
   * Variables
-@@ -170,7 +170,7 @@
- array_index_calc(const char *n, bool *arrayp, uint32_t *valp)
- {
- 	const char *p;
--	int len;
-+	size_t len;
- 	char *ap = NULL;
- 
- 	*arrayp = false;
-@@ -585,7 +585,7 @@
- 	char *p, *q;
- 	size_t psiz;
- 
--	olen = utf_mbswidth(s);
-+	olen = (int)utf_mbswidth(s);
- 
- 	if (vp->flag & (RJUST|LJUST)) {
- 		if (!vp->u2.field)
-@@ -693,7 +693,7 @@
- 	struct tbl *vpbase, *t;
- 	char *tvar;
- 	const char *val;
--	int len;
-+	size_t len;
- 	bool vappend = false;
- 
- 	/* check for valid variable name, search for value */
-@@ -717,7 +717,8 @@
- 		 * would be a major security hole.
- 		 */
- 		if (set & IMPORT) {
--			int i;
-+			size_t i;
-+
- 			for (i = 1; i < len - 1; i++)
- 				if (!ksh_isdigit(val[i]))
- 					return (NULL);
-@@ -738,9 +739,9 @@
- 		val = NULL;
- 		/* handle foo[*] => foo (whole array) mapping for R39b */
- 		len = strlen(tvar);
--		if (len > 3 && tvar[len-3] == '[' && tvar[len-2] == '*' &&
--		    tvar[len-1] == ']')
--			tvar[len-3] = '\0';
-+		if (len > 3 && tvar[len - 3] == '[' && tvar[len - 2] == '*' &&
-+		    tvar[len - 1] == ']')
-+			tvar[len - 3] = '\0';
- 	}
- 
- 	if (set_refflag == SRF_ENABLE) {
-@@ -944,7 +945,7 @@
- const char *
- skip_varname(const char *s, int aok)
- {
--	int alen;
-+	size_t alen;
- 
- 	if (s && ksh_isalphx(*s)) {
- 		while (*++s && ksh_isalnux(*s))
-@@ -1336,11 +1337,11 @@
-  * to point to the open bracket. Returns 0 if there is no matching
-  * closing bracket.
+@@ -39,7 +39,6 @@
+  * if (flag&EXPORT), val.s contains "name=value" for E-Z exporting.
   */
--int
-+size_t
- array_ref_len(const char *cp)
- {
- 	const char *s = cp;
--	int c;
-+	char c;
- 	int depth = 0;
  
- 	while ((c = *s++) && (c != ']' || --depth))
-@@ -1374,19 +1375,20 @@
- set_array(const char *var, bool reset, const char **vals)
- {
- 	struct tbl *vp, *vq;
--	mksh_uari_t i, j = 0;
-+	mksh_uari_t i = 0, j = 0;
- 	const char *ccp;
- #ifndef MKSH_SMALL
- 	char *cp = NULL;
-+	size_t n;
- #endif
+-static struct tbl vtemp;
+ static struct table specials;
+ static uint32_t lcg_state = 5381;
  
- 	/* to get local array, use "typeset foo; set -A foo" */
- #ifndef MKSH_SMALL
--	i = strlen(var);
--	if (i > 0 && var[i - 1] == '+') {
-+	n = strlen(var);
-+	if (n > 0 && var[n - 1] == '+') {
- 		/* append mode */
- 		reset = false;
--		strndupx(cp, var, i - 1, ATEMP);
-+		strndupx(cp, var, n - 1, ATEMP);
+@@ -131,7 +130,7 @@
+ 	struct tbl *tp;
+ 
+ 	ktinit(APERM, &specials,
+-	    /* currently 12 specials -> 80% of 16 (2^4) */
++	    /* currently 12 specials: 75% of 16 = 2^4 */
+ 	    4);
+ 	while (i < V_MAX - 1) {
+ 		tp = ktenter(&specials, initvar_names[i],
+@@ -141,8 +140,8 @@
  	}
- #define CPORVAR	(cp ? cp : var)
- #else
-@@ -1406,7 +1408,6 @@
- 	 * completely fail. Only really effects integer arrays:
- 	 * evaluation of some of vals[] may fail...
- 	 */
--	i = 0;
- #ifndef MKSH_SMALL
- 	if (cp != NULL) {
- 		/* find out where to set when appending */
-@@ -1496,9 +1497,9 @@
+ }
+ 
+-/* common code for several functions below */
+-static struct block *
++/* common code for several functions below and c_typeset() */
++struct block *
+ varsearch(struct block *l, struct tbl **vpp, const char *vn, uint32_t h)
+ {
+ 	register struct tbl *vp;
+@@ -410,7 +409,7 @@
+ 
+ 	error_ok &= ~0x4;
+ 	if ((vq->flag & RDONLY) && !no_ro_check) {
+-		warningf(true, "%s: %s", vq->name, "is read only");
++		warningf(true, "read-only: %s", vq->name);
+ 		if (!error_ok)
+ 			errorfxz(2);
+ 		return (0);
+@@ -488,27 +487,16 @@
+ 	base = 10;
+ 	num = 0;
+ 	neg = 0;
+-#ifdef MKSH_DISABLE_DEPRECATED
+ 	if (arith && s[0] == '0' && (s[1] | 0x20) == 'x') {
+ 		s += 2;
+ 		base = 16;
+ 		have_base = true;
+ 	}
+-#else
+-	if (arith && *s == '0' && *(s+1)) {
+-		s++;
+-		if (*s == 'x' || *s == 'X') {
+-			s++;
+-			base = 16;
+-		} else if (vp->flag & ZEROFIL) {
+-			while (*s == '0')
+-				s++;
+-		} else {
+-			warningf(true, "interpreting %s[%lu]='%s' as octal"
+-			    " is deprecated", vp->name,
+-			    arrayindex(vp), vp->val.s + vp->type);
+-			base = 8;
+-		}
++#ifdef MKSH_LEGACY_MODE
++	if (arith && s[0] == '0' && ksh_isdigit(s[1]) &&
++	    !(vp->flag & ZEROFIL)) {
++		/* interpret as octal (deprecated) */
++		base = 8;
+ 		have_base = true;
+ 	}
+ #endif
+@@ -814,7 +802,7 @@
+ 	if ((vpbase->flag&RDONLY) &&
+ 	    (val || clr || (set & ~EXPORT)))
+ 		/* XXX check calls - is error here ok by POSIX? */
+-		errorfx(2, "%s: %s", tvar, "is read only");
++		errorfx(2, "read-only: %s", tvar);
+ 	afree(tvar, ATEMP);
+ 
+ 	/* most calls are with set/clr == 0 */
+@@ -1107,17 +1095,13 @@
+ 		if (vp->flag & ISSET) {
+ 			struct timeval tv;
+ 
+-			gettimeofday(&tv, NULL);
++			mksh_TIME(tv);
+ 			i = tv.tv_sec - seconds;
+ 		} else
+ 			return;
+ 		break;
+ 	case V_RANDOM:
+-		/*
+-		 * this is the same Linear Congruential PRNG as Borland
+-		 * C/C++ allegedly uses in its built-in rand() function
+-		 */
+-		i = ((lcg_state = 22695477 * lcg_state + 1) >> 16) & 0x7FFF;
++		i = rndget();
+ 		break;
+ 	case V_HISTSIZE:
+ 		i = histsize;
+@@ -1244,7 +1228,7 @@
+ 		{
+ 			struct timeval tv;
+ 
+-			gettimeofday(&tv, NULL);
++			mksh_TIME(tv);
+ 			seconds = tv.tv_sec - i;
+ 		}
+ 		break;
+@@ -1404,7 +1388,7 @@
+ 
+ 	/* Note: AT&T ksh allows set -A but not set +A of a read-only var */
+ 	if ((vp->flag&RDONLY))
+-		errorfx(2, "%s: %s", ccp, "is read only");
++		errorfx(2, "read-only: %s", ccp);
+ 	/* This code is quite non-optimal */
+ 	if (reset) {
+ 		/* trash existing values and attributes */
+@@ -1492,20 +1476,30 @@
  {
  	register uint32_t h;
  
@@ -2557,11 +4674,22 @@ diff -u src/bin/mksh/var.c:1.130.2.1 src/bin/mksh/var.c:1.131
 -	oaat1_fini_impl(h);
 +	NZATInit(h);
 +	NZATUpdateString(h, s);
-+	NZATFinish(h);
++	NZAATFinish(h);
  	return (h);
  }
  
-@@ -1507,9 +1508,9 @@
++mksh_ari_t
++rndget(void)
++{
++	/*
++	 * this is the same Linear Congruential PRNG as Borland
++	 * C/C++ allegedly uses in its built-in rand() function
++	 */
++	return (((lcg_state = 22695477 * lcg_state + 1) >> 16) & 0x7FFF);
++}
++
+ void
+ rndset(long v)
  {
  	register uint32_t h;
  
@@ -2574,7 +4702,7 @@ diff -u src/bin/mksh/var.c:1.130.2.1 src/bin/mksh/var.c:1.131
  
  #if defined(arc4random_pushb_fast) || defined(MKSH_A4PB)
  	/*
-@@ -1518,16 +1519,16 @@
+@@ -1514,16 +1508,16 @@
  	 * user requested us to use the old functions
  	 */
  	lcg_state = h;
