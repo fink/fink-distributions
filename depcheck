@@ -1,0 +1,85 @@
+#!/bin/sh
+
+FINK_PATH="/sw"
+
+if [[ -z ${1} ]]; then
+  /bin/echo "Need a package name or path to check"
+  exit 1
+fi
+
+# check if arg is a dir if not assume it's a package
+if [ -d "${1}" ]; then
+  is_dir="YES"
+fi
+
+if [[ "${is_dir}" == "YES" ]]; then
+  files="find ${1} -type f"
+else
+  is_installed=`/sw/bin/dpkg -s ${1} 2>1 | grep 'ok installed' | perl -pi -e 's,^.+ok installed$,INSTALLED,g'`
+  if [[ "${is_installed}" != "INSTALLED" ]]; then 
+    /bin/echo "Package '${1}' not installed, can not check deps."
+    exit 1
+  fi
+
+  files="${FINK_PATH}/bin/dpkg -L ${1}"
+fi
+
+/bin/echo -n "Gathering fink depends... "
+fink_deps=''
+fink_deps=`${files} | xargs /usr/bin/file -h | grep 'Mach-O' | cut -f 1 -d ':' | xargs otool -L | grep version | sort | uniq | cut -f 1 -d ' ' | xargs ${FINK_PATH}/bin/dpkg -S 2>1 | grep -v 'not found' | grep -v 'no path found matching pattern' | cut -f 1 -d ':' | sort | uniq`
+/bin/echo "Done"
+
+/bin/echo -n "Gathering X11 depends... "
+x11_deps=''
+x11_deps=`${files} | xargs /usr/bin/file -h | grep 'Mach-O' | cut -f 1 -d ':' | xargs otool -L | grep version | grep /usr/X11 | sort | uniq | cut -f 1 -d ' ' | cut -f 2`
+/bin/echo "Done"
+
+/bin/echo -n "Gathering System depends... "
+sys_deps=''
+sys_deps=`${files} | xargs /usr/bin/file -h | grep 'Mach-O' | cut -f 1 -d ':' | xargs otool -L | grep version | grep /usr | grep -v /usr/X11 | sort | uniq | cut -f 1 -d ' ' | cut -f 2`
+/bin/echo "Done"
+
+/bin/echo -n "Gathering System Frameworks... "
+sys_fw=''
+sys_fw=`${files} | xargs /usr/bin/file -h | grep 'Mach-O' | cut -f 1 -d ':' | xargs otool -L | grep version | grep /Library\/Frameworks | sort | uniq | cut -f 1 -d ' ' | cut -f 2`
+/bin/echo "Done"
+/bin/echo ""
+
+if [[ ${fink_deps} ]]; then
+  /bin/echo "Fink Depends: "
+  /bin/echo ${fink_deps}
+  /bin/echo ""
+fi
+
+if [[ ${x11_deps} ]]; then
+  /bin/echo "X11 Libs: "
+  /bin/echo ${x11_deps}
+  /bin/echo ""
+fi
+
+if [[ ${sys_deps} ]]; then
+  /bin/echo "System Libs: "
+  /bin/echo ${sys_deps}
+  /bin/echo ""
+fi
+
+if [[ ${sys_fw} ]]; then
+  /bin/echo "Frameworks:"
+  /bin/echo ${sys_fw}
+  /bin/echo ""
+fi
+
+depends=''
+### This needs to get expanded
+if [[ "${sys_deps}" || "${sys_fw}" ]]; then
+  depends="${depends} darwin"
+fi
+if [[ "${x11_deps}" ]]; then
+  depends="${depends} x11-shlibs"
+fi
+
+depends=`/bin/echo ${depends} ${fink_deps} | perl -pi -e 's/\s+/, /g' | perl -pi -e 's/, $//g'`
+
+/bin/echo -n "Depends: "
+/bin/echo ${depends}
+/bin/echo ""
