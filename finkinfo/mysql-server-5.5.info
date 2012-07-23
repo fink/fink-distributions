@@ -2,7 +2,7 @@ Package: mysql-server-5.5
 Version: 5.5.24
 Revision: 1
 ###
-BuildDepends: libncurses5 (>= 5.0-6), readline6, po-debconf, cmake
+BuildDepends: fink (>= 0.32), libncurses5 (>= 5.0-6), readline6, po-debconf, cmake
 Depends: mysql-common (= %v-%r), mysql-client-5.5 (= %v-%r), mysql-server-core-5.5 (= %v-%r), libmysqlclient18-shlibs (= %v-%r), dbi-pm, daemonic, debconf
 Recommends: mailx, html-template-pm
 Provides: virtual-mysql-server
@@ -182,10 +182,53 @@ rm -vf %i/bin/mysql_client_test_embedded \
        %i/bin/mysqlaccess.conf
 
 # debconf
-po2debconf fink/%n.templates > fink/%n.templates.merged
-install -m 0755 fink/%n.config %d/DEBIAN/config
-install -m 0755 fink/%n.templates.merged %d/DEBIAN/templates
+#po2debconf fink/%n.templates > fink/%n.templates.merged
+#install -m 0755 fink/%n.config %d/DEBIAN/config
+#install -m 0755 fink/%n.templates.merged %d/DEBIAN/templates
 <<
+###
+Debconf: <<
+  ConfigScript: <<
+CNF=%p/etc/mysql/my.cnf
+
+ # only ask this question on fresh installs, during "reconfiguration" and when  
+ # not upgrading from an existing 5.0 installation.
+ # there is also an additional check for empty root passwords in the
+ # postinst script when the tools are available for us to use.
+if [ "$1" = "configure" ] && ([ -z "$2" ] && [ ! -e "%p/var/lib/mysql/fink-5.0.flag" ] ) || [ "$1" = "reconfigure" ]; then
+  while :; do
+    RET=""
+    db_input high mysql-server/root_password || true
+    db_go
+    db_get mysql-server/root_password
+    # if password isn't empty we ask for password verification
+    if [ -z "$RET" ]; then
+      db_fset mysql-server/root_password seen false
+      db_fset mysql-server/root_password_again seen false
+      break
+    fi
+    ROOT_PW="$RET"
+    db_input high mysql-server/root_password_again || true
+    db_go
+    db_get mysql-server/root_password_again
+    if [ "$RET" == "$ROOT_PW" ]; then
+      ROOT_PW=''
+      break
+    fi
+    db_fset mysql-server/password_mismatch seen false
+    db_input critical mysql-server/password_mismatch
+    db_set mysql-server/root_password "" 
+    db_set mysql-server/root_password_again ""
+    db_go
+  done
+  db_input high mysql-server-5.5/start_on_boot || true
+  db_go
+fi
+  <<
+  TemplatesFile: %b/fink/%n.templates
+  PODirectory: %b/fink/po
+<<
+###
 InfoTest: <<
   TestScript: <<
     cp unittest/unit.pl %b/builddir/unittest/
