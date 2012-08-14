@@ -4170,8 +4170,8 @@ diff -ruN httpd-2.2.22.orig/fink/config-dir/mods-available/dir.load httpd-2.2.22
 +LoadModule dir_module @FINKPREFIX@/lib/apache2/modules/mod_dir.so
 diff -ruN httpd-2.2.22.orig/fink/config-dir/mods-available/disk_cache.conf httpd-2.2.22/fink/config-dir/mods-available/disk_cache.conf
 --- httpd-2.2.22.orig/fink/config-dir/mods-available/disk_cache.conf	1969-12-31 17:00:00.000000000 -0700
-+++ httpd-2.2.22/fink/config-dir/mods-available/disk_cache.conf	2012-06-12 08:46:21.000000000 -0600
-@@ -0,0 +1,18 @@
++++ httpd-2.2.22/fink/config-dir/mods-available/disk_cache.conf	2012-08-14 09:55:30.000000000 -0600
+@@ -0,0 +1,22 @@
 +<IfModule mod_disk_cache.c>
 +# cache cleaning is done by htcacheclean, which can be configured in
 +# @FINKPREFIX@/etc/default/apache2
@@ -4187,8 +4187,12 @@ diff -ruN httpd-2.2.22.orig/fink/config-dir/mods-available/disk_cache.conf httpd
 +
 +	#CacheEnable disk /
 +
-+        CacheDirLevels 5
-+        CacheDirLength 3
++	# The result of CacheDirLevels * CacheDirLength must not be higher than
++	# 20. Moreover, pay attention on file system limits. Some file systems
++	# do not support more than a certain number of subdirectories in a
++	# single directory (e.g. 32000 for ext3)
++	CacheDirLevels 2
++	CacheDirLength 1
 +</IfModule>
 diff -ruN httpd-2.2.22.orig/fink/config-dir/mods-available/disk_cache.load httpd-2.2.22/fink/config-dir/mods-available/disk_cache.load
 --- httpd-2.2.22.orig/fink/config-dir/mods-available/disk_cache.load	1969-12-31 17:00:00.000000000 -0700
@@ -5312,6 +5316,70 @@ diff -ruN httpd-2.2.22.orig/fink/convert_docs httpd-2.2.22/fink/convert_docs
 +	print $out $file;
 +	close($out);
 +}
+diff -ruN httpd-2.2.22.orig/fink/cron.daily httpd-2.2.22/fink/cron.daily
+--- httpd-2.2.22.orig/fink/cron.daily	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/cron.daily	2012-08-14 13:55:25.000000000 -0600
+@@ -0,0 +1,30 @@
++#!/bin/sh
++
++# run htcacheclean
++
++set -e
++set -u
++
++[ -e /usr/sbin/htcacheclean ] || exit 0
++[ -e @FINKPREFIX@/etc/default/apache2 ]   || exit 0
++
++
++# edit @FINKPREFIX@/etc/default/apache2 to change this
++HTCACHECLEAN_MODE=daemon
++HTCACHECLEAN_RUN=auto
++HTCACHECLEAN_SIZE=300M
++HTCACHECLEAN_PATH=@FINKPREFIX@/var/cache/apache2/mod_disk_cache
++HTCACHECLEAN_OPTIONS=""
++
++. @FINKPREFIX@/etc/default/apache2
++
++[ "$HTCACHECLEAN_MODE" = "cron" ] || exit 0
++
++[ "$HTCACHECLEAN_RUN" = "yes"	] || 
++( [ "$HTCACHECLEAN_RUN" = "auto" ] && \
++  [ -e @FINKPREFIX@/etc/apache2/mods-enabled/disk_cache.load ] )  || exit 0
++
++@FINKPREFIX@/sbin/htcacheclean  ${HTCACHECLEAN_OPTIONS}	\
++			-p${HTCACHECLEAN_PATH}	\
++			-l${HTCACHECLEAN_SIZE}
++
+diff -ruN httpd-2.2.22.orig/fink/default httpd-2.2.22/fink/default
+--- httpd-2.2.22.orig/fink/default	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/default	2012-08-14 13:56:35.000000000 -0600
+@@ -0,0 +1,26 @@
++### htcacheclean settings ###
++
++## run htcacheclean: yes, no, auto
++## auto means run if @FINKPREFIX@/etc/apache2/mods-enabled/disk_cache.load exists
++## default: auto
++HTCACHECLEAN_RUN=auto
++
++## run mode: cron, daemon
++## run in daemon mode or as daily cron job
++## default: daemon
++HTCACHECLEAN_MODE=daemon
++
++## cache size 
++HTCACHECLEAN_SIZE=300M
++
++## interval: if in daemon mode, clean cache every x minutes
++HTCACHECLEAN_DAEMON_INTERVAL=120
++
++## path to cache
++## must be the same as in CacheRoot directive
++HTCACHECLEAN_PATH=@FINKPREFIX@/var/cache/apache2/mod_disk_cache
++
++## additional options:
++## -n : be nice
++## -t : remove empty directories
++HTCACHECLEAN_OPTIONS="-n"
 diff -ruN httpd-2.2.22.orig/fink/httxt2dbm.8 httpd-2.2.22/fink/httxt2dbm.8
 --- httpd-2.2.22.orig/fink/httxt2dbm.8	1969-12-31 17:00:00.000000000 -0700
 +++ httpd-2.2.22/fink/httxt2dbm.8	2012-06-12 08:46:21.000000000 -0600
@@ -5887,6 +5955,158 @@ diff -ruN httpd-2.2.22.orig/fink/patches/CacheIgnoreURLSessionIdentifiers.patch 
 +             }
 +         }
 +     }
+diff -ruN httpd-2.2.22.orig/fink/patches/SSLProtocol-tls11-12.2.patch httpd-2.2.22/fink/patches/SSLProtocol-tls11-12.2.patch
+--- httpd-2.2.22.orig/fink/patches/SSLProtocol-tls11-12.2.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/SSLProtocol-tls11-12.2.patch	2012-08-14 10:03:11.000000000 -0600
+@@ -0,0 +1,148 @@
++Description: Support TLSv1.1 and TLSv1.2 in SSLProtocol directive
++Forwarded: not-needed
++Author: Stefan Fritsch
++Last-Update: 2012-07-30
++Bug-Debian: http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=682897
++#
++# This patch encompases backports from 2.4 branch;
++#
++#   http://svn.apache.org/viewvc?view=revision&revision=1222921
++#   http://svn.apache.org/viewvc?view=revision&revision=1222930
++#
++# However, it also accounts for the fact that SSLv2 support
++# remains present in httpd-2.2 branch and makes no changes
++# which changes the existing configuration behavior, with
++# the exception of adding TLS1.1 and TLS1.2 by default.)
++#
++Index: apache2/modules/ssl/ssl_private.h
++===================================================================
++--- apache2.orig/modules/ssl/ssl_private.h
+++++ apache2/modules/ssl/ssl_private.h
++@@ -59,6 +59,11 @@
++ /** mod_ssl headers */
++ #include "ssl_toolkit_compat.h"
++ #include "ssl_expr.h"
+++
+++#ifdef SSL_OP_NO_TLSv1_2
+++#define HAVE_TLSV1_X
+++#endif
+++
++ #include "ssl_util_ssl.h"
++ 
++ /** The #ifdef macros are only defined AFTER including the above
++@@ -218,10 +223,14 @@
++ #define SSL_PROTOCOL_SSLV2 (1<<0)
++ #define SSL_PROTOCOL_SSLV3 (1<<1)
++ #define SSL_PROTOCOL_TLSV1 (1<<2)
+++#define SSL_PROTOCOL_TLSV1_1 (1<<3)
+++#define SSL_PROTOCOL_TLSV1_2 (1<<4)
++ #ifndef OPENSSL_NO_SSL2
++-#define SSL_PROTOCOL_ALL   (SSL_PROTOCOL_SSLV2|SSL_PROTOCOL_SSLV3|SSL_PROTOCOL_TLSV1)
+++#define SSL_PROTOCOL_ALL (SSL_PROTOCOL_SSLV2|SSL_PROTOCOL_SSLV3|SSL_PROTOCOL_TLSV1|\
+++                          SSL_PROTOCOL_TLSV1_1|SSL_PROTOCOL_TLSV1_2)
++ #else
++-#define SSL_PROTOCOL_ALL   (SSL_PROTOCOL_SSLV3|SSL_PROTOCOL_TLSV1)
+++#define SSL_PROTOCOL_ALL (SSL_PROTOCOL_SSLV3|SSL_PROTOCOL_TLSV1|\
+++                          SSL_PROTOCOL_TLSV1_1|SSL_PROTOCOL_TLSV1_2)
++ #endif
++ typedef int ssl_proto_t;
++ 
++Index: apache2/modules/ssl/ssl_engine_init.c
++===================================================================
++--- apache2.orig/modules/ssl/ssl_engine_init.c
+++++ apache2/modules/ssl/ssl_engine_init.c
++@@ -459,6 +459,10 @@
++                      (protocol & SSL_PROTOCOL_SSLV2 ? "SSLv2, " : ""),
++                      (protocol & SSL_PROTOCOL_SSLV3 ? "SSLv3, " : ""),
++                      (protocol & SSL_PROTOCOL_TLSV1 ? "TLSv1, " : ""),
+++#ifdef HAVE_TLSV1_X
+++                     (protocol & SSL_PROTOCOL_TLSV1_1 ? "TLSv1.1, " : ""),
+++                     (protocol & SSL_PROTOCOL_TLSV1_2 ? "TLSv1.2, " : ""),
+++#endif
++                      NULL);
++     cp[strlen(cp)-2] = NUL;
++ 
++@@ -474,6 +478,21 @@
++     }
++     else
++ #endif
+++#ifdef HAVE_TLSV1_X
+++    if (protocol == SSL_PROTOCOL_TLSV1_1) {
+++        method = mctx->pkp ?
+++            TLSv1_1_client_method() : /* proxy */
+++            TLSv1_1_server_method();  /* server */
+++        ctx = SSL_CTX_new(method);
+++    }
+++    else if (protocol == SSL_PROTOCOL_TLSV1_2) {
+++        method = mctx->pkp ?
+++            TLSv1_2_client_method() : /* proxy */
+++            TLSv1_2_server_method();  /* server */
+++        ctx = SSL_CTX_new(method);
+++    }
+++    else
+++#endif
++     {
++         method = mctx->pkp ?
++             SSLv23_client_method() : /* proxy */
++@@ -497,6 +516,16 @@
++         SSL_CTX_set_options(ctx, SSL_OP_NO_TLSv1);
++     }
++ 
+++#ifdef HAVE_TLSV1_X
+++    if (!(protocol & SSL_PROTOCOL_TLSV1_1)) {
+++        SSL_CTX_set_options(ctx, SSL_OP_NO_TLSv1_1);
+++    }
+++
+++    if (!(protocol & SSL_PROTOCOL_TLSV1_2)) {
+++        SSL_CTX_set_options(ctx, SSL_OP_NO_TLSv1_2);
+++    }
+++#endif
+++
++ #ifdef SSL_OP_CIPHER_SERVER_PREFERENCE
++     if (sc->cipher_server_pref == TRUE) {
++         SSL_CTX_set_options(ctx, SSL_OP_CIPHER_SERVER_PREFERENCE);
++Index: apache2/modules/ssl/ssl_engine_config.c
++===================================================================
++--- apache2.orig/modules/ssl/ssl_engine_config.c
+++++ apache2/modules/ssl/ssl_engine_config.c
++@@ -1286,6 +1286,14 @@
++         else if (strcEQ(w, "TLSv1")) {
++             thisopt = SSL_PROTOCOL_TLSV1;
++         }
+++#ifdef HAVE_TLSV1_X
+++        else if (strcEQ(w, "TLSv1.1")) {
+++            thisopt = SSL_PROTOCOL_TLSV1_1;
+++        }
+++        else if (strcEQ(w, "TLSv1.2")) {
+++            thisopt = SSL_PROTOCOL_TLSV1_2;
+++        }
+++#endif
++         else if (strcEQ(w, "all")) {
++             thisopt = SSL_PROTOCOL_ALL;
++         }
++Index: apache2/modules/ssl/mod_ssl.c
++===================================================================
++--- apache2.orig/modules/ssl/mod_ssl.c
+++++ apache2/modules/ssl/mod_ssl.c
++@@ -142,8 +142,8 @@
++                 "SSL Session Cache object lifetime "
++                 "(`N' - number of seconds)")
++     SSL_CMD_SRV(Protocol, RAW_ARGS,
++-                "Enable or disable various SSL protocols"
++-                "(`[+-][SSLv2|SSLv3|TLSv1] ...' - see manual)")
+++                "Enable or disable various SSL protocols "
+++                "('[+-][SSLv3|TLSv1|TLSv1.1|TLSv1.2] ...' - see manual)")
++     SSL_CMD_SRV(HonorCipherOrder, FLAG,
++                 "Use the server's cipher ordering preference")
++     SSL_CMD_SRV(InsecureRenegotiation, FLAG,
++@@ -160,8 +160,8 @@
++                 "SSL switch for the proxy protocol engine "
++                 "(`on', `off')")
++     SSL_CMD_SRV(ProxyProtocol, RAW_ARGS,
++-               "SSL Proxy: enable or disable SSL protocol flavors "
++-               "(`[+-][SSLv2|SSLv3|TLSv1] ...' - see manual)")
+++                "SSL Proxy: enable or disable SSL protocol flavors "
+++                "('[+-][SSLv3|TLSv1|TLSv1.1|TLSv1.2] ...' - see manual)")
++     SSL_CMD_SRV(ProxyCipherSuite, TAKE1,
++                "SSL Proxy: colon-delimited list of permitted SSL ciphers "
++                "(`XXX:...:XXX' - see manual)")
 diff -ruN httpd-2.2.22.orig/fink/patches/ab_num_requests.patch httpd-2.2.22/fink/patches/ab_num_requests.patch
 --- httpd-2.2.22.orig/fink/patches/ab_num_requests.patch	1969-12-31 17:00:00.000000000 -0700
 +++ httpd-2.2.22/fink/patches/ab_num_requests.patch	2012-06-12 08:46:21.000000000 -0600
@@ -6251,6 +6471,64 @@ diff -ruN httpd-2.2.22.orig/fink/patches/dbm_read_hash_or_btree.patch httpd-2.2.
 +             `ps $_ 2>/dev/null`;
 +             $psf = $_, last unless $?;
 +         }
+diff -ruN httpd-2.2.22.orig/fink/patches/dbmmanage-perl-510.patch httpd-2.2.22/fink/patches/dbmmanage-perl-510.patch
+--- httpd-2.2.22.orig/fink/patches/dbmmanage-perl-510.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/dbmmanage-perl-510.patch	2012-08-14 09:59:34.000000000 -0600
+@@ -0,0 +1,54 @@
++Description: Make use of builtin SHA1 perl routines in Perl 5.10
++Forwarded: not-needed
++Author: Arno Töll <arno@debian.org>
++Last-Update: 2012-07-23
++Bug-Debian: http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=682401
++--- a/support/dbmmanage.in
+++++ b/support/dbmmanage.in
++@@ -20,6 +20,7 @@
++ #
++ # usage: dbmmanage <DBMfile> <command> <user> <password> <groups> <comment>
++ 
+++require v5.10;
++ package dbmmanage;
++ #                               -ldb    -lndbm    -lgdbm    -lsdbm
++ BEGIN { @AnyDBM_File::ISA = qw(DB_File NDBM_File GDBM_File SDBM_File) }
++@@ -49,14 +50,15 @@
++ }
++ 
++ sub need_sha1_crypt {
++-    if (!eval ('require "Digest/SHA1.pm";')) {
+++    if (!eval ('require "Digest/SHA.pm";')) {
++         print STDERR <<SHAERR;
++ dbmmanage SHA1 passwords require the interface or the module Digest::SHA1
++-available from CPAN:
+++available from CPAN and Fink:
++ 
++-    http://www.cpan.org/modules/by-module/Digest/Digest-MD5-2.12.tar.gz
+++    Fink package: digest-sha-pmXXXX
+++    CPAN: http://search.cpan.org/~mshelor/Digest-SHA-5.71/lib/Digest/SHA.pm
++ 
++-Please install Digest::SHA1 and try again, or use a different crypt option:
+++Please install Digest::SHA and try again, or use a different crypt option:
++ 
++ SHAERR
++         usage();
++@@ -67,7 +69,9 @@
++     if (!eval ('require "Crypt/PasswdMD5.pm";')) {
++         print STDERR <<MD5ERR;
++ dbmmanage MD5 passwords require the module Crypt::PasswdMD5 available from CPAN
+++and Fink:
++ 
+++    Fink package: crypt-passwdmd5-pm
++     http://www.cpan.org/modules/by-module/Crypt/Crypt-PasswdMD5-1.1.tar.gz
++ 
++ Please install Crypt::PasswdMD5 and try again, or use a different crypt option:
++@@ -209,7 +213,7 @@
++ 
++ sub cryptpw_sha1 {
++     my($pw, $salt) = @_;
++-    '{SHA}' . Digest::SHA1::sha1_base64($pw) . "=";
+++    '{SHA}' . Digest::SHA::sha1_base64($pw) . "=";
++ }
++ 
++ sub cryptpw {
 diff -ruN httpd-2.2.22.orig/fink/patches/disablemods.patch httpd-2.2.22/fink/patches/disablemods.patch
 --- httpd-2.2.22.orig/fink/patches/disablemods.patch	1969-12-31 17:00:00.000000000 -0700
 +++ httpd-2.2.22/fink/patches/disablemods.patch	2012-06-12 08:46:21.000000000 -0600

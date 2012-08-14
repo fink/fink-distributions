@@ -1,16 +1,16 @@
 Package: apache2
 Version: 2.2.22
-Revision: 9.1
+Revision: 11
 ###
 Provides: httpd
 BuildDepends: fink (>= 0.32), libaprutil.0-dev, libapr.0-dev, libpcap1, libpcre1, pkgconfig, openssl, openssl100-dev, openldap24-dev
-Depends: %N-mpm-prefork (= %v-%r) | %N-mpm-worker (= %v-%r) | %N-mpm-event (= %v-%r), %N.2-common (= %v-%r)
+Depends: %N-mpm-prefork (= %v-%r) | %N-mpm-worker (= %v-%r) | %N-mpm-event (= %v-%r), %N.2-common
 ###
 Source: mirror:apache:httpd/httpd-%v.tar.gz
 Source-MD5: d77fa5af23df96a8af68ea8114fa6ce1
 ###
 PatchFile: %n.patch
-PatchFile-MD5: f0b208f8d048cc31382fca13f92d54a2
+PatchFile-MD5: f7acac39653b631747208afe3a6fa8c5
 PatchScript: <<
   sed -e 's,@FINKPREFIX@,%p,g' %{PatchFile} | patch -p1
 
@@ -39,6 +39,10 @@ PatchScript: <<
   patch -p1 < fink/patches/mod_cache_partial_content-2.2.x.patch
   patch -p1 < fink/patches/upstream_trunk_bugfixes.patch
   patch -p1 < fink/patches/mod_negotiation_CVE-2012-2687.patch
+  # patch -p1 < fink/patches/201_build_suexec-custom
+  # patch -p1 < fink/patches/202_suexec-custom
+  patch -p1 < fink/patches/dbmmanage-perl-510.patch
+  patch -p1 < fink/patches/SSLProtocol-tls11-12.2.patch
 
   ## decode new icons
   for i in %b/fink/icons/*.txt; do cd %b/fink/icons; uudecode < $i; done
@@ -167,8 +171,11 @@ cp %i/share/man/man1/apxs2-prefork.1 %i/share/man/man1/apxs2-worker.1
 rm -rf %i/etc/apache2/*.conf
 
 # move the html manual to a more suitable location
-mkdir -p %i/share/doc/apache2-doc
+chmod +x %i/lib/cgi-bin/*
+mkdir -p %i/share/doc/apache2-doc/cgi-examples
 mv %i/share/apache2/default-site/htdocs/manual %i/share/doc/apache2-doc/manual
+mv %i/lib/cgi-bin/printenv %i/share/doc/apache2-doc/cgi-examples
+mv %i/lib/cgi-bin/test-cgi %i/share/doc/apache2-doc/cgi-examples
 mv %i/share/apache2/default-site/htdocs/index.html %i/share/apache2/default-site/
 rm -rf %i/share/apache2/default-site/htdocs
 # Convert it to a better layout
@@ -186,6 +193,7 @@ mkdir -p %i/etc/apache2/conf.d
 mkdir -p %i/share/apache2/config
 mkdir -p %i/var/lock/apache2
 mkdir -p %i/var/cache/apache2/proxy
+mkdir -p %i/var/cache/apache2/mod_disk_cache
 mkdir -p %i/var/log/apache2
 mkdir -p %i/var/run/apache2
 mkdir -p %i/var/www
@@ -228,8 +236,6 @@ cp -R %b/fink/config-dir/* %i/etc/apache2/
 mv %i/etc/apache2/extra %i/share/apache2/config
 mv %i/etc/apache2/original %i/share/apache2/config
 
-chmod +x %i/lib/cgi-bin/*
-
 if [ -f %i/etc/apache2/envvars ] ; then
 	rm %i/etc/apache2/envvars;
 fi
@@ -258,6 +264,12 @@ chmod 4750 %i/lib/apache2/suexec
 mkdir -p %i/etc/logrotate.d
 cp %b/fink/logrotate %i/etc/logrotate.d/apache2
 
+mkdir -p %i/etc/default
+cp %b/fink/default %i/etc/default/apache2
+
+mkdir -p %i/etc/cron.daily
+cp %b/fink/cron.daily %i/etc/cron.daily/apache2
+
 mkdir -p %i/etc/bash_completion.d
 install -m755 %b/fink/bash_completion %i/etc/bash_completion.d/apache2
 <<
@@ -270,7 +282,7 @@ SplitOff2: <<
   Description: Standard suexec program for Apache 2 mod_suexec
   DescDetail: <<
 Provides the standard suexec helper program for mod_suexec. This version is
-compiled with document root /var/www and userdir suffix public_html.
+compiled with document root %p/var/www and userdir suffix Sites.
   <<
   Files: <<
     lib/apache2/suexec
@@ -278,13 +290,7 @@ compiled with document root /var/www and userdir suffix public_html.
   <<
   DocFiles: LICENSE
   PostInstScript: <<
-if [ "$1" != "configure" ]; then
-	exit 0
-fi
-
 chown root:www %p/lib/apache2/suexec
-
-exit 0
   <<
 <<
 SplitOff3: <<
@@ -303,13 +309,13 @@ See http://localhost/manual/index.html.en for more info after install.
   <<
   DocFiles: LICENSE
   PostInstScript: <<
-if [ "$1" = "upgrade" ]; then
-	%p/sbin/apache2ctl restart
+if [ "x$(daemonic dump | grep 'service apache2')" != "x" ]; then
+  %p/sbin/apache2ctl restart || true
 fi
   <<
   PostRmScript: <<
-if [ "$1" = "upgrade" ]; then
-	%p/sbin/apache2ctl restart
+if [ "x$(daemonic dump | grep 'service apache2')" != "x" ]; then
+  %p/sbin/apache2ctl restart || true
 fi
   <<
 <<
@@ -362,9 +368,9 @@ versions of apache2; see the apache2 package description for more details.
 <<
 SplitOff6: <<
   Package: %N.2-common
-  Depends: %N-utils (= %v-%r), %N.2-bin (= %v-%r), daemonic, logrotate, mime-support
+  Depends: %N-utils (= %v-%r), %N.2-bin (= %v-%r), mime-support
   Recommends: ssl-cert
-  RuntimeDepends: debianutils, bash-completion, file, lynx
+  RuntimeDepends: debianutils, bash-completion, file, lynx, daemonic, logrotate, anacron
   ConfFiles: <<
     %p/etc/apache2/mods-available/actions.conf
     %p/etc/apache2/mods-available/actions.load
@@ -478,6 +484,8 @@ SplitOff6: <<
     etc/apache2/sites-available
     etc/bash_completion.d
     etc/logrotate.d
+    etc/default
+    etc/cron.daily
     var
     lib/cgi-bin
     share/apache2
@@ -508,6 +516,35 @@ SplitOff6: <<
     </daemon>
    </service>
   <<
+  PreInstScript: <<
+mv_conffile() {
+	if [ "`md5sum $1 2>/dev/null | cut -d ' ' -f 1`" = "$2" ] ; then
+		echo Replacing $1 with new version ...
+		mv $1 $1.dpkg-apache2.2-common.old
+	fi
+}
+
+#if [ -n "$2" ] && dpkg --compare-versions "$2" lt 2.2.4-2; then
+#	mv_conffile %p/etc/default/apache2 	9ac83f9132b78c3aa6dd4d7a583bf476
+#	mv_conffile %p/etc/default/apache2 	801eb5156368b54d92ecb578ce710836
+#	mv_conffile %p/etc/apache2/ports.conf	d5fcefc335117f400d451de47efeca87
+#	mv_conffile %p/etc/apache2/conf.d/charset 641239a7d2d172856cb1413a47d2e142
+#fi
+
+if [ -n "$2" ] && dpkg --compare-versions "$2" lt 2.2.15-4~ ; then
+	# The definition of other_vhosts_access.log has been moved from
+	# apache2.conf to conf.d/other-vhosts-access-log. If the admin has
+	# removed it from apache2.conf, mark it to be disabled in
+	# conf.d/other-vhosts-access-log in the postinst.
+	if ! egrep -q '^ *CustomLog.*other_vhosts_access.log vhost_combined$' %p/etc/apache2/apache2.conf
+	then
+		touch %p/etc/apache2/disable-other-vhost-access-log.dpkg-apache2.2-common
+	fi
+fi
+
+### needs dpkg 1.15+
+#dpkg-maintscript-helper rm_conffile %p/etc/apache2/mods-available/version.load 2.2.22-6~ -- "$@"
+  <<
   PostInstScript: <<
 if [ "$1" != "configure" ]; then
 	exit 0
@@ -516,6 +553,17 @@ fi
 mod_is_enabled() {
 	test -L %p/etc/apache2/mods-enabled/$1.load
 }
+
+#set up default site and dummy error and access logs
+if [ -z "$2" ]; then
+	if [ ! -L %p/etc/apache2/sites-enabled/000-default -a \
+	     ! -f %p/etc/apache2/sites-enabled/000-default ]; then
+		a2ensite -q default
+	fi
+	touch %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+	chown root:admin %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+	chmod 0640 %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+fi
 
 # Note, this line catches new installs as well as upgrades
 if dpkg --compare-versions "$2" lt 2.2.3-3.1; then
@@ -560,7 +608,6 @@ if dpkg --compare-versions "$2" lt 2.2.7-1~0; then
              ! -e %p/var/www/index.xhtml -a \
              ! -e %p/var/www/index.htm ] ; then
                 cp %p/share/apache2/default-site/index.html %p/var/www/index.html
-		chown www:www %p/var/www/index.html
         fi
 fi
 
@@ -581,29 +628,73 @@ if [ -e %p/etc/apache2/httpd.conf ] && [ -f %p/etc/apache2/httpd.conf ] ; then
 	fi
 fi
 
-#set up default site and dummy error and access logs
-if [ "$2" = "<unknown>" -o -z "$2" ]; then
-	if [ ! -L %p/etc/apache2/sites-enabled/000-default -a \
-	     ! -f %p/etc/apache2/sites-enabled/000-default ]; then
-		ln -s %p/etc/apache2/sites-available/default %p/etc/apache2/sites-enabled/000-default
-	fi
-	touch %p/var/log/apache2/error.log %p/var/log/apache2/access.log
-	chown www:www %p/var/log/apache2/error.log %p/var/log/apache2/access.log
-	chmod 0640 %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+# Can't enable this till dpkg 1.15+
+#dpkg-maintscript-helper rm_conffile %p/etc/apache2/mods-available/version.load 2.2.22-6~ -- "$@"
+
+# The definition of other_vhost_access.log has been moved.
+# Disable the new definition if the admin has changed the old
+# one (as determined by preinst).
+if [ -e %p/etc/apache2/disable-other-vhost-access-log.dpkg-apache2.2-common ] ; then
+	echo "Disabling %p/etc/apache2/conf.d/other-vhosts-access-log"
+	perl -p -i -e 's/^(CustomLog.*)$/#$1/' %p/etc/apache2/conf.d/other-vhosts-access-log
+	rm  %p/etc/apache2/disable-other-vhost-access-log.dpkg-apache2.2-common
 fi
 
+# This code existed in parts 2.2.22-10 already but it wasn't complete.
+# Thus, users of 2.2.22-10 enter here as well. That's not
+# optimal, but not a problem either.
+if [ -n "$2" ] && dpkg --compare-versions "$2" lt 2.2.22-11; then
+	if [ -d %p/var/cache/apache2/mod_disk_cache ] ; then
+		echo "Purging old mod_disk_cache cache data in %p/var/cache/apache2/mod_disk_cache"
+		if [ -d %p/var/cache/apache2/ ] && [ "$(/usr/bin/stat -f '%%u' %p/var/cache/apache2/ | /usr/bin/xargs /usr/bin/id -n -u)" = "_www" ] ; then
+			chown root:admin %p/var/cache/apache2/
+		fi
+		rm -rf %p/var/cache/apache2/mod_disk_cache
+		install -o www -g www -d %p/var/cache/apache2/mod_disk_cache/
+	fi
+fi
+
+rm -f %p/etc/apache2/ports.conf.dpkg-apache2.2-common.old
+rm -f %p/etc/default/apache2.dpkg-apache2.2-common.old
+rm -f %p/etc/apache2/conf.d/charset.dpkg-apache2.2-common.old
+
+daemonic enable apache2
+
 chown -R root:www %p/var/lock/apache2
-chown -R www:www %p/var/cache/apache2
 chown -R www:www %p/var/log/apache2
+chown -R www:www %p/var/cache/apache2/mod_disk_cache
 chmod 755 %p/var/log/apache2
 chmod 644 %p/var/log/apache2/*.log
 chown -R root:www %p/var/run/apache2
 chown -R www:www %p/var/www
-
-exit 0
   <<
   PostRmScript: <<
-if [ "$1" = "purge" ]; then
+# Allow apache 2.4 to override what we do.
+if [ -x %p/etc/apache2/upgrade-to-2.4-in-progress ] ; then
+	set +e
+	%p/etc/apache2/upgrade-to-2.4-in-progress $0 "$@"
+	ret=$?
+	set -e
+	case $ret in
+	42)
+		exit 0
+		;;
+	43)
+		DONT_PURGE=1
+		;;
+	0)
+		: # do nothing
+		;;
+	*)
+		exit $ret
+		;;
+	esac
+fi
+
+### Needs dpkg 1.15+
+#dpkg-maintscript-helper rm_conffile /etc/apache2/mods-available/version.load 2.2.22-6~ -- "$@"
+
+if [ "$1" = purge -a "$DONT_PURGE" != 1 ] ; then
 	rm -f 	%p/etc/apache2/httpd.conf \
 		%p/etc/apache2/conf.d/httpd.conf \
 		%p/var/cache/apache2/reload \
@@ -629,9 +720,34 @@ if [ "$1" = "purge" ]; then
 		%p/var/cache/apache2 ; do
 		rmdir $d 2> /dev/null || true
 	done
+
 fi
 
-exit 0
+restore_conffile() {
+	if [ -e $1.dpkg-apache2.2-common.old ] ; then
+		echo Restoring previous version of $1 ...
+		mv $1.dpkg-apache2.2-common.old $1
+	fi
+}
+
+if [ "$1" = abort-upgrade ] ; then
+	restore_conffile %p/etc/default/apache2
+	restore_conffile %p/etc/apache2/ports.conf
+	restore_conffile %p/etc/apache2/conf.d/charset
+	#a2enmod -q version
+fi
+
+if [ "$1" = remove ] ; then
+	MD5SUM="`md5sum %p/var/www/index.html 2>/dev/null | cut -d ' ' -f 1`"
+	case "$MD5SUM" in
+		5388f60d7695cb57b87c799ee62d20b2|\
+		21dde95d9d269cbb2fa6560309dca40c)
+			rm -f %p/var/www/index.html
+			;;
+	esac
+fi
+
+daemonic disable apache2
   <<
   Description: Apache HTTP Server common files
   DescDetail: <<
@@ -709,32 +825,80 @@ non-thread-safe libraries, and is the best MPM for isolating each request, so
 that a problem with a single request will not affect any other.
   <<
   DocFiles: LICENSE
+  PreInstScript: <<
+P=mpm-prefork
+update-alternatives --install %p/sbin/apache2 apache2 %p/lib/apache2/$P/apache2 60
+
+if [ "$2" ] && dpkg --compare-versions "$2" lt 2.2; then
+    if [ "x$(daemonic dump | grep 'service apache2')" != "x" ]; then
+        %p/sbin/apache2ctl stop || true
+    fi
+    chmod -x %p/sbin/apache2 %p/lib/apache2/$P/apache2
+fi
+
+case "$1" in
+	install)
+		rm -f %p/var/cache/apache2/reload
+		;;
+	upgrade)
+		if [ -d %p/var/cache/apache2 ]; then
+			touch %p/var/cache/apache2/reload
+		fi
+		;;
+	*)
+		;;
+esac
+  <<
   PostInstScript: <<
-if [ "$1" = "upgrade" ]; then
-	%p/bin/daemonic update apache2
-	%p/sbin/apache2ctl restart
+P=%n
+
+if [ "$1" != "configure" ]; then
+        exit 0
 fi
 
-update-alternatives --install %p/sbin/apache2 apache2 %p/lib/apache2/mpm-prefork/apache2 60
-
-%p/bin/daemonic enable apache2
-
-if [ -f /Library/StartupItems/daemonic-apache2/daemonic-apache2 ]
-then
-	%p/sbin/apache2ctl restart
+if [ $P = apache2-mpm-prefork ] || [ $P = apache2-mpm-itk ]; then
+	CGI_DIS=cgid
+	CGI_EN=cgi
+else
+	CGI_DIS=cgi
+	CGI_EN=cgid
 fi
 
-exit 0
+#enable cgi/cgid, but only on new installs.
+if [ -z "$2" ]; then
+	a2dismod $CGI_DIS >/dev/null || true
+	a2enmod  $CGI_EN  >/dev/null || echo "It looks like you've deleted %p/etc/apache2/mods-available/cgid.load, so mod_cgid cannot be enabled.  To fix this, please purge and reinstall apache2.2-common."
+fi
+
+if [ "x$(daemonic dump | grep 'service apache2')" != "x" ]; then
+    %p/sbin/apache2ctl start || true
+fi
+
+if dpkg --compare-versions "$2" lt 2.2.11-5~ ; then
+	DOCDIR=%p/share/doc/$P
+	if [ ! -h $DOCDIR -a -d $DOCDIR ] ; then
+		rmdir $DOCDIR 2> /dev/null && ln -s apache2.2-common $DOCDIR
+	fi
+fi
   <<
   PreRmScript: <<
-if [ $1 != "upgrade" ]
-then
-	%p/sbin/apache2ctl stop
-	%p/bin/daemonic disable apache2
-	update-alternatives --remove apache2 %p/lib/apache2/mpm-prefork/apache2
-fi
+P=mpm-prefork
+case "$1" in
+        upgrade|remove)
+		if [ "x$(daemonic dump | grep 'service apache2')" != "x" ]; then
+			%p/sbin/apache2ctl stop || true
+		fi
+		sleep 2
+        ;;
+        deconfigure|failed-upgrade)
+        ;;
+        *)
+                echo "prerm called with unknown argument \`$1'" >&2
+                exit 1
+        ;;
+esac
 
-exit 0
+update-alternatives --remove apache2 %p/lib/apache2/$P/apache2
   <<
 <<
 ###
@@ -754,32 +918,80 @@ especially for high-traffic sites because it is faster and has a smaller memory
 footprint than the traditional prefork MPM.
   <<
   DocFiles: LICENSE
+  PreInstScript: <<
+P=mpm-worker
+update-alternatives --install %p/sbin/apache2 apache2 %p/lib/apache2/$P/apache2 60
+
+if [ "$2" ] && dpkg --compare-versions "$2" lt 2.2; then
+    if [ "x$(daemonic dump | grep 'service apache2')" != "x" ]; then
+        %p/sbin/apache2ctl stop || true
+    fi
+    chmod -x %p/sbin/apache2 %p/lib/apache2/$P/apache2
+fi
+
+case "$1" in
+	install)
+		rm -f %p/var/cache/apache2/reload
+		;;
+	upgrade)
+		if [ -d %p/var/cache/apache2 ]; then
+			touch %p/var/cache/apache2/reload
+		fi
+		;;
+	*)
+		;;
+esac
+  <<
   PostInstScript: <<
-if [ "$1" = "upgrade" ]; then
-	%p/bin/daemonic update apache2
-	%p/sbin/apache2ctl restart
+P=%n
+
+if [ "$1" != "configure" ]; then
+        exit 0
 fi
 
-update-alternatives --install %p/sbin/apache2 apache2 %p/lib/apache2/mpm-worker/apache2 60
-
-%p/bin/daemonic enable apache2
-
-if [ -f /Library/StartupItems/daemonic-apache2/daemonic-apache2 ]
-then
-	%p/sbin/apache2ctl restart
+if [ $P = apache2-mpm-prefork ] || [ $P = apache2-mpm-itk ]; then
+	CGI_DIS=cgid
+	CGI_EN=cgi
+else
+	CGI_DIS=cgi
+	CGI_EN=cgid
 fi
 
-exit 0
+#enable cgi/cgid, but only on new installs.
+if [ -z "$2" ]; then
+	a2dismod $CGI_DIS >/dev/null || true
+	a2enmod  $CGI_EN  >/dev/null || echo "It looks like you've deleted %p/etc/apache2/mods-available/cgid.load, so mod_cgid cannot be enabled.  To fix this, please purge and reinstall apache2.2-common."
+fi
+
+if [ "x$(daemonic dump | grep 'service apache2')" != "x" ]; then
+    %p/sbin/apache2ctl start || true
+fi
+
+if dpkg --compare-versions "$2" lt 2.2.11-5~ ; then
+	DOCDIR=%p/share/doc/$P
+	if [ ! -h $DOCDIR -a -d $DOCDIR ] ; then
+		rmdir $DOCDIR 2> /dev/null && ln -s apache2.2-common $DOCDIR
+	fi
+fi
   <<
   PreRmScript: <<
-if [ $1 != "upgrade" ]
-then
-	%p/sbin/apache2ctl stop
-	%p/bin/daemonic disable apache2
-	update-alternatives --remove apache2 %p/lib/apache2/mpm-worker/apache2
-fi
+P=mpm-worker
+case "$1" in
+        upgrade|remove)
+		if [ "x$(daemonic dump | grep 'service apache2')" != "x" ]; then
+			%p/sbin/apache2ctl stop || true
+		fi
+		sleep 2
+        ;;
+        deconfigure|failed-upgrade)
+        ;;
+        *)
+                echo "prerm called with unknown argument \`$1'" >&2
+                exit 1
+        ;;
+esac
 
-exit 0
+update-alternatives --remove apache2 %p/lib/apache2/$P/apache2
   <<
 <<
 ###
@@ -802,32 +1014,80 @@ extensive KeepAlive traffic.
 This MPM is experimental and less tested than the worker and prefork MPMs.
   <<
   DocFiles: LICENSE
+  PreInstScript: <<
+P=mpm-event
+update-alternatives --install %p/sbin/apache2 apache2 %p/lib/apache2/$P/apache2 60
+
+if [ "$2" ] && dpkg --compare-versions "$2" lt 2.2; then
+    if [ "x$(daemonic dump | grep 'service apache2')" != "x" ]; then
+        %p/sbin/apache2ctl stop || true
+    fi
+    chmod -x %p/sbin/apache2 %p/lib/apache2/$P/apache2
+fi
+
+case "$1" in
+	install)
+		rm -f %p/var/cache/apache2/reload
+		;;
+	upgrade)
+		if [ -d %p/var/cache/apache2 ]; then
+			touch %p/var/cache/apache2/reload
+		fi
+		;;
+	*)
+		;;
+esac
+  <<
   PostInstScript: <<
-if [ "$1" = "upgrade" ]; then
-	%p/bin/daemonic update apache2
-	%p/sbin/apache2ctl restart
+P=%n
+
+if [ "$1" != "configure" ]; then
+        exit 0
 fi
 
-update-alternatives --install %p/sbin/apache2 apache2 %p/lib/apache2/mpm-event/apache2 60
-
-%p/bin/daemonic enable apache2
-
-if [ -f /Library/StartupItems/daemonic-apache2/daemonic-apache2 ]
-then
-	%p/sbin/apache2ctl restart
+if [ $P = apache2-mpm-prefork ] || [ $P = apache2-mpm-itk ]; then
+	CGI_DIS=cgid
+	CGI_EN=cgi
+else
+	CGI_DIS=cgi
+	CGI_EN=cgid
 fi
 
-exit 0
+#enable cgi/cgid, but only on new installs.
+if [ -z "$2" ]; then
+	a2dismod $CGI_DIS >/dev/null || true
+	a2enmod  $CGI_EN  >/dev/null || echo "It looks like you've deleted %p/etc/apache2/mods-available/cgid.load, so mod_cgid cannot be enabled.  To fix this, please purge and reinstall apache2.2-common."
+fi
+
+if [ "x$(daemonic dump | grep 'service apache2')" != "x" ]; then
+    %p/sbin/apache2ctl start || true
+fi
+
+if dpkg --compare-versions "$2" lt 2.2.11-5~ ; then
+	DOCDIR=%p/share/doc/$P
+	if [ ! -h $DOCDIR -a -d $DOCDIR ] ; then
+		rmdir $DOCDIR 2> /dev/null && ln -s apache2.2-common $DOCDIR
+	fi
+fi
   <<
   PreRmScript: <<
-if [ $1 != "upgrade" ]
-then
-	%p/sbin/apache2ctl stop
-	%p/bin/daemonic disable apache2
-	update-alternatives --remove apache2 %p/lib/apache2/mpm-event/apache2
-fi
+P=mpm-event
+case "$1" in
+        upgrade|remove)
+		if [ "x$(daemonic dump | grep 'service apache2')" != "x" ]; then
+			%p/sbin/apache2ctl stop || true
+		fi
+		sleep 2
+        ;;
+        deconfigure|failed-upgrade)
+        ;;
+        *)
+                echo "prerm called with unknown argument \`$1'" >&2
+                exit 1
+        ;;
+esac
 
-exit 0
+update-alternatives --remove apache2 %p/lib/apache2/$P/apache2
   <<
 <<
 ###
