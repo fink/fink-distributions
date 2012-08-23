@@ -158,6 +158,49 @@ diff -ruN php-5.4.4.orig/fink/patches/Add-information-about-which-INI-file-is-wh
 + ;;;;;;;;;;;;;;;;;;;
 + ; Quick Reference ;
 + ;;;;;;;;;;;;;;;;;;;
+diff -ruN php-5.4.4.orig/fink/patches/CVE-2012-2688.patch php-5.4.4/fink/patches/CVE-2012-2688.patch
+--- php-5.4.4.orig/fink/patches/CVE-2012-2688.patch	1969-12-31 17:00:00.000000000 -0700
++++ php-5.4.4/fink/patches/CVE-2012-2688.patch	2012-08-23 09:24:02.000000000 -0600
+@@ -0,0 +1,39 @@
++--- a/main/streams/streams.c
+++++ b/main/streams/streams.c
++@@ -2331,8 +2331,8 @@ PHPAPI int _php_stream_scandir(char *dir
++ 	php_stream *stream;
++ 	php_stream_dirent sdp;
++ 	char **vector = NULL;
++-	int vector_size = 0;
++-	int nfiles = 0;
+++	unsigned int vector_size = 0;
+++	unsigned int nfiles = 0;
++ 
++ 	if (!namelist) {
++ 		return FAILURE;
++@@ -2348,14 +2348,24 @@ PHPAPI int _php_stream_scandir(char *dir
++ 			if (vector_size == 0) {
++ 				vector_size = 10;
++ 			} else {
+++				if(vector_size*2 < vector_size) {
+++					/* overflow */
+++					efree(vector);
+++					return FAILURE;
+++				}
++ 				vector_size *= 2;
++ 			}
++-			vector = (char **) erealloc(vector, vector_size * sizeof(char *));
+++			vector = (char **) safe_erealloc(vector, vector_size, sizeof(char *), 0);
++ 		}
++ 
++ 		vector[nfiles] = estrdup(sdp.d_name);
++ 
++ 		nfiles++;
+++		if(vector_size < 10 || nfiles == 0) {
+++			/* overflow */
+++			efree(vector);
+++			return FAILURE;
+++		}
++ 	}
++ 	php_stream_closedir(stream);
++ 
 diff -ruN php-5.4.4.orig/fink/patches/PEAR-Builder-print-info-about-php5-dev.patch php-5.4.4/fink/patches/PEAR-Builder-print-info-about-php5-dev.patch
 --- php-5.4.4.orig/fink/patches/PEAR-Builder-print-info-about-php5-dev.patch	1969-12-31 17:00:00.000000000 -0700
 +++ php-5.4.4/fink/patches/PEAR-Builder-print-info-about-php5-dev.patch	2012-05-09 15:45:14.000000000 -0600
@@ -1709,6 +1752,108 @@ diff -ruN php-5.4.4.orig/fink/patches/php-fpm-man-section-and-cleanup.patch php-
 + .SH SEE ALSO
 + The PHP-FPM website:
 + .PD 0
+diff -ruN php-5.4.4.orig/fink/patches/php-fpm-segfault.patch php-5.4.4/fink/patches/php-fpm-segfault.patch
+--- php-5.4.4.orig/fink/patches/php-fpm-segfault.patch	1969-12-31 17:00:00.000000000 -0700
++++ php-5.4.4/fink/patches/php-fpm-segfault.patch	2012-08-23 09:23:18.000000000 -0600
+@@ -0,0 +1,98 @@
++--- a/sapi/fpm/fpm/fpm_php.c
+++++ b/sapi/fpm/fpm/fpm_php.c
++@@ -257,3 +257,41 @@ int fpm_php_limit_extensions(char *path)
++ 	return 1; /* extension not found: not allowed  */
++ }
++ /* }}} */
+++
+++char* fpm_php_get_string_from_table(char *table, char *key TSRMLS_DC) /* {{{ */
+++{
+++	zval **data, **tmp;
+++	char *string_key;
+++	uint string_len;
+++	ulong num_key;
+++	if (!table || !key) {
+++		return NULL;
+++	}
+++
+++	/* inspired from ext/standard/info.c */
+++
+++	zend_is_auto_global(table, strlen(table) TSRMLS_CC);
+++
+++	/* find the table and ensure it's an array */
+++	if (zend_hash_find(&EG(symbol_table), table, strlen(table) + 1, (void **) &data) == SUCCESS && Z_TYPE_PP(data) == IS_ARRAY) {
+++
+++		/* reset the internal pointer */
+++		zend_hash_internal_pointer_reset(Z_ARRVAL_PP(data));
+++
+++		/* parse the array to look for our key */
+++		while (zend_hash_get_current_data(Z_ARRVAL_PP(data), (void **) &tmp) == SUCCESS) {
+++			/* ensure the key is a string */
+++			if (zend_hash_get_current_key_ex(Z_ARRVAL_PP(data), &string_key, &string_len, &num_key, 0, NULL) == HASH_KEY_IS_STRING) {
+++				/* compare to our key */
+++				if (!strncmp(string_key, key, string_len)) {
+++					return Z_STRVAL_PP(tmp);
+++				}
+++			}
+++			zend_hash_move_forward(Z_ARRVAL_PP(data));
+++		}
+++	}
+++
+++	return NULL;
+++}
+++/* }}} */
+++
++--- a/sapi/fpm/fpm/fpm_php.h
+++++ b/sapi/fpm/fpm/fpm_php.h
++@@ -44,6 +44,7 @@ void fpm_php_soft_quit();
++ int fpm_php_init_main();
++ int fpm_php_apply_defines_ex(struct key_value_s *kv, int mode);
++ int fpm_php_limit_extensions(char *path);
+++char* fpm_php_get_string_from_table(char *table, char *key TSRMLS_DC);
++ 
++ #endif
++ 
++--- a/sapi/fpm/fpm/fpm_status.c
+++++ b/sapi/fpm/fpm/fpm_status.c
++@@ -14,6 +14,7 @@
++ #include "zlog.h"
++ #include "fpm_atomic.h"
++ #include "fpm_conf.h"
+++#include "fpm_php.h"
++ #include <ext/standard/html.h>
++ 
++ static char *fpm_status_uri = NULL;
++@@ -125,13 +126,13 @@ int fpm_status_handle_request(TSRMLS_D)
++ 		}
++ 
++ 		/* full status ? */
++-		full = SG(request_info).request_uri && strstr(SG(request_info).query_string, "full");
+++		full = (fpm_php_get_string_from_table("_GET", "full" TSRMLS_CC) != NULL);
++ 		short_syntax = short_post = NULL;
++ 		full_separator = full_pre = full_syntax = full_post = NULL;
++ 		encode = 0;
++ 
++ 		/* HTML */
++-		if (SG(request_info).query_string && strstr(SG(request_info).query_string, "html")) {
+++		if (fpm_php_get_string_from_table("_GET", "html" TSRMLS_CC)) {
++ 			sapi_add_header_ex(ZEND_STRL("Content-Type: text/html"), 1, 1 TSRMLS_CC);
++ 			time_format = "%d/%b/%Y:%H:%M:%S %z";
++ 			encode = 1;
++@@ -205,7 +206,7 @@ int fpm_status_handle_request(TSRMLS_D)
++ 			}
++ 
++ 		/* XML */
++-		} else if (SG(request_info).request_uri && strstr(SG(request_info).query_string, "xml")) {
+++		} else if (fpm_php_get_string_from_table("_GET", "xml" TSRMLS_CC)) {
++ 			sapi_add_header_ex(ZEND_STRL("Content-Type: text/xml"), 1, 1 TSRMLS_CC);
++ 			time_format = "%s";
++ 			encode = 1;
++@@ -256,7 +257,7 @@ int fpm_status_handle_request(TSRMLS_D)
++ 				}
++ 
++ 			/* JSON */
++-		} else if (SG(request_info).request_uri && strstr(SG(request_info).query_string, "json")) {
+++		} else if (fpm_php_get_string_from_table("_GET", "json" TSRMLS_CC)) {
++ 			sapi_add_header_ex(ZEND_STRL("Content-Type: application/json"), 1, 1 TSRMLS_CC);
++ 			time_format = "%s";
++ 
 diff -ruN php-5.4.4.orig/fink/patches/php-fpm-sysconfdir.patch php-5.4.4/fink/patches/php-fpm-sysconfdir.patch
 --- php-5.4.4.orig/fink/patches/php-fpm-sysconfdir.patch	1969-12-31 17:00:00.000000000 -0700
 +++ php-5.4.4/fink/patches/php-fpm-sysconfdir.patch	2012-06-14 11:35:05.000000000 -0600
