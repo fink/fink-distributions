@@ -1,7 +1,7 @@
 Info2: <<
 Package: php5
 Version: 5.4.4
-Revision: 4.1
+Revision: 7.1
 Type: sapiver (20100525)
 ###
 BuildDepends: fink (>= 0.34.99.git), automake1.11, apache2-prefork-dev, aspell-dev, coreutils, cyrus-sasl2-dev, db53-aes, enchant1-dev, expat1, file-dev, freetds (>= 1:0.91-1), freetds-dev, freetype219, gd2, glib2-dev, gmp5, libapr.0-dev, libc-client1-dev, libcurl4, libevent2, libgcrypt, libicu36-dev, libjpeg8, libmcrypt, libmhash2, libonig2-dev, libodbc3-dev, libpcre1, libpng15, libtidy-0.99.0-dev, libtool2, libxml2, libxslt, mysql-unified-dev | libmysqlclient18-dev, libnetsnmp30-dev, netcat, openldap24-dev, openssl100-dev, postgresql91-dev, qdbm14, re2c, recode-dev, sed, sqlite3-dev, wrap
@@ -69,7 +69,7 @@ CustomMirror: <<
 Source: mirror:custom:distributions/php-%v.tar.gz
 Source-MD5: 8366c3626f2275ab8c7ef5e2d6bc5bd7
 PatchFile: %n.patch
-PatchFile-MD5: 27f82271e13ec268f92fdef7e5ea4044
+PatchFile-MD5: 58f79af281b1e947d4d8f96c307ac8b8
 PatchScript: <<
   sed -e 's,@FINKPREFIX@,%p,g' %{PatchFile} | patch -p1
 
@@ -123,6 +123,18 @@ PatchScript: <<
   patch -p1 < fink/patches/php-fpm-error-reporting.patch
   patch -p1 < fink/patches/php-fpm-segfault.patch
   patch -p1 < fink/patches/CVE-2012-2688.patch
+  patch -p1 < fink/patches/fix_gzip_output_compression.patch
+  patch -p1 < fink/patches/PHP-5.4.5-fix-information-leak-in-exif.patch
+  patch -p1 < fink/patches/PHP-5.4.5-PHP55042-fix-unsafe-erealloc-in-iconv.patch
+  patch -p1 < fink/patches/PHP-5.4.5-PHP61998-fix-crash-when-using-traits-with-method-aliases.patch
+  patch -p1 < fink/patches/PHP-5.4.5-PHP62266-fix-custom-extensions-segfault-in-libxml.patch
+  patch -p1 < fink/patches/PHP-5.4.5-PHP62373-fix-wrong-reference-in-serialize.patch
+  patch -p1 < fink/patches/PHP-5.4.6-PHP61964-fix-invalid-free-in-finfo_open.patch
+  patch -p1 < fink/patches/PHP-5.4.6-PHP62564-fix-crash-when-extendind-MessageFormater-in-intl.patch
+  patch -p1 < fink/patches/PHP-5.4.6-PHP62565-fix-non-initialized-properties_table-crash.patch
+  patch -p1 < fink/patches/PHP-5.4.6-PHP62594-fix-segfault-in-mysqlnd.patch
+  patch -p1 < fink/patches/PHP-5.4.6-PHP62616-fix-segfault-in-SPL.patch
+  patch -p1 < fink/patches/PHP-5.4.6-PHP62653-fix-unset_array_float-crash.patch
 
   patch -p1 < fink/patches/giconv_is_inferior.patch
   patch -p1 < fink/patches/gd-libJPEG-Version.patch
@@ -289,6 +301,7 @@ for i in $BUILDS; do
       %b/pear-build%p/bin/peardev
     perl -pi -e "s#('PEAR_CONFIG_SYSCONFDIR', PHP_SYSCONFDIR)#\1 . '/pear'#" %b/pear-build%p/share/php/PEAR/Config.php
     patch -s -d %b/pear-build%p/share/php/ -p1 -i %b/fink/patches/PEAR-Builder-print-info-about-php5-dev.patch
+    patch -s -d %b/pear-build%p/share/php/ -p1 -i %b/fink/patches/PEAR-Archive-Tar-fix-invalid-generated-tar-file.patch
   else
     mkdir %b/$i-build/Zend;
     CONFARGS=`eval echo "\\${${i}_CONFARGS}"`; \
@@ -382,8 +395,11 @@ cp %b/fink/libapache2-mod-php5.conf %i/etc/apache2/mods-available/php5.conf;
 
 # install apache2 DSO filter module
 cp %b/apache2filter-build/libs/libphp5.so ${APACHE_MOD_DIR}/libphp5filter.so
-cp %b/fink/libapache2-mod-php5filter.load %i/etc/apache2/mods-available/php5filter.load;
-cp %b/fink/libapache2-mod-php5filter.conf %i/etc/apache2/mods-available/php5filter.conf;
+cp %b/fink/libapache2-mod-php5filter.load %i/etc/apache2/mods-available/php5filter.load
+cp %b/fink/libapache2-mod-php5filter.conf %i/etc/apache2/mods-available/php5filter.conf
+
+cp fink/php5_cgi.conf %i/etc/apache2/mods-available/php5_cgi.conf
+cp fink/php5_cgi.load %i/etc/apache2/mods-available/php5_cgi.load
 
 # generate the config snippets for various php
 # modules from the templates.
@@ -2715,7 +2731,8 @@ SplitOff81: <<
   <<
   Files: <<
     etc/php5/apache2filter
-    etc/apache2
+    etc/apache2/mods-available/php5filter.load
+    etc/apache2/mods-available/php5filter.conf
     lib/apache2
   <<
   InterestTriggers: <<
@@ -2816,14 +2833,28 @@ SplitOff82: <<
   Package: %N-cgi
   Provides: phpapi-%type_raw[sapiver]
   Depends: ucf, %N-common (= %v-%r), httpd, bzip2-shlibs, db53-aes-shlibs, libgettext8-shlibs, libiconv, libonig2-shlibs, libpcre1-shlibs, libxml2-shlibs, openssl100-shlibs, qdbm14-shlibs
-  ConfFiles: %p/etc/php5/cgi/php.ini
+  ConfFiles: <<
+    %p/etc/php5/cgi/php.ini
+    %p/etc/apache2/mods-available/php5_cgi.conf
+    %p/etc/apache2/mods-available/php5_cgi.load
+  <<
   Files: <<
+    etc/apache2
     etc/php5/cgi
     bin/php5-cgi
     lib/cgi-bin
     share/man/man1/php5-cgi.1
   <<
   PostInstScript: <<
+reload_apache()
+{
+       if apache2ctl configtest 2>/dev/null; then
+               apache2ctl $1 || true
+       else
+               echo "Your apache2 configuration is broken, so we're not restarting it for you."
+       fi
+}
+
 if [ "$1" != "configure" ]; then
     exit 0
 fi
@@ -2832,6 +2863,15 @@ phpini="%p/etc/php5/cgi/php.ini"
 
 ucf %p/share/php5/php.ini-production $phpini
 ucfr %n $phpini
+
+# Enable php5_cgi if upgrading from older versions of php5-cgi
+if [ -n "$2" ] && dpkg --compare-versions "$2" lt 5.4.4-5; then
+    # Only enable php5_cgi if apache2 is installed
+    if [ -x "%p/sbin/a2enmod" ]; then
+       a2enmod php5_cgi >/dev/null || true
+       reload_apache restart
+    fi
+fi
 
 update-alternatives \
         --install %p/bin/php-cgi php-cgi %p/bin/php5-cgi 50 \
@@ -2849,6 +2889,16 @@ update-alternatives --remove php-cgi %p/bin/php5-cgi
 update-alternatives --remove php-cgi-bin %p/lib/cgi-bin/php5
   <<
   PostRmScript: <<
+case "$1" in
+    remove)
+       if [ -x %p/sbin/a2dismod ]; then
+           a2dismod php5_cgi || true
+       fi
+       update-alternatives --remove php-cgi /usr/bin/php5-cgi
+       update-alternatives --remove php-cgi-bin /usr/lib/cgi-bin/php5
+       ;;
+esac
+
 phpini=%p/etc/php5/cgi/php.ini
 
 case "$1" in
