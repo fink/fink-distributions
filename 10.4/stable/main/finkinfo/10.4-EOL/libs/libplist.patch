@@ -1,0 +1,292 @@
+diff -Naur /a/libplist-1.8/CMakeLists.txt /b/libplist/CMakeLists.txt
+--- /a/libplist-1.8/CMakeLists.txt	2012-01-11 15:29:30.000000000 +0100
++++ /b/libplist/CMakeLists.txt	2012-07-31 18:03:36.000000000 +0200
+@@ -57,6 +57,8 @@
+ ADD_SUBDIRECTORY( include )
+ ADD_SUBDIRECTORY( test )
+ 
++ADD_DEPENDENCIES( plist libcnary )
++
+ IF ( SWIG_FOUND AND PYTHONLIBS_FOUND AND PYTHONINTERP_FOUND )
+ 	ADD_SUBDIRECTORY( swig )
+ ENDIF ( SWIG_FOUND AND PYTHONLIBS_FOUND AND PYTHONINTERP_FOUND )
+diff -Naur /a/libplist-1.8/cython/plist.pyx /b/libplist/cython/plist.pyx
+--- /a/libplist-1.8/cython/plist.pyx	2012-01-11 15:29:30.000000000 +0100
++++ /b/libplist/cython/plist.pyx	2012-07-31 18:03:36.000000000 +0200
+@@ -283,8 +283,8 @@
+             if isinstance(value, unicode):
+                 utf8_data = value.encode('utf-8')
+             elif (PY_MAJOR_VERSION < 3) and isinstance(value, str):
+-                value.decode('ascii') # trial decode
+-                utf8_data = value.decode('ascii')
++                value.encode('ascii') # trial decode
++                utf8_data = value.encode('ascii')
+             else:
+                 raise ValueError("Requires unicode input, got %s" % type(value))
+             c_utf8_data = utf8_data
+@@ -319,8 +319,8 @@
+             if isinstance(value, unicode):
+                 utf8_data = value.encode('utf-8')
+             elif (PY_MAJOR_VERSION < 3) and isinstance(value, str):
+-                value.decode('ascii') # trial decode
+-                utf8_data = value.decode('ascii')
++                value.encode('ascii') # trial decode
++                utf8_data = value.encode('ascii')
+             else:
+                 raise ValueError("Requires unicode input, got %s" % type(value))
+             c_utf8_data = utf8_data
+@@ -331,7 +331,7 @@
+             char* c_value = NULL
+         plist_get_string_val(self._c_node, &c_value)
+         try:
+-            return cpython.PyUnicode_DecodeUTF8(c_value, libc.stdlib.strlen(c_value), 'strict')
++            return cpython.PyUnicode_DecodeUTF8(c_value, len(c_value), 'strict')
+         finally:
+             libc.stdlib.free(c_value)
+ 
+diff -Naur /a/libplist-1.8/include/plist/Date.h /b/libplist/include/plist/Date.h
+--- /a/libplist-1.8/include/plist/Date.h	2012-01-11 15:29:30.000000000 +0100
++++ /b/libplist/include/plist/Date.h	2012-07-31 18:03:36.000000000 +0200
+@@ -25,10 +25,6 @@
+ #include <plist/Node.h>
+ #include <ctime>
+ 
+-#ifdef _WIN32
+-#include <Winsock2.h>
+-#endif
+-
+ namespace PList
+ {
+ 
+diff -Naur /a/libplist-1.8/libcnary/node.c /b/libplist/libcnary/node.c
+--- /a/libplist-1.8/libcnary/node.c	2012-01-11 15:29:30.000000000 +0100
++++ /b/libplist/libcnary/node.c	2012-07-31 18:03:36.000000000 +0200
+@@ -95,16 +95,17 @@
+ }
+ 
+ int node_detach(node_t* parent, node_t* child) {
+-	if (!parent || !child) return 0;
+-	if (node_list_remove(parent->children, child) == 0) {
++	if (!parent || !child) return -1;
++	int index = node_list_remove(parent->children, child);
++	if (index >= 0) {
+ 		parent->count--;
+ 	}
+-	return 0;
++	return index;
+ }
+ 
+ int node_insert(node_t* parent, unsigned int index, node_t* child)
+ {
+-	if (!parent || !child) return;
++	if (!parent || !child) return -1;
+ 	child->isLeaf = TRUE;
+ 	child->isRoot = FALSE;
+ 	child->parent = parent;
+@@ -209,7 +210,7 @@
+ node_t* node_copy_deep(node_t* node, copy_func_t copy_func)
+ {
+ 	if (!node) return NULL;
+-	void *data;
++	void *data = NULL;
+ 	if (copy_func) {
+ 		data = copy_func(node->data);
+ 	}
+diff -Naur /a/libplist-1.8/libcnary/node_list.c /b/libplist/libcnary/node_list.c
+--- /a/libplist-1.8/libcnary/node_list.c	2012-01-11 15:29:30.000000000 +0100
++++ /b/libplist/libcnary/node_list.c	2012-07-31 18:03:36.000000000 +0200
+@@ -124,6 +124,7 @@
+ 	if (!list || !node) return -1;
+ 	if (list->count == 0) return -1;
+ 
++	int index = 0;
+ 	node_t* n;
+ 	for (n = list->begin; n; n = n->next) {
+ 		if (node == n) {
+@@ -144,8 +145,9 @@
+ 				list->begin = newnode;
+ 			}
+ 			list->count--;
+-			return 0;
++			return index;
+ 		}
++		index++;
+ 	}	
+ 	return -1;
+ }
+diff -Naur /a/libplist-1.8/src/base64.c /b/libplist/src/base64.c
+--- /a/libplist-1.8/src/base64.c	2012-01-11 15:29:30.000000000 +0100
++++ /b/libplist/src/base64.c	2012-07-31 18:03:36.000000000 +0200
+@@ -104,9 +104,9 @@
+ 
+ unsigned char *base64decode(const char *buf, size_t *size)
+ {
+-	if (!buf) return;
++	if (!buf) return NULL;
+ 	size_t len = strlen(buf);
+-	if (len <= 0) return;
++	if (len <= 0) return NULL;
+ 	unsigned char *outbuf = (unsigned char*)malloc((len/4)*3+3);
+ 
+ 	unsigned char *line;
+@@ -114,7 +114,7 @@
+ 
+ 	line = (unsigned char*)strtok((char*)buf, "\r\n\t ");
+ 	while (line) {
+-		p+=base64decode_block(outbuf+p, line, strlen((char*)line));
++		p+=base64decode_block(outbuf+p, (const char*)line, strlen((char*)line));
+ 
+ 		// get next line of base64 encoded block
+ 		line = (unsigned char*)strtok(NULL, "\r\n\t ");
+diff -Naur /a/libplist-1.8/src/bplist.c /b/libplist/src/bplist.c
+--- /a/libplist-1.8/src/bplist.c	2012-01-11 15:29:30.000000000 +0100
++++ /b/libplist/src/bplist.c	2012-07-31 18:03:36.000000000 +0200
+@@ -521,12 +521,12 @@
+         break;
+     case PLIST_DATA:
+     case PLIST_ARRAY:
+-        dstdata->buff = (uint8_t *) malloc(sizeof(uint8_t *) * srcdata->length);
+-        memcpy(dstdata->buff, srcdata->buff, sizeof(uint8_t *) * srcdata->length);
++        dstdata->buff = (uint8_t*) malloc(sizeof(uint8_t) * srcdata->length);
++        memcpy(dstdata->buff, srcdata->buff, sizeof(uint8_t) * srcdata->length);
+         break;
+     case PLIST_DICT:
+-        dstdata->buff = (uint8_t *) malloc(sizeof(uint8_t *) * srcdata->length * 2);
+-        memcpy(dstdata->buff, srcdata->buff, sizeof(uint8_t *) * srcdata->length * 2);
++        dstdata->buff = (uint8_t*) malloc(sizeof(uint8_t) * srcdata->length * 2);
++        memcpy(dstdata->buff, srcdata->buff, sizeof(uint8_t) * srcdata->length * 2);
+         break;
+     default:
+         break;
+@@ -740,12 +740,6 @@
+     return;
+ }
+ 
+-static int free_index(void* key, void* value, void* user_data)
+-{
+-    free((uint64_t *) value);
+-    return TRUE;
+-}
+-
+ #define Log2(x) (x == 8 ? 3 : (x == 4 ? 2 : (x == 2 ? 1 : 0)))
+ 
+ static void write_int(bytearray_t * bplist, uint64_t val)
+@@ -998,7 +992,6 @@
+     uint8_t trailer[BPLIST_TRL_SIZE];
+     //for string
+     long len = 0;
+-    int type = 0;
+     long items_read = 0;
+     long items_written = 0;
+     uint16_t *unicodestr = NULL;
+@@ -1087,7 +1080,6 @@
+     }
+ 
+     //free intermediate objects
+-    //hash_table_foreach_remove(ref_table, free_index, NULL);
+     ptr_array_free(objects);
+     hash_table_destroy(ref_table);
+ 
+diff -Naur /a/libplist-1.8/src/common.h /b/libplist/src/common.h
+--- /a/libplist-1.8/src/common.h	2012-01-11 15:29:30.000000000 +0100
++++ /b/libplist/src/common.h	2012-07-31 18:03:36.000000000 +0200
+@@ -4,6 +4,15 @@
+ #define PLIST_LITTLE_ENDIAN 0
+ #define PLIST_BIG_ENDIAN 1
+ 
++#ifndef PLIST_BYTE_ORDER
++#if __BIG_ENDIAN__ == 1
++#define PLIST_BYTE_ORDER PLIST_BIG_ENDIAN
++#endif
++#if __LITTLE_ENDIAN__ == 1
++#define PLIST_BYTE_ORDER PLIST_LITTLE_ENDIAN
++#endif
++#endif
++
+ #if defined(__GNUC__) && (__GNUC__ >= 4) && !defined(__CYGWIN__) && !defined(WIN32)
+ # define _PLIST_INTERNAL      __attribute__((visibility("hidden")))
+ #elif defined(__SUNPRO_C) && (__SUNPRO_C >= 0x550)
+diff -Naur /a/libplist-1.8/src/hashtable.c /b/libplist/src/hashtable.c
+--- /a/libplist-1.8/src/hashtable.c	2012-01-11 15:29:30.000000000 +0100
++++ /b/libplist/src/hashtable.c	2012-07-31 18:03:36.000000000 +0200
+@@ -55,7 +55,6 @@
+ void hash_table_insert(hashtable_t* ht, void *key, void *value)
+ {
+ 	if (!ht || !key) return;
+-	int i;
+ 
+ 	unsigned int hash = ht->hash_func(key);
+ 
+diff -Naur /a/libplist-1.8/src/plist.c /b/libplist/src/plist.c
+--- /a/libplist-1.8/src/plist.c	2012-01-11 15:29:30.000000000 +0100
++++ /b/libplist/src/plist.c	2012-07-31 18:03:36.000000000 +0200
+@@ -67,10 +67,10 @@
+     }
+ }
+ 
+-static void plist_free_node(node_t* node)
++static int plist_free_node(node_t* node)
+ {
+     plist_data_t data = NULL;
+-    node_detach(node->parent, node);
++    int index = node_detach(node->parent, node);
+     data = plist_get_data(node);
+     plist_free_data(data);
+     node->data = NULL;
+@@ -83,6 +83,8 @@
+     node_iterator_destroy(ni);
+ 
+     node_destroy(node);
++
++    return index;
+ }
+ 
+ plist_t plist_new_dict(void)
+@@ -264,9 +266,12 @@
+         plist_t old_item = plist_array_get_item(node, n);
+         if (old_item)
+         {
+-            plist_free_node(old_item);
+-            old_item = NULL;
+-            plist_copy_node(item, &old_item);
++            int idx = plist_free_node(old_item);
++	    if (idx < 0) {
++		node_attach(node, item);
++	    } else {
++		node_insert(node, idx, item);
++	    }
+         }
+     }
+     return;
+@@ -393,12 +398,15 @@
+ {
+     if (node && PLIST_DICT == plist_get_node_type(node))
+     {
+-        plist_t old_item = plist_dict_get_item(node, key);
++        node_t* old_item = plist_dict_get_item(node, key);
+         if (old_item)
+         {
+-            plist_free_node(old_item);
+-            old_item = NULL;
+-            plist_copy_node(item, &old_item);
++            int idx = plist_free_node(old_item);
++	    if (idx < 0) {
++		node_attach(node, item);
++	    } else {
++		node_insert(node, idx, item);
++	    }
+         }
+     }
+     return;
+diff -Naur /a/libplist-1.8/src/xplist.c /b/libplist/src/xplist.c
+--- /a/libplist-1.8/src/xplist.c	2012-01-11 15:29:30.000000000 +0100
++++ /b/libplist/src/xplist.c	2012-07-31 18:03:36.000000000 +0200
+@@ -342,7 +342,7 @@
+         {
+             xmlChar *strval = xmlNodeGetContent(node);
+             time_t time = 0;
+-            if (strlen(strval) >= 11) {
++            if (strlen((const char*)strval) >= 11) {
+                 struct tm btime;
+                 parse_date((const char*)strval, &btime);
+                 time = mktime(&btime);
