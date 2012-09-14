@@ -1,0 +1,454 @@
+--- bazaar-1.4.2.orig/src/baz/libarch/pfs-dav.c	2006-12-22 13:57:17.000000000 +0100
++++ bazaar-1.4.2/src/baz/libarch/pfs-dav.c	2006-12-22 13:58:41.000000000 +0100
+@@ -97,13 +97,13 @@
+ static int dav_is_dir (struct arch_pfs_dav_session * pfs, char * dir);
+ static int pfs_rmdir (struct arch_pfs_session * p, t_uchar * path, int soft_errors);
+ static int pfs_rm (struct arch_pfs_session * p, t_uchar * path, int soft_errors);
+-static void dav_is_dir_results (void * userdata, const char * uri, const ne_prop_result_set * set);
++static void dav_is_dir_results (void * userdata, const ne_uri * uri, const ne_prop_result_set * set);
+ static int dav_client_cwd (struct arch_pfs_dav_session * pfs, t_uchar * path, int soft_errors);
+ static int dav_client_auth (void * userdata, const char * realm, int attempt,
+                             char * username, char * password);
+ static t_uchar * abs_path (t_uchar * cwd, t_uchar * path);
+ static t_uchar * dirfold (t_uchar *dir);
+-static void results (void * userdata, const char * uri, const ne_prop_result_set * set);
++static void results (void * userdata, const ne_uri * uri, const ne_prop_result_set * set);
+
+ 
+
+@@ -815,19 +815,23 @@
+
+
+ static void
+-dav_is_dir_results (void * userdata, const char * uri, const ne_prop_result_set * set)
++dav_is_dir_results (void * userdata, const ne_uri * uri, const ne_prop_result_set * set)
+ {
+   struct dav_is_dir_ls_data * data = (struct dav_is_dir_ls_data *)userdata;
+   int len;
+
++  char *textual_uri = ne_uri_unparse(uri);
++
+   len = str_length (data->uri);
+-  if (!str_cmp_n (uri, len, data->uri, len))
++  if (!str_cmp_n (textual_uri, len, data->uri, len))
+     {
+-      if (uri[str_length (uri) - 1] == '/')
++      if (textual_uri[str_length (textual_uri) - 1] == '/')
+         data->is_dir = 1;
+       else
+         data->is_dir = 0;
+     }
++
++  free(textual_uri);
+ }
+
+ static int
+@@ -998,21 +1002,24 @@
+ }
+
+ static void
+-results (void * userdata, const char * uri, const ne_prop_result_set * set)
++results (void * userdata, const ne_uri * uri, const ne_prop_result_set * set)
+ {
+   int n;
+   char * file, * tmp;
+   struct ls_data * data = userdata;
++  char * textual_uri = ne_uri_unparse(uri);
+
+-  if (str_cmp (data->uri, uri))
++  if (str_cmp (data->uri, textual_uri))
+     {
+-      if (1 == (n = str_length (uri)))
++      if (1 == (n = str_length (textual_uri))) {
++        free(textual_uri);
+         return;
++      }
+
+-      if (uri[n - 1] == '/')
++      if (textual_uri[n - 1] == '/')
+         n--;
+
+-      file = str_chr_rindex_n (uri, n, '/') + 1;
++      file = str_chr_rindex_n (textual_uri, n, '/') + 1;
+
+       n = str_length (file);
+       if (file[n - 1] == '/')
+@@ -1025,6 +1032,7 @@
+       data->files = str_realloc_cat_many (0, data->files, tmp, "\r\n", str_end);
+       free (tmp);
+     }
++  free(textual_uri);
+ }
+
+ 
+
+--- bazaar-1.4.2.orig/src/baz/libarch/pfs-sftp.c	2006-12-22 13:57:17.000000000 +0100
++++ bazaar-1.4.2/src/baz/libarch/pfs-sftp.c	2006-12-22 13:58:17.000000000 +0100
+@@ -1496,7 +1496,7 @@
+    */
+   arch_uri_heuristics (&parsed_uri);
+
+-  *user = str_save (0, parsed_uri.authinfo);
++  *user = str_save (0, parsed_uri.userinfo);
+   *hostname = str_save (0, parsed_uri.host);
+   if (parsed_uri.port)
+     {
+
+--- bazaar-1.4.2.orig/src/baz/libarch/pfs.c	2006-12-22 13:58:04.000000000 +0100
++++ bazaar-1.4.2/src/baz/libarch/pfs.c	2006-12-22 13:58:17.000000000 +0100
+@@ -513,10 +513,10 @@
+     char *at_pos = str_chr_index (parsed_uri->host, '@');
+     if (!at_pos)
+         return;
+-    parsed_uri->authinfo = str_replace (parsed_uri->authinfo, 
+-					str_alloc_cat (0, parsed_uri->authinfo, "@"));
+-    parsed_uri->authinfo = str_replace (parsed_uri->authinfo, 
+-					str_alloc_cat_n (0, parsed_uri->authinfo, parsed_uri->host, at_pos - parsed_uri->host));
++    parsed_uri->userinfo = str_replace (parsed_uri->userinfo,
++					str_alloc_cat (0, parsed_uri->userinfo, "@"));
++    parsed_uri->userinfo = str_replace (parsed_uri->userinfo,
++					str_alloc_cat_n (0, parsed_uri->userinfo, parsed_uri->host, at_pos - parsed_uri->host));
+     parsed_uri->host = str_replace (parsed_uri->host, str_save (0, at_pos + 1));
+ }
+
+--- bazaar-1.4.2.orig/src/baz/libarch/tests/unit-sftp.c	2006-12-22 13:57:17.000000000 +0100
++++ bazaar-1.4.2/src/baz/libarch/tests/unit-sftp.c	2006-12-22 13:58:17.000000000 +0100
+@@ -35,7 +35,7 @@
+     char *host;
+     unsigned int port;
+     char *path;
+-    char *authinfo;
++    char *userinfo;
+ } ne_uri;
+ */
+   invariant_int_cmp (ne_uri_parse ("sftp://user@email.com@host.phwoar/root/path", &parsed_uri), 0);
+@@ -44,7 +44,7 @@
+   invariant_str_cmp (parsed_uri.host, "email.com@host.phwoar");
+   arch_uri_heuristics (&parsed_uri);
+   invariant_str_cmp (parsed_uri.host, "host.phwoar");
+-  invariant_str_cmp (parsed_uri.authinfo, "user@email.com");
++  invariant_str_cmp (parsed_uri.userinfo, "user@email.com");
+   invariant_int_cmp (parsed_uri.port, 0);
+   ne_uri_free(&parsed_uri);
+
+
+--- bazaar-1.4.2.orig/src/baz/libarch/pfs.c	2006-07-06 00:59:33.000000000 +1000
++++ bazaar-1.4.2/src/baz/libarch/pfs.c	2006-07-06 01:08:05.000000000 +1000
+@@ -25,6 +25,7 @@
+ #include "libarch/pfs.h"
+ #include "libarch/cached-archive.h"
+
++#include <string.h>
+ 
+ /* __STDC__ prototypes for static functions */
+ static int dot_listings_equal (rel_table a, rel_table b);
+@@ -520,6 +521,79 @@
+     parsed_uri->host = str_replace (parsed_uri->host, str_save (0, at_pos + 1));
+ }
+
++/* RFC2396 spake:
++ * "Data must be escaped if it does not have a representation
++ * using an unreserved character".
++ */
++
++/* Lookup table: character classes from 2396. (This is overkill) */
++
++#define SP 0   /* space    = <US-ASCII coded character 20 hexadecimal>
++       */
++#define CO 0   /* control  = <US-ASCII coded characters 00-1F and 7F hexadecimal>      */
++#define DE 0   /* delims   = "<" | ">" | "#" | "%" | <">
++       */
++#define UW 0   /* unwise   = "{" | "}" | "|" | "\" | "^" | "[" | "]" | "`"
++       */
++#define MA 1   /* mark     = "-" | "_" | "." | "!" | "~" | "*" | "'" | "(" | ")"       */
++#define AN 2   /* alphanum = alpha | digit						*/
++#define RE 2   /* reserved = ";" | "/" | "?" | ":" | "@" | "&" | "=" | "+" | "$" | "," */
++
++static const char uri_chars[128] = {
++/*                +2      +4      +6      +8     +10     +12     +14     */
++/*   0 */ CO, CO, CO, CO, CO, CO, CO, CO, CO, CO, CO, CO, CO, CO, CO, CO,
++/*  16 */ CO, CO, CO, CO, CO, CO, CO, CO, CO, CO, CO, CO, CO, CO, CO, CO,
++/*  32 */ SP, MA, DE, DE, RE, DE, RE, MA, MA, MA, MA, RE, RE, MA, MA, RE,
++/*  48 */ AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, RE, RE, DE, RE, DE, RE,
++/*  64 */ RE, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN,
++/*  80 */ AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, UW, UW, UW, UW, MA,
++/*  96 */ UW, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN,
++/* 112 */ AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, AN, UW, UW, UW, MA, CO
++};
++
++#define ESCAPE(ch) (((const signed char)(ch) < 0 || \
++               uri_chars[(unsigned int)(ch)] == 0))
++
++#undef SP
++#undef CO
++#undef DE
++#undef UW
++#undef MA
++#undef AN
++#undef RE
++
++
++static char *ne24_path_escape(const char *abs_path)
++{
++    const char *pnt;
++    char *ret, *retpos;
++    int count = 0;
++    for (pnt = abs_path; *pnt != '\0'; pnt++) {
++       if (ESCAPE(*pnt)) {
++           count++;
++       }
++    }
++    if (count == 0) {
++       return strdup(abs_path);
++    }
++    /* An escaped character is "%xx", i.e., two MORE
++     * characters than the original string */
++    retpos = ret = malloc(strlen(abs_path) + 2*count + 1);
++    for (pnt = abs_path; *pnt != '\0'; pnt++) {
++       if (ESCAPE(*pnt)) {
++           /* Escape it - %<hex><hex> */
++           sprintf(retpos, "%%%02x", (unsigned char) *pnt);
++           retpos += 3;
++       } else {
++           /* It's cool */
++           *retpos++ = *pnt;
++       }
++    }
++    *retpos = '\0';
++    return ret;
++}
++
++
+ /**
+  * \brief escape a location
+  *
+@@ -528,7 +602,7 @@
+ t_uchar *
+ escape_location (t_uchar const *location)
+ {
+-    return ne_path_escape(location);
++    return ne24_path_escape(location);
+ }
+
+ /**
+
+--- bazaar-1.4.2.orig/src/baz/commands/export.c	2005-06-21 07:59:38.000000000 +1000
++++ bazaar-1.4.2/src/baz/commands/export.c	2005-10-15 17:03:13.000000000 +1000
+@@ -254,14 +254,11 @@
+     revision_spec = str_replace (revision_spec, arch_determine_fqrevision(&arch, NULL, revision_spec, argv[0]));
+     revision = arch_parse_package_name (arch_ret_non_archive, NULL, revision_spec);
+     
+-    if (!output_dir)
+-      {
+-	/* name of revision part */
+-	t_uchar * cwd = safe_current_working_directory ();
+-	output_dir = file_name_in_vicinity (0, cwd, revision);
+-	lim_free (0, cwd);
+-      }
+-
++    /* name of revision part */
++    t_uchar * cwd = safe_current_working_directory ();
++    output_dir = file_name_in_vicinity (0, cwd, output_dir ? output_dir : revision);
++    lim_free (0, cwd);
++
+     invariant (!!output_dir);
+       {
+ 	t_uchar * canonical_dir = file_name_from_directory (0, output_dir);
+
+--- bazaar-1.4.2.orig/src/baz/po/de.po	2005-06-21 07:59:37.000000000 +1000
++++ bazaar-1.4.2/src/baz/po/de.po	2005-10-15 17:12:50.000000000 +1000
+@@ -549,7 +549,7 @@
+
+ #: ../../commands/archive-mirror.c:38
+ msgid "don't copy cached revisions"
+-msgstr "gepuffert Revisionen nich kopieren"
++msgstr "gepuffert Revisionen nicht kopieren"
+
+ #: ../../commands/archive-mirror.c:40 ../../commands/logs.c:40
+ msgid "print the summary of each patch"
+
+--- bazaar-1.4.2.orig/src/baz/libarch/build-revision.c	2005-06-21 07:59:41.000000000 +1000
++++ bazaar-1.4.2/src/baz/libarch/build-revision.c	2005-10-15 20:48:17.000000000 +1000
+@@ -1166,7 +1166,7 @@
+       }
+   }
+   if (start != end)
+-    debug (dbg_builder, 1, "\n");
++    debug (dbg_builder, 1, " done.\n");
+
+   talloc_free (my_arch);
+ }
+
+--- bazaar-1.4.2.orig/src/baz/libarch/local-cache.c	2005-06-21 07:59:41.000000000 +1000
++++ bazaar-1.4.2/src/baz/libarch/local-cache.c	2005-10-15 20:48:17.000000000 +1000
+@@ -229,7 +229,7 @@
+       if (!tree_dir)
+         tree_dir = str_save (0, ".");
+
+-      tmp_path = talloc_tmp_file_name (talloc_context, tree_dir, ",,new-pristine");
++      tmp_path = talloc_tmp_file_name (talloc_context, tree->root, ",,new-pristine");
+
+       rmrf_file (tmp_path);
+       safe_mkdir (tmp_path, 0777);
+
+--- bazaar-1.4.2.orig/src/baz/commands/diff.c	2005-06-21 07:59:43.000000000 +1000
++++ bazaar-1.4.2/src/baz/commands/diff.c	2005-10-15 21:04:47.000000000 +1000
+@@ -329,7 +329,7 @@
+
+   if (! filename)
+     {
+-      final_destination = talloc_tmp_file_name(context, dir_root, ",,changes");
++      final_destination = talloc_tmp_file_name_in_tmp(",,changes");
+       rmrf_file(final_destination);
+     }
+   else
+
+--- bazaar-1.4.2.orig/src/baz/libfsutils/tmp-files.c	2005-06-21 07:59:37.000000000 +1000
++++ bazaar-1.4.2/src/baz/libfsutils/tmp-files.c	2005-10-15 21:04:47.000000000 +1000
+@@ -91,6 +91,21 @@
+     return result;
+ }
+
++
++/**
++ * \brief return a semi-random pathname, honouring TMP
++ *
++ * \return a talloc-ed absolute path
++ */
++t_uchar *
++talloc_tmp_file_name_in_tmp (t_uchar const * const basename)
++{
++    t_uchar * tmpdir = tmp_dir(NULL);
++    t_uchar * talloced_result = str_replace (tmpdir,
++                                            talloc_tmp_file_name (talloc_context, tmpdir, basename));
++    return talloced_result;
++}
++
+ 
+
+
+
+--- bazaar-1.4.2.orig/src/baz/libfsutils/tmp-files.h	2005-06-21 07:59:37.000000000 +1000
++++ bazaar-1.4.2/src/baz/libfsutils/tmp-files.h	2005-10-15 21:04:47.000000000 +1000
+@@ -20,6 +20,7 @@
+ 				       t_uchar const * const basename);
+ extern t_uchar * tmp_seq_file (t_uchar const * const dir, t_uchar const * const basename);
+ extern t_uchar * tmp_file_name_in_tmp (t_uchar const * const basename);
++extern t_uchar * talloc_tmp_file_name_in_tmp (t_uchar const * const basename);
+
+ #endif  /* INCLUDE__LIBFSUTILS__TMP_FILES_H */
+
+
+--- bazaar-1.4.2.orig/src/baz/tests/test-diff.sh	2005-06-21 07:59:37.000000000 +1000
++++ bazaar-1.4.2/src/baz/tests/test-diff.sh	2005-10-15 21:04:47.000000000 +1000
+@@ -23,6 +23,7 @@
+   tla get jane@example.com--2003/hello-world--mainline--1.0 hello-world
+   copy_tree hello-world hello-world.good
+   cd hello-world
++  echo "setup get complete"
+ }  
+
+ assert_output_changes () {
+
+--- bazaar-1.4.2.orig/src/hackerlab/hash/sha1.c	2006-07-20 06:34:36.000000000 +0000
++++ bazaar-1.4.2/src/hackerlab/hash/sha1.c	2006-08-28 07:06:06.000000000 +0000
+@@ -39,11 +39,11 @@
+
+   t_uint32 total[2];
+   t_uint32 buflen;
+-  t_uchar buffer[128];
++  t_uchar buffer[128] __attribute__((aligned(4)));
+ };
+
+ static void
+-sha1_process_blocks (const void *buffer, size_t len, sha1_context_t ctx);
++sha1_process_blocks (const t_uchar *buffer, size_t len, sha1_context_t ctx);
+
+ #if MACHINE_IS_BIGENDIAN
+ # define NOTSWAP(n) (n)
+@@ -124,7 +124,7 @@
+ {
+   /* When we already have some bits in our internal buffer concatenate
+      both inputs first.  */
+-  if (ctx->buflen != 0)
++  while (len > 0)
+     {
+       size_t left_over = ctx->buflen;
+       size_t add = 128 - left_over > len ? len : 128 - left_over;
+@@ -147,14 +147,17 @@
+     }
+
+   /* Process available complete blocks.  */
++  /*
+   if (len >= 64)
+     {
+       sha1_process_blocks (buffer, len & ~63, ctx);
+       buffer = (const t_uchar *) buffer + (len & ~63);
+       len &= 63;
+     }
++  */
+
+   /* Move remaining bytes in internal buffer.  */
++  /*
+   if (len > 0)
+     {
+       size_t left_over = ctx->buflen;
+@@ -169,6 +172,7 @@
+ 	}
+       ctx->buflen = left_over;
+     }
++  */
+ }
+
+
+@@ -191,6 +195,8 @@
+   /* Take yet unprocessed bytes into account.  */
+   t_uint32 bytes = ctx->buflen;
+   size_t pad;
++  /* Temporary array for solving alignment issues */
++  t_uint32 tmp[5];
+
+   /* Now count remaining bytes.  */
+   ctx->total[0] += bytes;
+@@ -208,11 +214,12 @@
+   /* Process last bytes.  */
+   sha1_process_blocks (ctx->buffer, bytes + pad + 8, ctx);
+
+-  ((t_uint32 *) result)[0] = NOTSWAP (ctx->current_sha1.A);
+-  ((t_uint32 *) result)[1] = NOTSWAP (ctx->current_sha1.B);
+-  ((t_uint32 *) result)[2] = NOTSWAP (ctx->current_sha1.C);
+-  ((t_uint32 *) result)[3] = NOTSWAP (ctx->current_sha1.D);
+-  ((t_uint32 *) result)[4] = NOTSWAP (ctx->current_sha1.E);
++  tmp[0] = NOTSWAP (ctx->current_sha1.A);
++  tmp[1] = NOTSWAP (ctx->current_sha1.B);
++  tmp[2] = NOTSWAP (ctx->current_sha1.C);
++  tmp[3] = NOTSWAP (ctx->current_sha1.D);
++  tmp[4] = NOTSWAP (ctx->current_sha1.E);
++  mem_cpy (result, tmp, 20);
+   
+   sha1_context_reset (ctx);
+ }
+@@ -329,7 +336,7 @@
+    It is assumed that LEN % 64 == 0.
+    Most of this code comes from GnuPG's cipher/sha1.c.  */
+ static void
+-sha1_process_blocks (const void *buffer, size_t len, sha1_context_t ctx)
++sha1_process_blocks (const t_uchar *buffer, size_t len, sha1_context_t ctx)
+ {
+   const t_uint32 *words = buffer;
+   size_t nwords = len / sizeof (t_uint32);
+
+--- bazaar-1.4.2.orig/src/baz/PLUGIN/auto	2009-12-05 13:26:02.000000000 +0100
++++ bazaar-1.4.2/src/baz/PLUGIN/auto	2009-12-05 13:26:55.000000000 +0100
+@@ -24,9 +24,9 @@
+ header-test have-neon-h-header '<neon.h>'
+ library-test neon-library -lneon
+ ;; Which sometimes uses ssl
+-library-test ssl-library -lssl
++library-test ssl-library /usr/lib/libssl.dylib
+ ;; Which wants crypto
+-library-test crypto-library -lcrypto
++library-test crypto-library /usr/lib/libcrypto.dylib
+ 
+ ;; We use intl for internationalisation
+ header-test have-intl-h-header '<libintl.h>'
