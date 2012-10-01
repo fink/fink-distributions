@@ -1,15 +1,3 @@
-diff -Nurd mysql-5.0.45/mysys/default.c mysql-5.0.45-patched/mysys/default.c
---- mysql-5.0.45/mysys/default.c	2007-07-04 09:06:27.000000000 -0400
-+++ mysql-5.0.45-patched/mysys/default.c	2009-06-12 14:05:02.000000000 -0400
-@@ -989,6 +989,8 @@
- {
-   const char *env, **ptr= default_directories;
- 
-+  *ptr++= "@PREFIX@/etc/";
-+
- #ifdef __WIN__
-   *ptr++= "C:/";
- 
 diff -Nurd mysql-5.0.45/scripts/mysqld_safe.sh mysql-5.0.45-patched/scripts/mysqld_safe.sh
 --- mysql-5.0.45/scripts/mysqld_safe.sh	2007-07-04 09:06:09.000000000 -0400
 +++ mysql-5.0.45-patched/scripts/mysqld_safe.sh	2009-06-12 14:05:02.000000000 -0400
@@ -53,3 +41,113 @@ diff -Nurd mysql-5.0.45/scripts/mysqld_safe.sh mysql-5.0.45-patched/scripts/mysq
  
  if test -z "$MYSQL_HOME"
  then 
+--- mysql-5.0.45/ndb/include/util/Parser.hpp.orig	2012-09-27 19:14:19.000000000 -0400
++++ mysql-5.0.45/ndb/include/util/Parser.hpp	2012-09-27 19:16:02.000000000 -0400
+@@ -145,12 +145,12 @@
+   static const DummyRow* matchArg(Context*, const char *, const DummyRow *);
+   static bool parseArg(Context*, char*, const DummyRow*, Properties*);
+   static bool checkMandatory(Context*, const Properties*);
+-private:
+-  const DummyRow * const m_rows;
+-  class ParseInputStream & input;
+   bool m_breakOnEmpty;
+   bool m_breakOnCmd;
+   bool m_breakOnInvalidArg;
++private:
++  const DummyRow * const m_rows;
++  class ParseInputStream & input;
+ };
+ 
+ template<class T>
+--- mysql-5.0.45/ndb/src/common/util/SocketClient.cpp.orig	2012-09-27 19:54:53.000000000 -0400
++++ mysql-5.0.45/ndb/src/common/util/SocketClient.cpp	2012-09-27 19:56:11.000000000 -0400
+@@ -168,7 +168,7 @@
+   if (FD_ISSET(m_sockfd, &rset) || FD_ISSET(m_sockfd, &wset))
+   {
+     len= sizeof(r);
+-    if (getsockopt(m_sockfd, SOL_SOCKET, SO_ERROR, &r, &len) < 0 || r)
++    if (getsockopt(m_sockfd, SOL_SOCKET, SO_ERROR, &r, (socklen_t *) &len) < 0 || r)
+     {
+       // Solaris got an error... different than others
+       NDB_CLOSE_SOCKET(m_sockfd);
+--- mysql-5.0.45/ndb/src/common/util/SocketServer.cpp.orig	2012-09-27 19:45:32.000000000 -0400
++++ mysql-5.0.45/ndb/src/common/util/SocketServer.cpp	2012-09-27 19:53:52.000000000 -0400
+@@ -24,6 +24,8 @@
+ #include <NdbThread.h>
+ #include <NdbSleep.h>
+ 
++#include <sys/socket.h>
++
+ #define DEBUG(x) ndbout << x << endl;
+ 
+ SocketServer::SocketServer(unsigned maxSessions) :
+@@ -127,7 +129,7 @@
+ 
+   /* Get the port we bound to */
+   SOCKET_SIZE_TYPE sock_len = sizeof(servaddr);
+-  if(getsockname(sock,(struct sockaddr*)&servaddr,&sock_len)<0) {
++  if(getsockname(sock,(struct sockaddr*)&servaddr,(socklen_t *)&sock_len)<0) {
+     ndbout_c("An error occurred while trying to find out what"
+ 	     " port we bound to. Error: %s",strerror(errno));
+     NDB_CLOSE_SOCKET(sock);
+--- mysql-5.0.45/ndb/src/common/transporter/Transporter.cpp.orig	2012-09-27 20:00:10.000000000 -0400
++++ mysql-5.0.45/ndb/src/common/transporter/Transporter.cpp	2012-09-27 20:02:04.000000000 -0400
+@@ -107,7 +107,7 @@
+   {
+     struct sockaddr_in addr;
+     SOCKET_SIZE_TYPE addrlen= sizeof(addr);
+-    getpeername(sockfd, (struct sockaddr*)&addr, &addrlen);
++    getpeername(sockfd, (struct sockaddr*)&addr, (socklen_t *) &addrlen);
+     m_connect_address= (&addr)->sin_addr;
+   }
+ 
+@@ -213,7 +213,7 @@
+   {
+     struct sockaddr_in addr;
+     SOCKET_SIZE_TYPE addrlen= sizeof(addr);
+-    getpeername(sockfd, (struct sockaddr*)&addr, &addrlen);
++    getpeername(sockfd, (struct sockaddr*)&addr, (socklen_t *) &addrlen);
+     m_connect_address= (&addr)->sin_addr;
+   }
+ 
+--- mysql-5.0.45/ndb/src/mgmsrv/Services.cpp.orig	2012-09-27 20:05:55.000000000 -0400
++++ mysql-5.0.45/ndb/src/mgmsrv/Services.cpp	2012-09-27 20:06:38.000000000 -0400
+@@ -449,7 +449,7 @@
+ 
+   struct sockaddr_in addr;
+   SOCKET_SIZE_TYPE addrlen= sizeof(addr);
+-  int r = getpeername(m_socket, (struct sockaddr*)&addr, &addrlen);
++  int r = getpeername(m_socket, (struct sockaddr*)&addr, (socklen_t *) &addrlen);
+   if (r != 0 ) {
+     m_output->println(cmd);
+     m_output->println("result: getpeername(%d) failed, err= %d", m_socket, r);
+--- mysql-5.0.45/sql/mysqld.cc.orig	2012-09-27 20:22:06.000000000 -0400
++++ mysql-5.0.45/sql/mysqld.cc	2012-09-27 20:23:25.000000000 -0400
+@@ -4197,7 +4197,7 @@
+     {
+       size_socket length=sizeof(struct sockaddr_in);
+       new_sock = accept(sock, my_reinterpret_cast(struct sockaddr *) (&cAddr),
+-			&length);
++			(socklen_t *) &length);
+ #ifdef __NETWARE__
+       // TODO: temporary fix, waiting for TCP/IP fix - DEFECT000303149
+       if ((new_sock == INVALID_SOCKET) && (socket_errno == EINVAL))
+@@ -4270,7 +4270,7 @@
+       size_socket dummyLen;
+       struct sockaddr dummy;
+       dummyLen = sizeof(struct sockaddr);
+-      if (getsockname(new_sock,&dummy, &dummyLen) < 0)
++      if (getsockname(new_sock,&dummy, (socklen_t *) &dummyLen) < 0)
+       {
+ 	sql_perror("Error on new connection socket");
+ 	(void) shutdown(new_sock, SHUT_RDWR);
+--- mysql-5.0.96/mysql-test/t/disabled.def.orig	2012-09-28 23:20:07.000000000 -0400
++++ mysql-5.0.96/mysql-test/t/disabled.def	2012-09-28 23:21:43.000000000 -0400
+@@ -23,3 +23,7 @@
+ ndb_autodiscover3    : Bug#35148: Error '4009 Cluster Failure' in various tests on various platforms
+ ndb_autodiscover     : Bug#45972: ndb.ndb_autodiscover fails occasionally with pb2
+ ndb_autodiscover2    : Bug#45972: ndb.ndb_autodiscover fails occasionally with pb2
++archive              : fails on fink
++archive_gis          : fails on fink
++federated_archive    : fails on fink
++mysqldump-max        : fails on fink
