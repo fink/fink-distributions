@@ -1,0 +1,143 @@
+diff -ruNp -U 8 ices-0.4-orig/src/in_flac.c ices-0.4/src/in_flac.c
+--- ices-0.4-orig/src/in_flac.c	2004-07-31 13:52:24.000000000 -0400
++++ ices-0.4/src/in_flac.c	2012-10-19 21:37:07.000000000 -0400
+@@ -35,24 +35,29 @@ typedef struct {
+   size_t len;
+   /* write buffer */
+   int16_t *left;
+   int16_t *right;
+   size_t olen;
+ } flac_in_t;
+ 
+ /* -- static prototypes -- */
+-static int ices_flac_readpcm (input_stream_t* self, size_t len,
++static ssize_t ices_flac_readpcm (input_stream_t* self, size_t len,
+ 			      int16_t* left, int16_t* right);
+ static int ices_flac_close (input_stream_t* self);
+ 
+ /* -- FLAC callbacks -- */
++#if !defined(FLAC_API_VERSION_CURRENT) || FLAC_API_VERSION_CURRENT <= 7
++# define FLAC_BUFSIZE_TYPE unsigned
++#else
++# define FLAC_BUFSIZE_TYPE size_t
++#endif /* !FLAC_API_VERSION_CURRENT || FLAC_API_VERSION_CURRENT <= 7 */
+ static FLAC__StreamDecoderReadStatus
+ flac_read_cb(const FLAC__StreamDecoder* decoder, FLAC__byte buffer[],
+-	     unsigned* bytes, void* client_data);
++	     FLAC_BUFSIZE_TYPE* bytes, void* client_data);
+ static FLAC__StreamDecoderWriteStatus
+ flac_write_cb(const FLAC__StreamDecoder* decoder, const FLAC__Frame* frame,
+ 	      const FLAC__int32* const buffer[], void* client_data);
+ static void
+ flac_metadata_cb(const FLAC__StreamDecoder* decoder,
+ 		 const FLAC__StreamMetadata* metadata, void* client_data);
+ static void
+ flac_error_cb(const FLAC__StreamDecoder* decoder,
+@@ -71,47 +76,57 @@ ices_flac_open (input_stream_t* self, ch
+   flac_in_t* flac_data;
+   FLAC__StreamDecoder* decoder;
+ 
+   if (!(decoder = FLAC__stream_decoder_new())) {
+     ices_log_error("ices_flac_open: Error allocating FLAC decoder");
+     return -1;
+   }
+ 
++#if !defined(FLAC_API_VERSION_CURRENT) || FLAC_API_VERSION_CURRENT <= 7
+   FLAC__stream_decoder_set_read_callback(decoder, flac_read_cb);
+   FLAC__stream_decoder_set_write_callback(decoder, flac_write_cb);
+   FLAC__stream_decoder_set_metadata_callback(decoder, flac_metadata_cb);
+   FLAC__stream_decoder_set_error_callback(decoder, flac_error_cb);
++  FLAC__stream_decoder_set_client_data(decoder, self);
++
++  switch (FLAC__stream_decoder_init(decoder)) {
++  case FLAC__STREAM_DECODER_SEARCH_FOR_METADATA:
++    break;
++  case FLAC__STREAM_DECODER_MEMORY_ALLOCATION_ERROR:
++    ices_log_error("Could not allocate memory during FLAC decoder init");
++    goto errDecoder;
++  default:
++    ices_log_error("Unexpected error during FLAC decoder init");
++    goto errDecoder;
++  }
++#else
++  if (FLAC__stream_decoder_init_stream(decoder, flac_read_cb, NULL, NULL, NULL,
++                                       NULL, flac_write_cb, flac_metadata_cb,
++                                       flac_error_cb, self)
++      != FLAC__STREAM_DECODER_INIT_STATUS_OK) {
++    ices_log_error("ices_flac_open: Error initializing FLAC decoder");
++    goto errDecoder;
++  }
++#endif /* !FLAC_API_VERSION_CURRENT || FLAC_API_VERSION_CURRENT <= 7 */
+ 
+   FLAC__stream_decoder_set_metadata_respond(decoder, FLAC__METADATA_TYPE_VORBIS_COMMENT);
+ 
+   if (!(flac_data = (flac_in_t*)malloc (sizeof (flac_in_t)))) {
+     ices_log_error ("Malloc failed in ices_flac_open");
+     goto errDecoder;
+   }
+-  FLAC__stream_decoder_set_client_data(decoder, self);
+ 
+   flac_data->decoder = decoder;
+   flac_data->parsed = 0;
+   flac_data->buf = buf;
+   flac_data->len = len;
+ 
+   self->data = flac_data;
+ 
+-  switch (FLAC__stream_decoder_init(decoder)) {
+-  case FLAC__STREAM_DECODER_SEARCH_FOR_METADATA:
+-    break;
+-  case FLAC__STREAM_DECODER_MEMORY_ALLOCATION_ERROR:
+-    ices_log_error("Could not allocate memory during FLAC decoder init");
+-    goto errData;
+-  default:
+-    ices_log_error("Unexpected error during FLAC decoder init");
+-    goto errData;
+-  }
+-
+   if (!FLAC__stream_decoder_process_single(decoder)) {
+     ices_log_error("Could not find FLAC metadata header");
+     free(flac_data);
+     FLAC__stream_decoder_delete(decoder);
+     return 1;
+   }
+   if (!flac_data->parsed) {
+     ices_log_error("Could not find FLAC metadata header in prebuffer");
+@@ -136,17 +151,17 @@ ices_flac_open (input_stream_t* self, ch
+ errData:
+   free(flac_data);
+ errDecoder:
+   FLAC__stream_decoder_delete(decoder);
+ 
+   return -1;
+ }
+ 
+-static int
++static ssize_t
+ ices_flac_readpcm (input_stream_t* self, size_t olen, int16_t* left,
+ 		   int16_t* right)
+ {
+   flac_in_t* flac_data = (flac_in_t*)self->data;
+ 
+   flac_data->left = left;
+   flac_data->right = right;
+   flac_data->olen = olen;
+@@ -174,17 +189,17 @@ ices_flac_close (input_stream_t* self)
+   free (flac_data);
+ 
+   return close(self->fd);
+ }
+ 
+ /* -- callbacks -- */
+ static FLAC__StreamDecoderReadStatus
+ flac_read_cb(const FLAC__StreamDecoder* decoder, FLAC__byte buffer[],
+-	     unsigned* bytes, void* client_data)
++	     FLAC_BUFSIZE_TYPE* bytes, void* client_data)
+ {
+   input_stream_t* self = (input_stream_t*)client_data;
+   flac_in_t* flac_data = (flac_in_t*)self->data;
+   ssize_t len;
+   char errbuf[128];
+ 
+   if (!flac_data->len) {
+     if (!flac_data->parsed) {
