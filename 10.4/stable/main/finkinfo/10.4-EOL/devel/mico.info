@@ -1,0 +1,204 @@
+Package: mico
+Version: 2.3.12
+Revision: 13
+Depends: %N-shlibs (= %v-%r)
+BuildDepends: readline5, system-openssl-dev, x11-dev, libncurses5, fink (>= 0.24.12)
+Source: http://www.mico.org/%n-%v.tar.gz
+Source-MD5: b94252f78da414cc0c7122cdd2a4b2be
+SourceDirectory: mico
+GCC: 4.0
+
+PatchFile: %n.patch
+PatchFile-MD5: 5b4a9603b5992fb3717c7b97ef2a2c5b
+PatchScript: <<
+sed -i.bak -e '/-Wno-long-double/d' configure
+cat %{PatchFile} | sed "s|FINKPATH|%p|" | sed "s|FINKVERSION|%v|" | patch -p1
+perl -pi.bak -e "s,\(SHARED_INSTDIR\)/man,(SHARED_INSTDIR)/share/man,g" man/Makefile
+perl -pi.bak -e "s,\(SHARED_INSTDIR\)/doc,(SHARED_INSTDIR)/share/doc,g" Makefile
+perl -pi.bak -e "s,\(INSTDIR\)/doc,(INSTDIR)/share/doc,g" demo/MakeVars
+find demo -name Makefile | xargs perl -pi.bak -e "s,\(INSTDIR\)/doc,(INSTDIR)/share/doc,g"
+<<
+ConfigureParams: --x-includes=/usr/X11R6/include --x-libraries=/usr/X11R6/lib
+CompileScript: <<
+#!/bin/sh -ex
+export DYLD_LIBRARY_PATH=%b/libs:.
+./configure %c --with-ssl=%p/lib/system-openssl --disable-dependency-tracking
+# add -fno-common
+echo 'CXXFLAGS := $(CXXFLAGS) -fno-common' >> MakeVars
+# set version to include fink major version
+echo "VERSION = .0.%v" >> MakeVars
+# dynamic casts are supported on OS X
+echo "#define HAVE_DYNAMIC_CAST 1" >> include/mico/config.h
+# fix for missing #defines in 10.3
+cat >> include/mico/config.h << EOF
+#ifndef POLLRDNORM
+#define POLLRDNORM POLLIN
+#endif
+#ifndef POLLRDBAND
+#define POLLRDBAND POLLIN
+#endif
+#ifndef POLLWRNORM
+#define POLLWRNORM POLLIN
+#endif
+#ifndef POLLWRBAND
+#define POLLWRBAND POLLIN
+#endif
+EOF
+# disable optional features
+echo "HAVE_JDK = no"   >> MakeVars
+echo "HAVE_QT  = no"   >> MakeVars
+echo "HAVE_GTK = no"   >> MakeVars
+echo "HAVE_TCL = no"   >> MakeVars
+echo "HAVE_PGSQL = no" >> MakeVars
+# prepare symlinks to resolve shared libs during build
+mkdir libs
+(cd libs; ln -fs libmico.0.%v.dylib libmico.0.dylib) || exit 1
+(cd libs; ln -fs libmicox.0.%v.dylib libmicox.0.dylib) || exit 1
+(cd libs; ln -fs libmicoir.0.%v.dylib libmicoir.0.dylib) || exit 1
+(cd libs; ln -fs libmicoaux.0.%v.dylib libmicoaux.0.dylib) || exit 1
+(cd libs; ln -fs libmicocoss.0.%v.dylib libmicocoss.0.dylib) || exit 1
+make
+<<
+
+InstallScript: <<
+echo "INSTDIR        = %i" >> MakeVars
+echo "SHARED_INSTDIR = %i" >> MakeVars
+make install
+# rename imr to mico-imr and fix calls to it in examples
+mv %i/bin/imr %i/bin/mico-imr
+mv %i/share/man/man1/imr.1 %i/share/man/man1/mico-imr.1
+grep -rl imr %i/share/doc/mico/examples | xargs -n 1 perl -pi.bak -e "s,^imr,mico-imr,"
+# remove version from static libs
+mv %i/lib/libmico.0.%v.a %i/lib/libmico.a
+mv %i/lib/libmicox.0.%v.a %i/lib/libmicox.a
+mv %i/lib/libmicoir.0.%v.a %i/lib/libmicoir.a
+mv %i/lib/libmicoaux.0.%v.a %i/lib/libmicoaux.a
+mv %i/lib/libmicocoss.0.%v.a %i/lib/libmicocoss.a
+# fix read-only
+chmod +w %i/lib/libmico*.a
+# ranlib
+ranlib %i/lib/libmico*.a
+# install already created symlinks for shared libs
+install libs/libmico*.0.dylib %i/lib
+# create symlinks for shared libs without major version
+(cd %i/lib; ln -s libmico.0.%v.dylib libmico.dylib)
+(cd %i/lib; ln -s libmicox.0.%v.dylib libmicox.dylib)
+(cd %i/lib; ln -s libmicoir.0.%v.dylib libmicoir.dylib)
+(cd %i/lib; ln -s libmicoaux.0.%v.dylib libmicoaux.dylib)
+(cd %i/lib; ln -s libmicocoss.0.%v.dylib libmicocoss.dylib)
+# create symlinks for backward compatibility with MICO books
+(cd %i/lib; ln -s libmico.0.%v.dylib libmico%v.dylib)
+(cd %i/lib; ln -s libmicox.0.%v.dylib libmicox%v.dylib)
+(cd %i/lib; ln -s libmicoir.0.%v.dylib libmicoir%v.dylib)
+(cd %i/lib; ln -s libmicoaux.0.%v.dylib libmicoaux%v.dylib)
+(cd %i/lib; ln -s libmicocoss.0.%v.dylib libmicocoss%v.dylib)
+<<
+
+RuntimeVars: <<
+ MICOVERSION: %v
+ MICOSHAREDDIR: %p
+ MICODIR: %p
+<<
+
+SplitOff: <<
+  Package: %N-shlibs
+  Depends: readline5-shlibs, x11, libncurses5-shlibs
+  Files: << 
+    lib/libmico.0.%v.dylib
+    lib/libmico.0.dylib
+    lib/libmicox.0.%v.dylib
+    lib/libmicox.0.dylib
+    lib/libmicoir.0.%v.dylib
+    lib/libmicoir.0.dylib
+    lib/libmicoaux.0.%v.dylib
+    lib/libmicoaux.0.dylib
+    lib/libmicocoss.0.%v.dylib
+    lib/libmicocoss.0.dylib
+    lib/libmico%v.dylib
+    lib/libmicoaux%v.dylib
+    lib/libmicocoss%v.dylib
+    lib/libmicoir%v.dylib
+    lib/libmicox%v.dylib
+  <<
+  Shlibs: <<
+    %p/lib/libmico.0.dylib 2.3.0 %n (>= 2.3.12-1)
+    %p/lib/libmicox.0.dylib 2.3.0 %n (>= 2.3.12-1)
+    %p/lib/libmicoir.0.dylib 2.3.0 %n (>= 2.3.12-1)
+    %p/lib/libmicoaux.0.dylib 2.3.0 %n (>= 2.3.12-1)
+    %p/lib/libmicocoss.0.dylib 2.3.0 %n (>= 2.3.12-1)
+  <<
+  DocFiles: LICENSE*
+  DescDetail: <<
+    The dev package contains the shared library only.
+  <<
+<<
+
+SplitOff2: <<
+  Package: %N-dev
+  Depends: %N-shlibs (= %v-%r)
+  BuildDependsOnly: true
+  Files: << 
+    include/*
+    lib/*.a
+    lib/libmico.dylib
+    lib/libmicox.dylib
+    lib/libmicoir.dylib
+    lib/libmicoaux.dylib
+    lib/libmicocoss.dylib
+  <<
+  DocFiles: LICENSE*
+  DescDetail: <<
+    The dev package contains all the development files (/include/*, /lib/*.a, symlinks to dylibs).
+  <<
+<<
+
+DocFiles: LICENSE* BUGS CHANGES* CONVERT FAQ INSTALL.txt TODO VERSION
+
+Description: Fully-compliant CORBA 2.3 Implementation
+DescDetail: <<
+  This package contains development tools, documentation and example code.
+<<
+
+DescPort: <<
+General:
+- MakeVars: CXXFLAGS += -fno-common (link of and to static libs)
+- include/mico/config.h: added #define HAVE_DYNAMIC_CAST 1
+- include/mico/os-math.h: #define isinf on __APPLE__  only if not already defined
+Dynamic libraries:
+- set DYLD_LIBRARY_PATH during configure & build (%b:%b/libs) 
+- provide symlinks to shared libs during build
+- admin/mico-shld.def.in: set -install_name and -compatibility_version
+- admin/mico-shld.def.in: include libs when creating libraries
+- explicitly set the location for X libs/includes since the package uses xmkmf to
+  find them, which is problematic on 10.5
+<<
+
+DescPackaging: <<
+- added security fix 001 from July 8 2006
+- disabled optional features (JDK, QT, GTK, TC, PGSQL) in MakeVars
+- configure: prepend ssldir to CPPFLAGS & LDFLAGS to use system-openssl
+- installation goes into %i
+- ranlib on installed archives
+- moved %i/doc into %i/share/doc
+- moved %i/man into %i/share/man
+- renamed imr to mico-imr to avoid conflict with jacorb
+- map undefined poll() calls for 10.3
+<<
+
+DescUsage: <<
+To use MICO, mico-setup.[sh|csh] is not needed, as it is installed
+within the fink tree and runtime vars MICO[DIS|SHAREDDIR|MICOVERSION]
+are already setup by fink. Also, you should link against -lmico
+and -lmicocoss instead or -lmico$MICOVERSION and -lmicocoss$MICOVERSION
+although those libraries are provided as symlinks in -dev package.
+
+The implementation repository tool imr has been renamed to mico-imr.
+
+A detailed tutorial is provided at %p/share/doc/mico/manual.ps
+<<
+
+License: LGPL
+Homepage: http://www.mico.org
+Maintainer: Matthias Ringwald <freckle@users.sf.net>
+
+ 	  	 
