@@ -1,0 +1,488 @@
+Package: llvm32
+Version: 3.2
+Revision: 1
+Description: Modular and reusable compiler
+License: BSD
+Maintainer: David Fang <fangism@users.sourceforge.net>
+
+# ccache is only temporary, for accelerating rebuilds
+# some cyclic dependency checker script needs python
+BuildDepends: cmake (>= 2.8.2-1), python27, fink (>= 0.28), ccache
+
+Source: http://llvm.org/releases/%v/llvm-%v.src.tar.gz
+Source-MD5: 71610289bbc819e3e15fdd562809a2d7
+Source2: http://llvm.org/releases/%v/clang-%v.src.tar.gz
+Source2-MD5: 3896ef4334df08563b05d0848ba80582
+Source3: http://llvm.org/releases/%v/compiler-rt-%v.src.tar.gz
+Source3-MD5: a9a30ccd7bbee6f68a3ca3020af0d852
+# Source4: http://llvm.org/releases/%v/test-suite-%v.src.tar.gz
+# Source4-MD5: d8e16facb5ce65bd36dc9ff49e3243e5
+# Source5: http://llvm.org/releases/%v/polly-%v.src.tar.gz
+# Source5-MD5: 4f10b08531d80682ae892c0adb746181
+# libcxxabi is not recommended, lib++ is not ready yet
+
+SourceDirectory: llvm-%v.src
+BuildDependsOnly: false
+UseMaxBuildJobs: true
+
+PatchFile: %n.patch
+PatchFile-MD5: 3eafb5af0363cc2b3d75922608a9f175
+PatchScript: <<
+	#!/bin/sh -ev
+	# relocated a few auxiliary directories where they are expected
+	pushd tools
+	ln -f -s ../../clang-%v.src ./clang
+#	ln -f -s ../../polly-%v.src ./polly
+	popd
+	pushd projects
+	ln -f -s ../../compier-rt-%v.src compiler-rt
+# uncomment the next line to enable test-suite (huge):
+#	ln -f -s ../../test-suite-%v.src test-suite
+	popd
+#	%{default_script}
+	sed -e 's|@FINK_PREFIX@|%p|g' %{PatchFile} | patch -p0
+
+	# point hard-coded paths to system g++-4.0.1's C++ includes
+	# remove references to g++-4.2.1, never existed in Xcode 2.5
+	darwin_vers=`uname -r | cut -d. -f1`
+	if test "$darwin_vers" != 10
+	then sed -i.orig -e "s|darwin10|darwin$darwin_vers|g" \
+		tools/clang/lib/Frontend/InitHeaderSearch.cpp
+	fi
+	if test ! -d /usr/include/c++/4.0.0
+	then sed -i.orig2 -e '/GnuCPlusPlusInclude.*4\.0\.0/,/);/d' \
+		tools/clang/lib/Frontend/InitHeaderSearch.cpp
+	fi
+	if test ! -d /usr/include/c++/4.2.1
+	then sed -i.orig2 -e '/GnuCPlusPlusInclude.*4\.2\.1/,/);/d' \
+		tools/clang/lib/Frontend/InitHeaderSearch.cpp
+	fi
+
+	# darwin8 missing PRIO_DARWIN_BG constant
+	test "$darwin_vers" != 8 || \
+	sed -i.orig -e '/PRIO_DARWIN_THREAD/s|^|// |' tools/clang/tools/libclang/CIndex.cpp
+
+	# explicit template instantiation (needed for 10.7)
+	{ echo '#include "llvm/Analysis/Dominators.h"' ; \
+	echo '#include "llvm/Assembly/Writer.h"' ; \
+	grep -e namespace -e EXTERN_TEMPLATE \
+		include/llvm/Analysis/Dominators.h | \
+	sed -e 's/EXTERN_TEMPLATE_INSTANTIATION(/template /' -e 's/);/;/' ; \
+	} > lib/Analysis/Dominators.cpp
+	sed -i.orig -e '/EXTERN_TEMPLATE_INSTANTIATION/s|^|// |' include/llvm/Analysis/Dominators.h
+	sed -i.orig -e '/DomPrinter/a\
+  Dominators.cpp\
+' lib/Analysis/CMakeLists.txt
+
+	# ld warning about binding of _abort and _raise symbols vs. libSystem's
+	# suggests -bind_at_load
+#	cp lib/Support/CMakeLists.txt{,.orig}
+#	echo "SET_TARGET_PROPERTIES(LLVMSupport PROPERTIES LINK_FLAGS -Wl,-bind_at_load)" >> lib/Support/CMakeLists.txt
+
+# needed for gcc-4.6 only
+#	sed -i.orig2 -e 's|compatibility_version|dylib_&|' tools/clang/tools/libclang/CMakeLists.txt
+
+	# test suite requires newer bash than /bin/bash 2.0 for pipefail
+	# test the pipefail option of this shell first
+	set -o pipefail || {
+	sed -i.orig -e "/bashPath = None/s|None|'%p/bin/bash'|" utils/lit/lit/LitConfig.py
+	test -x %p/bin/bash || { echo "Error: Fink-built bash >= 3.0 required for pipefail!" ; exit 1; }
+	}
+	# force time limit per test (prefix each command-line)
+	sed -i.orig -e "/script\.append/s|ln|'gtimeout 5m '+&|" utils/lit/lit/TestRunner.py
+	# projects/test-suite expects built llvm/clang to have been configured
+	# but sadly, we used cmake; don't include $llvmobjdir/Makefile.config
+	# TODO: replace cmake build with autoconf'd build
+	# sed -i.orig -e 's|HAS_LLVM := 1|HAS_LLVM := 0|' projects/test-suite/Makefile.config.in
+<<
+CompileScript: <<
+	#!/bin/sh -ev
+	# just always build these archs
+	case "%m" in
+	powerpc*) CMAKE_OPTIONS="-DLLVM_TARGETS_TO_BUILD=PowerPC" ;;
+	ppc*) CMAKE_OPTIONS="-DLLVM_TARGETS_TO_BUILD=PowerPC" ;;
+	i386*) CMAKE_OPTIONS="-DLLVM_TARGETS_TO_BUILD=X86" ;;
+	x86*) CMAKE_OPTIONS="-DLLVM_TARGETS_TO_BUILD=X86" ;;
+	esac
+	echo "Target option: $CMAKE_OPTIONS"
+	# to enable cross-compiling to other archs, uncomment the following line:
+	# CMAKE_OPTIONS="-DLLVM_TARGETS_TO_BUILD=X86;PowerPC;ARM"
+
+	# automatically use ccache if detected
+	# ccache recommended, but not required
+	# comment-out the next line if ccache is not desired
+	test -x $p/bin/ccache && ccache=ccache || ccache=
+
+	# set up some possible bootstrapping compilers
+	# wrap ccache into single cmd b/c cmake can't handle "ccache g++"
+	mkdir ../opt-bin
+	pushd ../opt-bin
+	{ echo "#!/bin/sh" ; echo 'exec $ccache gcc "$@"' ; } > ccgcc
+	{ echo "#!/bin/sh" ; echo 'exec $ccache g++ "$@"' ; } > ccg++
+	{ echo "#!/bin/sh" ; echo 'exec $ccache gcc-4.2 "$@"' ; } > ccgcc-4.2
+	{ echo "#!/bin/sh" ; echo 'exec $ccache g++-4.2 "$@"' ; } > ccg++-4.2
+#	{ echo "#!/bin/sh" ; echo 'exec $ccache gcc-fsf-4.6 "$@"' ; } > ccgcc-4.6
+#	{ echo "#!/bin/sh" ; echo 'exec $ccache g++-fsf-4.6 "$@"' ; } > ccg++-4.6
+	# also setup bootstrap stage compilers
+	# yes, ccache 3.1 supports compiler binary hashing
+	{ echo "#!/bin/sh" ; echo 'exec $ccache st1-clang "$@"' ; } > cc-st1-clang
+	{ echo "#!/bin/sh" ; echo 'exec $ccache st1-clang++ "$@"' ; } > cc-st1-clang++
+	{ echo "#!/bin/sh" ; echo 'exec $ccache st2-clang "$@"' ; } > cc-st2-clang
+	{ echo "#!/bin/sh" ; echo 'exec $ccache st2-clang++ "$@"' ; } > cc-st2-clang++
+
+	chmod +x cc*
+	export PATH=`pwd`:$PATH
+	popd
+
+	CMAKE_OPTIONS="$CMAKE_OPTIONS -DBUILD_SHARED_LIBS:BOOL=ON -DCMAKE_C_FLAGS=-fno-common -DCMAKE_CXX_FLAGS=-fno-common"
+
+	# stage 1 compiler (try to use ccache if available)
+	# gcc-4.0.1 FAILS on darwin9
+	darwin_vers=`uname -r | cut -d. -f1`
+	case "$darwin_vers" in
+	8)
+	  export CC=ccgcc
+	  export CXX=ccg++
+#	  export CC=ccgcc-4.6
+#	  export CXX=ccg++-4.6
+	  ;;
+	9)
+	  export CC=ccgcc-4.2
+	  export CXX=ccg++-4.2
+	  ;;
+	*)
+	  export CC=ccgcc
+	  export CXX=ccg++
+	  ;;
+	# on darwin11+, fink redirects gcc/g++ to clang/clang++ via PATH
+	esac
+
+	build_type=Release
+	CMAKE_OPTIONS="$CMAKE_OPTIONS -DCMAKE_INSTALL_PREFIX=%p/opt/llvm-%v -DCMAKE_BUILD_TYPE=$build_type -DLLVM_LIT_ARGS:STRING=-v -DLLVM_ENABLE_ASSERTIONS=ON"
+
+#	the --max-time option applies to aggregate test time, not individual :(
+#	CMAKE_OPTIONS="$CMAKE_OPTIONS -DLLVM_LIT_ARGS="-s -v --max-time=14400"
+
+	# trying to disable optimization flags on non-trustworthy compilers
+	ccvers=`$CXX -v 2>&1 | tail -n 1 | cut -d\  -f3`
+	if test $ccvers = 4.0.1
+	then STAGE1_CMAKE_OPTIONS='-DCMAKE_C_FLAGS_RELEASE:STRING=-O0 -DCMAKE_CXX_FLAGS_RELEASE:STRING=-O0'
+	fi
+
+	echo "######## START of BOOTSTRAP STAGE 1: building llvm/clang with the system compiler"
+	# wd: %b
+	mkdir -p ../build/stage1
+	pushd ../build/stage1
+	echo "CMAKE_OPTIONS=$CMAKE_OPTIONS $STAGE1_CMAKE_OPTIONS"
+	# Technically, we only need the native back-end in stage 1...
+	cmake $CMAKE_OPTIONS $STAGE1_CMAKE_OPTIONS ../../llvm-%v.src
+	# first make fails, but we have to run it first and then fix some deps
+	make -k || make VERBOSE=1
+	cd ..
+	ln -s stage1 last
+	popd
+	# wd: %b
+	# link stage1 compilers into opt-bin for next stage
+	pushd ../opt-bin
+	ln -s ../build/stage1/bin/clang st1-clang
+	ln -s ../build/stage1/bin/clang++ st1-clang++
+	popd
+	# wd: %b
+	# create some empty test logs, which we may overwrite and install to docs
+	for f in ../build/stage1/{llvm,clang}-%v-check.log
+	do echo "Stage 1 Tests were not run." > $f
+	done
+	echo "######## END of BOOTSTRAP STAGE 1: built llvm/clang with the system compiler"
+
+
+	# don't bootstrap on powerpc-darwinX, codegen issues
+	if test "%m" = "powerpc"
+	then exit
+	fi
+	if test "$darwin_vers" = 8
+	then exit
+	fi
+
+#	If you do not wish to bootstrap, just uncomment the next line:
+#	exit
+
+	echo "######## START of BOOTSTRAP STAGE 2: building llvm/clang with stage 1 clang"
+	export CCACHE_COMPILERCHECK=content
+	export CC=cc-st1-clang
+	export CXX=cc-st1-clang++
+	mkdir -p ../build/stage2
+	pushd ../build/stage2
+	cmake $CMAKE_OPTIONS ../../llvm-%v.src
+	make -k || make VERBOSE=1
+	cd ..
+	rm -f last
+	ln -s stage2 last
+	popd
+	# wd: %b
+	pushd ../opt-bin
+	ln -s ../build/stage2/bin/clang st2-clang
+	ln -s ../build/stage2/bin/clang++ st2-clang++
+	popd
+	# wd: %b
+	for f in ../build/stage2/{llvm,clang}-%v-check.log
+	do echo "Stage 2 Tests were not run." > $f
+	done
+	echo "######## END of BOOTSTRAP STAGE 2: built llvm/clang with stage 1 clang"
+
+	echo "######## START of BOOTSTRAP STAGE 3: building llvm/clang with stage 2 clang"
+	export CC=cc-st2-clang
+	export CXX=cc-st2-clang++
+	export CCACHE_DISABLE=1
+	mkdir -p ../build/stage3
+	pushd ../build/stage3
+	cmake $CMAKE_OPTIONS ../../llvm-%v.src
+	make -k || make VERBOSE=1
+	cd ..
+	rm -f last
+	ln -s stage3 last
+	popd
+	# wd: %b
+	for f in ../build/stage3/{llvm,clang}-%v-check.log
+	do echo "Stage 3 Tests were not run." > $f
+	done
+	echo "######## END of BOOTSTRAP STAGE 3: built llvm/clang with stage 2 clang"
+	# comparison!
+	# diff-ing binaries directly doesn't quite work because paths to build
+	# locations differ 'stage2' vs. 'stage3'.
+	pushd ../build
+	# compare pre-linked object files directly
+	# diff -r stage{2,3}/lib
+	# diff -r stage{2,3}/bin
+
+	diffs=
+	diff_obj_dir () {
+	# $1 is reference dir
+	# $2 is target dir
+	for f in $2/*
+	do
+	if test -d $f
+	then
+	  diff_obj_dir $1/`basename $f` $f
+	else
+	case $f in
+	*.s.tmp.o) ;;
+	*.o)
+	  if test -f $1/`basename $f`
+	  then
+	  diff $1/`basename $f` $f && echo "matches: $f" || diffs="$diffs $f"
+	  fi
+	  ;;
+	esac
+	fi
+	done
+	}
+
+	diff_obj_dir stage2 stage3 | grep -v basename
+	err=
+	echo "Objects that differ:"
+	for f in $diffs
+	do
+	case $f in
+	stage3/lib/Support/CMakeFiles/LLVMSupport.dir/CommandLine.cpp.o)
+	  echo "  $f -- OK, due to __DATE__, __TIME__ cpp macros" ;;
+	*) echo "  $f -- not OK" ; err=1 ;;
+	esac
+	done
+	test -z "$err"
+	echo "######## 3-STAGE BOOTSTRAP of llvm/clang PASSED!"
+	popd
+
+<<
+InfoTest: <<
+# need bash because /bin/sh 2.0 on darwin8 is missing support for pipefail
+# coreutils for gtimeout for tests
+	TestDepends: bash (>= 3.0), coreutils
+ 	TestScript: <<
+	#!/bin/sh -ev
+	# need path to bootstrapping compiler
+	pushd ../opt-bin
+	export PATH=`pwd`:$PATH
+	popd
+	cd ../build/last
+#	echo "******** Running included LLVM and clang tests ... ********"
+#	{ make -k TESTARGS=-v check-all 2>&1 || : ;} | tee llvm-clang-%v-check.log
+	echo "******** Running included LLVM tests ... ********"
+	{ make -k TESTARGS=-v check 2>&1 || : ;} | tee llvm-%v-check.log
+	echo "******** Running included clang tests ... ********"
+	{ make -k TESTARGS=-v check-clang 2>&1 || : ;} | tee clang-%v-check.log
+#	echo "******** Running massive test-suite ... ********"
+#	( cd projects/test-suite ; make -k 2>&1 || : ;) | tee test-suite-%v-check.log
+#	echo "******** Running included polly tests ... ********"
+#	( cd tools/polly/test ; make -k TESTARGS=-v polly-test 2>&1 || : ;) | tee polly-%v-check.log
+	<<
+	TestSuiteSize: medium
+<<
+InstallScript: <<
+	#!/bin/sh -ev
+	iprefix=%i/opt/llvm-%v
+	prefix=%p/opt/llvm-%v
+	pushd ../build/last
+		make -j1 install/fast DESTDIR="%d"
+	popd
+
+	# boilerplate script for fixing post-cmake-install install_names
+	pushd $iprefix/lib
+	for f in *.dylib
+	do
+		if test ! -L $f
+		then
+		install_name_tool -id "$prefix/lib/$f" "$f"
+		deplibs=`otool -L $f | sed 1,2d | awk '{print $1;}' | tr '\n' ' '`
+		for d in $deplibs
+		do
+		# prefix absolute paths to llvm/clang's lib installation
+		case $d in
+		/*) ;;
+		*) install_name_tool -change "$d" "$prefix/lib/$d" $f ;;
+		esac
+		done
+		fi
+	done
+	popd
+	pushd $iprefix/bin
+	for f in *
+	do
+		if test ! -L $f
+		then
+		deplibs=`otool -L $f | sed 1d | awk '{print $1;}' | tr '\n' ' '`
+		for d in $deplibs
+		do
+		# consider substituting with relative @executable_path/../lib ?
+		case $d in
+		/*) ;;
+		@*) ;;
+		*) install_name_tool -change "$d" "$prefix/lib/$d" $f ;;
+		esac
+		done
+		fi
+	done
+	popd
+
+	# documentation
+	docdir=$prefix/share/doc
+	idocdir=$iprefix/share/doc
+	mkdir -p $idocdir
+	cp -R docs $idocdir/llvm
+	cp -R tools/clang/docs $idocdir/clang
+	mkdir -p $idocdir/%n
+	pushd $idocdir/%n
+	ln -s $docdir/llvm .
+	ln -s $docdir/clang .
+	mkdir testlogs
+	cp %b/../build/last/*-check.log testlogs/
+	popd
+<<
+DocFiles: *.TXT README.txt
+Shlibs: <<
+	 	%p/opt/llvm-%v/lib/libclang.3.2.dylib 1.0.0 %n (>= 3.2-0)
+		!%p/opt/llvm-%v/lib/libclang.dylib
+		!%p/opt/llvm-%v/lib/libLTO.dylib
+		%p/opt/llvm-%v/lib/BugpointPasses.dylib 0.0.0 %n (>= 3.2-0)
+		%p/opt/llvm-%v/lib/LLVMHello.dylib 0.0.0 %n (>= 3.2-0)
+		!%p/opt/llvm-%v/lib/libLLVMAnalysis.dylib
+		!%p/opt/llvm-%v/lib/libLLVMArchive.dylib
+		!%p/opt/llvm-%v/lib/libLLVMAsmParser.dylib
+		!%p/opt/llvm-%v/lib/libLLVMAsmPrinter.dylib
+		!%p/opt/llvm-%v/lib/libLLVMBitReader.dylib
+		!%p/opt/llvm-%v/lib/libLLVMBitWriter.dylib
+		!%p/opt/llvm-%v/lib/libLLVMCodeGen.dylib
+		!%p/opt/llvm-%v/lib/libLLVMCore.dylib
+		!%p/opt/llvm-%v/lib/libLLVMDebugInfo.dylib
+		!%p/opt/llvm-%v/lib/libLLVMExecutionEngine.dylib
+		!%p/opt/llvm-%v/lib/libLLVMInstCombine.dylib
+		!%p/opt/llvm-%v/lib/libLLVMInstrumentation.dylib
+		!%p/opt/llvm-%v/lib/libLLVMInterpreter.dylib
+		!%p/opt/llvm-%v/lib/libLLVMJIT.dylib
+		!%p/opt/llvm-%v/lib/libLLVMLinker.dylib
+		!%p/opt/llvm-%v/lib/libLLVMMC.dylib
+		!%p/opt/llvm-%v/lib/libLLVMMCDisassembler.dylib
+		!%p/opt/llvm-%v/lib/libLLVMMCJIT.dylib
+		!%p/opt/llvm-%v/lib/libLLVMMCParser.dylib
+		!%p/opt/llvm-%v/lib/libLLVMObject.dylib
+		(%m = powerpc) !%p/opt/llvm-%v/lib/libLLVMPowerPCAsmPrinter.dylib
+		(%m = powerpc) !%p/opt/llvm-%v/lib/libLLVMPowerPCCodeGen.dylib
+		(%m = powerpc) !%p/opt/llvm-%v/lib/libLLVMPowerPCDesc.dylib
+		(%m = powerpc) !%p/opt/llvm-%v/lib/libLLVMPowerPCInfo.dylib
+		!%p/opt/llvm-%v/lib/libLLVMRuntimeDyld.dylib
+		!%p/opt/llvm-%v/lib/libLLVMScalarOpts.dylib
+		!%p/opt/llvm-%v/lib/libLLVMSelectionDAG.dylib
+		!%p/opt/llvm-%v/lib/libLLVMSupport.dylib
+		!%p/opt/llvm-%v/lib/libLLVMTableGen.dylib
+		!%p/opt/llvm-%v/lib/libLLVMTarget.dylib
+		!%p/opt/llvm-%v/lib/libLLVMTransformUtils.dylib
+		!%p/opt/llvm-%v/lib/libLLVMVectorize.dylib
+		!%p/opt/llvm-%v/lib/libLLVMipa.dylib
+		!%p/opt/llvm-%v/lib/libLLVMipo.dylib
+		(%m != powerpc) !%p/opt/llvm-%v/lib/libLLVMX86AsmParser.dylib
+		(%m != powerpc) !%p/opt/llvm-%v/lib/libLLVMX86AsmPrinter.dylib
+		(%m != powerpc) !%p/opt/llvm-%v/lib/libLLVMX86CodeGen.dylib
+		(%m != powerpc) !%p/opt/llvm-%v/lib/libLLVMX86Desc.dylib
+		(%m != powerpc) !%p/opt/llvm-%v/lib/libLLVMX86Disassembler.dylib
+		(%m != powerpc) !%p/opt/llvm-%v/lib/libLLVMX86Info.dylib
+		(%m != powerpc) !%p/opt/llvm-%v/lib/libLLVMX86Utils.dylib
+		!%p/opt/llvm-%v/lib/libclangAnalysis.dylib
+		!%p/opt/llvm-%v/lib/libclangARCMigrate.dylib
+		!%p/opt/llvm-%v/lib/libclangAST.dylib
+		!%p/opt/llvm-%v/lib/libclangASTMatchers.dylib
+		!%p/opt/llvm-%v/lib/libclangBasic.dylib
+		!%p/opt/llvm-%v/lib/libclangCodeGen.dylib
+		!%p/opt/llvm-%v/lib/libclangDriver.dylib
+		!%p/opt/llvm-%v/lib/libclangEdit.dylib
+		!%p/opt/llvm-%v/lib/libclangFrontend.dylib
+		!%p/opt/llvm-%v/lib/libclangFrontendTool.dylib
+		!%p/opt/llvm-%v/lib/libclangLex.dylib
+		!%p/opt/llvm-%v/lib/libclangParse.dylib
+		!%p/opt/llvm-%v/lib/libclangRewriteCore.dylib
+		!%p/opt/llvm-%v/lib/libclangRewriteFrontend.dylib
+		!%p/opt/llvm-%v/lib/libclangSema.dylib
+		!%p/opt/llvm-%v/lib/libclangSerialization.dylib
+		!%p/opt/llvm-%v/lib/libclangStaticAnalyzerCheckers.dylib
+		!%p/opt/llvm-%v/lib/libclangStaticAnalyzerCore.dylib
+		!%p/opt/llvm-%v/lib/libclangStaticAnalyzerFrontend.dylib
+		!%p/opt/llvm-%v/lib/libclangTooling.dylib
+		!%p/opt/llvm-%v/lib/libgtest.dylib
+		!%p/opt/llvm-%v/lib/libgtest_main.dylib
+		!%p/opt/llvm-%v/lib/libprofile_rt.dylib
+<<
+Homepage: http://llvm.org/
+DescDetail: <<
+The LLVM Project is a collection of modular and reusable compiler and
+toolchain technologies.  Despite its name, LLVM has little to do with
+traditional virtual machines, though it does provide helpful libraries
+that can be used to build them.
+
+The goal of the Clang project is to create a new C, C++, Objective C 
+and Objective C++ front-end for the LLVM compiler.
+<<
+DescPackaging: <<
+Built with shared-libraries to reduce the binary size.
+Enabled only native targets X86, PowerPC.
+Nag me if you want other cross-targets enabled.
+I suspect the following shlibs are actually modules/plug-ins, and should
+(conventionally) be suffixed .so:
+	profile_rt.dylib
+	BugpointPasses.dylib
+	LLVMHello.dylib
+<<
+DescPort: <<
+fangism contributed this port for PowerPC-Darwin8.
+	*** LLVM/Clang-3.2 still has serious codegen issues for PowerPC
+	*** It is NOT considered production quality for PowerPC
+	*** HELP WANTED: in stabilizing and fixing PowerPC CodeGen
+	*** on llvm/clang svn trunk.
+	*** status page: http://www.csl.cornell.edu/~fang/sw/llvm/
+Original package maintained by 
+	Benjamin Reed <llvm@fink.raccoonfink.com>
+with contributions from
+	Jack Howarth <howarth@bromo.med.uc.edu>
+PatchFile contains:
+*	CMakeFile fixes, mostly missing dependencies
+*	workarounds for C++ accessibility bugs in g++-4.0.x
+*	added inline virtual dtor to clang header to fix stage3 undefined ref.
+*	backport of http://llvm.org/viewvc/llvm-project?view=rev&revision=168172
+<<
