@@ -1,0 +1,320 @@
+Index: utils/lit/lit/LitConfig.py
+===================================================================
+--- utils/lit/lit/LitConfig.py	(revision 156555)
++++ utils/lit/lit/LitConfig.py	(working copy)
+@@ -36,7 +36,7 @@
+         self.debug = debug
+         self.isWindows = bool(isWindows)
+         self.params = dict(params)
+-        self.bashPath = None
++        self.bashPath = '@FINK_PREFIX@/bin/bash'
+ 
+         self.numErrors = 0
+         self.numWarnings = 0
+Index: lib/ExecutionEngine/MCJIT/CMakeLists.txt
+===================================================================
+--- lib/ExecutionEngine/MCJIT/CMakeLists.txt	(revision 156555)
++++ lib/ExecutionEngine/MCJIT/CMakeLists.txt	(working copy)
+@@ -2,3 +2,4 @@
+   MCJIT.cpp
+   MCJITMemoryManager.cpp
+   )
++target_link_libraries( LLVMMCJIT LLVMJIT )
+Index: lib/MC/MCDisassembler/CMakeLists.txt
+===================================================================
+--- lib/MC/MCDisassembler/CMakeLists.txt	(revision 156555)
++++ lib/MC/MCDisassembler/CMakeLists.txt	(working copy)
+@@ -6,3 +6,27 @@
+   EDOperand.cpp
+   EDToken.cpp
+   )
++
++target_link_libraries(LLVMMCDisassembler
++  LLVMMC
++  LLVMMCParser
++  LLVMSupport
++  LLVMTarget
++  )
++
++foreach(t ${LLVM_TARGETS_TO_BUILD})
++  set(td ${LLVM_MAIN_SRC_DIR}/lib/Target/${t})
++  if(EXISTS ${td}/TargetInfo/CMakeLists.txt)
++    target_link_libraries(LLVMMCDisassembler "LLVM${t}Info")
++  endif()
++  if(EXISTS ${td}/MCTargetDesc/CMakeLists.txt)
++    target_link_libraries(LLVMMCDisassembler "LLVM${t}Desc")
++  endif()
++  if(EXISTS ${td}/AsmParser/CMakeLists.txt)
++    target_link_libraries(LLVMMCDisassembler "LLVM${t}AsmParser")
++  endif()
++  if(EXISTS ${td}/Disassembler/CMakeLists.txt)
++    target_link_libraries(LLVMMCDisassembler "LLVM${t}Disassembler")
++  endif()
++endforeach(t)
++
+Index: include/llvm/Support/Compiler.h
+===================================================================
+--- include/llvm/Support/Compiler.h     (revision 170308)
++++ include/llvm/Support/Compiler.h     (working copy)
+@@ -137,7 +137,10 @@
+ #define LLVM_READNONE
+ #endif
+
+-#ifdef __GNUC__  // aka 'PURE' but following LLVM Conventions.
++// this attribute may be buggy for older gcc-4.0.1 (apple)
++// removing this fixes bug #14244
++#if defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __CNUC_MINOR__ >= 2))
++// aka 'PURE' but following LLVM Conventions.
+ #define LLVM_READONLY __attribute__((__pure__))
+ #else
+ #define LLVM_READONLY
+Index: include/llvm/ADT/DenseMap.h
+===================================================================
+--- include/llvm/ADT/DenseMap.h (revision 170308)
++++ include/llvm/ADT/DenseMap.h (working copy)
+@@ -531,7 +531,7 @@
+     init(NumInitBuckets);
+   }
+
+-  DenseMap(const DenseMap &other) {
++  DenseMap(const DenseMap &other) : BaseT() {
+     init(0);
+     copyFrom(other);
+   }
+Index: lib/Support/Unix/Memory.inc
+===================================================================
+--- lib/Support/Unix/Memory.inc (revision 170308)
++++ lib/Support/Unix/Memory.inc (working copy)
+@@ -51,7 +51,7 @@
+         llvm::sys::Memory::MF_EXEC:
+     return PROT_READ | PROT_WRITE | PROT_EXEC;
+   case llvm::sys::Memory::MF_EXEC:
+-    return PROT_EXEC;
++    return PROT_EXEC | PROT_READ;      // patch from Roman Divacky, bug 14278
+   default:
+     llvm_unreachable("Illegal memory protection flag specified!");
+   }
+Index: lib/Support/Unix/Signals.inc
+===================================================================
+--- lib/Support/Unix/Signals.inc	(revision 156555)
++++ lib/Support/Unix/Signals.inc	(working copy)
+@@ -266,6 +266,6 @@
+ void llvm::sys::PrintStackTraceOnErrorSignal() {
+   AddSignalHandler(PrintStackTrace, 0);
+ 
+-#if defined(__APPLE__)
++#if defined(__APPLE__) && defined(MACH_EXCEPTION_CODES) && defined(EXC_MASK_CRASH)
+   // Environment variable to disable any kind of crash dialog.
+   if (getenv("LLVM_DISABLE_CRASH_REPORT")) 
+Index: lib/Target/TargetInstrInfo.cpp
+===================================================================
+--- lib/Target/TargetInstrInfo.cpp      (revision 167609)
++++ lib/Target/TargetInstrInfo.cpp      (working copy)
+@@ -19,6 +19,28 @@
+ #include <cctype>
+ using namespace llvm;
+ 
++// HACK: fang copy-pasted this here from "lib/CodeGen/MachineInstr.cpp"
++// to avoid circular dependency.  Must be inline to avoid multiple defs.
++// to automate patch: sed -n '/MachineInstr::hasPropertyInBundle/,/^}/p' lib/CodeGen/MachineInstr.cpp
++inline
++bool MachineInstr::hasPropertyInBundle(unsigned Mask, QueryType Type) const {
++  const MachineBasicBlock *MBB = getParent();
++  MachineBasicBlock::const_instr_iterator MII = *this; ++MII;
++  while (MII != MBB->end() && MII->isInsideBundle()) {
++    if (MII->getDesc().getFlags() & Mask) {
++      if (Type == AnyInBundle)
++        return true;
++    } else {
++      if (Type == AllInBundle)
++        return false;
++    }
++    ++MII;
++  }
++
++  return Type == AllInBundle;
++}
++// END HACK: fang
++
+ //===----------------------------------------------------------------------===//
+ //  TargetInstrInfo
+ //
+Index: tools/clang/lib/AST/ExprConstant.cpp
+===================================================================
+--- tools/clang/lib/AST/ExprConstant.cpp	(revision 156555)
++++ tools/clang/lib/AST/ExprConstant.cpp	(working copy)
+@@ -2775,7 +2775,8 @@
+     if (E->isArrow()) {
+       if (!EvaluatePointer(E->getBase(), Result, this->Info))
+         return false;
+-      BaseTy = E->getBase()->getType()->castAs<PointerType>()->getPointeeType();
++      BaseTy = E->getBase()->getType()->template castAs<PointerType>()
++               ->getPointeeType();
+     } else if (E->getBase()->isRValue()) {
+       assert(E->getBase()->getType()->isRecordType());
+       if (!EvaluateTemporary(E->getBase(), Result, this->Info))
+Index: tools/clang/lib/Serialization/CMakeLists.txt
+===================================================================
+--- tools/clang/lib/Serialization/CMakeLists.txt	(revision 156555)
++++ tools/clang/lib/Serialization/CMakeLists.txt	(working copy)
+@@ -25,6 +25,9 @@
+   ClangStmtNodes
+   )
+ 
+ target_link_libraries(clangSerialization
++  clangAST
++  clangBasic
+   clangSema
++  LLVMSupport
+   )
+Index: tools/clang/include/clang/Serialization/ASTReader.h
+===================================================================
+--- tools/clang/include/clang/Serialization/ASTReader.h	(revision 156555)
++++ tools/clang/include/clang/Serialization/ASTReader.h	(working copy)
+@@ -276,10 +276,16 @@
+   FileManager &FileMgr;
+   DiagnosticsEngine &Diags;
+ 
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
++public:	// workaround to grant access to classes nested within ASTDeclReader
++#endif
+   /// \brief The semantic analysis object that will be processing the
+   /// AST files and the translation unit that uses it.
+   Sema *SemaObj;
+ 
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
++private:
++#endif
+   /// \brief The preprocessor that will be loading the source file.
+   Preprocessor &PP;
+ 
+@@ -792,6 +798,9 @@
+   /// since the last time the declaration chains were linked.
+   llvm::SmallPtrSet<Decl *, 16> RedeclsDeserialized;
+   
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
++public:	// workaround to grant access to classes nested within ASTDeclReader
++#endif
+   /// \brief The list of redeclaration chains that still need to be 
+   /// reconstructed.
+   ///
+@@ -803,6 +812,9 @@
+   /// \brief Keeps track of the elements added to PendingDeclChains.
+   llvm::SmallSet<serialization::DeclID, 16> PendingDeclChainsKnown;
+ 
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
++private:
++#endif
+   /// \brief The set of Objective-C categories that have been deserialized
+   /// since the last time the declaration chains were linked.
+   llvm::SmallPtrSet<ObjCCategoryDecl *, 16> CategoriesDeserialized;
+--- tools/clang/include/clang/Frontend/FrontendActions.h	2012-05-24 14:48:30.000000000 -0700
++++ tools/clang/include/clang/Frontend/FrontendActions.h	2012-05-24 14:47:37.000000000 -0700
+@@ -123,6 +123,9 @@
+   virtual ASTConsumer *CreateASTConsumer(CompilerInstance &CI,
+                                          StringRef InFile);
+ public:
++  // fang: stage3 bootstrap unittest build wants inline virtual dtor
++  // (else undefined reference at link time)
++  virtual ~SyntaxOnlyAction() { }
+   virtual bool hasCodeCompletionSupport() const { return true; }
+ };
+ 
+--- tools/clang/lib/ASTMatchers/CMakeLists.txt	2012/11/16 16:07:37	168171
++++ tools/clang/lib/ASTMatchers/CMakeLists.txt	2012/11/16 17:30:58	168172
+@@ -1,5 +1,4 @@
+ set(LLVM_LINK_COMPONENTS support)
+-set(LLVM_USED_LIBS clangBasic clangAST)
+ 
+ add_clang_library(clangASTMatchers
+   ASTMatchFinder.cpp
+@@ -15,3 +14,8 @@
+   ClangDiagnosticCommon
+   ClangStmtNodes
+   )
++
++target_link_libraries(clangASTMatchers
++  clangBasic
++  clangAST
++  )
+--- tools/clang/lib/Rewrite/Frontend/CMakeLists.txt	2012/11/16 16:07:37	168171
++++ tools/clang/lib/Rewrite/Frontend/CMakeLists.txt	2012/11/16 17:30:58	168172
+@@ -25,4 +25,5 @@
+   clangAST
+   clangParse
+   clangFrontend
++  clangRewriteCore
+   )
+--- tools/clang/lib/CodeGen/CGExpr.cpp	2012/11/13 01:03:15	167801
++++ tools/clang/lib/CodeGen/CGExpr.cpp	2012/11/13 02:05:15	167802
+@@ -935,8 +935,8 @@
+   llvm::APInt Min;
+   llvm::APInt End;
+   if (IsBool) {
+-    Min = llvm::APInt(8, 0);
+-    End = llvm::APInt(8, 2);
++    Min = llvm::APInt(getContext().getTypeSize(Ty), 0);
++    End = llvm::APInt(getContext().getTypeSize(Ty), 2);
+   } else {
+     const EnumDecl *ED = ET->getDecl();
+     llvm::Type *LTy = ConvertTypeForMem(ED->getIntegerType());
+@@ -1031,8 +1031,9 @@
+     // This should really always be an i1, but sometimes it's already
+     // an i8, and it's awkward to track those cases down.
+     if (Value->getType()->isIntegerTy(1))
+-      return Builder.CreateZExt(Value, Builder.getInt8Ty(), "frombool");
+-    assert(Value->getType()->isIntegerTy(8) && "value rep of bool not i1/i8");
++      return Builder.CreateZExt(Value, ConvertTypeForMem(Ty), "frombool");
++    assert(Value->getType()->isIntegerTy(getContext().getTypeSize(Ty)) &&
++           "wrong value rep of bool");
+   }
+ 
+   return Value;
+@@ -1041,7 +1042,8 @@
+ llvm::Value *CodeGenFunction::EmitFromMemory(llvm::Value *Value, QualType Ty) {
+   // Bool has a different representation in memory than in registers.
+   if (hasBooleanRepresentation(Ty)) {
+-    assert(Value->getType()->isIntegerTy(8) && "memory rep of bool not i8");
++    assert(Value->getType()->isIntegerTy(getContext().getTypeSize(Ty)) &&
++           "wrong value rep of bool");
+     return Builder.CreateTrunc(Value, Builder.getInt1Ty(), "tobool");
+   }
+ 
+Index: tools/clang/lib/Driver/Driver.cpp
+===================================================================
+--- tools/clang/lib/Driver/Driver.cpp       (revision 170308)
++++ tools/clang/lib/Driver/Driver.cpp       (working copy)
+@@ -1676,6 +1686,14 @@
+     case llvm::Triple::IOS:
+       if (Target.getArch() == llvm::Triple::x86 ||
+           Target.getArch() == llvm::Triple::x86_64 ||
++#if 1
++       // uncomment this to use DarwinClang driver for ppc family
++          Target.getArch() == llvm::Triple::ppc ||
++          Target.getArch() == llvm::Triple::ppc64 ||
++       // see bugs:
++       // http://llvm.org/bugs/show_bug.cgi?id=14387
++       // http://llvm.org/bugs/show_bug.cgi?id=14275
++#endif
+           Target.getArch() == llvm::Triple::arm ||
+           Target.getArch() == llvm::Triple::thumb)
+         TC = new toolchains::DarwinClang(*this, Target);
+Index: tools/clang/lib/Driver/Tools.cpp
+===================================================================
+--- tools/clang/lib/Driver/Tools.cpp        (revision 170308)
++++ tools/clang/lib/Driver/Tools.cpp        (working copy)
+@@ -3873,6 +3877,14 @@
+
+   // Derived from darwin_arch spec.
+   CmdArgs.push_back("-arch");
++#if 1
++// suggested patch from http://llvm.org/bugs/show_bug.cgi?id=3830
++  if (ArchName == "powerpc")
++    CmdArgs.push_back("ppc");
++  else if (ArchName == "powerpc64")
++    CmdArgs.push_back("ppc64");
++  else
++#endif
+   CmdArgs.push_back(Args.MakeArgString(ArchName));
+
+   // FIXME: Is this needed anymore?
