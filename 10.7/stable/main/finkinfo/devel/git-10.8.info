@@ -1,6 +1,6 @@
 Info2:<<
 Package: git
-Version: 1.8.0.2
+Version: 1.8.1
 Revision: 1+10.8
 Type: pm 5.12.4
 Distribution: 10.8
@@ -16,7 +16,7 @@ Depends: <<
 <<
 BuildDepends: <<
 	expat1,
-	fink (>= 0.24.12),
+	fink (>= 0.32),
 	gettext-tools,
 	libcurl4 (>= 7.25.0-1),
 	libgettext8-dev,
@@ -28,12 +28,12 @@ Replaces: git-core, git-cvsimport (<< 1.7.2.3-1002), git-archimport (<< 1.7.2.3-
 Conflicts: git-cvsimport (<< 1.7.2.3-1002), git-archimport (<< 1.7.2.3-1002), git-svn (<< 1.7.2.3-1002)
 
 Source: http://git-core.googlecode.com/files/git-%v.tar.gz
-Source-MD5: 1aca109d4a719fe5bc43d25927fbc7d9
+Source-MD5: a2c6f4404c5e432b47474d246ca83c7e
 Source2: http://git-core.googlecode.com/files/git-htmldocs-%v.tar.gz
-Source2-MD5: 74bfbd1173943442d26d1831a3e52db0
+Source2-MD5: b1d393661080ec8077ea9e444fdf887a
 Source2ExtractDir: doc
 Source3: http://git-core.googlecode.com/files/git-manpages-%v.tar.gz
-Source3-MD5: ab83283a5b3c73ab711a9f02896ca12e
+Source3-MD5: 8da825142aed9f37f80ad67164990373
 
 PatchFile: %n.patch
 PatchFile-MD5: 94888883d974322ec4801de649289b1a
@@ -57,10 +57,10 @@ NO_INSTALL_HARDLINKS=1
 NO_REGEX=1
 EOF
 	perl -pi -e 's/\"\$PERL\"/\$PERL/' git-instaweb.sh
+	perl -pi -e 's/svnrdump/svnrdump17/' remote-testsvn.c
 <<
 
-# Test suite hangs now when using multiple processes. :(
-UseMaxBuildJobs: false
+UseMaxBuildJobs: true
 
 # Let configure do the work of setting up the environment instead of
 # patching and passing things manually to make.
@@ -70,7 +70,7 @@ SetLDFLAGS: -Wl,-dead_strip_dylibs
 ConfigureParams: <<
 	--libexecdir='${exec_prefix}/lib' \
 	--enable-pthreads=' ' \
-	--without-python \
+	--with-python='/usr/bin/python' \
 	--with-tcltk='/usr/bin/wish' \
 	--with-openssl=%p \
 	--with-libpcre=%p
@@ -98,7 +98,8 @@ InfoTest: <<
  		libwww-pm%type_pkg[pm],
  		svn-swig-pm%type_pkg[pm] (>= 1.7.7-1),
  		svn17,
- 		term-readkey-pm%type_pkg[pm]
+ 		term-readkey-pm%type_pkg[pm],
+ 		test-harness-pm%type_pkg[pm]
  	<<
 
 	TestScript: <<
@@ -109,19 +110,21 @@ InfoTest: <<
 		ln -s %p/bin/svn17 bin-wrappers/svn
 		ln -s %p/bin/svnadmin17 bin-wrappers/svnadmin
 		ln -s %p/bin/svnserve17 bin-wrappers/svnserve
+		
+		# Need to pass -j1 to 'prove' since some tests don't seem to like running in parallel.
 
 		if [ $UID = 0 ]; then
 			# Some tests fail when run as root.
-			GIT_SKIP_TESTS='t0001.25 t0004.2 t0004.3 t0004.4 t0004.5 t0070.3 t1004.13 t3700.21 t3700.22 t3700.23 t3700.24 t3700.25 t4034.22 t4034.26 t4201.2 t5302 t5700.16 t6000.3 t7300.26 t7403' make -k test PERL_PATH="$PERL_PATH" || exit 2
+			GIT_SKIP_TESTS="t9020" make -k DEFAULT_TEST_TARGET="prove" PROVE="%p/bin/prove-%type_pkg[pm]" GIT_PROVE_OPTS="--timer --failures -j1" test PERL_PATH="$PERL_PATH" || exit 1
 		else
-			GIT_SKIP_TESTS="t4034.22 t4034.26 t4201.2 t5302 t5700.16 t6000.3 t7403" make -k test PERL_PATH="$PERL_PATH" || exit 2
+			GIT_SKIP_TESTS="t9020" make -k DEFAULT_TEST_TARGET="prove" PROVE="%p/bin/prove-%type_pkg[pm]" GIT_PROVE_OPTS="--timer --failures -j1" test PERL_PATH="$PERL_PATH" || exit 2
 		fi
 	<<
 	TestSuiteSize: large
 <<
 
 InstallScript: <<
-	make install DESTDIR=%d
+	make install DESTDIR=%d NO_PYTHON=1
 	
 	mkdir -p %i/share/man %i/share/doc
 	cp -R ../man* %i/share/man
@@ -133,7 +136,6 @@ InstallScript: <<
 	install -m 755 contrib/credential/osxkeychain/git-credential-osxkeychain %i/lib/git-core
 	mkdir -p %i/etc/profile.d
 	install -m 755 contrib/completion/git-prompt.sh %i/etc/profile.d
-	install -m 755 git-p4.py %i/lib/git-core/git-p4
 	
 	# These go in separate packages.
 	rm %i/lib/git-core/git-cvsimport
@@ -148,6 +150,24 @@ InstallScript: <<
 	rm %i/lib/git-core/git-send-email
 	rm %i/share/doc/%n/git-send-email.*
 	rm %i/share/man/man1/git-send-email.1
+<<
+
+SplitOff: <<
+	Package: git-remote-testsvn
+	Description: SVN remote helper for git
+	DescDetail: <<
+		This is the testsvn remote helper from git.
+		It allows one to import an svn repository into git using the
+		remote mechanism.
+		
+		This should be considered experimental (hence 'testsvn')
+		and used with caution.
+		
+		Use like: git clone testsvn::http://some.svn.repo
+	<<
+	RuntimeDepends: git (>= 1.8.1), svn17
+	Files: lib/git-core/%n
+	DocFiles: COPYING README
 <<
 
 UpdatePOD: true
