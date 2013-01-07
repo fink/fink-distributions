@@ -1,6 +1,6 @@
-diff -ruN ZendFramework-1.11.11.orig/fink/manpage/zf.8 ZendFramework-1.11.11/fink/manpage/zf.8
---- ZendFramework-1.11.11.orig/fink/manpage/zf.8	1969-12-31 17:00:00.000000000 -0700
-+++ ZendFramework-1.11.11/fink/manpage/zf.8	2012-07-04 13:18:19.000000000 -0600
+diff -ruN ZendFramework-1.11.13.orig/fink/manpage/zf.8 ZendFramework-1.11.13/fink/manpage/zf.8
+--- ZendFramework-1.11.13.orig/fink/manpage/zf.8	1969-12-31 17:00:00.000000000 -0700
++++ ZendFramework-1.11.13/fink/manpage/zf.8	2013-01-07 08:35:28.000000000 -0700
 @@ -0,0 +1,46 @@
 +.TH ZF 8 "2010-02-12" "1.10.1" "zendframework tool"
 +
@@ -48,9 +48,459 @@ diff -ruN ZendFramework-1.11.11.orig/fink/manpage/zf.8 ZendFramework-1.11.11/fin
 +The development is currently coordinated by Zend Technologies Ltd. <\fIhttp://framework.zend.com\fR>.
 +.PP
 +This manual page was written by Frank Habermann <\fIlordlamer@lordlamer.de\fR>, for the Debian project (but may be used by others).
-diff -ruN ZendFramework-1.11.11.orig/fink/patches/zf-shell.patch ZendFramework-1.11.11/fink/patches/zf-shell.patch
---- ZendFramework-1.11.11.orig/fink/patches/zf-shell.patch	1969-12-31 17:00:00.000000000 -0700
-+++ ZendFramework-1.11.11/fink/patches/zf-shell.patch	2012-07-04 13:19:30.000000000 -0600
+diff -ruN ZendFramework-1.11.13.orig/fink/patches/ZF2012-05.patch ZendFramework-1.11.13/fink/patches/ZF2012-05.patch
+--- ZendFramework-1.11.13.orig/fink/patches/ZF2012-05.patch	1969-12-31 17:00:00.000000000 -0700
++++ ZendFramework-1.11.13/fink/patches/ZF2012-05.patch	2013-01-07 08:38:32.000000000 -0700
+@@ -0,0 +1,446 @@
++Index: zendframework-1.11.13/library/Zend/Feed.php
++===================================================================
++--- zendframework-1.11.13.orig/library/Zend/Feed.php	2012-01-05 22:27:01.000000000 +0100
+++++ zendframework-1.11.13/library/Zend/Feed.php	2012-12-25 17:31:38.238088865 +0100
++@@ -191,7 +191,8 @@
++     public static function importString($string)
++     {
++         // Load the feed as an XML DOMDocument object
++-        $libxml_errflag = libxml_use_internal_errors(true);
+++        $libxml_errflag       = libxml_use_internal_errors(true);
+++        $libxml_entity_loader = libxml_disable_entity_loader(true);
++         $doc = new DOMDocument;
++         if (trim($string) == '') {
++             require_once 'Zend/Feed/Exception.php';
++@@ -199,9 +200,9 @@
++             . ' is an Empty string or comes from an empty HTTP response');
++         }
++         $status = $doc->loadXML($string);
+++        libxml_disable_entity_loader($libxml_entity_loader);
++         libxml_use_internal_errors($libxml_errflag);
++ 
++-
++         if (!$status) {
++             // prevent the class to generate an undefined variable notice (ZF-2590)
++             // Build error message
++Index: zendframework-1.11.13/library/Zend/Feed/Abstract.php
++===================================================================
++--- zendframework-1.11.13.orig/library/Zend/Feed/Abstract.php	2012-01-05 22:27:01.000000000 +0100
+++++ zendframework-1.11.13/library/Zend/Feed/Abstract.php	2012-12-25 17:31:38.234088865 +0100
++@@ -81,9 +81,9 @@
++                  * @see Zend_Feed_Exception
++                  */
++                 require_once 'Zend/Feed/Exception.php';
++-                throw new Zend_Feed_Exception('Feed failed to load, got response code ' . $response->getStatus());
+++                throw new Zend_Feed_Exception('Feed failed to load, got response code ' . $response->getStatus() . '; request: ' . $client->getLastRequest() . "\nresponse: " . $response->asString());
++             }
++-            $this->_element = $response->getBody();
+++            $this->_element = $this->_importFeedFromString($response->getBody());
++             $this->__wakeup();
++         } elseif ($string !== null) {
++             // Retrieve the feed from $string
++@@ -256,4 +256,49 @@
++      * @return void
++      */
++     abstract public function send();
+++
+++    /**
+++     * Import a feed from a string
+++     *
+++     * Protects against XXE attack vectors.
+++     * 
+++     * @param  string $feed 
+++     * @return string
+++     * @throws Zend_Feed_Exception on detection of an XXE vector
+++     */
+++    protected function _importFeedFromString($feed)
+++    {
+++        // Load the feed as an XML DOMDocument object
+++        $libxml_errflag       = libxml_use_internal_errors(true);
+++        $libxml_entity_loader = libxml_disable_entity_loader(true);
+++        $doc = new DOMDocument;
+++        if (trim($feed) == '') {
+++            require_once 'Zend/Feed/Exception.php';
+++            throw new Zend_Feed_Exception('Remote feed being imported'
+++            . ' is an Empty string or comes from an empty HTTP response');
+++        }
+++        $status = $doc->loadXML($feed);
+++        libxml_disable_entity_loader($libxml_entity_loader);
+++        libxml_use_internal_errors($libxml_errflag);
+++
+++        if (!$status) {
+++            // prevent the class to generate an undefined variable notice (ZF-2590)
+++            // Build error message
+++            $error = libxml_get_last_error();
+++            if ($error && $error->message) {
+++                $errormsg = "DOMDocument cannot parse XML: {$error->message}";
+++            } else {
+++                $errormsg = "DOMDocument cannot parse XML";
+++            }
+++
+++
+++            /**
+++             * @see Zend_Feed_Exception
+++             */
+++            require_once 'Zend/Feed/Exception.php';
+++            throw new Zend_Feed_Exception($errormsg);
+++        }
+++
+++        return $doc->saveXML($doc->documentElement);
+++    }
++ }
++Index: zendframework-1.11.13/library/Zend/Feed/Writer/Deleted.php
++===================================================================
++--- zendframework-1.11.13.orig/library/Zend/Feed/Writer/Deleted.php	2012-02-25 23:06:01.000000000 +0100
+++++ zendframework-1.11.13/library/Zend/Feed/Writer/Deleted.php	2012-12-25 17:31:38.238088865 +0100
++@@ -128,10 +128,10 @@
++         $zdate = null;
++         if ($date === null) {
++             $zdate = new Zend_Date;
++-        } elseif (ctype_digit((string)$date)) {
++-            $zdate = new Zend_Date($date, Zend_Date::TIMESTAMP);
++         } elseif ($date instanceof Zend_Date) {
++             $zdate = $date;
+++        } elseif (ctype_digit((string)$date)) {
+++            $zdate = new Zend_Date($date, Zend_Date::TIMESTAMP);
++         } else {
++             require_once 'Zend/Feed/Exception.php';
++             throw new Zend_Feed_Exception('Invalid Zend_Date object or UNIX Timestamp passed as parameter');
++Index: zendframework-1.11.13/library/Zend/Feed/Writer/Entry.php
++===================================================================
++--- zendframework-1.11.13.orig/library/Zend/Feed/Writer/Entry.php	2012-02-25 23:06:01.000000000 +0100
+++++ zendframework-1.11.13/library/Zend/Feed/Writer/Entry.php	2012-12-25 17:31:38.234088865 +0100
++@@ -214,10 +214,10 @@
++         $zdate = null;
++         if ($date === null) {
++             $zdate = new Zend_Date;
++-        } elseif (ctype_digit((string)$date)) {
++-            $zdate = new Zend_Date($date, Zend_Date::TIMESTAMP);
++         } elseif ($date instanceof Zend_Date) {
++             $zdate = $date;
+++        } elseif (ctype_digit((string)$date)) {
+++            $zdate = new Zend_Date($date, Zend_Date::TIMESTAMP);
++         } else {
++             require_once 'Zend/Feed/Exception.php';
++             throw new Zend_Feed_Exception('Invalid Zend_Date object or UNIX Timestamp passed as parameter');
++@@ -235,10 +235,10 @@
++         $zdate = null;
++         if ($date === null) {
++             $zdate = new Zend_Date;
++-        } elseif (ctype_digit((string)$date)) {
++-            $zdate = new Zend_Date($date, Zend_Date::TIMESTAMP);
++         } elseif ($date instanceof Zend_Date) {
++             $zdate = $date;
+++        } elseif (ctype_digit((string)$date)) {
+++            $zdate = new Zend_Date($date, Zend_Date::TIMESTAMP);
++         } else {
++             require_once 'Zend/Feed/Exception.php';
++             throw new Zend_Feed_Exception('Invalid Zend_Date object or UNIX Timestamp passed as parameter');
++Index: zendframework-1.11.13/library/Zend/Feed/Writer/Feed/FeedAbstract.php
++===================================================================
++--- zendframework-1.11.13.orig/library/Zend/Feed/Writer/Feed/FeedAbstract.php	2012-02-25 23:06:01.000000000 +0100
+++++ zendframework-1.11.13/library/Zend/Feed/Writer/Feed/FeedAbstract.php	2012-12-25 17:31:38.234088865 +0100
++@@ -176,10 +176,10 @@
++         $zdate = null;
++         if ($date === null) {
++             $zdate = new Zend_Date;
++-        } elseif (ctype_digit((string)$date)) {
++-            $zdate = new Zend_Date($date, Zend_Date::TIMESTAMP);
++         } elseif ($date instanceof Zend_Date) {
++             $zdate = $date;
+++        } elseif (ctype_digit((string)$date)) {
+++            $zdate = new Zend_Date($date, Zend_Date::TIMESTAMP);
++         } else {
++             require_once 'Zend/Feed/Exception.php';
++             throw new Zend_Feed_Exception('Invalid Zend_Date object or UNIX Timestamp passed as parameter');
++@@ -197,10 +197,10 @@
++         $zdate = null;
++         if ($date === null) {
++             $zdate = new Zend_Date;
++-        } elseif (ctype_digit((string)$date)) {
++-            $zdate = new Zend_Date($date, Zend_Date::TIMESTAMP);
++         } elseif ($date instanceof Zend_Date) {
++             $zdate = $date;
+++        } elseif (ctype_digit((string)$date)) {
+++            $zdate = new Zend_Date($date, Zend_Date::TIMESTAMP);
++         } else {
++             require_once 'Zend/Feed/Exception.php';
++             throw new Zend_Feed_Exception('Invalid Zend_Date object or UNIX Timestamp passed as parameter');
++@@ -218,10 +218,10 @@
++         $zdate = null;
++         if ($date === null) {
++             $zdate = new Zend_Date;
++-        } elseif (ctype_digit((string)$date)) {
++-            $zdate = new Zend_Date($date, Zend_Date::TIMESTAMP);
++         } elseif ($date instanceof Zend_Date) {
++             $zdate = $date;
+++        } elseif (ctype_digit((string)$date)) {
+++            $zdate = new Zend_Date($date, Zend_Date::TIMESTAMP);
++         } else {
++             require_once 'Zend/Feed/Exception.php';
++             throw new Zend_Feed_Exception('Invalid Zend_Date object or UNIX Timestamp passed as parameter');
++Index: zendframework-1.11.13/tests/TestConfiguration.php.dist
++===================================================================
++--- zendframework-1.11.13.orig/tests/TestConfiguration.php.dist	2012-02-23 23:06:02.000000000 +0100
+++++ zendframework-1.11.13/tests/TestConfiguration.php.dist	2012-12-25 17:31:38.234088865 +0100
++@@ -185,6 +185,14 @@
++ defined('TESTS_ZEND_DB_ADAPTER_SQLSRV_DATABASE') || define('TESTS_ZEND_DB_ADAPTER_SQLSRV_DATABASE', 'test');
++ 
++ /**
+++ * Zend_Feed_Rss/Zend_Feed_Atom online tests
+++ *
+++ * Set the BASEURI to a vhost pointed at the tests/Zend/Feed/_files
+++ * subdirectory to enable these tests.
+++ */
+++defined('TESTS_ZEND_FEED_IMPORT_ONLINE_BASEURI') || define('TESTS_ZEND_FEED_IMPORT_ONLINE_BASEURI', false);
+++
+++/**
++  * Zend_Feed_Reader tests
++  *
++  * If the ONLINE_ENABLED property is false, only tests that can be executed
++Index: zendframework-1.11.13/tests/Zend/Feed/AbstractFeedTest.php
++===================================================================
++--- /dev/null	1970-01-01 00:00:00.000000000 +0000
+++++ zendframework-1.11.13/tests/Zend/Feed/AbstractFeedTest.php	2012-12-25 17:31:38.234088865 +0100
++@@ -0,0 +1,84 @@
+++<?php
+++/**
+++ * Zend Framework
+++ *
+++ * LICENSE
+++ *
+++ * This source file is subject to the new BSD license that is bundled
+++ * with this package in the file LICENSE.txt.
+++ * It is also available through the world-wide-web at this URL:
+++ * http://framework.zend.com/license/new-bsd
+++ * If you did not receive a copy of the license and are unable to
+++ * obtain it through the world-wide-web, please send an email
+++ * to license@zend.com so we can send you a copy immediately.
+++ *
+++ * @category   Zend
+++ * @package    Zend_Feed
+++ * @subpackage UnitTests
+++ * @copyright  Copyright (c) 2005-2012 Zend Technologies USA Inc. (http://www.zend.com)
+++ * @license    http://framework.zend.com/license/new-bsd     New BSD License
+++ * @version    $Id$
+++ */
+++
+++/**
+++ * @see Zend_Feed
+++ */
+++require_once 'Zend/Feed.php';
+++
+++/**
+++ * @see Zend_Http
+++ */
+++require_once 'Zend/Http/Client.php';
+++
+++/**
+++ * @category   Zend
+++ * @package    Zend_Feed
+++ * @subpackage UnitTests
+++ * @copyright  Copyright (c) 2005-2012 Zend Technologies USA Inc. (http://www.zend.com)
+++ * @license    http://framework.zend.com/license/new-bsd     New BSD License
+++ * @group      Zend_Feed
+++ */
+++class Zend_Feed_AbstractFeedTest extends PHPUnit_Framework_TestCase
+++{
+++    public $baseUri;
+++
+++    public $remoteFeedNames = array();
+++
+++    public function setUp()
+++    {
+++        if (!defined('TESTS_ZEND_FEED_IMPORT_ONLINE_BASEURI')
+++            || !constant('TESTS_ZEND_FEED_IMPORT_ONLINE_BASEURI')
+++        ) {
+++            $this->markTestSkipped('ONLINE feed tests are not enabled');
+++        }
+++        $this->baseUri = rtrim(constant('TESTS_ZEND_FEED_IMPORT_ONLINE_BASEURI'), '/');
+++        Zend_Feed::setHttpClient(new Zend_Http_Client());
+++    }
+++
+++    public function tearDown()
+++    {
+++        if (!$this->baseUri) {
+++            return parent::tearDown();
+++        }
+++
+++        $basePath = dirname(__FILE__) . '/_files/';
+++        foreach ($this->remoteFeedNames as $file) {
+++            $filename = $basePath . $file;
+++            if (!file_exists($filename)) {
+++                continue;
+++            }
+++            unlink($filename);
+++        }
+++    }
+++
+++    public function prepareFeed($filename)
+++    {
+++        $basePath = dirname(__FILE__) . '/_files/';
+++        $path     = $basePath . $filename;
+++        $remote   = str_replace('.xml', '.remote.xml', $filename);
+++        $string   = file_get_contents($path);
+++        $string   = str_replace('XXE_URI', $this->baseUri . '/xxe-info.txt', $string);
+++        file_put_contents($basePath . '/' . $remote, $string);
+++        return $remote;
+++    }
+++}
++Index: zendframework-1.11.13/tests/Zend/Feed/AllTests.php
++===================================================================
++--- zendframework-1.11.13.orig/tests/Zend/Feed/AllTests.php	2012-01-05 22:27:01.000000000 +0100
+++++ zendframework-1.11.13/tests/Zend/Feed/AllTests.php	2012-12-25 17:31:38.234088865 +0100
++@@ -32,6 +32,8 @@
++ require_once 'Zend/Feed/ImportTest.php';
++ require_once 'Zend/Feed/IteratorTest.php';
++ require_once 'Zend/Feed/Entry/RssTest.php';
+++require_once 'Zend/Feed/AtomTest.php';
+++require_once 'Zend/Feed/RssTest.php';
++ 
++ require_once 'Zend/Feed/ReaderTest.php';
++ require_once 'Zend/Feed/Reader/Feed/RssTest.php';
++@@ -89,6 +91,8 @@
++         $suite->addTestSuite('Zend_Feed_ImportTest');
++         $suite->addTestSuite('Zend_Feed_IteratorTest');
++         $suite->addTestSuite('Zend_Feed_Entry_RssTest');
+++        $suite->addTestSuite('Zend_Feed_AtomTest');
+++        $suite->addTestSuite('Zend_Feed_RssTest');
++ 
++         /* Zend_Feed_Reader tests */
++         // Base parent class
++Index: zendframework-1.11.13/tests/Zend/Feed/AtomTest.php
++===================================================================
++--- /dev/null	1970-01-01 00:00:00.000000000 +0000
+++++ zendframework-1.11.13/tests/Zend/Feed/AtomTest.php	2012-12-25 17:31:38.234088865 +0100
++@@ -0,0 +1,49 @@
+++<?php
+++/**
+++ * Zend Framework
+++ *
+++ * LICENSE
+++ *
+++ * This source file is subject to the new BSD license that is bundled
+++ * with this package in the file LICENSE.txt.
+++ * It is also available through the world-wide-web at this URL:
+++ * http://framework.zend.com/license/new-bsd
+++ * If you did not receive a copy of the license and are unable to
+++ * obtain it through the world-wide-web, please send an email
+++ * to license@zend.com so we can send you a copy immediately.
+++ *
+++ * @category   Zend
+++ * @package    Zend_Feed
+++ * @subpackage UnitTests
+++ * @copyright  Copyright (c) 2005-2012 Zend Technologies USA Inc. (http://www.zend.com)
+++ * @license    http://framework.zend.com/license/new-bsd     New BSD License
+++ * @version    $Id$
+++ */
+++
+++require_once dirname(__FILE__) . '/AbstractFeedTest.php';
+++
+++/**
+++ * @see Zend_Feed_Atom
+++ */
+++require_once 'Zend/Feed/Atom.php';
+++
+++/**
+++ * @category   Zend
+++ * @package    Zend_Feed
+++ * @subpackage UnitTests
+++ * @copyright  Copyright (c) 2005-2012 Zend Technologies USA Inc. (http://www.zend.com)
+++ * @license    http://framework.zend.com/license/new-bsd     New BSD License
+++ * @group      Zend_Feed
+++ */
+++class Zend_Feed_AtomTest extends Zend_Feed_AbstractFeedTest
+++{
+++    public $remoteFeedNames = array('zend_feed_atom_xxe.remote.xml');
+++
+++    public function testPreventsXxeAttacksOnParsing()
+++    {
+++        $uri   = $this->baseUri . '/' . $this->prepareFeed('zend_feed_atom_xxe.xml');
+++        $this->setExpectedException('Zend_Feed_Exception', 'parse');
+++        $feed  = new Zend_Feed_Atom($uri);
+++    }
+++}
+++
++Index: zendframework-1.11.13/tests/Zend/Feed/RssTest.php
++===================================================================
++--- /dev/null	1970-01-01 00:00:00.000000000 +0000
+++++ zendframework-1.11.13/tests/Zend/Feed/RssTest.php	2012-12-25 17:31:38.234088865 +0100
++@@ -0,0 +1,48 @@
+++<?php
+++/**
+++ * Zend Framework
+++ *
+++ * LICENSE
+++ *
+++ * This source file is subject to the new BSD license that is bundled
+++ * with this package in the file LICENSE.txt.
+++ * It is also available through the world-wide-web at this URL:
+++ * http://framework.zend.com/license/new-bsd
+++ * If you did not receive a copy of the license and are unable to
+++ * obtain it through the world-wide-web, please send an email
+++ * to license@zend.com so we can send you a copy immediately.
+++ *
+++ * @category   Zend
+++ * @package    Zend_Feed
+++ * @subpackage UnitTests
+++ * @copyright  Copyright (c) 2005-2012 Zend Technologies USA Inc. (http://www.zend.com)
+++ * @license    http://framework.zend.com/license/new-bsd     New BSD License
+++ * @version    $Id$
+++ */
+++
+++require_once dirname(__FILE__) . '/AbstractFeedTest.php';
+++
+++/**
+++ * @see Zend_Feed_Rss
+++ */
+++require_once 'Zend/Feed/Rss.php';
+++
+++/**
+++ * @category   Zend
+++ * @package    Zend_Feed
+++ * @subpackage UnitTests
+++ * @copyright  Copyright (c) 2005-2012 Zend Technologies USA Inc. (http://www.zend.com)
+++ * @license    http://framework.zend.com/license/new-bsd     New BSD License
+++ * @group      Zend_Feed
+++ */
+++class Zend_Feed_RssTest extends Zend_Feed_AbstractFeedTest
+++{
+++    public $remoteFeedNames = array('zend_feed_rss_xxe.remote.xml');
+++
+++    public function testPreventsXxeAttacksOnParsing()
+++    {
+++        $uri   = $this->baseUri . '/' . $this->prepareFeed('zend_feed_rss_xxe.xml');
+++        $this->setExpectedException('Zend_Feed_Exception', 'parse');
+++        $feed  = new Zend_Feed_Rss($uri);
+++    }
+++}
++Index: zendframework-1.11.13/tests/Zend/Feed/_files/xxe-info.txt
++===================================================================
++--- /dev/null	1970-01-01 00:00:00.000000000 +0000
+++++ zendframework-1.11.13/tests/Zend/Feed/_files/xxe-info.txt	2012-12-25 17:31:38.234088865 +0100
++@@ -0,0 +1 @@
+++xxe-information-disclosed
++Index: zendframework-1.11.13/tests/Zend/Feed/_files/zend_feed_atom_xxe.xml
++===================================================================
++--- /dev/null	1970-01-01 00:00:00.000000000 +0000
+++++ zendframework-1.11.13/tests/Zend/Feed/_files/zend_feed_atom_xxe.xml	2012-12-25 17:31:38.234088865 +0100
++@@ -0,0 +1,5 @@
+++<?xml version="1.0" encoding="utf-8"?>
+++<!DOCTYPE feed [ <!ENTITY discloseInfo SYSTEM "XXE_URI"> ]>
+++<feed xmlns="http://www.w3.org/2005/Atom">
+++    <title type="text">info:&discloseInfo;</title>
+++</feed>
++Index: zendframework-1.11.13/tests/Zend/Feed/_files/zend_feed_rss_xxe.xml
++===================================================================
++--- /dev/null	1970-01-01 00:00:00.000000000 +0000
+++++ zendframework-1.11.13/tests/Zend/Feed/_files/zend_feed_rss_xxe.xml	2012-12-25 17:31:38.234088865 +0100
++@@ -0,0 +1,7 @@
+++<?xml version="1.0" encoding="utf-8"?>
+++<!DOCTYPE rss [ <!ENTITY discloseInfo SYSTEM "XXE_URI"> ]>
+++<rss version="2.0">
+++    <channel>
+++        <title type="text">info:&discloseInfo;</title>
+++    </channel>
+++</rss>
+diff -ruN ZendFramework-1.11.13.orig/fink/patches/zf-shell.patch ZendFramework-1.11.13/fink/patches/zf-shell.patch
+--- ZendFramework-1.11.13.orig/fink/patches/zf-shell.patch	1969-12-31 17:00:00.000000000 -0700
++++ ZendFramework-1.11.13/fink/patches/zf-shell.patch	2013-01-07 08:35:28.000000000 -0700
 @@ -0,0 +1,21 @@
 +Author: Frank Habermann <habermann@2im.de>
 +Description: add shebang and set absolut path to php file
