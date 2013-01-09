@@ -1,16 +1,3 @@
-Index: utils/lit/lit/LitConfig.py
-===================================================================
---- utils/lit/lit/LitConfig.py	(revision 156555)
-+++ utils/lit/lit/LitConfig.py	(working copy)
-@@ -36,7 +36,7 @@
-         self.debug = debug
-         self.isWindows = bool(isWindows)
-         self.params = dict(params)
--        self.bashPath = None
-+        self.bashPath = '@FINK_PREFIX@/bin/bash'
- 
-         self.numErrors = 0
-         self.numWarnings = 0
 Index: lib/ExecutionEngine/MCJIT/CMakeLists.txt
 ===================================================================
 --- lib/ExecutionEngine/MCJIT/CMakeLists.txt	(revision 156555)
@@ -52,6 +39,48 @@ Index: lib/MC/MCDisassembler/CMakeLists.txt
 +  endif()
 +endforeach(t)
 +
+Index: include/llvm/Support/Compiler.h
+===================================================================
+--- include/llvm/Support/Compiler.h     (revision 170308)
++++ include/llvm/Support/Compiler.h     (working copy)
+@@ -137,7 +137,10 @@
+ #define LLVM_READNONE
+ #endif
+
+-#ifdef __GNUC__  // aka 'PURE' but following LLVM Conventions.
++// this attribute may be buggy for older gcc-4.0.1 (apple)
++// removing this fixes bug #14244
++#if defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __CNUC_MINOR__ >= 2))
++// aka 'PURE' but following LLVM Conventions.
+ #define LLVM_READONLY __attribute__((__pure__))
+ #else
+ #define LLVM_READONLY
+Index: include/llvm/ADT/DenseMap.h
+===================================================================
+--- include/llvm/ADT/DenseMap.h (revision 170308)
++++ include/llvm/ADT/DenseMap.h (working copy)
+@@ -531,7 +531,7 @@
+     init(NumInitBuckets);
+   }
+
+-  DenseMap(const DenseMap &other) {
++  DenseMap(const DenseMap &other) : BaseT() {
+     init(0);
+     copyFrom(other);
+   }
+Index: lib/Support/Unix/Memory.inc
+===================================================================
+--- lib/Support/Unix/Memory.inc (revision 170308)
++++ lib/Support/Unix/Memory.inc (working copy)
+@@ -51,7 +51,7 @@
+         llvm::sys::Memory::MF_EXEC:
+     return PROT_READ | PROT_WRITE | PROT_EXEC;
+   case llvm::sys::Memory::MF_EXEC:
+-    return PROT_EXEC;
++    return PROT_EXEC | PROT_READ;      // patch from Roman Divacky, bug 14278
+   default:
+     llvm_unreachable("Illegal memory protection flag specified!");
+   }
 Index: lib/Support/Unix/Signals.inc
 ===================================================================
 --- lib/Support/Unix/Signals.inc	(revision 156555)
@@ -64,6 +93,39 @@ Index: lib/Support/Unix/Signals.inc
 +#if defined(__APPLE__) && defined(MACH_EXCEPTION_CODES) && defined(EXC_MASK_CRASH)
    // Environment variable to disable any kind of crash dialog.
    if (getenv("LLVM_DISABLE_CRASH_REPORT")) 
+Index: lib/Target/TargetInstrInfo.cpp
+===================================================================
+--- lib/Target/TargetInstrInfo.cpp      (revision 167609)
++++ lib/Target/TargetInstrInfo.cpp      (working copy)
+@@ -19,6 +19,28 @@
+ #include <cctype>
+ using namespace llvm;
+ 
++// HACK: fang copy-pasted this here from "lib/CodeGen/MachineInstr.cpp"
++// to avoid circular dependency.  Must be inline to avoid multiple defs.
++// to automate patch: sed -n '/MachineInstr::hasPropertyInBundle/,/^}/p' lib/CodeGen/MachineInstr.cpp
++inline
++bool MachineInstr::hasPropertyInBundle(unsigned Mask, QueryType Type) const {
++  const MachineBasicBlock *MBB = getParent();
++  MachineBasicBlock::const_instr_iterator MII = *this; ++MII;
++  while (MII != MBB->end() && MII->isInsideBundle()) {
++    if (MII->getDesc().getFlags() & Mask) {
++      if (Type == AnyInBundle)
++        return true;
++    } else {
++      if (Type == AllInBundle)
++        return false;
++    }
++    ++MII;
++  }
++
++  return Type == AllInBundle;
++}
++// END HACK: fang
++
+ //===----------------------------------------------------------------------===//
+ //  TargetInstrInfo
+ //
 Index: tools/clang/lib/AST/ExprConstant.cpp
 ===================================================================
 --- tools/clang/lib/AST/ExprConstant.cpp	(revision 156555)
@@ -96,32 +158,40 @@ Index: tools/clang/include/clang/Serialization/ASTReader.h
 ===================================================================
 --- tools/clang/include/clang/Serialization/ASTReader.h	(revision 156555)
 +++ tools/clang/include/clang/Serialization/ASTReader.h	(working copy)
-@@ -230,10 +230,12 @@
+@@ -276,10 +276,16 @@
    FileManager &FileMgr;
    DiagnosticsEngine &Diags;
  
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
 +public:	// workaround to grant access to classes nested within ASTDeclReader
++#endif
    /// \brief The semantic analysis object that will be processing the
    /// AST files and the translation unit that uses it.
    Sema *SemaObj;
  
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
 +private:
++#endif
    /// \brief The preprocessor that will be loading the source file.
    Preprocessor &PP;
  
-@@ -689,6 +691,7 @@
+@@ -792,6 +798,9 @@
    /// since the last time the declaration chains were linked.
    llvm::SmallPtrSet<Decl *, 16> RedeclsDeserialized;
    
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
 +public:	// workaround to grant access to classes nested within ASTDeclReader
++#endif
    /// \brief The list of redeclaration chains that still need to be 
    /// reconstructed.
    ///
-@@ -700,6 +703,7 @@
+@@ -803,6 +812,9 @@
    /// \brief Keeps track of the elements added to PendingDeclChains.
    llvm::SmallSet<serialization::DeclID, 16> PendingDeclChainsKnown;
  
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
 +private:
++#endif
    /// \brief The set of Objective-C categories that have been deserialized
    /// since the last time the declaration chains were linked.
    llvm::SmallPtrSet<ObjCCategoryDecl *, 16> CategoriesDeserialized;
@@ -162,3 +232,179 @@ Index: tools/clang/include/clang/Serialization/ASTReader.h
    clangFrontend
 +  clangRewriteCore
    )
+--- tools/clang/lib/CodeGen/CGExpr.cpp	2012/11/13 01:03:15	167801
++++ tools/clang/lib/CodeGen/CGExpr.cpp	2012/11/13 02:05:15	167802
+@@ -935,8 +935,8 @@
+   llvm::APInt Min;
+   llvm::APInt End;
+   if (IsBool) {
+-    Min = llvm::APInt(8, 0);
+-    End = llvm::APInt(8, 2);
++    Min = llvm::APInt(getContext().getTypeSize(Ty), 0);
++    End = llvm::APInt(getContext().getTypeSize(Ty), 2);
+   } else {
+     const EnumDecl *ED = ET->getDecl();
+     llvm::Type *LTy = ConvertTypeForMem(ED->getIntegerType());
+@@ -1031,8 +1031,9 @@
+     // This should really always be an i1, but sometimes it's already
+     // an i8, and it's awkward to track those cases down.
+     if (Value->getType()->isIntegerTy(1))
+-      return Builder.CreateZExt(Value, Builder.getInt8Ty(), "frombool");
+-    assert(Value->getType()->isIntegerTy(8) && "value rep of bool not i1/i8");
++      return Builder.CreateZExt(Value, ConvertTypeForMem(Ty), "frombool");
++    assert(Value->getType()->isIntegerTy(getContext().getTypeSize(Ty)) &&
++           "wrong value rep of bool");
+   }
+ 
+   return Value;
+@@ -1041,7 +1042,8 @@
+ llvm::Value *CodeGenFunction::EmitFromMemory(llvm::Value *Value, QualType Ty) {
+   // Bool has a different representation in memory than in registers.
+   if (hasBooleanRepresentation(Ty)) {
+-    assert(Value->getType()->isIntegerTy(8) && "memory rep of bool not i8");
++    assert(Value->getType()->isIntegerTy(getContext().getTypeSize(Ty)) &&
++           "wrong value rep of bool");
+     return Builder.CreateTrunc(Value, Builder.getInt1Ty(), "tobool");
+   }
+ 
+Index: tools/clang/lib/Driver/Driver.cpp
+===================================================================
+--- tools/clang/lib/Driver/Driver.cpp       (revision 170308)
++++ tools/clang/lib/Driver/Driver.cpp       (working copy)
+@@ -1676,6 +1686,14 @@
+     case llvm::Triple::IOS:
+       if (Target.getArch() == llvm::Triple::x86 ||
+           Target.getArch() == llvm::Triple::x86_64 ||
++#if 1
++       // uncomment this to use DarwinClang driver for ppc family
++          Target.getArch() == llvm::Triple::ppc ||
++          Target.getArch() == llvm::Triple::ppc64 ||
++       // see bugs:
++       // http://llvm.org/bugs/show_bug.cgi?id=14387
++       // http://llvm.org/bugs/show_bug.cgi?id=14275
++#endif
+           Target.getArch() == llvm::Triple::arm ||
+           Target.getArch() == llvm::Triple::thumb)
+         TC = new toolchains::DarwinClang(*this, Target);
+Index: tools/clang/lib/Driver/Tools.cpp
+===================================================================
+--- tools/clang/lib/Driver/Tools.cpp        (revision 170308)
++++ tools/clang/lib/Driver/Tools.cpp        (working copy)
+@@ -3873,6 +3877,14 @@
+
+   // Derived from darwin_arch spec.
+   CmdArgs.push_back("-arch");
++#if 1
++// suggested patch from http://llvm.org/bugs/show_bug.cgi?id=3830
++  if (ArchName == "powerpc")
++    CmdArgs.push_back("ppc");
++  else if (ArchName == "powerpc64")
++    CmdArgs.push_back("ppc64");
++  else
++#endif
+   CmdArgs.push_back(Args.MakeArgString(ArchName));
+
+   // FIXME: Is this needed anymore?
+Index: tools/polly/lib/CMakeLists.txt
+===================================================================
+--- tools/polly/lib/CMakeLists.txt	2013-01-07 14:31:36.000000000 -0800
++++ tools/polly/lib/CMakeLists.txt	2013-01-08 16:18:39.000000000 -0800
+@@ -1,29 +1,66 @@
+-add_subdirectory(Analysis)
+-add_subdirectory(CodeGen)
+-add_subdirectory(Exchange)
+-add_subdirectory(Support)
++# patch: flattened sub-components of Polly into monolithic link
++# to avoid intra-module circular dependencies
++# because cmake shared-lib build of convenience libraries is broken.
+ add_subdirectory(JSON)
+ 
+ set(MODULE TRUE)
+ set(LLVM_NO_RTTI 1)
+ 
+-if (SCOPLIB_FOUND)
+-  set(POLLY_SCOPLIB_FILES Pocc.cpp)
+-endif (SCOPLIB_FOUND)
+-
+ if (PLUTO_FOUND)
+   set(POLLY_PLUTO_FILES Pluto.cpp)
+ endif (PLUTO_FOUND)
+ 
+ set(LLVM_USED_LIBS
+-  PollyAnalysis
+-  PollyCodeGen
+-  PollyExchange
+-  PollySupport
+   PollyJSON
+   )
+ 
++if (CLOOG_FOUND)
++  set(CLOOG_FILES
++      CodeGen/Cloog.cpp
++      CodeGen/CodeGeneration.cpp)
++endif (CLOOG_FOUND)
++
++set(ISL_CODEGEN_FILES
++    CodeGen/IslAst.cpp
++    CodeGen/IslCodeGeneration.cpp)
++
++if (GPU_CODEGEN)
++  set (GPGPU_CODEGEN_FILES
++       CodeGen/PTXGenerator.cpp)
++endif (GPU_CODEGEN)
++
++if (OPENSCOP_FOUND)
++  set(POLLY_OPENSCOP_FILES
++      Exchange/OpenScopImporter.cpp
++      Exchange/OpenScopExporter.cpp)
++endif (OPENSCOP_FOUND)
++
++if (SCOPLIB_FOUND)
++  set(POLLY_SCOPLIB_FILES
++      Pocc.cpp
++      Exchange/ScopLib.cpp
++      Exchange/ScopLibExporter.cpp
++      Exchange/ScopLibImporter.cpp)
++endif (SCOPLIB_FOUND)
++
+ add_polly_loadable_module(LLVMPolly
++  Analysis/Dependences.cpp
++  Analysis/ScopDetection.cpp
++  Analysis/ScopInfo.cpp
++  Analysis/ScopGraphPrinter.cpp
++  Analysis/ScopPass.cpp
++  Analysis/TempScopInfo.cpp
++  CodeGen/BlockGenerators.cpp
++  ${CLOOG_FILES}
++  ${ISL_CODEGEN_FILES}
++  CodeGen/LoopGenerators.cpp
++  CodeGen/Utils.cpp
++  ${GPGPU_CODEGEN_FILES}
++  Support/GICHelper.cpp
++  Support/SCEVValidator.cpp
++  Support/ScopHelper.cpp
++  Exchange/JSONExporter.cpp
++  ${POLLY_OPENSCOP_FILES}
+   CodePreparation.cpp
+   DeadCodeElimination.cpp
+   IndependentBlocks.cpp
+@@ -43,10 +80,6 @@
+ endif()
+ 
+ add_dependencies(LLVMPolly
+-  PollyAnalysis
+-  PollyCodeGen
+-  PollyExchange
+-  PollySupport
+   PollyJSON
+   )
+ 
+@@ -58,3 +91,8 @@
+ if (PLUTO_FOUND)
+   target_link_libraries(LLVMPolly ${PLUTO_LIBRARY})
+ endif(PLUTO_FOUND)
++
++target_link_libraries(LLVMPolly
++  LLVMSupport
++  LLVMTransformUtils
++)
