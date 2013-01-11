@@ -1,99 +1,169 @@
 Package: cairo
-Version: 1.8.10
-Revision: 5
+Version: 1.12.8
+Revision: 3
 Description: Vector graphics library
 License: BSD
 Maintainer: Benjamin Reed <cairo@fink.raccoonfink.com>
 
 Depends: <<
-	%N-shlibs (= %v-%r),
-	pkgconfig (>= 0.23-1)
+	%N-shlibs (= %v-%r)
 <<
 BuildDepends: <<
-	fink (>= 0.30.2-1),
+	fink (>= 0.28),
 	fink-package-precedence (>= 0.7-1),
 	flag-sort (>= 0.4-1),
-	fontconfig2-dev (>= 2.8.0-4),
-	freetype219 (>= 2.3.12-1),
-	glitz (>= 0.5.6-1),
+	fontconfig2-dev (>= 2.10.0-1),
+	freetype219 (>= 2.4.11-1),
 	gtk-doc (>= 1.17-2),
-	pixman (>= 0.16.0-1),
+	pixman (>= 0.28.2-1),
 	pkgconfig (>= 0.23-1),
-	libgl-dev,
 	libpng15,
-	x11-dev
+	x11-dev,
+	xz
 <<
 BuildDependsOnly: true
 InfoTest: <<
-	TestScript: <<
-		#!/bin/sh -ev
-		export LANG=C
-		if [ `echo $DISPLAY | grep -c /tmp/launch` -gt 0 ]; then
-			make check || exit 2
-		fi
-	<<
+#	TestDepends: <<
+#		xvfb-run
+#	<<
+#	TestScript: <<
+#		#!/bin/sh -ev
+#		export LANG=C
+#
+#		# some xlib things explode with double-free errors
+#		# under Xvfb
+#		#xvfb-run make test || exit 2
+#
+#		# clip tests fail even with real x11 display large
+#		# suite that fails anyway (clip-operator tests don't
+#		# match bit-for-bit, but do look visually correct)
+#		# even with real x11 display
+#		make test || exit 2
+#
+#		# lots of things compiled during test, need to
+#		# re-check for needed TestDepends
+#		fink-package-precedence --prohibit-bdep %n .
+#	<<
 <<
 
-Source: http://cairographics.org/releases/%n-%v.tar.gz
-Source-MD5: b60a82f405f9400bbfdcf850b1728d25
+Source: http://cairographics.org/releases/%n-%v.tar.xz
+Source-MD5: 8b3dcade859c44fb7e56fc68edfe9a45
+NoSourceDirectory: true
+PatchFile: %n.patch
+PatchFile-MD5: 98fdb25594fcc365ab31c65b99eff7c6
 PatchScript: <<
-	patch -p1 < %{PatchFile}
-	perl -pi -e 's,have_glitz_agl=yes,have_glitz_agl=no,g' configure
-	perl -pi -e 's,libpng12,libpng,g' configure
+	#!/bin/sh -ev
+	xz -dc %n-%v.tar.xz | tar xvf -
+	cd %n-%v
+	%{default_script}
 	perl -pi -e 's,(POPPLER_VERSION_REQUIRED=).*,${1}99999.FORCE.NONDETECT,' configure
 	perl -pi -e 's,(LIBRSVG_VERSION_REQUIRED=).*,${1}99999.FORCE.NONDETECT,' configure
 	perl -pi -e 's,(SPECTRE_VERSION_REQUIRED=).*,${1}99999.FORCE.NONDETECT,' configure
-	perl -pi -e 's,/usr/share/gtk-doc/html,%p/share/gtk-doc/html,g' doc/public/html/*.html
+	perl -pi -e 's,(gtk\+-2\.0),${1} >= 99999.FORCE.NONDETECT,' configure
+	# workarounds on darwin8
+	# XRenderCreateSolidFill is missing
+	nm /usr/X11R6/lib/libXrender.dylib | grep XRenderCreateSolidFill || \
+	sed -i.orig -e 's|XRenderCreateSolidFill|_int_consume|' src/cairo-xlib-source.c
 <<
-PatchFile: %n.patch
-PatchFile-MD5: c0035b1abb5c8a39fd0d111e3e1f4aff
 
-SetCFLAGS: -Os -isystem /usr/include
+SetCC: flag-sort -r gcc
+# SetCFLAGS: -Os
 UseMaxBuildJobs: true
-ConfigureParams: --build=%m-apple-darwin`uname -r|sed 's/\\..*//'` --disable-xcb --enable-dependency-tracking --disable-gtk-doc --enable-quartz --enable-quartz-font --disable-quartz-image --enable-png --enable-glitz --enable-ps --enable-pdf --mandir=%p/share/man --disable-static
+ConfigureParams: <<
+	--build=%m-apple-darwin`uname -r|sed 's/\\..*//'` \
+	--mandir=%p/share/man \
+	--disable-static \
+	--enable-dependency-tracking \
+	--disable-xcb \
+	--enable-quartz \
+	--enable-quartz-font \
+	--disable-quartz-image \
+	--enable-png \
+	--enable-ps \
+	--enable-pdf \
+	--enable-xml \
+	--disable-gobject \
+	--disable-interpreter
+<<
 CompileScript: <<
-	#!/bin/sh -ex
-	if [[ $(sw_vers -productVersion | cut -d. -f1-2) > 10.6 ]]; then
-	export CC="clang"
-	elif [ -x /usr/bin/gcc-4.2 ]; then
-	export CC="gcc-4.2"
-	else
-	export CC="gcc"
-	fi
-	
-	export PKG_CONFIG_PATH="%p/lib/fontconfig2/lib/pkgconfig:`pwd`:$PKG_CONFIG_PATH"
+	#!/bin/sh -ev
+	cd %n-%v
+	export PKG_CONFIG_PATH="%p/lib/glib-2.0/pkgconfig-strict:$PKG_CONFIG_PATH"
 	ac_cv_prog_GS= ./configure %c
-	
-	export CC="flag-sort -v -r $CC"
-	make CC="$CC" CPP="$CC -E"
-	
-	fink-package-precedence --prohibit-bdep %n .
+	make -j1 V=1
+	fink-package-precedence --prohibit-bdep=cairo,cairo-gobject,cairo-script-interpreter .
 <<
 
 InstallScript: <<
 #!/bin/sh -ex
+	cd %n-%v
 	make -j1 install DESTDIR="%d"
-	perl -pi -e 's,xrender >= 0.6,,' %i/lib/pkgconfig/*.pc
-	perl -pi -e 's,^(Libs.private:.*)$,$1 -lXrender -lXext,' %i/lib/pkgconfig/cairo.pc
-	perl -pi -e 's,^(Cflags: .*)$,$1 -I/usr/X11R6/include -I/usr/X11/include,' %i/lib/pkgconfig/cairo.pc
 	perl -pi -e 's,libpng,,g' %i/lib/pkgconfig/*.pc
-	perl -pi -e 's,pixman-1 >= [\d\.]+,,g' %i/lib/pkgconfig/*.pc
+	perl -pi -e 's,pixman-1 >= 0.22.0,,g' %i/lib/pkgconfig/*.pc
+
+
+	# Many other packages expect cairo.pc itself to publish
+	# everything needed for all cairo-*.h, so cairo-*.pc:Requires:
+	# is not sufficient. Grr.
+	#perl -ni -e 'print unless /Requires.private:/' %i/lib/pkgconfig/*.pc
+	perl -ni -e 'print unless /Libs.private:/' %i/lib/pkgconfig/*.pc
+
+	# Other packages build differently depending on which cairo
+	# components are found. Let's be deterministic about which
+	# ones are supplied (fix cairomm1 and pycairo-pyXX if you
+	# change this!)
+	pushd %i/lib/pkgconfig
+		want="cairo-fc.pc cairo-ft.pc cairo-pdf.pc cairo-png.pc cairo-ps.pc cairo-quartz-font.pc cairo-quartz.pc cairo-script.pc cairo-svg.pc cairo-xlib-xrender.pc cairo-xlib.pc cairo-xml.pc cairo.pc "
+		have=`/bin/ls -1 | tr '\n' ' '`
+	popd
+	if [ "$want" != "$have" ]; then
+		echo "unexpected build results (mismatched list of .pc)"
+		echo "  want: '$want'"
+		echo "  have: '$have'"
+		exit 1
+	fi
+
+	# cairo-glib is packaged separately, but there's a monolithic
+	# header that publishes what is available in the whole
+	# libcairo* suite. Eew.
+	perl -pi -e 's/.*(CAIRO_HAS_GOBJECT_FUNCTIONS).*/#define \1 1/' %i/include/cairo/cairo-features.h
 <<
-DocFiles: AUTHORS COPYING ChangeLog* INSTALL NEWS README
+DocFiles: <<
+	%n-%v/AUTHORS
+	%n-%v/BIBLIOGRAPHY
+	%n-%v/BUGS
+	%n-%v/COPYING*
+	%n-%v/ChangeLog*
+	%n-%v/HACKING
+	%n-%v/NEWS
+	%n-%v/README
+	%n-%v/TODO
+<<
+Shlibs: <<
+	!%p/lib/cairo/libcairo-trace.0.dylib
+<<
 SplitOff: <<
 	Package: %N-shlibs
 	Depends: <<
-		fontconfig2-shlibs (>= 2.8.0-4),
-		freetype219-shlibs (>= 2.3.12-1),
-		glitz-shlibs (>= 0.5.6-1),
-		libgl-shlibs,
+		fontconfig2-shlibs (>= 2.10.0-1),
+		freetype219-shlibs (>= 2.4.11-1),
 		libpng15-shlibs,
-		pixman-shlibs (>= 0.16.0-1),
+		pixman-shlibs (>= 0.28.2-1),
 		x11-shlibs
 	<<
-	DocFiles: AUTHORS COPYING ChangeLog* INSTALL NEWS README
-	Files: lib/libcairo.*.dylib
-	Shlibs: %p/lib/libcairo.2.dylib 10803.0.0 %N-shlibs (>= 1.8.0-1)
+	DocFiles: <<
+		%N-%v/AUTHORS
+		%N-%v/BIBLIOGRAPHY
+		%N-%v/BUGS
+		%N-%v/COPYING*
+		%N-%v/ChangeLog*
+		%N-%v/HACKING
+		%N-%v/NEWS
+		%N-%v/README
+		%N-%v/TODO
+	<<
+	Files: %p/lib/libcairo.2.dylib
+	Shlibs: %p/lib/libcairo.2.dylib 11203.0.0 %n (>= 1.12.8-1)
 <<
 
 Homepage: http://www.cairographics.org/
@@ -106,11 +176,58 @@ DescPackaging: <<
 	tests even if found, but make sure they aren't found so that
 	everyone gets the same results.
 
-	dmacks: seems to ignore --enable-gtk-doc, so just patch the
-	prefix in the bad URLs in the existing generated files.
-
-	dmacks: libpng12 is not part of public API so don't need to
+	dmacks: libpng is not part of public API so don't need to
 	publish it via .pc (avoids inherited BDep and deadlock with
 	other libpng* pkgs)--we're shared-only, no unresolved symbols.
+	See: https://bugs.freedesktop.org/show_bug.cgi?id=58803
+	Same for pixman
+
+	Clean up .pc: don't need entries that are not (re)exposed by
+	public interfaces to avoid publishing useless and hidden
+	InheritedBuildDepends.
+
+	dmacks: disable gtk stuff to avoid circular dependency
+
+	Ignoring warning about unhandled pixman mode. See:
+	https://bugs.freedesktop.org/show_bug.cgi?id=58726
+
+	Ignoring a bunch of warnings about ignoring stuff. See:
+	https://bugs.freedesktop.org/show_bug.cgi?id=58727
+
+	Hack build process to have core libcairo, libcairo-gobject,
+	and libcairo-script-interpretter in separate package suites,
+	with the latter ones built against the (installed) core one
+	But cannot disable libcairo-script-interpreter in the main
+	package because it is used by various self-test processes.
+	See: https://bugs.freedesktop.org/show_bug.cgi?id=58934
+	However, we disable self-test for other reasons, so may as
+	well for now.
+
+	Have to hack to disable building of tests. See:
+	https://bugs.freedesktop.org/show_bug.cgi?id=55772
+
+	XQuartz has cairo (but 10.5's apple-x11 does not):
+		*.pc			10.5	10.6	10.7	10.8	fink
+		cairo-fc		Y		Y	Y	Y
+		cairo-ft		Y	Y	Y	Y	Y
+		cairo-gobject						Y[1]
+		cairo-pdf		Y	Y	Y	Y	Y
+		cairo-png		Y	Y	Y	Y	Y
+		cairo-ps		Y	Y	Y	Y	Y
+		cairo-script					Y	Y
+		cairo-svg		Y	Y	Y	Y	Y
+		cairo-tee		Y		Y	Y
+		cairo-xcb-shm		Y		Y	Y	[2]
+		cairo-xcb		Y		Y	Y	[2]
+		cairo-xlib-xcb		Y		Y	Y	[2]
+		cairo-xlib-xrender	Y	Y	Y	Y	Y
+		cairo-xlib		Y	Y	Y	Y	Y
+		cairo-xml		Y		Y	Y	Y
+		cairo			Y	Y	Y	Y	Y
+	We try to have at least as much that as possible...
+		1. in separate cairo-gobject package-set
+		2. some fink-supported platforms do not have new
+		   enough xcb extension in x11, so omit on all
+		   platforms for consistency
 <<
 
