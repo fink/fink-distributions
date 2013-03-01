@@ -19,3 +19,152 @@ diff -ru lilypond-2.12.1-orig/config.make.in lilypond-2.12.1/config.make.in
  package_libdir = $(libdir)/$(package)
  package_docdir = $(docdir)/$(package)
  package_omfdir = $(omfdir)/$(package)
+From 4256f121bdbb6310cbb7162f1d38632dfec11519 Mon Sep 17 00:00:00 2001
+From: David Kastrup <dak@gnu.org>
+Date: Thu, 21 Feb 2013 10:38:14 +0100
+Subject: [PATCH] Issue 2088: Replace automatic pointer-to-member function
+ conversions
+
+Those are a GCC extension and thus a portability problem.
+---
+ lily/GNUmakefile                 | 3 ---
+ lily/include/lily-proto.hh       | 5 ++---
+ lily/include/translator-group.hh | 2 +-
+ lily/translator-dispatch-list.cc | 2 +-
+ 4 files changed, 4 insertions(+), 8 deletions(-)
+
+diff --git a/lily/GNUmakefile b/lily/GNUmakefile
+index e67a883..ba19ac9 100644
+--- a/lily/GNUmakefile
++++ b/lily/GNUmakefile
+@@ -6,9 +6,6 @@ NAME = lilypond
+ MODULE_LIBS=$(depth)/flower
+ MODULE_INCLUDES= $(depth)/flower/include
+ 
+-# need this to convert between function pointers and member function pointers.
+-MODULE_CXXFLAGS= -Wno-pmf-conversions 
+-
+ 
+ HELP2MAN_EXECS = lilypond
+ STEPMAKE_TEMPLATES=c c++ executable po help2man
+diff --git a/lily/include/lily-proto.hh b/lily/include/lily-proto.hh
+index e726c4a..53e863c 100644
+--- a/lily/include/lily-proto.hh
++++ b/lily/include/lily-proto.hh
+@@ -198,8 +198,7 @@ class Translator_group;
+ class Transposed_music;
+ class yyFlexLexer;
+ 
+-typedef void (*Engraver_void_function_engraver_grob_info) (Engraver *,
+-                                                           Grob_info);
+-typedef void (*Translator_void_method_ptr) (Translator *);
++typedef void (Engraver::*Engraver_void_function_engraver_grob_info) (Grob_info);
++typedef void (Translator::*Translator_void_method_ptr) ();
+ 
+ #endif /* LILY_PROTO_HH */
+diff --git a/lily/include/translator-group.hh b/lily/include/translator-group.hh
+index e5004c2..ad044de 100644
+--- a/lily/include/translator-group.hh
++++ b/lily/include/translator-group.hh
+@@ -43,7 +43,7 @@ struct Translator_method_binding
+   void invoke ()
+   {
+     if (method_)
+-      (*method_) (translator_);
++      (translator_->*method_) ();
+   }
+ };
+ 
+diff --git a/lily/translator-dispatch-list.cc b/lily/translator-dispatch-list.cc
+index 6c74b25..dffaa09 100644
+--- a/lily/translator-dispatch-list.cc
++++ b/lily/translator-dispatch-list.cc
+@@ -32,7 +32,7 @@ Engraver_dispatch_list::apply (Grob_info gi)
+       if (e.engraver_ == origin)
+         continue;
+ 
+-      (*e.function_) (e.engraver_, gi);
++      (e.engraver_->*e.function_) (gi);
+     }
+ }
+ 
+-- 
+1.7.11.1
+
+From 22581154dd1af254e4b9113e04b620d6e7c99296 Mon Sep 17 00:00:00 2001
+From: David Kastrup <dak@gnu.org>
+Date: Sat, 23 Feb 2013 09:56:06 +0100
+Subject: [PATCH] Issue 3201: Don't initialize dim_cache_ array via
+ constructor syntax
+
+This is not valid C++ and not even a documented GCC extension.  It is
+probabably an oversight that GCC appears to be able to interpret this
+in some manner.
+
+Also creates a custom copy constructor for Dimension_cache for the
+sole purpose of being able to initialize a Dimension_cache array
+element-wise from a Dimension_cache array in the copy constructor of
+Grob.  C++ clearly is lacking in some departments.
+---
+ lily/dimension-cache.cc         | 10 ++++++++++
+ lily/grob.cc                    |  5 ++++-
+ lily/include/dimension-cache.hh |  1 +
+ 3 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/lily/dimension-cache.cc b/lily/dimension-cache.cc
+index 2d2fce4..4538f17 100644
+--- a/lily/dimension-cache.cc
++++ b/lily/dimension-cache.cc
+@@ -30,6 +30,16 @@ Dimension_cache::Dimension_cache (Dimension_cache const &d)
+   extent_ = d.extent_ ? new Interval (*d.extent_) : 0;
+ }
+ 
++Dimension_cache &
++Dimension_cache::operator = (Dimension_cache const &d)
++{
++  clear ();
++  offset_ = d.offset_ ? new Real (*d.offset_) : 0;
++  parent_ = d.parent_;
++  extent_ = d.extent_ ? new Interval (*d.extent_) : 0;
++  return *this;
++}
++
+ Dimension_cache::Dimension_cache ()
+ {
+   init ();
+diff --git a/lily/grob.cc b/lily/grob.cc
+index 4c54cbc..8ece3cd 100644
+--- a/lily/grob.cc
++++ b/lily/grob.cc
+@@ -87,13 +87,16 @@ Grob::Grob (SCM basicprops)
+ }
+ 
+ Grob::Grob (Grob const &s)
+-  : dim_cache_ (s.dim_cache_)
+ {
+   original_ = (Grob *) & s;
+   self_scm_ = SCM_EOL;
+ 
+   immutable_property_alist_ = s.immutable_property_alist_;
+   mutable_property_alist_ = SCM_EOL;
++
++  for (Axis a = X_AXIS; a < NO_AXES; incr (a))
++      dim_cache_ [a] = s.dim_cache_ [a];
++
+   interfaces_ = s.interfaces_;
+   object_alist_ = SCM_EOL;
+ 
+diff --git a/lily/include/dimension-cache.hh b/lily/include/dimension-cache.hh
+index 581bcff..6210be1 100644
+--- a/lily/include/dimension-cache.hh
++++ b/lily/include/dimension-cache.hh
+@@ -36,6 +36,7 @@ class Dimension_cache
+   friend class Grob;
+ 
+   Dimension_cache (Dimension_cache const &);
++  Dimension_cache & operator = (Dimension_cache const &d);
+   ~Dimension_cache ();
+   Dimension_cache ();
+ };
+-- 
+1.7.11.1
