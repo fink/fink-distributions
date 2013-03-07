@@ -215,6 +215,193 @@ diff -ruN php-5.4.4.orig/fink/patches/CVE-2012-2688.patch php-5.4.4/fink/patches
 + 	}
 + 	php_stream_closedir(stream);
 + 
+diff -ruN php-5.4.4.orig/fink/patches/CVE-2013-1635.patch php-5.4.4/fink/patches/CVE-2013-1635.patch
+--- php-5.4.4.orig/fink/patches/CVE-2013-1635.patch	1969-12-31 17:00:00.000000000 -0700
++++ php-5.4.4/fink/patches/CVE-2013-1635.patch	2013-03-07 10:22:25.000000000 -0700
+@@ -0,0 +1,44 @@
++--- a/ext/soap/soap.c
+++++ b/ext/soap/soap.c
++@@ -497,10 +497,40 @@ ZEND_INI_MH(OnUpdateCacheMode)
++ 	return SUCCESS;
++ }
++ 
+++static PHP_INI_MH(OnUpdateCacheDir)
+++{
+++	/* Only do the open_basedir check at runtime */
+++	if (stage == PHP_INI_STAGE_RUNTIME || stage == PHP_INI_STAGE_HTACCESS) {
+++		char *p;
+++
+++		if (memchr(new_value, '\0', new_value_length) != NULL) {
+++			return FAILURE;
+++		}
+++
+++		/* we do not use zend_memrchr() since path can contain ; itself */
+++		if ((p = strchr(new_value, ';'))) {
+++			char *p2;
+++			p++;
+++			if ((p2 = strchr(p, ';'))) {
+++				p = p2 + 1;
+++			}
+++		} else {
+++			p = new_value;
+++		}
+++
+++		if (PG(open_basedir) && *p && php_check_open_basedir(p TSRMLS_CC)) {
+++			return FAILURE;
+++		}
+++	}
+++
+++	OnUpdateString(entry, new_value, new_value_length, mh_arg1, mh_arg2, mh_arg3, stage TSRMLS_CC);
+++	return SUCCESS;
+++}
+++
++ PHP_INI_BEGIN()
++ STD_PHP_INI_ENTRY("soap.wsdl_cache_enabled",     "1", PHP_INI_ALL, OnUpdateCacheEnabled,
++                   cache_enabled, zend_soap_globals, soap_globals)
++-STD_PHP_INI_ENTRY("soap.wsdl_cache_dir",         "/tmp", PHP_INI_ALL, OnUpdateString,
+++STD_PHP_INI_ENTRY("soap.wsdl_cache_dir",         "/tmp", PHP_INI_ALL, OnUpdateCacheDir,
++                   cache_dir, zend_soap_globals, soap_globals)
++ STD_PHP_INI_ENTRY("soap.wsdl_cache_ttl",         "86400", PHP_INI_ALL, OnUpdateLong,
++                   cache_ttl, zend_soap_globals, soap_globals)
+diff -ruN php-5.4.4.orig/fink/patches/CVE-2013-1643.patch php-5.4.4/fink/patches/CVE-2013-1643.patch
+--- php-5.4.4.orig/fink/patches/CVE-2013-1643.patch	1969-12-31 17:00:00.000000000 -0700
++++ php-5.4.4/fink/patches/CVE-2013-1643.patch	2013-03-07 10:22:52.000000000 -0700
+@@ -0,0 +1,135 @@
++--- a/ext/libxml/libxml.c
+++++ b/ext/libxml/libxml.c
++@@ -270,6 +270,7 @@ static PHP_GINIT_FUNCTION(libxml)
++ 	libxml_globals->error_buffer.c = NULL;
++ 	libxml_globals->error_list = NULL;
++ 	libxml_globals->entity_loader.fci.size = 0;
+++	libxml_globals->entity_loader_disabled = 0;
++ }
++ 
++ static void _php_libxml_destroy_fci(zend_fcall_info *fci)
++@@ -369,16 +370,15 @@ static int php_libxml_streams_IO_close(v
++ }
++ 
++ static xmlParserInputBufferPtr
++-php_libxml_input_buffer_noload(const char *URI, xmlCharEncoding enc)
++-{
++-	return NULL;
++-}
++-
++-static xmlParserInputBufferPtr
++ php_libxml_input_buffer_create_filename(const char *URI, xmlCharEncoding enc)
++ {
++ 	xmlParserInputBufferPtr ret;
++ 	void *context = NULL;
+++	TSRMLS_FETCH();
+++
+++	if (LIBXML(entity_loader_disabled)) {
+++		return NULL;
+++	}
++ 
++ 	if (URI == NULL)
++ 		return(NULL);
++@@ -1052,28 +1052,25 @@ static PHP_FUNCTION(libxml_clear_errors)
++ }
++ /* }}} */
++ 
+++PHP_LIBXML_API zend_bool php_libxml_disable_entity_loader(zend_bool disable TSRMLS_DC)
+++{
+++	zend_bool old = LIBXML(entity_loader_disabled);
+++
+++	LIBXML(entity_loader_disabled) = disable;
+++	return old;
+++}
+++
++ /* {{{ proto bool libxml_disable_entity_loader([boolean disable]) 
++    Disable/Enable ability to load external entities */
++ static PHP_FUNCTION(libxml_disable_entity_loader)
++ {
++ 	zend_bool disable = 1;
++-	xmlParserInputBufferCreateFilenameFunc old;
++ 
++ 	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "|b", &disable) == FAILURE) {
++ 		return;
++ 	}
++ 
++-	if (disable == 0) {
++-		old = xmlParserInputBufferCreateFilenameDefault(php_libxml_input_buffer_create_filename);
++-	} else {
++-		old = xmlParserInputBufferCreateFilenameDefault(php_libxml_input_buffer_noload);
++-	}
++-
++-	if (old == php_libxml_input_buffer_noload) {
++-		RETURN_TRUE;
++-	}
++-
++-	RETURN_FALSE;
+++	RETURN_BOOL(php_libxml_disable_entity_loader(disable TSRMLS_CC));
++ }
++ /* }}} */
++ 
++--- a/ext/libxml/php_libxml.h
+++++ b/ext/libxml/php_libxml.h
++@@ -47,6 +47,7 @@ ZEND_BEGIN_MODULE_GLOBALS(libxml)
++ 		zend_fcall_info			fci;
++ 		zend_fcall_info_cache	fcc;
++ 	} entity_loader;
+++	zend_bool entity_loader_disabled;
++ ZEND_END_MODULE_GLOBALS(libxml)
++ 
++ typedef struct _libxml_doc_props {
++@@ -97,6 +98,7 @@ PHP_LIBXML_API void php_libxml_ctx_error
++ PHP_LIBXML_API int php_libxml_xmlCheckUTF8(const unsigned char *s);
++ PHP_LIBXML_API zval *php_libxml_switch_context(zval *context TSRMLS_DC);
++ PHP_LIBXML_API void php_libxml_issue_error(int level, const char *msg TSRMLS_DC);
+++PHP_LIBXML_API zend_bool php_libxml_disable_entity_loader(zend_bool disable TSRMLS_DC);
++ 
++ /* Init/shutdown functions*/
++ PHP_LIBXML_API void php_libxml_initialize(void);
++--- a/ext/soap/php_xml.c
+++++ b/ext/soap/php_xml.c
++@@ -20,6 +20,7 @@
++ /* $Id$ */
++ 
++ #include "php_soap.h"
+++#include "ext/libxml/php_libxml.h"
++ #include "libxml/parser.h"
++ #include "libxml/parserInternals.h"
++ 
++@@ -91,13 +92,17 @@ xmlDocPtr soap_xmlParseFile(const char *
++ 	ctxt = xmlCreateFileParserCtxt(filename);
++ 	PG(allow_url_fopen) = old_allow_url_fopen;
++ 	if (ctxt) {
+++		zend_bool old;
+++
++ 		ctxt->keepBlanks = 0;
++ 		ctxt->sax->ignorableWhitespace = soap_ignorableWhitespace;
++ 		ctxt->sax->comment = soap_Comment;
++ 		ctxt->sax->warning = NULL;
++ 		ctxt->sax->error = NULL;
++ 		/*ctxt->sax->fatalError = NULL;*/
+++		old = php_libxml_disable_entity_loader(1);
++ 		xmlParseDocument(ctxt);
+++		php_libxml_disable_entity_loader(old);
++ 		if (ctxt->wellFormed) {
++ 			ret = ctxt->myDoc;
++ 			if (ret->URL == NULL && ctxt->directory != NULL) {
++@@ -133,6 +138,8 @@ xmlDocPtr soap_xmlParseMemory(const void
++ */
++ 	ctxt = xmlCreateMemoryParserCtxt(buf, buf_size);
++ 	if (ctxt) {
+++		zend_bool old;
+++
++ 		ctxt->sax->ignorableWhitespace = soap_ignorableWhitespace;
++ 		ctxt->sax->comment = soap_Comment;
++ 		ctxt->sax->warning = NULL;
++@@ -141,7 +148,9 @@ xmlDocPtr soap_xmlParseMemory(const void
++ #if LIBXML_VERSION >= 20703
++ 		ctxt->options |= XML_PARSE_HUGE;
++ #endif
+++		old = php_libxml_disable_entity_loader(1);
++ 		xmlParseDocument(ctxt);
+++		php_libxml_disable_entity_loader(old);
++ 		if (ctxt->wellFormed) {
++ 			ret = ctxt->myDoc;
++ 			if (ret->URL == NULL && ctxt->directory != NULL) {
 diff -ruN php-5.4.4.orig/fink/patches/PEAR-Archive-Tar-fix-invalid-generated-tar-file.patch php-5.4.4/fink/patches/PEAR-Archive-Tar-fix-invalid-generated-tar-file.patch
 --- php-5.4.4.orig/fink/patches/PEAR-Archive-Tar-fix-invalid-generated-tar-file.patch	1969-12-31 17:00:00.000000000 -0700
 +++ php-5.4.4/fink/patches/PEAR-Archive-Tar-fix-invalid-generated-tar-file.patch	2012-09-11 09:04:01.000000000 -0600
