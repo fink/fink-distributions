@@ -1928,8 +1928,8 @@ diff -ruN httpd-2.2.22.orig/fink/apache2.conf httpd-2.2.22/fink/apache2.conf
 +Include @FINKPREFIX@/etc/apache2/sites-enabled/[^.#]*
 diff -ruN httpd-2.2.22.orig/fink/apache2ctl httpd-2.2.22/fink/apache2ctl
 --- httpd-2.2.22.orig/fink/apache2ctl	1969-12-31 17:00:00.000000000 -0700
-+++ httpd-2.2.22/fink/apache2ctl	2012-06-12 08:46:21.000000000 -0600
-@@ -0,0 +1,154 @@
++++ httpd-2.2.22/fink/apache2ctl	2013-03-11 09:46:01.000000000 -0600
+@@ -0,0 +1,179 @@
 +#!/bin/sh
 +#
 +# Licensed to the Apache Software Foundation (ASF) under one or more
@@ -2036,10 +2036,35 @@ diff -ruN httpd-2.2.22.orig/fink/apache2ctl httpd-2.2.22/fink/apache2ctl
 +    fi
 +}
 +
++mkdir_chown () {
++    local OWNER="$1"
++    local DIR="$2"
++    local STAT="$(LC_ALL=C stat -c %F:%U $DIR 2> /dev/null || true)"
++    if [ "$STAT" = "" ] ; then
++        local TMPNAME=$(mktemp -d $DIR.XXXXXXXXXX) || exit 1
++        chmod 755 $TMPNAME || exit 1
++        chown $OWNER $TMPNAME || exit 1
++        if ! mv -T $TMPNAME $DIR 2> /dev/null; then
++            rmdir $TMPNAME
++            # check for race with other apachectl
++            if [ "$(LC_ALL=C stat -f %HT: $DIR 2>/dev/null)$(LC_ALL=C stat -f %u $DIR 2>/dev/null | /usr/bin/xargs /usr/bin/id -n -u 2>/dev/null)" != "Directory:$OWNER" ]
++            then
++                echo Cannot create $DIR with owner $OWNER.
++                echo Please fix manually. Aborting.
++                exit 1
++            fi
++        fi
++    elif [ "$STAT" != "directory:$OWNER" ] ; then
++        echo $DIR already exists but is not a directory owned by $OWNER.
++        echo Please fix manually. Aborting.
++        exit 1
++    fi
++}
++
 +case $ARGV in
 +start)
 +    mkdir -p ${APACHE_RUN_DIR:-@FINKPREFIX@/var/run/apache2}
-+    install -d -o ${APACHE_RUN_USER:-www-data} ${APACHE_LOCK_DIR:-@FINKPREFIX@/var/lock/apache2}
++    mkdir_chown ${APACHE_RUN_USER:-www} ${APACHE_LOCK_DIR:-@FINKPREFIX@/var/lock/apache2}
 +    # ssl_scache shouldn't be here if we're just starting up.
 +    # (this is bad if there are several apache2 instances running)
 +    rm -f ${APACHE_RUN_DIR:-@FINKPREFIX@/var/run/apache2}/*ssl_scache*
@@ -2857,8 +2882,8 @@ diff -ruN httpd-2.2.22.orig/fink/config-dir/conf.d/security httpd-2.2.22/fink/co
 +#Header set X-Frame-Options: "sameorigin"
 diff -ruN httpd-2.2.22.orig/fink/config-dir/envvars httpd-2.2.22/fink/config-dir/envvars
 --- httpd-2.2.22.orig/fink/config-dir/envvars	1969-12-31 17:00:00.000000000 -0700
-+++ httpd-2.2.22/fink/config-dir/envvars	2012-06-12 08:46:21.000000000 -0600
-@@ -0,0 +1,37 @@
++++ httpd-2.2.22/fink/config-dir/envvars	2013-03-11 09:46:51.000000000 -0600
+@@ -0,0 +1,42 @@
 +# envvars - default environment variables for apache2ctl
 +
 +# this won't be correct after changing uid
@@ -2874,8 +2899,8 @@ diff -ruN httpd-2.2.22.orig/fink/config-dir/envvars httpd-2.2.22/fink/config-dir
 +# Since there is no sane way to get the parsed apache2 config in scripts, some
 +# settings are defined via environment variables and then used in apache2ctl,
 +# @FINKPREFIX@/etc/init.d/apache2, @FINKPREFIX@/etc/logrotate.d/apache2, etc.
-+export APACHE_RUN_USER=www
-+export APACHE_RUN_GROUP=www
++export APACHE_RUN_USER=_www
++export APACHE_RUN_GROUP=_www
 +export APACHE_PID_FILE=@FINKPREFIX@/var/run/apache2$SUFFIX.pid
 +export APACHE_RUN_DIR=@FINKPREFIX@/var/run/apache2$SUFFIX
 +export APACHE_LOCK_DIR=@FINKPREFIX@/var/lock/apache2$SUFFIX
@@ -2896,6 +2921,11 @@ diff -ruN httpd-2.2.22.orig/fink/config-dir/envvars httpd-2.2.22/fink/config-dir
 +## If you need a higher file descriptor limit, uncomment and adjust the
 +## following line (default is 8192):
 +#APACHE_ULIMIT_MAX_FILES='ulimit -n 65536'
++
++
++## If you would like to pass arguments to the web server, add them below
++## to the APACHE_ARGUMENTS environment.
++#export APACHE_ARGUMENTS=''
 diff -ruN httpd-2.2.22.orig/fink/config-dir/magic httpd-2.2.22/fink/config-dir/magic
 --- httpd-2.2.22.orig/fink/config-dir/magic	1969-12-31 17:00:00.000000000 -0700
 +++ httpd-2.2.22/fink/config-dir/magic	2012-06-12 08:46:21.000000000 -0600
@@ -5869,6 +5899,214 @@ diff -ruN httpd-2.2.22.orig/fink/logrotate httpd-2.2.22/fink/logrotate
 +                fi; \
 +        endscript
 +}
+diff -ruN httpd-2.2.22.orig/fink/patches/CVE-2012-3499_CVE-2012-4558_XSS.patch httpd-2.2.22/fink/patches/CVE-2012-3499_CVE-2012-4558_XSS.patch
+--- httpd-2.2.22.orig/fink/patches/CVE-2012-3499_CVE-2012-4558_XSS.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/CVE-2012-3499_CVE-2012-4558_XSS.patch	2013-03-11 09:18:27.000000000 -0600
+@@ -0,0 +1,204 @@
++# http://svn.apache.org/viewvc?view=revision&revision=r1447390
++#
++# *) SECURITY: CVE-2012-3499 (cve.mitre.org)
++#    Various XSS flaws due to unescaped hostnames and URIs HTML output in
++#    mod_info, mod_status, mod_imagemap, mod_ldap, and mod_proxy_ftp.
++#    [Jim Jagielski, Stefan Fritsch, Niels Heinen <heinenn google com>]
++#
++# *) SECURITY: CVE-2012-4558 (cve.mitre.org)
++#    XSS in mod_proxy_balancer manager interface. [Jim Jagielski,
++#    Niels Heinen <heinenn google com>]
++Index: apache2/modules/ldap/util_ldap_cache_mgr.c
++===================================================================
++--- apache2.orig/modules/ldap/util_ldap_cache_mgr.c
+++++ apache2/modules/ldap/util_ldap_cache_mgr.c
++@@ -541,7 +541,7 @@
++     if (id) {
++         buf2 = apr_psprintf(p,
++                  "<a href=\"%s?%s\">%s</a>",
++-             r->uri,
+++             ap_escape_html(r->pool, ap_escape_uri(r->pool, r->uri)),
++              id,
++              name);
++     }
++Index: apache2/modules/proxy/mod_proxy_balancer.c
++===================================================================
++--- apache2.orig/modules/proxy/mod_proxy_balancer.c
+++++ apache2/modules/proxy/mod_proxy_balancer.c
++@@ -818,7 +818,8 @@
++         ap_rputs(DOCTYPE_HTML_3_2
++                  "<html><head><title>Balancer Manager</title></head>\n", r);
++         ap_rputs("<body><h1>Load Balancer Manager for ", r);
++-        ap_rvputs(r, ap_get_server_name(r), "</h1>\n\n", NULL);
+++        ap_rvputs(r, ap_escape_html(r->pool, ap_get_server_name(r)),
+++                  "</h1>\n\n", NULL);
++         ap_rvputs(r, "<dl><dt>Server Version: ",
++                   ap_get_server_description(), "</dt>\n", NULL);
++         ap_rvputs(r, "<dt>Server Built: ",
++@@ -853,7 +854,8 @@
++             worker = (proxy_worker *)balancer->workers->elts;
++             for (n = 0; n < balancer->workers->nelts; n++) {
++                 char fbuf[50];
++-                ap_rvputs(r, "<tr>\n<td><a href=\"", r->uri, "?b=",
+++                ap_rvputs(r, "<tr>\n<td><a href=\"",
+++                          ap_escape_uri(r->pool, r->uri), "?b=",
++                           balancer->name + sizeof("balancer://") - 1, "&w=",
++                           ap_escape_uri(r->pool, worker->name),
++                           "&nonce=", balancer_nonce, 
++@@ -894,7 +896,7 @@
++             ap_rputs("<h3>Edit worker settings for ", r);
++             ap_rvputs(r, wsel->name, "</h3>\n", NULL);
++             ap_rvputs(r, "<form method=\"GET\" action=\"", NULL);
++-            ap_rvputs(r, r->uri, "\">\n<dl>", NULL);
+++            ap_rvputs(r, ap_escape_uri(r->pool, r->uri), "\">\n<dl>", NULL);
++             ap_rputs("<table><tr><td>Load factor:</td><td><input name=\"lf\" type=text ", r);
++             ap_rprintf(r, "value=\"%d\"></td></tr>\n", wsel->s->lbfactor);
++             ap_rputs("<tr><td>LB Set:</td><td><input name=\"ls\" type=text ", r);
++Index: apache2/modules/proxy/mod_proxy_ftp.c
++===================================================================
++--- apache2.orig/modules/proxy/mod_proxy_ftp.c
+++++ apache2/modules/proxy/mod_proxy_ftp.c
++@@ -365,7 +365,9 @@
++                 " </head>\n"
++                 " <body>\n  <h2>Directory of "
++                 "<a href=\"/\">%s</a>/%s",
++-                site, basedir, escpath, site, basedir, escpath, site, str);
+++                ap_escape_html(p, site), basedir, escpath,
+++                ap_escape_uri(p, site), basedir, escpath,
+++                ap_escape_uri(p, site), str);
++ 
++         APR_BRIGADE_INSERT_TAIL(out, apr_bucket_pool_create(str, strlen(str),
++                                                           p, c->bucket_alloc));
++Index: apache2/modules/mappers/mod_imagemap.c
++===================================================================
++--- apache2.orig/modules/mappers/mod_imagemap.c
+++++ apache2/modules/mappers/mod_imagemap.c
++@@ -320,7 +320,7 @@
++ /*
++  * returns the mapped URL or NULL.
++  */
++-static char *imap_url(request_rec *r, const char *base, const char *value)
+++static const char *imap_url(request_rec *r, const char *base, const char *value)
++ {
++ /* translates a value into a URL. */
++     int slen, clen;
++@@ -342,7 +342,7 @@
++     if (!strcasecmp(value, "referer")) {
++         referer = apr_table_get(r->headers_in, "Referer");
++         if (referer && *referer) {
++-            return ap_escape_html(r->pool, referer);
+++            return referer;
++         }
++         else {
++             /* XXX:  This used to do *value = '\0'; ... which is totally bogus
++@@ -459,7 +459,7 @@
++     return my_base;
++ }
++ 
++-static int imap_reply(request_rec *r, char *redirect)
+++static int imap_reply(request_rec *r, const char *redirect)
++ {
++     if (!strcasecmp(redirect, "error")) {
++         /* they actually requested an error! */
++@@ -523,42 +523,52 @@
++                                    'formatted' form */
++ }
++ 
++-static void menu_default(request_rec *r, char *menu, char *href, char *text)
+++static void menu_default(request_rec *r, const char *menu, const char *href, const char *text)
++ {
+++    char *ehref, *etext;
++     if (!strcasecmp(href, "error") || !strcasecmp(href, "nocontent")) {
++         return;                 /* don't print such lines, these aren't
++                                    really href's */
++     }
+++
+++    ehref = ap_escape_uri(r->pool, href);
+++    etext = ap_escape_html(r->pool, text);
+++
++     if (!strcasecmp(menu, "formatted")) {
++-        ap_rvputs(r, "<pre>(Default) <a href=\"", href, "\">", text,
+++        ap_rvputs(r, "<pre>(Default) <a href=\"", ehref, "\">", etext,
++                "</a></pre>\n", NULL);
++     }
++     if (!strcasecmp(menu, "semiformatted")) {
++-        ap_rvputs(r, "<pre>(Default) <a href=\"", href, "\">", text,
+++        ap_rvputs(r, "<pre>(Default) <a href=\"", ehref, "\">", etext,
++                "</a></pre>\n", NULL);
++     }
++     if (!strcasecmp(menu, "unformatted")) {
++-        ap_rvputs(r, "<a href=\"", href, "\">", text, "</a>", NULL);
+++        ap_rvputs(r, "<a href=\"", ehref, "\">", etext, "</a>", NULL);
++     }
++     return;
++ }
++ 
++-static void menu_directive(request_rec *r, char *menu, char *href, char *text)
+++static void menu_directive(request_rec *r, const char *menu, const char *href, const char *text)
++ {
+++    char *ehref, *etext;
++     if (!strcasecmp(href, "error") || !strcasecmp(href, "nocontent")) {
++         return;                 /* don't print such lines, as this isn't
++                                    really an href */
++     }
+++
+++    ehref = ap_escape_uri(r->pool, href);
+++    etext = ap_escape_html(r->pool, text);
+++
++     if (!strcasecmp(menu, "formatted")) {
++-        ap_rvputs(r, "<pre>          <a href=\"", href, "\">", text,
+++        ap_rvputs(r, "<pre>          <a href=\"", ehref, "\">", etext,
++                "</a></pre>\n", NULL);
++     }
++     if (!strcasecmp(menu, "semiformatted")) {
++-        ap_rvputs(r, "<pre>          <a href=\"", href, "\">", text,
+++        ap_rvputs(r, "<pre>          <a href=\"", ehref, "\">", etext,
++                "</a></pre>\n", NULL);
++     }
++     if (!strcasecmp(menu, "unformatted")) {
++-        ap_rvputs(r, "<a href=\"", href, "\">", text, "</a>", NULL);
+++        ap_rvputs(r, "<a href=\"", ehref, "\">", etext, "</a>", NULL);
++     }
++     return;
++ }
++@@ -574,9 +584,9 @@
++     char *directive;
++     char *value;
++     char *href_text;
++-    char *base;
++-    char *redirect;
++-    char *mapdflt;
+++    const char *base;
+++    const char *redirect;
+++    const char *mapdflt;
++     char *closest = NULL;
++     double closest_yet = -1;
++     apr_status_t status;
++Index: apache2/modules/generators/mod_status.c
++===================================================================
++--- apache2.orig/modules/generators/mod_status.c
+++++ apache2/modules/generators/mod_status.c
++@@ -409,7 +409,8 @@
++                  "<html><head>\n<title>Apache Status</title>\n</head><body>\n",
++                  r);
++         ap_rputs("<h1>Apache Server Status for ", r);
++-        ap_rvputs(r, ap_get_server_name(r), "</h1>\n\n", NULL);
+++        ap_rvputs(r, ap_escape_html(r->pool, ap_get_server_name(r)),
+++                  "</h1>\n\n", NULL);
++         ap_rvputs(r, "<dl><dt>Server Version: ",
++                   ap_get_server_description(), "</dt>\n", NULL);
++         ap_rvputs(r, "<dt>Server Built: ",
++Index: apache2/modules/generators/mod_info.c
++===================================================================
++--- apache2.orig/modules/generators/mod_info.c
+++++ apache2/modules/generators/mod_info.c
++@@ -371,7 +371,8 @@
++                MODULE_MAGIC_NUMBER_MINOR);
++     ap_rprintf(r,
++                "<dt><strong>Hostname/port:</strong> "
++-               "<tt>%s:%u</tt></dt>\n", ap_get_server_name(r),
+++               "<tt>%s:%u</tt></dt>\n",
+++               ap_escape_html(r->pool, ap_get_server_name(r)),
++                ap_get_server_port(r));
++     ap_rprintf(r,
++                "<dt><strong>Timeouts:</strong> "
 diff -ruN httpd-2.2.22.orig/fink/patches/CacheIgnoreURLSessionIdentifiers.patch httpd-2.2.22/fink/patches/CacheIgnoreURLSessionIdentifiers.patch
 --- httpd-2.2.22.orig/fink/patches/CacheIgnoreURLSessionIdentifiers.patch	1969-12-31 17:00:00.000000000 -0700
 +++ httpd-2.2.22/fink/patches/CacheIgnoreURLSessionIdentifiers.patch	2012-06-12 08:46:21.000000000 -0600
@@ -7777,6 +8015,30 @@ diff -ruN httpd-2.2.22.orig/fink/patches/mod_dav_trunk_fixes.patch httpd-2.2.22/
 +     /*
 +      * Open writable. Unless an error occurs, we'll be
 +      * writing into the database.
+diff -ruN httpd-2.2.22.orig/fink/patches/mod_log_forensic_693292.patch httpd-2.2.22/fink/patches/mod_log_forensic_693292.patch
+--- httpd-2.2.22.orig/fink/patches/mod_log_forensic_693292.patch	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.2.22/fink/patches/mod_log_forensic_693292.patch	2013-03-11 09:19:55.000000000 -0600
+@@ -0,0 +1,20 @@
++http://svn.apache.org/viewvc?view=revision&revision=r1410954
++
++    Don't log a spurious "-" if a request has been rejected
++    before mod_log_forensic could attach its id to it.
++    
++    http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=693292
++
++diff --git a/modules/loggers/mod_log_forensic.c b/modules/loggers/mod_log_forensic.c
++index add3eb9..7cbb76d 100644
++--- a/modules/loggers/mod_log_forensic.c
+++++ b/modules/loggers/mod_log_forensic.c
++@@ -240,7 +240,7 @@ static int log_after(request_rec *r)
++     apr_size_t l, n;
++     apr_status_t rv;
++ 
++-    if (!cfg->fd) {
+++    if (!cfg->fd || id == NULL) {
++         return DECLINED;
++     }
++ 
 diff -ruN httpd-2.2.22.orig/fink/patches/mod_negotiation_CVE-2012-2687.patch httpd-2.2.22/fink/patches/mod_negotiation_CVE-2012-2687.patch
 --- httpd-2.2.22.orig/fink/patches/mod_negotiation_CVE-2012-2687.patch	1969-12-31 17:00:00.000000000 -0700
 +++ httpd-2.2.22/fink/patches/mod_negotiation_CVE-2012-2687.patch	2012-07-03 09:50:33.000000000 -0600
