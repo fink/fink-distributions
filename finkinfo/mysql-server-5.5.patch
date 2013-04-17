@@ -39040,6 +39040,478 @@ diff -ruN mysql-5.5-5.5.30+dfsg.orig.orig/fink/patches/versioned_symbols.patch m
 +     ENDIF() 
 +     # clean direct output needs to be set several targets have the same name
 +     #(mysqlclient in this case)
+diff -ruN mysql-5.5-5.5.30+dfsg.orig.orig/fink/patches/yassl.patch mysql-5.5-5.5.30+dfsg.orig/fink/patches/yassl.patch
+--- mysql-5.5-5.5.30+dfsg.orig.orig/fink/patches/yassl.patch	1969-12-31 17:00:00.000000000 -0700
++++ mysql-5.5-5.5.30+dfsg.orig/fink/patches/yassl.patch	2013-04-17 08:25:54.000000000 -0600
+@@ -0,0 +1,468 @@
++Author: Michael Stapelberg <stapelberg@debian.org>
++Origin: http://www.yassl.com/
++Forwarded: no
++Bug: http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=699886
++Description: Fixes CVE-2013-0169
++ MySQL uses yaSSL 2.2.2. yaSSL has released version 2.2.2d which addresses this
++ problem. I applied the patch to MySQL, see bug 699886 for details.
++
++Index: mysql-5.5-5.5.30+dfsg/extra/yassl/include/openssl/ssl.h
++===================================================================
++--- mysql-5.5-5.5.30+dfsg.orig/extra/yassl/include/openssl/ssl.h	2013-01-16 08:35:17.000000000 +0100
+++++ mysql-5.5-5.5.30+dfsg/extra/yassl/include/openssl/ssl.h	2013-04-14 13:15:17.402046571 +0200
++@@ -35,7 +35,7 @@
++ #include "rsa.h"
++ 
++ 
++-#define YASSL_VERSION "2.2.2"
+++#define YASSL_VERSION "2.2.2d"
++ 
++ 
++ #if defined(__cplusplus)
++Index: mysql-5.5-5.5.30+dfsg/extra/yassl/include/yassl_error.hpp
++===================================================================
++--- mysql-5.5-5.5.30+dfsg.orig/extra/yassl/include/yassl_error.hpp	2013-01-16 08:35:17.000000000 +0100
+++++ mysql-5.5-5.5.30+dfsg/extra/yassl/include/yassl_error.hpp	2013-04-14 13:15:17.402046571 +0200
++@@ -53,7 +53,8 @@
++     badVersion_error    = 117,
++     compress_error      = 118,
++     decompress_error    = 119,
++-    pms_version_error   = 120
+++    pms_version_error   = 120,
+++    sanityCipher_error  = 121
++ 
++     // !!!! add error message to .cpp !!!!
++ 
++Index: mysql-5.5-5.5.30+dfsg/extra/yassl/include/yassl_types.hpp
++===================================================================
++--- mysql-5.5-5.5.30+dfsg.orig/extra/yassl/include/yassl_types.hpp	2013-01-16 08:35:17.000000000 +0100
+++++ mysql-5.5-5.5.30+dfsg/extra/yassl/include/yassl_types.hpp	2013-04-14 13:15:17.403046590 +0200
++@@ -220,7 +220,11 @@
++ const int MAX_RECORD_SIZE   = 16384; // 2^14, max size by standard
++ const int COMPRESS_EXTRA    = 1024;  // extra compression possible addition
++ const int SESSION_FLUSH_COUNT = 256;  // when to flush session cache
++-
+++const int MAX_PAD_SIZE        = 256;  // max TLS padding size
+++const int COMPRESS_CONSTANT   =  13;  // compression calculation constant
+++const int COMPRESS_UPPER      =  55;  // compression calculation numerator
+++const int COMPRESS_LOWER      =  64;  // compression calculation denominator
+++const int COMPRESS_DUMMY_SIZE =  64;  // compression dummy round size 
++ 
++ typedef uint8 Cipher;             // first byte is always 0x00 for SSLv3 & TLS
++ 
++Index: mysql-5.5-5.5.30+dfsg/extra/yassl/src/handshake.cpp
++===================================================================
++--- mysql-5.5-5.5.30+dfsg.orig/extra/yassl/src/handshake.cpp	2013-01-16 08:35:17.000000000 +0100
+++++ mysql-5.5-5.5.30+dfsg/extra/yassl/src/handshake.cpp	2013-04-14 13:15:17.405046628 +0200
++@@ -221,12 +221,45 @@
++ }
++ 
++ 
+++// sanity checks on encrypted message size
+++static int sanity_check_message(SSL& ssl, uint msgSz)
+++{
+++    uint minSz = 0;
+++
+++    if (ssl.getSecurity().get_parms().cipher_type_ == block) {
+++        uint blockSz = ssl.getCrypto().get_cipher().get_blockSize();
+++        if (msgSz % blockSz)
+++            return -1;
+++
+++        minSz = ssl.getSecurity().get_parms().hash_size_ + 1;  // pad byte too
+++        if (blockSz > minSz)
+++            minSz = blockSz;
+++
+++        if (ssl.isTLSv1_1())
+++            minSz += blockSz;   // explicit IV
+++    }
+++    else {      // stream
+++        minSz = ssl.getSecurity().get_parms().hash_size_;
+++    }
+++
+++    if (msgSz < minSz)
+++        return -1;
+++
+++    return 0;
+++}
+++
+++
++ // decrypt input message in place, store size in case needed later
++ void decrypt_message(SSL& ssl, input_buffer& input, uint sz)
++ {
++     input_buffer plain(sz);
++     opaque*      cipher = input.get_buffer() + input.get_current();
++ 
+++    if (sanity_check_message(ssl, sz) != 0) {
+++        ssl.SetError(sanityCipher_error);
+++        return;
+++    }
+++
++     ssl.useCrypto().use_cipher().decrypt(plain.get_buffer(), cipher, sz);
++     memcpy(cipher, plain.get_buffer(), sz);
++     ssl.useSecurity().use_parms().encrypt_size_ = sz;
++@@ -774,6 +807,8 @@
++                     return 0;
++                 }
++                 decrypt_message(ssl, buffer, hdr.length_);
+++		if (ssl.GetError())
+++                    return 0;
++             }
++                 
++             mySTL::auto_ptr<Message> msg(mf.CreateObject(hdr.type_));
++Index: mysql-5.5-5.5.30+dfsg/extra/yassl/src/yassl_error.cpp
++===================================================================
++--- mysql-5.5-5.5.30+dfsg.orig/extra/yassl/src/yassl_error.cpp	2013-01-16 08:35:17.000000000 +0100
+++++ mysql-5.5-5.5.30+dfsg/extra/yassl/src/yassl_error.cpp	2013-04-14 13:15:17.405046628 +0200
++@@ -144,6 +144,10 @@
++         strncpy(buffer, "bad PreMasterSecret version error", max);
++         break;
++ 
+++    case sanityCipher_error :
+++        strncpy(buffer, "sanity check on cipher text size error", max);
+++        break;
+++
++         // openssl errors
++     case SSL_ERROR_WANT_READ :
++         strncpy(buffer, "the read operation would block", max);
++Index: mysql-5.5-5.5.30+dfsg/extra/yassl/src/yassl_imp.cpp
++===================================================================
++--- mysql-5.5-5.5.30+dfsg.orig/extra/yassl/src/yassl_imp.cpp	2013-01-16 08:35:17.000000000 +0100
+++++ mysql-5.5-5.5.30+dfsg/extra/yassl/src/yassl_imp.cpp	2013-04-14 13:16:02.777908499 +0200
++@@ -972,29 +972,193 @@
++ }
++ 
++ 
+++// check all bytes for equality 
+++static int constant_compare(const byte* a, const byte* b, int len)
+++{
+++    int good = 0;
+++    int bad  = 0;
+++
+++    for (int i = 0; i < len; i++) {
+++        if (a[i] == b[i])
+++            good++;
+++        else
+++            bad++;
+++    }
+++
+++    if (good == len)
+++        return 0;
+++    else
+++        return 0 - bad;  // failure
+++}
+++
+++
+++// check bytes for pad value
+++static int pad_check(const byte* input, byte pad, int len)
+++{
+++    int good = 0;
+++    int bad  = 0;
+++
+++    for (int i = 0; i < len; i++) {
+++        if (input[i] == pad)
+++            good++;
+++        else
+++            bad++;
+++    }
+++
+++    if (good == len)
+++        return 0;
+++    else
+++        return 0 - bad;  // failure
+++}
+++
+++
+++// get number of compression rounds
+++static inline int get_rounds(int pLen, int padLen, int t)
+++{
+++    int  roundL1 = 1;  // round ups 
+++    int  roundL2 = 1;
+++
+++    int L1 = COMPRESS_CONSTANT + pLen - t;
+++    int L2 = COMPRESS_CONSTANT + pLen - padLen - 1 - t;
+++
+++    L1 -= COMPRESS_UPPER;
+++    L2 -= COMPRESS_UPPER;
+++
+++    if ( (L1 % COMPRESS_LOWER) == 0)
+++        roundL1 = 0;
+++    if ( (L2 % COMPRESS_LOWER) == 0)
+++        roundL2 = 0;
+++
+++    L1 /= COMPRESS_LOWER;
+++    L2 /= COMPRESS_LOWER;
+++
+++    L1 += roundL1;
+++    L2 += roundL2;
+++
+++    return L1 - L2;
+++}
+++
+++
+++// do compression rounds on dummy data
+++static inline void compress_rounds(SSL& ssl, int rounds, const byte* dummy)
+++{
+++    if (rounds) {
+++        Digest* digest = NULL;
+++
+++        MACAlgorithm ma = ssl.getSecurity().get_parms().mac_algorithm_;
+++        if (ma == sha) 
+++            digest = NEW_YS SHA;
+++        else if (ma == md5)
+++            digest = NEW_YS MD5;
+++        else if (ma == rmd)
+++            digest = NEW_YS RMD;
+++        else
+++            return;
+++
+++        for (int i = 0; i < rounds; i++)
+++            digest->update(dummy, COMPRESS_LOWER);
+++
+++        ysDelete(digest);    
+++    }
+++}
+++
+++
+++// timing resistant pad verification
+++static int timing_verify(SSL& ssl, const byte* input, int padLen, int t,
+++                         int pLen)
+++{
+++    byte verify[SHA_LEN];
+++    byte dummy[MAX_PAD_SIZE];
+++
+++    memset(dummy, 1, sizeof(dummy));
+++
+++    if ( (t + padLen + 1) > pLen) {
+++        pad_check(dummy, (byte)padLen, MAX_PAD_SIZE);
+++        if (ssl.isTLS())
+++            TLS_hmac(ssl, verify, input, pLen - t, application_data, 1);
+++        else
+++            hmac(ssl, verify, input, pLen - t, application_data, 1);
+++        constant_compare(verify, input + pLen - t, t);
+++
+++        return -1;
+++    }
+++
+++    if (pad_check(input + pLen - (padLen + 1), (byte)padLen, padLen + 1) != 0) {
+++        pad_check(dummy, (byte)padLen, MAX_PAD_SIZE - padLen - 1);
+++        if (ssl.isTLS())
+++            TLS_hmac(ssl, verify, input, pLen - t, application_data, 1);
+++        else
+++            hmac(ssl, verify, input, pLen - t, application_data, 1);
+++        constant_compare(verify, input + pLen - t, t);
+++
+++        return -1;
+++    }
+++
+++    pad_check(dummy, (byte)padLen, MAX_PAD_SIZE - padLen - 1);
+++    if (ssl.isTLS())
+++        TLS_hmac(ssl, verify, input, pLen - padLen - 1 - t, application_data,1);
+++    else
+++        hmac(ssl, verify, input, pLen - padLen - 1 - t, application_data, 1);
+++
+++    compress_rounds(ssl, get_rounds(pLen, padLen, t), dummy);
+++
+++    if (constant_compare(verify, input + (pLen - padLen - 1 - t), t) != 0)
+++        return -1;
+++
+++    return 0;
+++}
+++
+++
++ // Process handler for Data
++ void Data::Process(input_buffer& input, SSL& ssl)
++ {
++     int msgSz = ssl.getSecurity().get_parms().encrypt_size_;
++     int pad   = 0, padSz = 0;
++     int ivExtra = 0;
+++    int digestSz = ssl.getCrypto().get_digest().get_digestSize();
+++    const byte* rawData = input.get_buffer() + input.get_current();
+++    opaque verify[SHA_LEN];
++ 
++     if (ssl.getSecurity().get_parms().cipher_type_ == block) {
++         if (ssl.isTLSv1_1())  // IV
++             ivExtra = ssl.getCrypto().get_cipher().get_blockSize();
++         pad = *(input.get_buffer() + input.get_current() + msgSz -ivExtra - 1);
++         padSz = 1;
+++
+++        if (ssl.isTLS()) {
+++            if (timing_verify(ssl, rawData, pad,digestSz, msgSz-ivExtra) != 0) {
+++                ssl.SetError(verify_error);
+++                return;
+++            }
+++        }
+++        else {   // SSLv3, some don't do this padding right
+++            int sz3 = msgSz - digestSz - pad - 1; 
+++            hmac(ssl, verify, rawData, sz3, application_data, true);
+++            if (constant_compare(verify, rawData + sz3, digestSz) != 0) {
+++                ssl.SetError(verify_error);
+++                return;
+++            }
+++        } 
++     }
++-    int digestSz = ssl.getCrypto().get_digest().get_digestSize();
+++    else {  // stream
+++        int streamSz = msgSz - digestSz; 
+++        if (ssl.isTLS())
+++            TLS_hmac(ssl, verify, rawData, streamSz, application_data, true);
+++        else
+++            hmac(ssl, verify, rawData, streamSz, application_data, true);
+++        if (constant_compare(verify, rawData + streamSz, digestSz) != 0) {
+++            ssl.SetError(verify_error);
+++            return;
+++        }
+++    }
+++
++     int dataSz = msgSz - ivExtra - digestSz - pad - padSz;
++-    opaque verify[SHA_LEN];
++ 
++     if (dataSz < 0) {
++         ssl.SetError(bad_input);
++         return;
++     }
++ 
++-    const byte* rawData = input.get_buffer() + input.get_current();
++ 
++     // read data
++     if (dataSz) {                               // could be compressed
++@@ -1013,27 +1177,10 @@
++             input.read(data->get_buffer(), dataSz);
++             data->add_size(dataSz);
++         }
++-
++-        if (ssl.isTLS())
++-            TLS_hmac(ssl, verify, rawData, dataSz, application_data, true);
++-        else
++-            hmac(ssl, verify, rawData, dataSz, application_data, true);
++     }
++ 
++-    // read mac and skip fill
++-    opaque mac[SHA_LEN];
++-    input.read(mac, digestSz);
++-    input.set_current(input.get_current() + pad + padSz);
++-
++-    // verify
++-    if (dataSz) {
++-        if (memcmp(mac, verify, digestSz)) {
++-            ssl.SetError(verify_error);
++-            return;
++-        }
++-    }
++-    else 
++-        ssl.get_SEQIncrement(true);  // even though no data, increment verify
+++    // advance past mac and fill
+++    input.set_current(input.get_current() + digestSz + pad + padSz);
++ }
++ 
++ 
++Index: mysql-5.5-5.5.30+dfsg/extra/yassl/taocrypt/include/asn.hpp
++===================================================================
++--- mysql-5.5-5.5.30+dfsg.orig/extra/yassl/taocrypt/include/asn.hpp	2013-01-16 08:35:17.000000000 +0100
+++++ mysql-5.5-5.5.30+dfsg/extra/yassl/taocrypt/include/asn.hpp	2013-04-14 13:15:17.409046704 +0200
++@@ -112,7 +112,7 @@
++     MAX_LENGTH_SZ =  5,    
++     MAX_SEQ_SZ    =  5,    // enum(seq|con) + length(4)
++     MAX_ALGO_SIZE =  9,
++-    MAX_DIGEST_SZ = 25,    // SHA + enum(Bit or Octet) + length(4)
+++    MAX_DIGEST_SZ = 69,    // SHA512 + enum(Bit or Octet) + length(4)
++     DSA_SIG_SZ    = 40,
++     ASN_NAME_MAX  = 512    // max total of all included names
++ };
++@@ -258,8 +258,11 @@
++ 
++ 
++ enum ContentType { HUH = 651 };
++-enum SigType  { SHAwDSA = 517, MD2wRSA = 646, MD5wRSA = 648, SHAwRSA =649};
++-enum HashType { MD2h = 646, MD5h = 649, SHAh = 88 };
+++enum SigType  { SHAwDSA = 517, MD2wRSA = 646, MD5wRSA = 648, SHAwRSA = 649,
+++                SHA256wRSA = 655, SHA384wRSA = 656, SHA512wRSA = 657,
+++                SHA256wDSA = 416 };
+++enum HashType { MD2h = 646, MD5h = 649, SHAh = 88, SHA256h = 414, SHA384h = 415,
+++                SHA512h = 416 };
++ enum KeyType  { DSAk = 515, RSAk = 645 };     // sums of algo OID
++ 
++ 
++Index: mysql-5.5-5.5.30+dfsg/extra/yassl/taocrypt/include/sha.hpp
++===================================================================
++--- mysql-5.5-5.5.30+dfsg.orig/extra/yassl/taocrypt/include/sha.hpp	2013-01-16 08:35:17.000000000 +0100
+++++ mysql-5.5-5.5.30+dfsg/extra/yassl/taocrypt/include/sha.hpp	2013-04-14 13:15:17.409046704 +0200
++@@ -158,6 +158,12 @@
++     void Transform();
++ };
++ 
+++enum { MAX_SHA2_DIGEST_SIZE = 64 };   // SHA512
+++
+++#else
+++
+++enum { MAX_SHA2_DIGEST_SIZE = 32 };   // SHA256
+++
++ #endif // WORD64_AVAILABLE
++ 
++ 
++Index: mysql-5.5-5.5.30+dfsg/extra/yassl/taocrypt/src/asn.cpp
++===================================================================
++--- mysql-5.5-5.5.30+dfsg.orig/extra/yassl/taocrypt/src/asn.cpp	2013-01-16 08:35:17.000000000 +0100
+++++ mysql-5.5-5.5.30+dfsg/extra/yassl/taocrypt/src/asn.cpp	2013-04-14 13:15:17.411046742 +0200
++@@ -972,12 +972,26 @@
++         hasher.reset(NEW_TC SHA);
++         ht = SHAh;
++     }
+++    else if (signatureOID_ == SHA256wRSA || signatureOID_ == SHA256wDSA) {
+++        hasher.reset(NEW_TC SHA256);
+++        ht = SHA256h;
+++    }
+++#ifdef WORD64_AVAILABLE
+++    else if (signatureOID_ == SHA384wRSA) {
+++        hasher.reset(NEW_TC SHA384);
+++        ht = SHA384h;
+++    }
+++    else if (signatureOID_ == SHA512wRSA) {
+++        hasher.reset(NEW_TC SHA512);
+++        ht = SHA512h;
+++    }
+++#endif
++     else {
++         source_.SetError(UNKOWN_SIG_E);
++         return false;
++     }
++ 
++-    byte digest[SHA::DIGEST_SIZE];      // largest size
+++    byte digest[MAX_SHA2_DIGEST_SIZE];      // largest size
++ 
++     hasher->Update(source_.get_buffer() + certBegin_, sigIndex_ - certBegin_);
++     hasher->Final(digest);
++@@ -1050,6 +1064,12 @@
++                                       0x02, 0x05, 0x05, 0x00  };
++     static const byte md2AlgoID[] = { 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d,
++                                       0x02, 0x02, 0x05, 0x00};
+++    static const byte sha256AlgoID[] = { 0x60, 0x86, 0x48, 0x01, 0x65, 0x03,
+++                                         0x04, 0x02, 0x01, 0x05, 0x00 };
+++    static const byte sha384AlgoID[] = { 0x60, 0x86, 0x48, 0x01, 0x65, 0x03,
+++                                         0x04, 0x02, 0x02, 0x05, 0x00 };
+++    static const byte sha512AlgoID[] = { 0x60, 0x86, 0x48, 0x01, 0x65, 0x03,
+++                                         0x04, 0x02, 0x03, 0x05, 0x00 };
++ 
++     int algoSz = 0;
++     const byte* algoName = 0;
++@@ -1060,6 +1080,21 @@
++         algoName = shaAlgoID;
++         break;
++ 
+++    case SHA256h:
+++        algoSz = sizeof(sha256AlgoID);
+++        algoName = sha256AlgoID;
+++        break;
+++
+++    case SHA384h:
+++        algoSz = sizeof(sha384AlgoID);
+++        algoName = sha384AlgoID;
+++        break;
+++
+++    case SHA512h:
+++        algoSz = sizeof(sha512AlgoID);
+++        algoName = sha512AlgoID;
+++        break;
+++
++     case MD2h:
++         algoSz = sizeof(md2AlgoID);
++         algoName = md2AlgoID;
 diff -ruN mysql-5.5-5.5.30+dfsg.orig.orig/fink/po/POTFILES.in mysql-5.5-5.5.30+dfsg.orig/fink/po/POTFILES.in
 --- mysql-5.5-5.5.30+dfsg.orig.orig/fink/po/POTFILES.in	1969-12-31 17:00:00.000000000 -0700
 +++ mysql-5.5-5.5.30+dfsg.orig/fink/po/POTFILES.in	2012-07-17 08:17:32.000000000 -0600
