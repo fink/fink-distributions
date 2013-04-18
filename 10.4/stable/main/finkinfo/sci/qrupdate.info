@@ -1,7 +1,7 @@
 Info2: <<
 Package: qrupdate%type_pkg[-blas]
 Version: 1.1.2
-Revision: 6
+Revision: 7
 Type: -blas (. -atlas -ref), gcc (4.8), lapack (3.4.2)
 
 Source: mirror:sourceforge:%{Ni}/1.1/%{Ni}-%v.tar.gz
@@ -16,6 +16,10 @@ This package contains a static library, header, and unversioned dylib.
 DescPackaging: <<
 Patch out hardcoded /usr/local.
 
+Revision 7: Change library install location to allow coexistence between
+the variants and thereby avoid dependency deadlocks.
+<<
+DescPort: <<
 Uses GNU 'install -D', so we patch that out and use 'mkdir -p' first to avoid
 BuildDepends: coreutils-default.
 
@@ -41,6 +45,7 @@ PatchScript: <<
 		then MYLDFLAGS="-Wl,-dead_strip_dylibs"
 		else MYLDFLAGS=""
 	fi
+	# Beat on Makeconf to make this build like we want
 	sed -i.orig -e 's|/usr/local|%p|g' \
 		-e '/FC/s|gfortran|&-fsf-%type_raw[gcc]|' Makeconf
 	if [ "%type_pkg[-blas]" = "-atlas" ]
@@ -60,6 +65,7 @@ PatchScript: <<
 			-e 's|-llapack||' Makeconf
 		perl -pi -e "s|^(BLAS=).*|LDFLAGS=$LDFLAGS\n\1-Wl,-framework,Accelerate|" Makeconf		
 	fi
+	perl -pi -e 's|(LIBDIR.*)|\1/%N|' Makeconf
 	sed -i.orig -e 's|install -D|install|g' src/Makefile
 	# recursive parallel Makefiles please -- fangism
 	sed -i.orig -e '/make -C/s|make|+&|' Makefile
@@ -75,8 +81,14 @@ InfoTest: <<
 <<
 
 InstallScript: <<
-	install -d %i/lib
+	#!/bin/sh -ev
+	install -d %i/lib/%N
 	make install-shlib install-staticlib DESTDIR=%d	
+	cd %i/lib
+	# move static lib up
+	mv %N/lib%N.a .
+	# convenience symlink
+	ln -s %N/lib%N.dylib 
 <<
 
 DocFiles: COPYING README
@@ -85,16 +97,13 @@ SplitOff: <<
 	Package: %N-shlibs
 	
 	Depends: <<
-	(%type_raw[-blas] = -atlas) atlas-shlibs (>= 3.10.1-1),
-	(%type_raw[-blas] = -ref) lapack341-shlibs,
-	gcc%type_pkg[gcc]-shlibs
+		(%type_raw[-blas] = -atlas) atlas-shlibs (>= 3.10.1-1),
+		(%type_raw[-blas] = -ref) lapack%type_pkg[lapack]-shlibs,
+		gcc%type_pkg[gcc]-shlibs
 	<<
-	Conflicts:  qrupdate-atlas-shlibs, qrupdate-shlibs
-	Replaces:  qrupdate-atlas-shlibs, qrupdate-shlibs
-	
-	Files: lib/lib%{Ni}.1*.dylib
+	Files: lib/%N/lib%{Ni}.1*.dylib
 	DocFiles: COPYING README
-	Shlibs:  %p/lib/lib%{Ni}.1.dylib 0.0.0 %n (>= 1.1.1-1)
+	Shlibs:  %p/lib/%N/lib%{Ni}.1.dylib 0.0.0 %n (>= 1.1.2-7)
 	DescUsage: This package contains a shared library.
 <<
 <<
