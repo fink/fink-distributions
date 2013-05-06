@@ -263,10 +263,64 @@ diff -ruN php-5.4.4.orig/fink/patches/CVE-2013-1635.patch php-5.4.4/fink/patches
 +                   cache_dir, zend_soap_globals, soap_globals)
 + STD_PHP_INI_ENTRY("soap.wsdl_cache_ttl",         "86400", PHP_INI_ALL, OnUpdateLong,
 +                   cache_ttl, zend_soap_globals, soap_globals)
-diff -ruN php-5.4.4.orig/fink/patches/CVE-2013-1643.patch php-5.4.4/fink/patches/CVE-2013-1643.patch
---- php-5.4.4.orig/fink/patches/CVE-2013-1643.patch	1969-12-31 17:00:00.000000000 -0700
-+++ php-5.4.4/fink/patches/CVE-2013-1643.patch	2013-03-07 10:22:52.000000000 -0700
-@@ -0,0 +1,135 @@
+diff -ruN php-5.4.4.orig/fink/patches/CVE-2013-1824.patch php-5.4.4/fink/patches/CVE-2013-1824.patch
+--- php-5.4.4.orig/fink/patches/CVE-2013-1824.patch	1969-12-31 17:00:00.000000000 -0700
++++ php-5.4.4/fink/patches/CVE-2013-1824.patch	2013-05-06 09:30:39.000000000 -0600
+@@ -0,0 +1,142 @@
++--- a/ext/soap/php_xml.c
+++++ b/ext/soap/php_xml.c
++@@ -20,6 +20,7 @@
++ /* $Id$ */
++ 
++ #include "php_soap.h"
+++#include "ext/libxml/php_libxml.h"
++ #include "libxml/parser.h"
++ #include "libxml/parserInternals.h"
++ 
++@@ -91,13 +92,17 @@ xmlDocPtr soap_xmlParseFile(const char *
++ 	ctxt = xmlCreateFileParserCtxt(filename);
++ 	PG(allow_url_fopen) = old_allow_url_fopen;
++ 	if (ctxt) {
+++		zend_bool old;
+++
++ 		ctxt->keepBlanks = 0;
++ 		ctxt->sax->ignorableWhitespace = soap_ignorableWhitespace;
++ 		ctxt->sax->comment = soap_Comment;
++ 		ctxt->sax->warning = NULL;
++ 		ctxt->sax->error = NULL;
++ 		/*ctxt->sax->fatalError = NULL;*/
+++		old = php_libxml_disable_entity_loader(1 TSRMLS_CC);
++ 		xmlParseDocument(ctxt);
+++		php_libxml_disable_entity_loader(old TSRMLS_CC);
++ 		if (ctxt->wellFormed) {
++ 			ret = ctxt->myDoc;
++ 			if (ret->URL == NULL && ctxt->directory != NULL) {
++@@ -128,11 +133,15 @@ xmlDocPtr soap_xmlParseMemory(const void
++ 	xmlParserCtxtPtr ctxt = NULL;
++ 	xmlDocPtr ret;
++ 
+++	TSRMLS_FETCH();
+++
++ /*
++ 	xmlInitParser();
++ */
++ 	ctxt = xmlCreateMemoryParserCtxt(buf, buf_size);
++ 	if (ctxt) {
+++		zend_bool old;
+++
++ 		ctxt->sax->ignorableWhitespace = soap_ignorableWhitespace;
++ 		ctxt->sax->comment = soap_Comment;
++ 		ctxt->sax->warning = NULL;
++@@ -141,7 +150,9 @@ xmlDocPtr soap_xmlParseMemory(const void
++ #if LIBXML_VERSION >= 20703
++ 		ctxt->options |= XML_PARSE_HUGE;
++ #endif
+++		old = php_libxml_disable_entity_loader(1 TSRMLS_CC);
++ 		xmlParseDocument(ctxt);
+++		php_libxml_disable_entity_loader(old TSRMLS_CC);
++ 		if (ctxt->wellFormed) {
++ 			ret = ctxt->myDoc;
++ 			if (ret->URL == NULL && ctxt->directory != NULL) {
 +--- a/ext/libxml/libxml.c
 ++++ b/ext/libxml/libxml.c
 +@@ -270,6 +270,7 @@ static PHP_GINIT_FUNCTION(libxml)
@@ -355,53 +409,6 @@ diff -ruN php-5.4.4.orig/fink/patches/CVE-2013-1643.patch php-5.4.4/fink/patches
 + 
 + /* Init/shutdown functions*/
 + PHP_LIBXML_API void php_libxml_initialize(void);
-+--- a/ext/soap/php_xml.c
-++++ b/ext/soap/php_xml.c
-+@@ -20,6 +20,7 @@
-+ /* $Id$ */
-+ 
-+ #include "php_soap.h"
-++#include "ext/libxml/php_libxml.h"
-+ #include "libxml/parser.h"
-+ #include "libxml/parserInternals.h"
-+ 
-+@@ -91,13 +92,17 @@ xmlDocPtr soap_xmlParseFile(const char *
-+ 	ctxt = xmlCreateFileParserCtxt(filename);
-+ 	PG(allow_url_fopen) = old_allow_url_fopen;
-+ 	if (ctxt) {
-++		zend_bool old;
-++
-+ 		ctxt->keepBlanks = 0;
-+ 		ctxt->sax->ignorableWhitespace = soap_ignorableWhitespace;
-+ 		ctxt->sax->comment = soap_Comment;
-+ 		ctxt->sax->warning = NULL;
-+ 		ctxt->sax->error = NULL;
-+ 		/*ctxt->sax->fatalError = NULL;*/
-++		old = php_libxml_disable_entity_loader(1);
-+ 		xmlParseDocument(ctxt);
-++		php_libxml_disable_entity_loader(old);
-+ 		if (ctxt->wellFormed) {
-+ 			ret = ctxt->myDoc;
-+ 			if (ret->URL == NULL && ctxt->directory != NULL) {
-+@@ -133,6 +138,8 @@ xmlDocPtr soap_xmlParseMemory(const void
-+ */
-+ 	ctxt = xmlCreateMemoryParserCtxt(buf, buf_size);
-+ 	if (ctxt) {
-++		zend_bool old;
-++
-+ 		ctxt->sax->ignorableWhitespace = soap_ignorableWhitespace;
-+ 		ctxt->sax->comment = soap_Comment;
-+ 		ctxt->sax->warning = NULL;
-+@@ -141,7 +148,9 @@ xmlDocPtr soap_xmlParseMemory(const void
-+ #if LIBXML_VERSION >= 20703
-+ 		ctxt->options |= XML_PARSE_HUGE;
-+ #endif
-++		old = php_libxml_disable_entity_loader(1);
-+ 		xmlParseDocument(ctxt);
-++		php_libxml_disable_entity_loader(old);
-+ 		if (ctxt->wellFormed) {
-+ 			ret = ctxt->myDoc;
-+ 			if (ret->URL == NULL && ctxt->directory != NULL) {
 diff -ruN php-5.4.4.orig/fink/patches/PEAR-Archive-Tar-fix-invalid-generated-tar-file.patch php-5.4.4/fink/patches/PEAR-Archive-Tar-fix-invalid-generated-tar-file.patch
 --- php-5.4.4.orig/fink/patches/PEAR-Archive-Tar-fix-invalid-generated-tar-file.patch	1969-12-31 17:00:00.000000000 -0700
 +++ php-5.4.4/fink/patches/PEAR-Archive-Tar-fix-invalid-generated-tar-file.patch	2012-09-11 09:04:01.000000000 -0600
