@@ -1,21 +1,25 @@
 Info3: <<
 Package: llvm32
 Version: 3.2
-Revision: 4
+Revision: 6
 Description: Modular and reusable compiler
 License: BSD
 Maintainer: David Fang <fangism@users.sourceforge.net>
 
-# ccache is only temporary, for accelerating rebuilds
-# some cyclic dependency checker script needs python
 BuildDepends: <<
 	fink (>= 0.28), 
-	cmake (>= 2.8.2-1), 
+	cmake (>= 2.8.10.2-1), 
+# ccache is optional, for accelerating rebuilds
 #	ccache,
+# polly plug-in needs isl,cloog,gmp
 	isl (>=0.11.1), 
 	cloog-org2 (>= 0.18), 
 	gmp5,
-	python27
+# build scripts need python2.7
+	python27,
+# xml and lzma are used to build an uninstalled bin/c-index-test, so bdep-only
+	libxml2,
+	liblzma5
 <<
 Depends: <<
 	isl-shlibs (>=0.11.1), 
@@ -34,7 +38,7 @@ Source4: http://llvm.org/releases/%v/polly-%v.src.tar.gz
 Source4-MD5: e9d21be41b1fc26d9a54e563f0e260b8
 # Source5: http://llvm.org/releases/%v/test-suite-%v.src.tar.gz
 # Source5-MD5: d8e16facb5ce65bd36dc9ff49e3243e5
-# libcxxabi is not recommended, lib++ is not ready yet
+# libcxxabi is not recommended, libc++ is not ready yet
 
 SourceDirectory: llvm-%v.src
 # may eventually split out development files
@@ -42,7 +46,7 @@ BuildDependsOnly: false
 UseMaxBuildJobs: true
 
 PatchFile: %n.patch
-PatchFile-MD5: 07b21f06db7ae5a7185f84560ffd330e
+PatchFile-MD5: 4cbbc6d340c05dacfd9159bb215781e3
 PatchScript: <<
 	#!/bin/sh -ev
 	# relocated a few auxiliary directories where they are expected
@@ -57,6 +61,11 @@ PatchScript: <<
 	popd
 #	%{default_script}
 	sed -e 's|@FINK_PREFIX@|%p|g' %{PatchFile} | patch -p0
+
+	# Do not want -DNDEBUG, cause linker errors (undef symbols)
+	# LLVM_ENABLE_ASSERTIONS:ON should have removed -DNDEBUG
+	# but it doesn't, so hack it out of cmake file
+	sed -i.orig -e '/-DNDEBUG/s|.*|#&|' cmake/modules/HandleLLVMOptions.cmake
 
 	# point hard-coded paths to system g++-4.0.1's C++ includes
 	# remove references to g++-4.2.1, never existed in Xcode 2.5
@@ -95,17 +104,10 @@ PatchScript: <<
 #	cp lib/Support/CMakeLists.txt{,.orig}
 #	echo "SET_TARGET_PROPERTIES(LLVMSupport PROPERTIES LINK_FLAGS -Wl,-bind_at_load)" >> lib/Support/CMakeLists.txt
 
-# needed for gcc-4.6 only
+# needed for gcc-fsf-4.x only
 #	sed -i.orig2 -e 's|compatibility_version|dylib_&|' tools/clang/tools/libclang/CMakeLists.txt
 
-	# test suite requires newer bash than /bin/bash 2.0 for pipefail
-	# test the pipefail option of this shell first
-	set -o pipefail || {
-	sed -i.orig -e "/bashPath = None/s|None|'%p/bin/bash'|" utils/lit/lit/LitConfig.py
-	test -x %p/bin/bash || { echo "Error: Fink-built bash >= 3.0 required for pipefail!" ; exit 1; }
-	}
-	# force time limit per test (prefix each command-line)
-	sed -i.orig -e "/script\.append/s|ln|'gtimeout 5m '+&|" utils/lit/lit/TestRunner.py
+
 	# projects/test-suite expects built llvm/clang to have been configured
 	# but sadly, we used cmake; don't include $llvmobjdir/Makefile.config
 	# TODO: replace cmake build with autoconf'd build
@@ -115,14 +117,16 @@ CompileScript: <<
 	#!/bin/sh -ev
 	# just always build these archs
 	case "%m" in
-	powerpc*) CMAKE_OPTIONS="-DLLVM_TARGETS_TO_BUILD=PowerPC" ;;
-	ppc*) CMAKE_OPTIONS="-DLLVM_TARGETS_TO_BUILD=PowerPC" ;;
-	i386*) CMAKE_OPTIONS="-DLLVM_TARGETS_TO_BUILD=X86" ;;
-	x86*) CMAKE_OPTIONS="-DLLVM_TARGETS_TO_BUILD=X86" ;;
+	powerpc*) TARGET_ARCHS="-DLLVM_TARGETS_TO_BUILD=PowerPC" ;;
+	ppc*) TARGET_ARCHS="-DLLVM_TARGETS_TO_BUILD=PowerPC" ;;
+	i386*) TARGET_ARCHS="-DLLVM_TARGETS_TO_BUILD=X86" ;;
+	x86*) TARGET_ARCHS="-DLLVM_TARGETS_TO_BUILD=X86" ;;
 	esac
-	echo "Target option: $CMAKE_OPTIONS"
-	# to enable cross-compiling to other archs, uncomment the following line:
-	# CMAKE_OPTIONS="-DLLVM_TARGETS_TO_BUILD=X86;PowerPC;ARM"
+	echo "Target option: $TARGET_ARCHS"
+	# to enable cross-compiling to other archs, uncomment the following:
+	# TARGET_ARCHS="-DLLVM_TARGETS_TO_BUILD=X86;PowerPC;ARM"
+	# TARGET_ARCHS="-DLLVM_TARGETS_TO_BUILD=all"
+	CMAKE_OPTIONS="$TARGET_ARCHS"
 
 	# automatically use ccache if detected
 	# ccache recommended, but not required
@@ -130,7 +134,8 @@ CompileScript: <<
 	test -x $p/bin/ccache && CCACHE=ccache || CCACHE=
 	export CCACHE
 
-	# set up some possible bootstrapping compilers
+	# set up some possible stage-1 compilers
+	fsfgccv=4.6
 	# wrap ccache into single cmd b/c cmake can't handle "ccache g++"
 	mkdir ../opt-bin
 	pushd ../opt-bin
@@ -138,8 +143,8 @@ CompileScript: <<
 	{ echo "#!/bin/sh" ; echo 'exec $CCACHE g++ "$@"' ; } > ccg++
 	{ echo "#!/bin/sh" ; echo 'exec $CCACHE gcc-4.2 "$@"' ; } > ccgcc-4.2
 	{ echo "#!/bin/sh" ; echo 'exec $CCACHE g++-4.2 "$@"' ; } > ccg++-4.2
-#	{ echo "#!/bin/sh" ; echo 'exec $CCACHE gcc-fsf-4.6 "$@"' ; } > ccgcc-4.6
-#	{ echo "#!/bin/sh" ; echo 'exec $CCACHE g++-fsf-4.6 "$@"' ; } > ccg++-4.6
+#	{ echo "#!/bin/sh" ; echo 'exec $CCACHE 'gcc-fsf-$fsfgccv' "$@"' ; } > ccgcc-$fsfgccv
+#	{ echo "#!/bin/sh" ; echo 'exec $CCACHE 'g++-fsf-$fsfgccv' "$@"' ; } > ccg++-$fsfgccv
 	# also setup bootstrap stage compilers
 	# yes, ccache 3.1 supports compiler binary hashing
 	{ echo "#!/bin/sh" ; echo 'exec $CCACHE st1-clang "$@"' ; } > cc-st1-clang
@@ -160,8 +165,8 @@ CompileScript: <<
 	8)
 	  export CC=ccgcc
 	  export CXX=ccg++
-#	  export CC=ccgcc-4.6
-#	  export CXX=ccg++-4.6
+#	  export CC=ccgcc-$fsfgccv
+#	  export CXX=ccg++-$fsfgccv
 	  ;;
 	9)
 	  export CC=ccgcc-4.2
@@ -174,17 +179,71 @@ CompileScript: <<
 	# on darwin11+, fink redirects gcc/g++ to clang/clang++ via PATH
 	esac
 
-	build_type=Release
-	CMAKE_OPTIONS="$CMAKE_OPTIONS -DCMAKE_INSTALL_PREFIX=%p/opt/llvm-%v -DCMAKE_BUILD_TYPE=$build_type -DLLVM_LIT_ARGS:STRING=-v -DLLVM_ENABLE_ASSERTIONS=ON"
+	abssrcdir=%b
+	relsrcdir=../../llvm-%v.src
+	# gcc-4.0.1 workaround for units failing -O1 and higher, fallback to -O0
+	compile_lib_unit() {
+	builddir=$PWD
+	# $1 = source file path
+	# $2 = lib name
+	subdir=`dirname $1`
+	fbase=`basename $1`
+	target=CMakeFiles/LLVM$2.dir/$fbase.o
+	echo "Compiling $1 to $target"
+	pushd $builddir/$subdir
+	$CXX \
+	-DLLVMAnalysis_EXPORTS -D_DEBUG \
+	-D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS \
+	-fno-common -fPIC \
+	-fvisibility-inlines-hidden \
+	-Wall -W -Wno-unused-parameter -Wwrite-strings -Wno-missing-field-initializers \
+	-pedantic -Wno-long-long -Wno-uninitialized -Wnon-virtual-dtor -fno-rtti \
+	-g -fPIC \
+	-I$builddir/$subdir \
+	-I$abssrcdir/$subdir \
+	-I$builddir/include \
+	-I$abssrcdir/include \
+	-fno-exceptions \
+	-o $target \
+	-c $abssrcdir/$1
+	popd
+	}
+
+	# more of the same workaround
+	recompile_known_units() {
+	echo "Recompiling known problematic units with -O0."
+	for f in \
+	lib/Analysis/ScalarEvolution{,Expander}.cpp:Analysis \
+	lib/Transforms/Utils/{BreakCriticalEdges,LoopUnroll}.cpp:TransformUtils \
+	lib/Transforms/Scalar/{LoopInstSimplify,LoopRotation,LoopUnswitch}.cpp:ScalarOpts \
+	lib/CodeGen/{MachineBasicBlock,MachineBlockPlacement,MachineTraceMetrics,PHIElimination}.cpp:CodeGen \
+
+	do
+	saveIFS=$IFS
+	IFS=:
+	set -- $f
+	src=$1
+	lib=$2
+	IFS=$saveIFS
+	# echo "$src -> $lib"
+	compile_lib_unit $src $lib
+	done
+	}
+
+#	build_type=Release
+	build_type=RelWithDebInfo
+	# do not let cmake auto-detect OSX_SYSROOT
+	CMAKE_OPTIONS="$CMAKE_OPTIONS -DCMAKE_INSTALL_PREFIX:PATH=%p/opt/llvm-%v -DCMAKE_BUILD_TYPE:STRING=$build_type -DLLVM_LIT_ARGS:STRING=-v -DLLVM_ENABLE_ASSERTIONS:BOOL=ON -DPYTHON_EXECUTABLE:FILEPATH=%p/bin/python2.7 -DCMAKE_OSX_SYSROOT:STRING=/ -DCMAKE_OSX_DEPLOYMENT_TARGET:STRING="
 
 #	the --max-time option applies to aggregate test time, not individual :(
 #	CMAKE_OPTIONS="$CMAKE_OPTIONS -DLLVM_LIT_ARGS="-s -v --max-time=14400"
 
 	# trying to disable optimization flags on non-trustworthy compilers
-	ccvers=`$CXX -v 2>&1 | tail -n 1 | cut -d\  -f3`
-	if test $ccvers = 4.0.1
-	then STAGE1_CMAKE_OPTIONS='-DCMAKE_C_FLAGS_RELEASE:STRING=-O0 -DCMAKE_CXX_FLAGS_RELEASE:STRING=-O0'
-	fi
+	# worked around in recompile_known_units(), and now using RelWithDebInfo
+#	ccvers=`$CXX -v 2>&1 | tail -n 1 | cut -d\  -f3`
+#	if test $ccvers = 4.0.1
+#	then STAGE1_CMAKE_OPTIONS='-DCMAKE_C_FLAGS_RELEASE:STRING=-O0 -DCMAKE_CXX_FLAGS_RELEASE:STRING=-O0'
+#	fi
 
 	echo "######## START of BOOTSTRAP STAGE 1: building llvm/clang with the system compiler"
 	# wd: %b
@@ -192,9 +251,12 @@ CompileScript: <<
 	pushd ../build/stage1
 	echo "CMAKE_OPTIONS=$CMAKE_OPTIONS $STAGE1_CMAKE_OPTIONS"
 	# Technically, we only need the native back-end in stage 1...
-	cmake $CMAKE_OPTIONS $STAGE1_CMAKE_OPTIONS ../../llvm-%v.src
+	cmake $CMAKE_OPTIONS $STAGE1_CMAKE_OPTIONS $relsrcdir
+	# kill -DNDEBUG with fire
+	sed -i.orig -e 's| -DNDEBUG||g' CMakeCache.txt
+
 	# first make fails, but we have to run it first and then fix some deps
-	make -k || make VERBOSE=1
+	make -k || recompile_known_units && make || make VERBOSE=1
 	cd ..
 	ln -s stage1 last
 	popd
@@ -211,15 +273,9 @@ CompileScript: <<
 	done
 	echo "######## END of BOOTSTRAP STAGE 1: built llvm/clang with the system compiler"
 
-
 	# don't bootstrap on powerpc-darwinX, codegen issues
-	if test "%m" = "powerpc"
-	then exit
-	fi
-	if test "$darwin_vers" = 8
-	then exit
-	fi
-
+	test "%m" != "powerpc" || exit 0
+	test "$darwin_vers" != 8 || exit 0
 #	If you do not wish to bootstrap, just uncomment the next line:
 #	exit
 
@@ -231,7 +287,7 @@ CompileScript: <<
 	export CXX=cc-st1-clang++
 	mkdir -p ../build/stage2
 	pushd ../build/stage2
-	cmake $CMAKE_OPTIONS ../../llvm-%v.src
+	cmake $CMAKE_OPTIONS $relsrcdir
 	make -k || make VERBOSE=1
 	cd ..
 	rm -f last
@@ -254,7 +310,7 @@ CompileScript: <<
 	export CCACHE_DISABLE=1
 	mkdir -p ../build/stage3
 	pushd ../build/stage3
-	cmake $CMAKE_OPTIONS ../../llvm-%v.src
+	cmake $CMAKE_OPTIONS $relsrcdir
 	make -k || make VERBOSE=1
 	cd ..
 	rm -f last
@@ -310,7 +366,6 @@ CompileScript: <<
 	test -z "$err"
 	echo "######## 3-STAGE BOOTSTRAP of llvm/clang PASSED!"
 	popd
-
 <<
 InfoTest: <<
 # need bash because /bin/sh 2.0 on darwin8 is missing support for pipefail
@@ -321,6 +376,16 @@ InfoTest: <<
 	<<
  	TestScript: <<
 	#!/bin/sh -ev
+
+	# test suite requires newer bash than /bin/bash 2.0 for pipefail
+	# test the pipefail option of this shell first
+	set -o pipefail || {
+	sed -i.orig -e "/bashPath = None/s|None|'%p/bin/bash'|" utils/lit/lit/LitConfig.py
+	test -x %p/bin/bash || { echo "Error: Fink-built bash >= 3.0 required for pipefail!" ; exit 1; }
+	}
+	# force time limit per test (prefix each command-line)
+	sed -i.orig -e "/script\.append/s|ln|'gtimeout 5m '+&|" utils/lit/lit/TestRunner.py
+
 	# need path to bootstrapping compiler
 	pushd ../opt-bin
 	export PATH=`pwd`:$PATH
@@ -332,10 +397,11 @@ InfoTest: <<
 	{ make -k TESTARGS=-v check 2>&1 || : ;} | tee llvm-%v-check.log
 	echo "******** Running included clang tests ... ********"
 	{ make -k TESTARGS=-v check-clang 2>&1 || : ;} | tee clang-%v-check.log
-#	echo "******** Running massive test-suite ... ********"
-#	( cd projects/test-suite ; make -k 2>&1 || : ;) | tee test-suite-%v-check.log
 	echo "******** Running included polly tests ... ********"
 	( cd tools/polly/test ; make -k TESTARGS=-v polly-test 2>&1 || : ;) | tee polly-%v-check.log
+	# TODO: compiler-rt tests
+#	echo "******** Running massive test-suite ... ********"
+#	( cd projects/test-suite ; make -k 2>&1 || : ;) | tee test-suite-%v-check.log
 	<<
 	TestSuiteSize: medium
 <<
@@ -348,25 +414,31 @@ InstallScript: <<
 	popd
 
 	# boilerplate script for fixing post-cmake-install install_names
-	pushd $iprefix/lib
-	for f in *.dylib *.so
+	# expect to find in lib/
+	pushd $iprefix
+	for f in `find . -name '*.dylib'` `find . -name '*.so'`
 	do
 		if test ! -L $f
 		then
-		install_name_tool -id "$prefix/lib/$f" "$f"
+		dir=`dirname $f | sed -e 's|^\.\/||'`
+                b=`basename $f`
+		pushd $dir 2> /dev/null
+		install_name_tool -id "$prefix/$dir/$b" "$b"
 		case $f in
 		*.dylib) filt="sed 1,2d" ;;
 		*.so) filt="sed 1d" ;;
 		esac
-		deplibs=`otool -L $f | $filt | awk '{print $1;}' | tr '\n' ' '`
+		deplibs=`otool -L $b | $filt | awk '{print $1;}' | tr '\n' ' '`
 		for d in $deplibs
 		do
 		# prefix absolute paths to llvm/clang's lib installation
+		# caution: assumes dependent libraries are in same dir
 		case $d in
 		/*) ;;
-		*) install_name_tool -change "$d" "$prefix/lib/$d" $f ;;
+		*) install_name_tool -change "$d" "$prefix/lib/$d" $b ;;
 		esac
 		done
+		popd 2> /dev/null
 		fi
 	done
 	popd
@@ -388,6 +460,11 @@ InstallScript: <<
 		done
 		fi
 	done
+	popd
+
+	# need symlink /usr/bin/ld so libLTO.dylib can be found relative to @executable_path
+	pushd $iprefix/bin
+	test -x /usr/bin/ld && ln -s /usr/bin/ld .
 	popd
 
 	# documentation
