@@ -1,537 +1,1041 @@
-diff -ruN apt-0.9.8.2.orig/apt-pkg/contrib/macros.h apt-0.9.8.2/apt-pkg/contrib/macros.h
---- apt-0.9.8.2.orig/apt-pkg/contrib/macros.h	2013-06-06 11:25:59.000000000 -0600
-+++ apt-0.9.8.2/apt-pkg/contrib/macros.h	2013-06-18 11:55:07.000000000 -0600
-@@ -57,7 +57,9 @@
- // some nice optional GNUC features
- #if __GNUC__ >= 3
- 	#define __must_check	__attribute__ ((warn_unused_result))
-+ #ifndef __APPLE__
- 	#define __deprecated	__attribute__ ((deprecated))
+diff -ruN apt-0.9.8.2.orig/fink/patches/darwin-fixes.patch apt-0.9.8.2/fink/patches/darwin-fixes.patch
+--- apt-0.9.8.2.orig/fink/patches/darwin-fixes.patch	1969-12-31 17:00:00.000000000 -0700
++++ apt-0.9.8.2/fink/patches/darwin-fixes.patch	2013-06-19 20:00:38.000000000 -0600
+@@ -0,0 +1,537 @@
++diff -ruN apt-0.9.8.2.orig/apt-pkg/contrib/macros.h apt-0.9.8.2/apt-pkg/contrib/macros.h
++--- apt-0.9.8.2.orig/apt-pkg/contrib/macros.h	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2/apt-pkg/contrib/macros.h	2013-06-18 11:55:07.000000000 -0600
++@@ -57,7 +57,9 @@
++ // some nice optional GNUC features
++ #if __GNUC__ >= 3
++ 	#define __must_check	__attribute__ ((warn_unused_result))
+++ #ifndef __APPLE__
++ 	#define __deprecated	__attribute__ ((deprecated))
+++ #endif
++ 	#define __attrib_const	__attribute__ ((__const__))
++ 	/* likely() and unlikely() can be used to mark boolean expressions
++ 	   as (not) likely true which will help the compiler to optimise */
++diff -ruN apt-0.9.8.2.orig/apt-pkg/contrib/strutl.h apt-0.9.8.2/apt-pkg/contrib/strutl.h
++--- apt-0.9.8.2.orig/apt-pkg/contrib/strutl.h	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2/apt-pkg/contrib/strutl.h	2013-06-17 15:56:40.000000000 -0600
++@@ -150,4 +150,292 @@
++ unsigned long RegexChoice(RxChoiceList *Rxs,const char **ListBegin,
++ 		      const char **ListEnd);
++ 
+++#if defined(__APPLE__)
+++inline char *strchrnul( const char *s, int c )
+++{
+++	for (; *s != c && *s != '\0'; ++s)
+++		;
+++	return (char *)s;
+++}
+++
+++inline void *
+++rawmemchr (const void *s, int c_in)
+++{
+++  /* On 32-bit hardware, choosing longword to be a 32-bit unsigned
+++     long instead of a 64-bit uintmax_t tends to give better
+++     performance.  On 64-bit hardware, unsigned long is generally 64
+++     bits already.  Change this typedef to experiment with
+++     performance.  */
+++  typedef unsigned long int longword;
+++
+++  const unsigned char *char_ptr;
+++  const longword *longword_ptr;
+++  longword repeated_one;
+++  longword repeated_c;
+++  unsigned char c;
+++
+++  c = (unsigned char) c_in;
+++
+++  /* Handle the first few bytes by reading one byte at a time.
+++     Do this until CHAR_PTR is aligned on a longword boundary.  */
+++  for (char_ptr = (const unsigned char *) s;
+++       (size_t) char_ptr % sizeof (longword) != 0;
+++       ++char_ptr)
+++    if (*char_ptr == c)
+++      return (void *) char_ptr;
+++
+++  longword_ptr = (const longword *) char_ptr;
+++
+++  /* All these elucidatory comments refer to 4-byte longwords,
+++     but the theory applies equally well to any size longwords.  */
+++
+++  /* Compute auxiliary longword values:
+++     repeated_one is a value which has a 1 in every byte.
+++     repeated_c has c in every byte.  */
+++  repeated_one = 0x01010101;
+++  repeated_c = c | (c << 8);
+++  repeated_c |= repeated_c << 16;
+++  if (0xffffffffU < (longword) -1)
+++    {
+++      repeated_one |= repeated_one << 31 << 1;
+++      repeated_c |= repeated_c << 31 << 1;
+++      if (8 < sizeof (longword))
+++        {
+++          size_t i;
+++
+++          for (i = 64; i < sizeof (longword) * 8; i *= 2)
+++            {
+++              repeated_one |= repeated_one << i;
+++              repeated_c |= repeated_c << i;
+++            }
+++        }
+++    }
+++
+++  /* Instead of the traditional loop which tests each byte, we will
+++     test a longword at a time.  The tricky part is testing if *any of
+++     the four* bytes in the longword in question are equal to NUL or
+++     c.  We first use an xor with repeated_c.  This reduces the task
+++     to testing whether *any of the four* bytes in longword1 is zero.
+++
+++     We compute tmp =
+++       ((longword1 - repeated_one) & ~longword1) & (repeated_one << 7).
+++     That is, we perform the following operations:
+++       1. Subtract repeated_one.
+++       2. & ~longword1.
+++       3. & a mask consisting of 0x80 in every byte.
+++     Consider what happens in each byte:
+++       - If a byte of longword1 is zero, step 1 and 2 transform it into 0xff,
+++         and step 3 transforms it into 0x80.  A carry can also be propagated
+++         to more significant bytes.
+++       - If a byte of longword1 is nonzero, let its lowest 1 bit be at
+++         position k (0 <= k <= 7); so the lowest k bits are 0.  After step 1,
+++         the byte ends in a single bit of value 0 and k bits of value 1.
+++         After step 2, the result is just k bits of value 1: 2^k - 1.  After
+++         step 3, the result is 0.  And no carry is produced.
+++     So, if longword1 has only non-zero bytes, tmp is zero.
+++     Whereas if longword1 has a zero byte, call j the position of the least
+++     significant zero byte.  Then the result has a zero at positions 0, ...,
+++     j-1 and a 0x80 at position j.  We cannot predict the result at the more
+++     significant bytes (positions j+1..3), but it does not matter since we
+++     already have a non-zero bit at position 8*j+7.
+++
+++     The test whether any byte in longword1 is zero is equivalent
+++     to testing whether tmp is nonzero.
+++
+++     This test can read beyond the end of a string, depending on where
+++     C_IN is encountered.  However, this is considered safe since the
+++     initialization phase ensured that the read will be aligned,
+++     therefore, the read will not cross page boundaries and will not
+++     cause a fault.  */
+++
+++  while (1)
+++    {
+++      longword longword1 = *longword_ptr ^ repeated_c;
+++
+++      if ((((longword1 - repeated_one) & ~longword1)
+++           & (repeated_one << 7)) != 0)
+++        break;
+++      longword_ptr++;
+++    }
+++
+++  char_ptr = (const unsigned char *) longword_ptr;
+++
+++  /* At this point, we know that one of the sizeof (longword) bytes
+++     starting at char_ptr is == c.  On little-endian machines, we
+++     could determine the first such byte without any further memory
+++     accesses, just by looking at the tmp result from the last loop
+++     iteration.  But this does not work on big-endian machines.
+++     Choose code that works in both cases.  */
+++
+++  char_ptr = (unsigned char *) longword_ptr;
+++  while (*char_ptr != c)
+++    char_ptr++;
+++  return (void *) char_ptr;
+++}
+++
+++#if defined _LIBC
+++# include <memcopy.h>
+++#else
+++# include <config.h>
+++# define reg_char char
+++#endif
+++
+++#include <limits.h>
+++
+++#undef __memrchr
+++#undef memrchr
+++
+++#ifndef weak_alias
+++# define __memrchr memrchr
+++#endif
+++
+++/* Search no more than N bytes of S for C.  */
+++inline void *
+++__memrchr (void const *s, int c_in, size_t n)
+++{
+++  const unsigned char *char_ptr;
+++  const unsigned long int *longword_ptr;
+++  unsigned long int longword, magic_bits, charmask;
+++  unsigned reg_char c;
+++  int i;
+++
+++  c = (unsigned char) c_in;
+++
+++  /* Handle the last few characters by reading one character at a time.
+++     Do this until CHAR_PTR is aligned on a longword boundary.  */
+++  for (char_ptr = (const unsigned char *) s + n;
+++       n > 0 && (size_t) char_ptr % sizeof longword != 0;
+++       --n)
+++    if (*--char_ptr == c)
+++      return (void *) char_ptr;
+++
+++  /* All these elucidatory comments refer to 4-byte longwords,
+++     but the theory applies equally well to any size longwords.  */
+++
+++  longword_ptr = (const unsigned long int *) char_ptr;
+++
+++  /* Bits 31, 24, 16, and 8 of this number are zero.  Call these bits
+++     the "holes."  Note that there is a hole just to the left of
+++     each byte, with an extra at the end:
+++
+++     bits:  01111110 11111110 11111110 11111111
+++     bytes: AAAAAAAA BBBBBBBB CCCCCCCC DDDDDDDD
+++
+++     The 1-bits make sure that carries propagate to the next 0-bit.
+++     The 0-bits provide holes for carries to fall into.  */
+++
+++  /* Set MAGIC_BITS to be this pattern of 1 and 0 bits.
+++     Set CHARMASK to be a longword, each of whose bytes is C.  */
+++
+++  magic_bits = 0xfefefefe;
+++  charmask = c | (c << 8);
+++  charmask |= charmask << 16;
+++#if 0xffffffffU < ULONG_MAX
+++  magic_bits |= magic_bits << 32;
+++  charmask |= charmask << 32;
+++  if (8 < sizeof longword)
+++    for (i = 64; i < sizeof longword * 8; i *= 2)
+++      {
+++	magic_bits |= magic_bits << i;
+++	charmask |= charmask << i;
+++      }
+++#endif
+++  magic_bits = (ULONG_MAX >> 1) & (magic_bits | 1);
+++
+++  /* Instead of the traditional loop which tests each character,
+++     we will test a longword at a time.  The tricky part is testing
+++     if *any of the four* bytes in the longword in question are zero.  */
+++  while (n >= sizeof longword)
+++    {
+++      /* We tentatively exit the loop if adding MAGIC_BITS to
+++	 LONGWORD fails to change any of the hole bits of LONGWORD.
+++
+++	 1) Is this safe?  Will it catch all the zero bytes?
+++	 Suppose there is a byte with all zeros.  Any carry bits
+++	 propagating from its left will fall into the hole at its
+++	 least significant bit and stop.  Since there will be no
+++	 carry from its most significant bit, the LSB of the
+++	 byte to the left will be unchanged, and the zero will be
+++	 detected.
+++
+++	 2) Is this worthwhile?  Will it ignore everything except
+++	 zero bytes?  Suppose every byte of LONGWORD has a bit set
+++	 somewhere.  There will be a carry into bit 8.  If bit 8
+++	 is set, this will carry into bit 16.  If bit 8 is clear,
+++	 one of bits 9-15 must be set, so there will be a carry
+++	 into bit 16.  Similarly, there will be a carry into bit
+++	 24.  If one of bits 24-30 is set, there will be a carry
+++	 into bit 31, so all of the hole bits will be changed.
+++
+++	 The one misfire occurs when bits 24-30 are clear and bit
+++	 31 is set; in this case, the hole at bit 31 is not
+++	 changed.  If we had access to the processor carry flag,
+++	 we could close this loophole by putting the fourth hole
+++	 at bit 32!
+++
+++	 So it ignores everything except 128's, when they're aligned
+++	 properly.
+++
+++	 3) But wait!  Aren't we looking for C, not zero?
+++	 Good point.  So what we do is XOR LONGWORD with a longword,
+++	 each of whose bytes is C.  This turns each byte that is C
+++	 into a zero.  */
+++
+++      longword = *--longword_ptr ^ charmask;
+++
+++      /* Add MAGIC_BITS to LONGWORD.  */
+++      if ((((longword + magic_bits)
+++
+++	    /* Set those bits that were unchanged by the addition.  */
+++	    ^ ~longword)
+++
+++	   /* Look at only the hole bits.  If any of the hole bits
+++	      are unchanged, most likely one of the bytes was a
+++	      zero.  */
+++	   & ~magic_bits) != 0)
+++	{
+++	  /* Which of the bytes was C?  If none of them were, it was
+++	     a misfire; continue the search.  */
+++
+++	  const unsigned char *cp = (const unsigned char *) longword_ptr;
+++
+++	  if (8 < sizeof longword)
+++	    for (i = sizeof longword - 1; 8 <= i; i--)
+++	      if (cp[i] == c)
+++		return (void *) &cp[i];
+++	  if (7 < sizeof longword && cp[7] == c)
+++	    return (void *) &cp[7];
+++	  if (6 < sizeof longword && cp[6] == c)
+++	    return (void *) &cp[6];
+++	  if (5 < sizeof longword && cp[5] == c)
+++	    return (void *) &cp[5];
+++	  if (4 < sizeof longword && cp[4] == c)
+++	    return (void *) &cp[4];
+++	  if (cp[3] == c)
+++	    return (void *) &cp[3];
+++	  if (cp[2] == c)
+++	    return (void *) &cp[2];
+++	  if (cp[1] == c)
+++	    return (void *) &cp[1];
+++	  if (cp[0] == c)
+++	    return (void *) cp;
+++	}
+++
+++      n -= sizeof longword;
+++    }
+++
+++  char_ptr = (const unsigned char *) longword_ptr;
+++
+++  while (n-- > 0)
+++    {
+++      if (*--char_ptr == c)
+++	return (void *) char_ptr;
+++    }
+++
+++  return 0;
+++}
+++#ifdef weak_alias
+++weak_alias (__memrchr, memrchr)
+++#endif
+++#endif // __APPLE__
 + #endif
- 	#define __attrib_const	__attribute__ ((__const__))
- 	/* likely() and unlikely() can be used to mark boolean expressions
- 	   as (not) likely true which will help the compiler to optimise */
-diff -ruN apt-0.9.8.2.orig/apt-pkg/contrib/strutl.h apt-0.9.8.2/apt-pkg/contrib/strutl.h
---- apt-0.9.8.2.orig/apt-pkg/contrib/strutl.h	2013-06-06 11:25:59.000000000 -0600
-+++ apt-0.9.8.2/apt-pkg/contrib/strutl.h	2013-06-17 15:56:40.000000000 -0600
-@@ -150,4 +150,292 @@
- unsigned long RegexChoice(RxChoiceList *Rxs,const char **ListBegin,
- 		      const char **ListEnd);
- 
-+#if defined(__APPLE__)
-+inline char *strchrnul( const char *s, int c )
-+{
-+	for (; *s != c && *s != '\0'; ++s)
-+		;
-+	return (char *)s;
-+}
-+
-+inline void *
-+rawmemchr (const void *s, int c_in)
-+{
-+  /* On 32-bit hardware, choosing longword to be a 32-bit unsigned
-+     long instead of a 64-bit uintmax_t tends to give better
-+     performance.  On 64-bit hardware, unsigned long is generally 64
-+     bits already.  Change this typedef to experiment with
-+     performance.  */
-+  typedef unsigned long int longword;
-+
-+  const unsigned char *char_ptr;
-+  const longword *longword_ptr;
-+  longword repeated_one;
-+  longword repeated_c;
-+  unsigned char c;
-+
-+  c = (unsigned char) c_in;
-+
-+  /* Handle the first few bytes by reading one byte at a time.
-+     Do this until CHAR_PTR is aligned on a longword boundary.  */
-+  for (char_ptr = (const unsigned char *) s;
-+       (size_t) char_ptr % sizeof (longword) != 0;
-+       ++char_ptr)
-+    if (*char_ptr == c)
-+      return (void *) char_ptr;
-+
-+  longword_ptr = (const longword *) char_ptr;
-+
-+  /* All these elucidatory comments refer to 4-byte longwords,
-+     but the theory applies equally well to any size longwords.  */
-+
-+  /* Compute auxiliary longword values:
-+     repeated_one is a value which has a 1 in every byte.
-+     repeated_c has c in every byte.  */
-+  repeated_one = 0x01010101;
-+  repeated_c = c | (c << 8);
-+  repeated_c |= repeated_c << 16;
-+  if (0xffffffffU < (longword) -1)
-+    {
-+      repeated_one |= repeated_one << 31 << 1;
-+      repeated_c |= repeated_c << 31 << 1;
-+      if (8 < sizeof (longword))
-+        {
-+          size_t i;
-+
-+          for (i = 64; i < sizeof (longword) * 8; i *= 2)
-+            {
-+              repeated_one |= repeated_one << i;
-+              repeated_c |= repeated_c << i;
-+            }
-+        }
++diff -ruN apt-0.9.8.2.orig/apt-pkg/deb/dpkgpm.cc apt-0.9.8.2/apt-pkg/deb/dpkgpm.cc
++--- apt-0.9.8.2.orig/apt-pkg/deb/dpkgpm.cc	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2/apt-pkg/deb/dpkgpm.cc	2013-06-17 15:28:30.000000000 -0600
++@@ -41,7 +41,13 @@
++ #include <termios.h>
++ #include <unistd.h>
++ #include <sys/ioctl.h>
++-#include <pty.h>
+++#ifndef __APPLE__
+++  #include <pty.h>
+++#else
+++  #define sighandler_t sig_t
+++  #include <util.h>
+++#endif
+++
++ 
++ #include <apti18n.h>
++ 									/*}}}*/
++diff -ruN apt-0.9.8.2.orig/buildlib/environment.mak.in apt-0.9.8.2/buildlib/environment.mak.in
++--- apt-0.9.8.2.orig/buildlib/environment.mak.in	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2/buildlib/environment.mak.in	2013-06-18 11:57:16.000000000 -0600
++@@ -13,7 +13,7 @@
++ NUM_PROCS = @NUM_PROCS@
++ 
++ # Linker stuff
++-PICFLAGS+= -fPIC -DPIC
+++PICFLAGS+= -fno-common -fPIC -DPIC
++ LFLAGS+= @LDFLAGS@
++ LEFLAGS+= 
++ SOCKETLIBS:= @SOCKETLIBS@
++@@ -61,11 +61,13 @@
++ 
++ # Shared library things
++ HOST_OS = @host_os@
++-ifneq ($(words $(filter gnu% linux-gnu% kfreebsd-gnu% %-gnu,$(HOST_OS))),0)
++-   SONAME_MAGIC=-Wl,-soname -Wl,
++-   LFLAGS_SO=
++-else
++-   # Do not know how to create shared libraries here.
++-   ONLYSTATICLIBS = yes
++-endif
+++#ifneq ($(words $(filter gnu% linux-gnu% kfreebsd-gnu% %-gnu,$(HOST_OS))),0)
+++#   SONAME_MAGIC=-Wl,-soname -Wl,
+++#   LFLAGS_SO=
+++#else
+++#   # Do not know how to create shared libraries here.
+++#   ONLYSTATICLIBS = yes
+++#endif
+++SONAME_MAGIC=-install_name @FINKPREFIX@/lib/
+++LFLAGS_SO=-dynamiclib
++ 	
++diff -ruN apt-0.9.8.2.orig/buildlib/library.mak apt-0.9.8.2/buildlib/library.mak
++--- apt-0.9.8.2.orig/buildlib/library.mak	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2/buildlib/library.mak	2013-06-17 21:44:28.000000000 -0600
++@@ -16,11 +16,11 @@
++ # See defaults.mak for information about LOCAL
++ 
++ # Some local definitions
++-LOCAL := lib$(LIBRARY).so.$(MAJOR).$(MINOR)
+++LOCAL := lib$(LIBRARY)$(LIBEXT).$(MAJOR).$(MINOR).dylib
++ $(LOCAL)-OBJS := $(addprefix $(OBJ)/,$(addsuffix .opic,$(notdir $(basename $(SOURCE)))))
++ $(LOCAL)-DEP := $(addprefix $(DEP)/,$(addsuffix .opic.d,$(notdir $(basename $(SOURCE)))))
++ $(LOCAL)-HEADERS := $(addprefix $(INCLUDE)/,$(HEADERS))
++-$(LOCAL)-SONAME := lib$(LIBRARY).so.$(MAJOR)
+++$(LOCAL)-SONAME := lib$(LIBRARY)$(LIBEXT).$(MAJOR).dylib
++ $(LOCAL)-SLIBS := $(SLIBS)
++ $(LOCAL)-LIBRARY := $(LIBRARY)
++ 
++@@ -29,7 +29,7 @@
++ 
++ # Install the command hooks
++ headers: $($(LOCAL)-HEADERS)
++-library: $(LIB)/lib$(LIBRARY).so $(LIB)/lib$(LIBRARY).so.$(MAJOR)
+++library: $(LIB)/lib$(LIBRARY).dylib $(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).dylib
++ clean: clean/$(LOCAL)
++ veryclean: veryclean/$(LOCAL)
++ 
++@@ -41,21 +41,23 @@
++ clean/$(LOCAL):
++ 	-rm -f $($(@F)-OBJS) $($(@F)-DEP)
++ veryclean/$(LOCAL): clean/$(LOCAL)
++-	-rm -f $($(@F)-HEADERS) $(LIB)/lib$($(@F)-LIBRARY)*.so*
+++	-rm -f $($(@F)-HEADERS) $(LIB)/lib$($(@F)-LIBRARY)*.dylib
++ 
++ # Build rules for the two symlinks
++-.PHONY: $(LIB)/lib$(LIBRARY).so.$(MAJOR) $(LIB)/lib$(LIBRARY).so
++-$(LIB)/lib$(LIBRARY).so.$(MAJOR): $(LIB)/lib$(LIBRARY).so.$(MAJOR).$(MINOR)
+++.PHONY: $(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).dylib $(LIB)/lib$(LIBRARY).dylib
+++$(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).dylib: $(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).$(MINOR).dylib
++ 	ln -sf $(<F) $@
++-$(LIB)/lib$(LIBRARY).so: $(LIB)/lib$(LIBRARY).so.$(MAJOR).$(MINOR)
+++$(LIB)/lib$(LIBRARY).dylib: $(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).$(MINOR).dylib
++ 	ln -sf $(<F) $@
++ 
++ # The binary build rule
++-$(LIB)/lib$(LIBRARY).so.$(MAJOR).$(MINOR): $($(LOCAL)-HEADERS) $($(LOCAL)-OBJS)
++-	-rm -f $(LIB)/lib$($(@F)-LIBRARY)*.so* 2> /dev/null
+++$(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).$(MINOR).dylib: $($(LOCAL)-HEADERS) $($(LOCAL)-OBJS)
+++	-rm -f $(LIB)/lib$($(@F)-LIBRARY)*.dylib 2> /dev/null
++ 	echo Building shared library $@
++ 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(PICFLAGS) $(LFLAGS) $(LFLAGS_SO)\
++-	   -o $@ $(SONAME_MAGIC)$($(@F)-SONAME) -shared \
+++	   -o $@ $(SONAME_MAGIC)$($(@F)-SONAME) \
+++	   -compatibility_version $(MAJOR).$(MINOR) \
+++	   -current_version $(MAJOR).$(MINOR) \
++ 	   $(filter %.opic,$^) \
++ 	   $($(@F)-SLIBS) 
++ 
++diff -ruN apt-0.9.8.2.orig/cmdline/apt-get.cc apt-0.9.8.2/cmdline/apt-get.cc
++--- apt-0.9.8.2.orig/cmdline/apt-get.cc	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2/cmdline/apt-get.cc	2013-06-17 16:03:14.000000000 -0600
++@@ -59,7 +59,11 @@
++ #include <termios.h>
++ #include <sys/ioctl.h>
++ #include <sys/stat.h>
++-#include <sys/statfs.h>
+++#ifndef __APPLE__
+++ #include <sys/statfs.h>
+++#else
+++ #define statfs statvfs
+++#endif
++ #include <sys/statvfs.h>
++ #include <signal.h>
++ #include <unistd.h>
++diff -ruN apt-0.9.8.2.orig/doc/manpage-style.xsl apt-0.9.8.2/doc/manpage-style.xsl
++--- apt-0.9.8.2.orig/doc/manpage-style.xsl	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2/doc/manpage-style.xsl	2013-06-17 16:24:16.000000000 -0600
++@@ -2,7 +2,7 @@
++  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
++  version="1.0">
++ 
++-<xsl:import href="/usr/share/xml/docbook/stylesheet/nwalsh/manpages/docbook.xsl" />
+++<xsl:import href="@FINKPREFIX@/share/xml/xsl/docbook-xsl/manpages/docbook.xsl" />
++ 
++ <xsl:param name="man.output.encoding" select="'UTF-8'" />
++ <!-- LANGUAGE -->
++diff -ruN apt-0.9.8.2.orig/ftparchive/contents.cc apt-0.9.8.2/ftparchive/contents.cc
++--- apt-0.9.8.2.orig/ftparchive/contents.cc	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2/ftparchive/contents.cc	2013-06-17 22:24:55.000000000 -0600
++@@ -42,7 +42,9 @@
++ #include <stdio.h>
++ #include <stdlib.h>
++ #include <string.h>
++-#include <malloc.h>
+++#ifndef __APPLE__
+++ #include <malloc.h>
+++#endif
++ 
++ #include "contents.h"
++ 
++diff -ruN apt-0.9.8.2.orig/test/libapt/run-tests apt-0.9.8.2/test/libapt/run-tests
++--- apt-0.9.8.2.orig/test/libapt/run-tests	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2/test/libapt/run-tests	2013-06-18 10:42:53.000000000 -0600
++@@ -1,26 +1,18 @@
++ #!/bin/sh
++ set -e
++ 
++-DIR=$(readlink -f $(dirname $0))
+++DIR=$(pwd)
++ echo "Compiling the tests …"
++ (cd $DIR && make)
++ echo "Running all testcases …"
++-LDPATH="$DIR/../../build/bin"
+++LDPATH="$DIR/../../bin"
++ EXT="_libapt_test"
++ EXIT_CODE=0
++ 
++-# detect if output is on a terminal (colorful) or better not
++-if expr match "$(readlink -f /proc/$$/fd/1)" '/dev/pts/[0-9]\+' > /dev/null; then
++ 	COLHIGH='\033[1;35m'
++ 	COLRESET='\033[0m'
++ 	TESTOKAY='\033[1;32mOKAY\033[0m'
++ 	TESTFAIL='\033[1;31mFAILED\033[0m'
++-else
++-	COLHIGH=''
++-	COLRESET=''
++-	TESTOKAY='OK'
++-	TESTFAIL='###FAILED###'
++-fi
++ 
++ for testapp in $(ls ${LDPATH}/*$EXT)
++ do
++@@ -30,7 +22,7 @@
++ 
++ 	if [ $name = "GetListOfFilesInDir${EXT}" ]; then
++ 		# TODO: very-low: move env creation to the actual test-app
++-		tmppath=$(mktemp -d)
+++		tmppath=$(/usr/bin/mktemp -d -t tmp)
++ 		touch "${tmppath}/anormalfile" \
++ 			"${tmppath}/01yet-anothernormalfile" \
++ 			"${tmppath}/anormalapt.conf" \
++@@ -61,7 +53,8 @@
++ 		ln -s "${tmppath}/anormalfile" "${tmppath}/linkedfile.list"
++ 		ln -s "${tmppath}/non-existing-file" "${tmppath}/brokenlink.list"
++ 	elif [ $name = "getLanguages${EXT}" ]; then
++-		tmppath=$(mktemp -d)
+++		continue
+++		tmppath=$(/usr/bin/mktemp -d -t tmp)
++ 		touch "${tmppath}/ftp.de.debian.org_debian_dists_sid_main_i18n_Translation-tr" \
++ 			"${tmppath}/ftp.de.debian.org_debian_dists_sid_main_i18n_Translation-pt" \
++ 			"${tmppath}/ftp.de.debian.org_debian_dists_sid_main_i18n_Translation-se~" \
++@@ -69,14 +62,14 @@
++ 			"${tmppath}/ftp.de.debian.org_debian_dists_sid_main_i18n_Translation-ast_DE" \
++ 			"${tmppath}/ftp.de.debian.org_debian_dists_sid_main_i18n_Translation-tlh%5fDE"
++ 	elif [ $name = "HashSums${EXT}" ]; then
++-		TMP="$(readlink -f "./${0}")"
+++		TMP="$(pwd)/${0}"
++ 		echo -n "Testing with ${NAME} "
++-		LD_LIBRARY_PATH=${LDPATH} ${testapp} $TMP $(md5sum $TMP | cut -d' ' -f 1) $(sha1sum $TMP | cut -d' ' -f 1) $(sha256sum $TMP | cut -d' ' -f 1) $(sha512sum $TMP | cut -d' ' -f 1) && echo "$TESTOKAY" || echo "$TESTFAIL"
+++		DYLD_LIBRARY_PATH=${LDPATH} ${testapp} $TMP $(md5sum $TMP | cut -d' ' -f 1) $(gsha1sum $TMP | cut -d' ' -f 1) $(gsha256sum $TMP | cut -d' ' -f 1) $(gsha512sum $TMP | cut -d' ' -f 1) && echo "$TESTOKAY" || echo "$TESTFAIL"
++ 		continue
++ 	elif [ $name = "CompareVersion${EXT}" ]; then
++ 		tmppath="${DIR}/versions.lst"
++ 	elif [ $name = "CdromFindPackages${EXT}" ]; then
++-		tmppath=$(mktemp -d)
+++		tmppath=$(/usr/bin/mktemp -d -t tmp)
++ 		mkdir -p "${tmppath}/.disk" "${tmppath}/pool" \
++ 			"${tmppath}/dists/stable/main/binary-i386" \
++ 			"${tmppath}/dists/stable/main/source" \
++@@ -107,7 +100,7 @@
++ 	fi
++ 
++ 	echo -n "Testing with ${NAME} "
++-	if LD_LIBRARY_PATH=${LDPATH} ${testapp} ${tmppath} ; then
+++	if DYLD_LIBRARY_PATH=${LDPATH} ${testapp} ${tmppath} ; then
++  		echo "$TESTOKAY"
++ 	else
++ 		echo "$TESTFAIL"
+diff -ruN apt-0.9.8.2.orig/fink/patches/f-v-p.patch apt-0.9.8.2/fink/patches/f-v-p.patch
+--- apt-0.9.8.2.orig/fink/patches/f-v-p.patch	1969-12-31 17:00:00.000000000 -0700
++++ apt-0.9.8.2/fink/patches/f-v-p.patch	2013-06-20 14:52:56.000000000 -0600
+@@ -0,0 +1,496 @@
++diff -ruN apt-0.9.8.2.darwin/apt-pkg/deb/debindexfile.cc apt-0.9.8.2.f-v-p/apt-pkg/deb/debindexfile.cc
++--- apt-0.9.8.2.darwin/apt-pkg/deb/debindexfile.cc	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2.f-v-p/apt-pkg/deb/debindexfile.cc	2013-06-20 09:12:54.000000000 -0600
++@@ -712,3 +712,9 @@
++ }
++ 
++ 									/*}}}*/
+++void init_deb3()
+++{
+++  (void)_apt_Src;
+++  (void)_apt_Pkg;
+++  (void)_apt_Status;
+++}
++diff -ruN apt-0.9.8.2.darwin/apt-pkg/deb/debmetaindex.cc apt-0.9.8.2.f-v-p/apt-pkg/deb/debmetaindex.cc
++--- apt-0.9.8.2.darwin/apt-pkg/deb/debmetaindex.cc	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2.f-v-p/apt-pkg/deb/debmetaindex.cc	2013-06-20 09:13:29.000000000 -0600
++@@ -467,3 +467,9 @@
++ 
++ debSLTypeDeb _apt_DebType;
++ debSLTypeDebSrc _apt_DebSrcType;
+++
+++void init_deb2()
+++{
+++  (void)_apt_DebType;
+++  (void)_apt_DebSrcType;
+++}
++diff -ruN apt-0.9.8.2.darwin/apt-pkg/deb/debsystem.cc apt-0.9.8.2.f-v-p/apt-pkg/deb/debsystem.cc
++--- apt-0.9.8.2.darwin/apt-pkg/deb/debsystem.cc	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2.f-v-p/apt-pkg/deb/debsystem.cc	2013-06-20 14:52:53.000000000 -0600
++@@ -26,6 +26,113 @@
++ 
++ #include <apti18n.h>
++ 									/*}}}*/
+++/* FINK LOCAL begin */
+++#include <sys/utsname.h>
+++#include <CoreFoundation/CoreFoundation.h>
+++#include <sstream>
+++#include <fstream>
+++#include <sys/stat.h>
+++#include <sys/wait.h>
+++
+++extern void init_deb2();
+++extern void init_deb3();
+++extern void init_deb4();
+++
+++#define FINKSTATUSFILE "/tmp/finkaptstatus"
+++
+++struct versionrevision {
+++  unsigned long epoch;
+++  const char *version;
+++  const char *revision;
+++};
+++
+++struct versionrevision darwin_version = {0,NULL,NULL};
+++struct versionrevision macosx_version = {0,NULL,NULL};
+++
+++static void finkinit()
+++{
+++  Boolean status;
+++  SInt32 errorCode;
+++  CFURLRef fileURL = NULL;
+++  CFDataRef resourceData = NULL;
+++  CFPropertyListRef propertyList = NULL;
+++  CFStringRef string;
+++  static char buffer[256];     // This is static, to ensure the buffer stays around
+++
+++  static struct utsname ver;   // This is static, to ensure the buffer stays around
+++
+++  /* Determine system version */
+++  /* TODO - should maybe check if this is really Darwin? */
+++  if (!uname(&ver)) {
+++    darwin_version.version = ver.release;
+++  }
+++
+++  /* Check whether this is Mac OS X, and which version of it */
+++
+++  fileURL = CFURLCreateWithFileSystemPath( NULL,
+++               CFSTR("/System/Library/CoreServices/SystemVersion.plist"),
+++               kCFURLPOSIXPathStyle,
+++               false );
+++  if (!fileURL)
+++    goto BAIL;
+++
+++  /* Read the XML */
+++  status = CFURLCreateDataAndPropertiesFromResource(
+++               NULL,
+++               fileURL,
+++               &resourceData,
+++               NULL,
+++               NULL,
+++               &errorCode);
+++  if (!status || errorCode != 0)
+++    goto BAIL;
+++
+++  /* Reconstitute the dictionary using the XML data. */
+++  propertyList = CFPropertyListCreateFromXMLData( NULL,
+++               resourceData,
+++               kCFPropertyListImmutable,
+++               &string);
+++  if (!propertyList)
+++    goto BAIL;
+++
+++  /* Try to read the system version from it. */
+++  status = CFDictionaryGetValueIfPresent(
+++               (CFDictionaryRef) propertyList,
+++               (const void *) CFSTR("ProductVersion"),
+++               (const void**) &string);
+++  if (!status)
+++    goto BAIL;
+++
+++  /* Convert into a C string */
+++  status = CFStringGetCString( string,
+++               buffer,
+++               sizeof(buffer),
+++               kCFStringEncodingISOLatin1);
+++  if (!status)
+++    goto BAIL;
+++
+++  /* Finally link the buffer into the macosx_version struct. */
+++  macosx_version.version = buffer;
+++
+++BAIL:
+++  // Release all of the CF objects we're responsible for.
+++  if (fileURL)
+++    CFRelease(fileURL);
+++  if (resourceData)
+++    CFRelease(resourceData);
+++  if (propertyList)
+++    CFRelease(propertyList);
+++}
+++
+++void initDebSystem()
+++{
+++  finkinit();
+++  (void)debSys;
+++  init_deb2();
+++  init_deb3();
+++  init_deb4();
+++}
+++/* FINK LOCAL end */
++ 
++ using std::string;
++ 
++@@ -50,6 +157,8 @@
++ {
++    d = new debSystemPrivate();
++    Label = "Debian dpkg interface";
+++   f = new debSystemPrivate();
+++   Label = "Fink Virtual interface";
++    VS = &debVS;
++ }
++ 									/*}}}*/
++@@ -60,6 +169,9 @@
++ {
++    delete d->StatusFile;
++    delete d;
+++   delete f->StatusFile;
+++   delete f;
+++   unlink(FINKSTATUSFILE);
++ }
++ 									/*}}}*/
++ // System::Lock - Get the lock						/*{{{*/
++@@ -181,6 +293,7 @@
++       be the only users of these */
++    Cnf.CndSet("Dir::State::extended_states", "extended_states");
++    Cnf.CndSet("Dir::State::status","/var/lib/dpkg/status");
+++   Cnf.CndSet("Dir::State::finkstatus",FINKSTATUSFILE);
++    Cnf.CndSet("Dir::Bin::dpkg","/usr/bin/dpkg");
++ 
++    if (d->StatusFile) {
++@@ -188,6 +301,12 @@
++      d->StatusFile = 0;
 +    }
-+
-+  /* Instead of the traditional loop which tests each byte, we will
-+     test a longword at a time.  The tricky part is testing if *any of
-+     the four* bytes in the longword in question are equal to NUL or
-+     c.  We first use an xor with repeated_c.  This reduces the task
-+     to testing whether *any of the four* bytes in longword1 is zero.
-+
-+     We compute tmp =
-+       ((longword1 - repeated_one) & ~longword1) & (repeated_one << 7).
-+     That is, we perform the following operations:
-+       1. Subtract repeated_one.
-+       2. & ~longword1.
-+       3. & a mask consisting of 0x80 in every byte.
-+     Consider what happens in each byte:
-+       - If a byte of longword1 is zero, step 1 and 2 transform it into 0xff,
-+         and step 3 transforms it into 0x80.  A carry can also be propagated
-+         to more significant bytes.
-+       - If a byte of longword1 is nonzero, let its lowest 1 bit be at
-+         position k (0 <= k <= 7); so the lowest k bits are 0.  After step 1,
-+         the byte ends in a single bit of value 0 and k bits of value 1.
-+         After step 2, the result is just k bits of value 1: 2^k - 1.  After
-+         step 3, the result is 0.  And no carry is produced.
-+     So, if longword1 has only non-zero bytes, tmp is zero.
-+     Whereas if longword1 has a zero byte, call j the position of the least
-+     significant zero byte.  Then the result has a zero at positions 0, ...,
-+     j-1 and a 0x80 at position j.  We cannot predict the result at the more
-+     significant bytes (positions j+1..3), but it does not matter since we
-+     already have a non-zero bit at position 8*j+7.
-+
-+     The test whether any byte in longword1 is zero is equivalent
-+     to testing whether tmp is nonzero.
-+
-+     This test can read beyond the end of a string, depending on where
-+     C_IN is encountered.  However, this is considered safe since the
-+     initialization phase ensured that the read will be aligned,
-+     therefore, the read will not cross page boundaries and will not
-+     cause a fault.  */
-+
-+  while (1)
++ 
+++   if (f->StatusFile) {
+++     delete f->StatusFile;
+++     f->StatusFile = 0;
+++     unlink(FINKSTATUSFILE);
+++   }
+++
++    return true;
++ }
++ 									/*}}}*/
++@@ -226,6 +345,53 @@
++    if (d->StatusFile == 0)
++       d->StatusFile = new debStatusIndex(_config->FindFile("Dir::State::status"));
++    List.push_back(d->StatusFile);
+++
+++   /* FINK LOCAL begin */
+++   if (f->StatusFile == 0) {
+++     struct stat unused_sbuf;
+++     unlink(FINKSTATUSFILE);
+++     // will be trying to use fink's own virtpkg data
+++     if (0 == stat("@FINKPREFIX@/bin/fink-virtual-pkgs",&unused_sbuf)) {
+++       int retval = system("@FINKPREFIX@/bin/fink-virtual-pkgs --apt");
+++       if (!(WIFEXITED(retval) && WEXITSTATUS(retval) == 0)) {
+++         std::ostringstream errorout (std::ostringstream::ate);
+++         errorout.str("Error while setting up data-piping from fink-virtual-pkgs: ");
+++         errorout << WEXITSTATUS(retval);
+++         return _error->Error(errorout.str().c_str());
+++       }
+++     }
+++
+++     if (!FileExists(_config->FindFile("Dir::State::finkstatus"))) {
+++       // no f-v-p...use dummy data
+++       std::ofstream finkstatus(FINKSTATUSFILE);
+++       if(macosx_version.version != 0)
+++       {
+++         finkstatus << "Package: macosx" << std::endl;
+++         finkstatus << "Status: install ok installed" << std::endl;
+++         finkstatus << "Priority: optional" << std::endl;
+++         finkstatus << "Section: base" << std::endl;
+++         finkstatus << "Maintainer: None" << std::endl;
+++         finkstatus << "Source: macosx" << std::endl;
+++         finkstatus << "Version: " << macosx_version.version << std::endl;
+++         finkstatus << "Description: Pseudo package representing Mac OS X" << std::endl;
+++         finkstatus << " Pseudo package representing Mac OS X" << std::endl << std::endl;
+++       }
+++       finkstatus << "Package: darwin" << std::endl;
+++       finkstatus << "Status: install ok installed" << std::endl;
+++       finkstatus << "Priority: optional" << std::endl;
+++       finkstatus << "Section: base" << std::endl;
+++       finkstatus << "Maintainer: None" << std::endl;
+++       finkstatus << "Source: darwin" << std::endl;
+++       finkstatus << "Version: " << darwin_version.version  << std::endl;
+++       finkstatus << "Description: Pseudo package representing Darwin" << std::endl;
+++       finkstatus << " Pseudo package representing Darwin" << std::endl << std::endl;
+++       finkstatus.close();
+++     }
+++     f->StatusFile = new debStatusIndex(_config->FindFile("Dir::State::finkstatus"));
+++   }
+++   List.push_back(f->StatusFile);
+++   /* FINK LOCAL end */
+++
++    return true;
++ }
++ 									/*}}}*/
++@@ -235,12 +401,16 @@
++ bool debSystem::FindIndex(pkgCache::PkgFileIterator File,
++ 			  pkgIndexFile *&Found) const
++ {
++-   if (d->StatusFile == 0)
+++   if (d->StatusFile == 0 && f->StatusFile == 0)
++       return false;
++    if (d->StatusFile->FindInCache(*File.Cache()) == File)
 +    {
-+      longword longword1 = *longword_ptr ^ repeated_c;
-+
-+      if ((((longword1 - repeated_one) & ~longword1)
-+           & (repeated_one << 7)) != 0)
-+        break;
-+      longword_ptr++;
++       Found = d->StatusFile;
++       return true;
+++   }  else if (f->StatusFile->FindInCache(*File.Cache()) == File)
+++   {
+++      Found = f->StatusFile;
+++      return true;
 +    }
-+
-+  char_ptr = (const unsigned char *) longword_ptr;
-+
-+  /* At this point, we know that one of the sizeof (longword) bytes
-+     starting at char_ptr is == c.  On little-endian machines, we
-+     could determine the first such byte without any further memory
-+     accesses, just by looking at the tmp result from the last loop
-+     iteration.  But this does not work on big-endian machines.
-+     Choose code that works in both cases.  */
-+
-+  char_ptr = (unsigned char *) longword_ptr;
-+  while (*char_ptr != c)
-+    char_ptr++;
-+  return (void *) char_ptr;
-+}
-+
-+#if defined _LIBC
-+# include <memcopy.h>
-+#else
-+# include <config.h>
-+# define reg_char char
-+#endif
-+
-+#include <limits.h>
-+
-+#undef __memrchr
-+#undef memrchr
-+
-+#ifndef weak_alias
-+# define __memrchr memrchr
-+#endif
-+
-+/* Search no more than N bytes of S for C.  */
-+inline void *
-+__memrchr (void const *s, int c_in, size_t n)
-+{
-+  const unsigned char *char_ptr;
-+  const unsigned long int *longword_ptr;
-+  unsigned long int longword, magic_bits, charmask;
-+  unsigned reg_char c;
-+  int i;
-+
-+  c = (unsigned char) c_in;
-+
-+  /* Handle the last few characters by reading one character at a time.
-+     Do this until CHAR_PTR is aligned on a longword boundary.  */
-+  for (char_ptr = (const unsigned char *) s + n;
-+       n > 0 && (size_t) char_ptr % sizeof longword != 0;
-+       --n)
-+    if (*--char_ptr == c)
-+      return (void *) char_ptr;
-+
-+  /* All these elucidatory comments refer to 4-byte longwords,
-+     but the theory applies equally well to any size longwords.  */
-+
-+  longword_ptr = (const unsigned long int *) char_ptr;
-+
-+  /* Bits 31, 24, 16, and 8 of this number are zero.  Call these bits
-+     the "holes."  Note that there is a hole just to the left of
-+     each byte, with an extra at the end:
-+
-+     bits:  01111110 11111110 11111110 11111111
-+     bytes: AAAAAAAA BBBBBBBB CCCCCCCC DDDDDDDD
-+
-+     The 1-bits make sure that carries propagate to the next 0-bit.
-+     The 0-bits provide holes for carries to fall into.  */
-+
-+  /* Set MAGIC_BITS to be this pattern of 1 and 0 bits.
-+     Set CHARMASK to be a longword, each of whose bytes is C.  */
-+
-+  magic_bits = 0xfefefefe;
-+  charmask = c | (c << 8);
-+  charmask |= charmask << 16;
-+#if 0xffffffffU < ULONG_MAX
-+  magic_bits |= magic_bits << 32;
-+  charmask |= charmask << 32;
-+  if (8 < sizeof longword)
-+    for (i = 64; i < sizeof longword * 8; i *= 2)
-+      {
-+	magic_bits |= magic_bits << i;
-+	charmask |= charmask << i;
-+      }
-+#endif
-+  magic_bits = (ULONG_MAX >> 1) & (magic_bits | 1);
-+
-+  /* Instead of the traditional loop which tests each character,
-+     we will test a longword at a time.  The tricky part is testing
-+     if *any of the four* bytes in the longword in question are zero.  */
-+  while (n >= sizeof longword)
++    
++    return false;
++diff -ruN apt-0.9.8.2.darwin/apt-pkg/deb/debsystem.h apt-0.9.8.2.f-v-p/apt-pkg/deb/debsystem.h
++--- apt-0.9.8.2.darwin/apt-pkg/deb/debsystem.h	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2.f-v-p/apt-pkg/deb/debsystem.h	2013-06-20 14:51:07.000000000 -0600
++@@ -21,6 +21,7 @@
++ {
++    // private d-pointer
++    debSystemPrivate *d;
+++   debSystemPrivate *f;
++    bool CheckUpdates();
++ 
++    public:
++diff -ruN apt-0.9.8.2.darwin/apt-pkg/deb/debversion.cc apt-0.9.8.2.f-v-p/apt-pkg/deb/debversion.cc
++--- apt-0.9.8.2.darwin/apt-pkg/deb/debversion.cc	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2.f-v-p/apt-pkg/deb/debversion.cc	2013-06-20 09:14:42.000000000 -0600
++@@ -21,6 +21,11 @@
++ 
++ debVersioningSystem debVS;
++ 
+++void init_deb4()
+++{
+++  (void)debVS;
+++}
+++
++ // debVS::debVersioningSystem - Constructor				/*{{{*/
++ // ---------------------------------------------------------------------
++ /* */
++diff -ruN apt-0.9.8.2.darwin/apt-pkg/init.cc apt-0.9.8.2.f-v-p/apt-pkg/init.cc
++--- apt-0.9.8.2.darwin/apt-pkg/init.cc	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2.f-v-p/apt-pkg/init.cc	2013-06-20 09:04:21.000000000 -0600
++@@ -20,6 +20,8 @@
++ #include <sys/stat.h>
++ 
++ #include <apti18n.h>
+++
+++extern void initDebSystem();
++ 									/*}}}*/
++ 
++ #define Stringfy_(x) # x
++@@ -142,6 +144,8 @@
++ /* */
++ bool pkgInitSystem(Configuration &Cnf,pkgSystem *&Sys)
++ {
+++   initDebSystem();
+++
++    Sys = 0;
++    std::string Label = Cnf.Find("Apt::System","");
++    if (Label.empty() == false)
++diff -ruN apt-0.9.8.2.darwin/buildlib/environment.mak.in apt-0.9.8.2.f-v-p/buildlib/environment.mak.in
++--- apt-0.9.8.2.darwin/buildlib/environment.mak.in	2013-06-19 22:30:46.000000000 -0600
+++++ apt-0.9.8.2.f-v-p/buildlib/environment.mak.in	2013-06-19 22:31:23.000000000 -0600
++@@ -14,7 +14,7 @@
++ 
++ # Linker stuff
++ PICFLAGS+= -fno-common -fPIC -DPIC
++-LFLAGS+= @LDFLAGS@
+++LFLAGS+= @LDFLAGS@ -framework CoreFoundation
++ LEFLAGS+= 
++ SOCKETLIBS:= @SOCKETLIBS@
++ AR:=@AR@
++diff -ruN apt-0.9.8.2.darwin/cmdline/apt-get.cc apt-0.9.8.2.f-v-p/cmdline/apt-get.cc
++--- apt-0.9.8.2.darwin/cmdline/apt-get.cc	2013-06-19 22:30:46.000000000 -0600
+++++ apt-0.9.8.2.f-v-p/cmdline/apt-get.cc	2013-06-19 22:31:23.000000000 -0600
++@@ -360,7 +360,14 @@
++ 		  if (Cache[Targ].CandidateVerIter(Cache).end() == true)
++ 		  {
++ 		     if (Targ->ProvidesList == 0)
++-			out << _("but it is not installable");
+++                     {
+++                        out << _("but it is not installable. For Fink users, ");
+++                        out << _("this often means that you have attempted ");
+++                        out << _("to install a package from the binary distribution ");
+++                        out << _("which depends on a \"Restrictive\" package. ");
+++                        out << _("See <http://fink.sourceforge.net/faq/usage-fink.php#bindist>, ");
+++                        out << _("<http://fink.sourceforge.net/doc/users-guide/packages.php#bin-exceptions>");
+++                     }
++ 		     else
++ 			out << _("but it is a virtual package");
++ 		  }		  
++@@ -846,7 +853,8 @@
++ 
++ 	 // Install it with autoinstalling enabled (if we not respect the minial
++ 	 // required deps or the policy)
++-	 if (FixBroken == false)
+++	 if (FixBroken == false
+++             && _config->FindB("APT::Get::Ignore-Breakage") == false)
++ 	    doAutoInstallLater.insert(Pkg);
++       }
++ 
++@@ -1020,7 +1028,9 @@
++    }
++ 
++    // Nothing is broken
++-   if (DCache->BrokenCount() == 0 || AllowBroken == true)
+++   // FINK LOCAL added APT::Get::Ignore-Breakage test
+++   if (DCache->BrokenCount() == 0 || AllowBroken == true
+++       || _config->FindB("APT::Get::Ignore-Breakage") == true)
++       return true;
++ 
++    // Attempt to fix broken things
++@@ -1129,7 +1139,9 @@
++    Stats(c1out,Cache);
++ 
++    // Sanity check
++-   if (Cache->BrokenCount() != 0)
+++   // FINK LOCAL added APT::Get::Ignore-Breakage test
+++   if (Cache->BrokenCount() != 0
+++       && _config->FindB("APT::Get::Ignore-Breakage",false) == false)
 +    {
-+      /* We tentatively exit the loop if adding MAGIC_BITS to
-+	 LONGWORD fails to change any of the hole bits of LONGWORD.
-+
-+	 1) Is this safe?  Will it catch all the zero bytes?
-+	 Suppose there is a byte with all zeros.  Any carry bits
-+	 propagating from its left will fall into the hole at its
-+	 least significant bit and stop.  Since there will be no
-+	 carry from its most significant bit, the LSB of the
-+	 byte to the left will be unchanged, and the zero will be
-+	 detected.
-+
-+	 2) Is this worthwhile?  Will it ignore everything except
-+	 zero bytes?  Suppose every byte of LONGWORD has a bit set
-+	 somewhere.  There will be a carry into bit 8.  If bit 8
-+	 is set, this will carry into bit 16.  If bit 8 is clear,
-+	 one of bits 9-15 must be set, so there will be a carry
-+	 into bit 16.  Similarly, there will be a carry into bit
-+	 24.  If one of bits 24-30 is set, there will be a carry
-+	 into bit 31, so all of the hole bits will be changed.
-+
-+	 The one misfire occurs when bits 24-30 are clear and bit
-+	 31 is set; in this case, the hole at bit 31 is not
-+	 changed.  If we had access to the processor carry flag,
-+	 we could close this loophole by putting the fourth hole
-+	 at bit 32!
-+
-+	 So it ignores everything except 128's, when they're aligned
-+	 properly.
-+
-+	 3) But wait!  Aren't we looking for C, not zero?
-+	 Good point.  So what we do is XOR LONGWORD with a longword,
-+	 each of whose bytes is C.  This turns each byte that is C
-+	 into a zero.  */
-+
-+      longword = *--longword_ptr ^ charmask;
-+
-+      /* Add MAGIC_BITS to LONGWORD.  */
-+      if ((((longword + magic_bits)
-+
-+	    /* Set those bits that were unchanged by the addition.  */
-+	    ^ ~longword)
-+
-+	   /* Look at only the hole bits.  If any of the hole bits
-+	      are unchanged, most likely one of the bytes was a
-+	      zero.  */
-+	   & ~magic_bits) != 0)
-+	{
-+	  /* Which of the bytes was C?  If none of them were, it was
-+	     a misfire; continue the search.  */
-+
-+	  const unsigned char *cp = (const unsigned char *) longword_ptr;
-+
-+	  if (8 < sizeof longword)
-+	    for (i = sizeof longword - 1; 8 <= i; i--)
-+	      if (cp[i] == c)
-+		return (void *) &cp[i];
-+	  if (7 < sizeof longword && cp[7] == c)
-+	    return (void *) &cp[7];
-+	  if (6 < sizeof longword && cp[6] == c)
-+	    return (void *) &cp[6];
-+	  if (5 < sizeof longword && cp[5] == c)
-+	    return (void *) &cp[5];
-+	  if (4 < sizeof longword && cp[4] == c)
-+	    return (void *) &cp[4];
-+	  if (cp[3] == c)
-+	    return (void *) &cp[3];
-+	  if (cp[2] == c)
-+	    return (void *) &cp[2];
-+	  if (cp[1] == c)
-+	    return (void *) &cp[1];
-+	  if (cp[0] == c)
-+	    return (void *) cp;
-+	}
-+
-+      n -= sizeof longword;
++       ShowBroken(c1out,Cache,false);
++       return _error->Error(_("Internal error, InstallPackages was called with broken packages!"));
++@@ -1954,7 +1966,9 @@
++       /* If we are in the Broken fixing mode we do not attempt to fix the
++ 	 problems. This is if the user invoked install without -f and gave
++ 	 packages */
++-      if (BrokenFix == true && Cache->BrokenCount() != 0)
+++      // FINK LOCAL added APT::Get::Ignore-Breakage test
+++      if (BrokenFix == true && Cache->BrokenCount() != 0
+++          && _config->FindB("APT::Get::Ignore-Breakage") == false)
++       {
++ 	 c1out << _("You might want to run 'apt-get -f install' to correct these:") << endl;
++ 	 ShowBroken(c1out,Cache,false);
++@@ -1972,7 +1986,8 @@
++       }
++ 
++       // Now we check the state of the packages,
++-      if (Cache->BrokenCount() != 0)
+++      // FINK LOCAL added APT::Get::Ignore-Breakage test
+++      if (Cache->BrokenCount() != 0 && _config->FindB("APT::Get::Ignore-Breakage") == false)
++       {
++ 	 c1out << 
++ 	    _("Some packages could not be installed. This may mean that you have\n" 
++@@ -3489,6 +3504,8 @@
++       {'y',"assume-yes","APT::Get::Assume-Yes",0},
++       {0,"assume-no","APT::Get::Assume-No",0},
++       {'f',"fix-broken","APT::Get::Fix-Broken",0},
+++      // FINK LOCAL added APT::Get::Ignore-Breakage
+++      {0,"ignore-breakage","APT::Get::Ignore-Breakage",0},
++       {'u',"show-upgraded","APT::Get::Show-Upgraded",0},
++       {'m',"ignore-missing","APT::Get::Fix-Missing",0},
++       {'t',"target-release","APT::Default-Release",CommandLine::HasArg},
++@@ -3568,6 +3585,22 @@
++       return 0;
 +    }
-+
-+  char_ptr = (const unsigned char *) longword_ptr;
-+
-+  while (n-- > 0)
-+    {
-+      if (*--char_ptr == c)
-+	return (void *) char_ptr;
-+    }
-+
-+  return 0;
-+}
-+#ifdef weak_alias
-+weak_alias (__memrchr, memrchr)
-+#endif
-+#endif // __APPLE__
- #endif
-diff -ruN apt-0.9.8.2.orig/apt-pkg/deb/dpkgpm.cc apt-0.9.8.2/apt-pkg/deb/dpkgpm.cc
---- apt-0.9.8.2.orig/apt-pkg/deb/dpkgpm.cc	2013-06-06 11:25:59.000000000 -0600
-+++ apt-0.9.8.2/apt-pkg/deb/dpkgpm.cc	2013-06-17 15:28:30.000000000 -0600
-@@ -41,7 +41,13 @@
- #include <termios.h>
- #include <unistd.h>
- #include <sys/ioctl.h>
--#include <pty.h>
-+#ifndef __APPLE__
-+  #include <pty.h>
-+#else
-+  #define sighandler_t sig_t
-+  #include <util.h>
-+#endif
-+
- 
- #include <apti18n.h>
- 									/*}}}*/
-diff -ruN apt-0.9.8.2.orig/buildlib/environment.mak.in apt-0.9.8.2/buildlib/environment.mak.in
---- apt-0.9.8.2.orig/buildlib/environment.mak.in	2013-06-06 11:25:59.000000000 -0600
-+++ apt-0.9.8.2/buildlib/environment.mak.in	2013-06-18 11:57:16.000000000 -0600
-@@ -13,7 +13,7 @@
- NUM_PROCS = @NUM_PROCS@
- 
- # Linker stuff
--PICFLAGS+= -fPIC -DPIC
-+PICFLAGS+= -fno-common -fPIC -DPIC
- LFLAGS+= @LDFLAGS@
- LEFLAGS+= 
- SOCKETLIBS:= @SOCKETLIBS@
-@@ -61,11 +61,13 @@
- 
- # Shared library things
- HOST_OS = @host_os@
--ifneq ($(words $(filter gnu% linux-gnu% kfreebsd-gnu% %-gnu,$(HOST_OS))),0)
--   SONAME_MAGIC=-Wl,-soname -Wl,
--   LFLAGS_SO=
--else
--   # Do not know how to create shared libraries here.
--   ONLYSTATICLIBS = yes
--endif
-+#ifneq ($(words $(filter gnu% linux-gnu% kfreebsd-gnu% %-gnu,$(HOST_OS))),0)
-+#   SONAME_MAGIC=-Wl,-soname -Wl,
-+#   LFLAGS_SO=
-+#else
-+#   # Do not know how to create shared libraries here.
-+#   ONLYSTATICLIBS = yes
-+#endif
-+SONAME_MAGIC=-install_name @FINKPREFIX@/lib/
-+LFLAGS_SO=-dynamiclib
- 	
-diff -ruN apt-0.9.8.2.orig/buildlib/library.mak apt-0.9.8.2/buildlib/library.mak
---- apt-0.9.8.2.orig/buildlib/library.mak	2013-06-06 11:25:59.000000000 -0600
-+++ apt-0.9.8.2/buildlib/library.mak	2013-06-17 21:44:28.000000000 -0600
-@@ -16,11 +16,11 @@
- # See defaults.mak for information about LOCAL
- 
- # Some local definitions
--LOCAL := lib$(LIBRARY).so.$(MAJOR).$(MINOR)
-+LOCAL := lib$(LIBRARY)$(LIBEXT).$(MAJOR).$(MINOR).dylib
- $(LOCAL)-OBJS := $(addprefix $(OBJ)/,$(addsuffix .opic,$(notdir $(basename $(SOURCE)))))
- $(LOCAL)-DEP := $(addprefix $(DEP)/,$(addsuffix .opic.d,$(notdir $(basename $(SOURCE)))))
- $(LOCAL)-HEADERS := $(addprefix $(INCLUDE)/,$(HEADERS))
--$(LOCAL)-SONAME := lib$(LIBRARY).so.$(MAJOR)
-+$(LOCAL)-SONAME := lib$(LIBRARY)$(LIBEXT).$(MAJOR).dylib
- $(LOCAL)-SLIBS := $(SLIBS)
- $(LOCAL)-LIBRARY := $(LIBRARY)
- 
-@@ -29,7 +29,7 @@
- 
- # Install the command hooks
- headers: $($(LOCAL)-HEADERS)
--library: $(LIB)/lib$(LIBRARY).so $(LIB)/lib$(LIBRARY).so.$(MAJOR)
-+library: $(LIB)/lib$(LIBRARY).dylib $(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).dylib
- clean: clean/$(LOCAL)
- veryclean: veryclean/$(LOCAL)
- 
-@@ -41,21 +41,23 @@
- clean/$(LOCAL):
- 	-rm -f $($(@F)-OBJS) $($(@F)-DEP)
- veryclean/$(LOCAL): clean/$(LOCAL)
--	-rm -f $($(@F)-HEADERS) $(LIB)/lib$($(@F)-LIBRARY)*.so*
-+	-rm -f $($(@F)-HEADERS) $(LIB)/lib$($(@F)-LIBRARY)*.dylib
- 
- # Build rules for the two symlinks
--.PHONY: $(LIB)/lib$(LIBRARY).so.$(MAJOR) $(LIB)/lib$(LIBRARY).so
--$(LIB)/lib$(LIBRARY).so.$(MAJOR): $(LIB)/lib$(LIBRARY).so.$(MAJOR).$(MINOR)
-+.PHONY: $(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).dylib $(LIB)/lib$(LIBRARY).dylib
-+$(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).dylib: $(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).$(MINOR).dylib
- 	ln -sf $(<F) $@
--$(LIB)/lib$(LIBRARY).so: $(LIB)/lib$(LIBRARY).so.$(MAJOR).$(MINOR)
-+$(LIB)/lib$(LIBRARY).dylib: $(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).$(MINOR).dylib
- 	ln -sf $(<F) $@
- 
- # The binary build rule
--$(LIB)/lib$(LIBRARY).so.$(MAJOR).$(MINOR): $($(LOCAL)-HEADERS) $($(LOCAL)-OBJS)
--	-rm -f $(LIB)/lib$($(@F)-LIBRARY)*.so* 2> /dev/null
-+$(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).$(MINOR).dylib: $($(LOCAL)-HEADERS) $($(LOCAL)-OBJS)
-+	-rm -f $(LIB)/lib$($(@F)-LIBRARY)*.dylib 2> /dev/null
- 	echo Building shared library $@
- 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(PICFLAGS) $(LFLAGS) $(LFLAGS_SO)\
--	   -o $@ $(SONAME_MAGIC)$($(@F)-SONAME) -shared \
-+	   -o $@ $(SONAME_MAGIC)$($(@F)-SONAME) \
-+	   -compatibility_version $(MAJOR).$(MINOR) \
-+	   -current_version $(MAJOR).$(MINOR) \
- 	   $(filter %.opic,$^) \
- 	   $($(@F)-SLIBS) 
- 
-diff -ruN apt-0.9.8.2.orig/cmdline/apt-get.cc apt-0.9.8.2/cmdline/apt-get.cc
---- apt-0.9.8.2.orig/cmdline/apt-get.cc	2013-06-06 11:25:59.000000000 -0600
-+++ apt-0.9.8.2/cmdline/apt-get.cc	2013-06-17 16:03:14.000000000 -0600
-@@ -59,7 +59,11 @@
- #include <termios.h>
- #include <sys/ioctl.h>
- #include <sys/stat.h>
--#include <sys/statfs.h>
-+#ifndef __APPLE__
-+ #include <sys/statfs.h>
-+#else
-+ #define statfs statvfs
-+#endif
- #include <sys/statvfs.h>
- #include <signal.h>
- #include <unistd.h>
-diff -ruN apt-0.9.8.2.orig/doc/manpage-style.xsl apt-0.9.8.2/doc/manpage-style.xsl
---- apt-0.9.8.2.orig/doc/manpage-style.xsl	2013-06-06 11:25:59.000000000 -0600
-+++ apt-0.9.8.2/doc/manpage-style.xsl	2013-06-17 16:24:16.000000000 -0600
-@@ -2,7 +2,7 @@
-  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
-  version="1.0">
- 
--<xsl:import href="/usr/share/xml/docbook/stylesheet/nwalsh/manpages/docbook.xsl" />
-+<xsl:import href="@FINKPREFIX@/share/xml/xsl/docbook-xsl/manpages/docbook.xsl" />
- 
- <xsl:param name="man.output.encoding" select="'UTF-8'" />
- <!-- LANGUAGE -->
-diff -ruN apt-0.9.8.2.orig/ftparchive/contents.cc apt-0.9.8.2/ftparchive/contents.cc
---- apt-0.9.8.2.orig/ftparchive/contents.cc	2013-06-06 11:25:59.000000000 -0600
-+++ apt-0.9.8.2/ftparchive/contents.cc	2013-06-17 22:24:55.000000000 -0600
-@@ -42,7 +42,9 @@
- #include <stdio.h>
- #include <stdlib.h>
- #include <string.h>
--#include <malloc.h>
-+#ifndef __APPLE__
-+ #include <malloc.h>
-+#endif
- 
- #include "contents.h"
- 
-diff -ruN apt-0.9.8.2.orig/test/libapt/run-tests apt-0.9.8.2/test/libapt/run-tests
---- apt-0.9.8.2.orig/test/libapt/run-tests	2013-06-06 11:25:59.000000000 -0600
-+++ apt-0.9.8.2/test/libapt/run-tests	2013-06-18 10:42:53.000000000 -0600
-@@ -1,26 +1,18 @@
- #!/bin/sh
- set -e
- 
--DIR=$(readlink -f $(dirname $0))
-+DIR=$(pwd)
- echo "Compiling the tests …"
- (cd $DIR && make)
- echo "Running all testcases …"
--LDPATH="$DIR/../../build/bin"
-+LDPATH="$DIR/../../bin"
- EXT="_libapt_test"
- EXIT_CODE=0
- 
--# detect if output is on a terminal (colorful) or better not
--if expr match "$(readlink -f /proc/$$/fd/1)" '/dev/pts/[0-9]\+' > /dev/null; then
- 	COLHIGH='\033[1;35m'
- 	COLRESET='\033[0m'
- 	TESTOKAY='\033[1;32mOKAY\033[0m'
- 	TESTFAIL='\033[1;31mFAILED\033[0m'
--else
--	COLHIGH=''
--	COLRESET=''
--	TESTOKAY='OK'
--	TESTFAIL='###FAILED###'
--fi
- 
- for testapp in $(ls ${LDPATH}/*$EXT)
- do
-@@ -30,7 +22,7 @@
- 
- 	if [ $name = "GetListOfFilesInDir${EXT}" ]; then
- 		# TODO: very-low: move env creation to the actual test-app
--		tmppath=$(mktemp -d)
-+		tmppath=$(/usr/bin/mktemp -d -t tmp)
- 		touch "${tmppath}/anormalfile" \
- 			"${tmppath}/01yet-anothernormalfile" \
- 			"${tmppath}/anormalapt.conf" \
-@@ -61,7 +53,8 @@
- 		ln -s "${tmppath}/anormalfile" "${tmppath}/linkedfile.list"
- 		ln -s "${tmppath}/non-existing-file" "${tmppath}/brokenlink.list"
- 	elif [ $name = "getLanguages${EXT}" ]; then
--		tmppath=$(mktemp -d)
-+		continue
-+		tmppath=$(/usr/bin/mktemp -d -t tmp)
- 		touch "${tmppath}/ftp.de.debian.org_debian_dists_sid_main_i18n_Translation-tr" \
- 			"${tmppath}/ftp.de.debian.org_debian_dists_sid_main_i18n_Translation-pt" \
- 			"${tmppath}/ftp.de.debian.org_debian_dists_sid_main_i18n_Translation-se~" \
-@@ -69,14 +62,14 @@
- 			"${tmppath}/ftp.de.debian.org_debian_dists_sid_main_i18n_Translation-ast_DE" \
- 			"${tmppath}/ftp.de.debian.org_debian_dists_sid_main_i18n_Translation-tlh%5fDE"
- 	elif [ $name = "HashSums${EXT}" ]; then
--		TMP="$(readlink -f "./${0}")"
-+		TMP="$(pwd)/${0}"
- 		echo -n "Testing with ${NAME} "
--		LD_LIBRARY_PATH=${LDPATH} ${testapp} $TMP $(md5sum $TMP | cut -d' ' -f 1) $(sha1sum $TMP | cut -d' ' -f 1) $(sha256sum $TMP | cut -d' ' -f 1) $(sha512sum $TMP | cut -d' ' -f 1) && echo "$TESTOKAY" || echo "$TESTFAIL"
-+		DYLD_LIBRARY_PATH=${LDPATH} ${testapp} $TMP $(md5sum $TMP | cut -d' ' -f 1) $(gsha1sum $TMP | cut -d' ' -f 1) $(gsha256sum $TMP | cut -d' ' -f 1) $(gsha512sum $TMP | cut -d' ' -f 1) && echo "$TESTOKAY" || echo "$TESTFAIL"
- 		continue
- 	elif [ $name = "CompareVersion${EXT}" ]; then
- 		tmppath="${DIR}/versions.lst"
- 	elif [ $name = "CdromFindPackages${EXT}" ]; then
--		tmppath=$(mktemp -d)
-+		tmppath=$(/usr/bin/mktemp -d -t tmp)
- 		mkdir -p "${tmppath}/.disk" "${tmppath}/pool" \
- 			"${tmppath}/dists/stable/main/binary-i386" \
- 			"${tmppath}/dists/stable/main/source" \
-@@ -107,7 +100,7 @@
- 	fi
- 
- 	echo -n "Testing with ${NAME} "
--	if LD_LIBRARY_PATH=${LDPATH} ${testapp} ${tmppath} ; then
-+	if DYLD_LIBRARY_PATH=${LDPATH} ${testapp} ${tmppath} ; then
-  		echo "$TESTOKAY"
- 	else
- 		echo "$TESTFAIL"
++ 
+++   /* FINK LOCAL begin */
+++   if (_config->FindB("APT::Get::Ignore-Breakage",false) == true) {
+++     if (_config->FindB("APT::Get::Print-URIs",false) == false &&
+++        _config->FindB("APT::Get::Download-Only",false) == false) {
+++       _error->Error("--ignore-breakage can only be used with --print-uris or --download-only");
+++       _error->DumpErrors();
+++       return 100;
+++     }
+++     if (strcmp(CmdL.FileList[0],"install") != 0) {
+++       _error->Error("--ignore-breakage can only be used with apt-get install");
+++       _error->DumpErrors();
+++       return 100;
+++     }
+++   }
+++   /* FINK LOCAL end */
+++
++    // simulate user-friendly if apt-get has no root privileges
++    if (getuid() != 0 && _config->FindB("APT::Get::Simulate") == true &&
++ 	(CmdL.FileSize() == 0 ||
++diff -ruN apt-0.9.8.2.darwin/dselect/setup apt-0.9.8.2.f-v-p/dselect/setup
++--- apt-0.9.8.2.darwin/dselect/setup	2013-06-06 11:25:59.000000000 -0600
+++++ apt-0.9.8.2.f-v-p/dselect/setup	2013-06-19 22:31:23.000000000 -0600
++@@ -23,15 +23,18 @@
++ my $vardir=$ARGV[0];
++ my $method=$ARGV[1];
++ my $option=$ARGV[2];
++-my $config_file = '/etc/apt/sources.list';
+++my $config_file = '@FINKPREFIX@/etc/apt/sources.list';
+++
+++my $boldon=`setterm -bold on 2>/dev/null`;
+++my $boldoff=`setterm -bold off 2>/dev/null`;
+++$boldon = "" unless defined $boldon;
+++$boldoff = "" unless defined $boldon;
++ 
++-my $boldon=`setterm -bold on`;
++-my $boldoff=`setterm -bold off`;
++ 
++ my @known_types           = ('deb');
++ my @known_access         = ('http', 'ftp', 'file');
++-my @typical_distributions = ('stable', 'unstable', 'testing', 'non-US');
++-my @typical_components    = ('main', 'contrib', 'non-free');
+++my @typical_distributions = ('@DIST@/release', '@DIST@/current');
+++my @typical_components    = ('main', 'crypto');
++ 
++ my %known_access           = map {($_,$_)} @known_access;
++ my %typical_distributions  = map {($_,$_)} @typical_distributions;
++@@ -118,9 +121,9 @@
++   }
++ 
++   $type         = 'deb';
++-  $urn          = "http://http.us.debian.org/debian" unless $urn;
++-  $distribution = "stable" unless $distribution;
++-  $components   = "main contrib non-free" unless $components;
+++  $urn          = "http://us.dl.sourceforge.net/fink/direct_download" unless $urn;
+++  $distribution = "@DIST@/release" unless $distribution;
+++  $components   = "main" unless $components;
++ 
++     
++   $rec->{'Type'} = 'deb';
++@@ -222,7 +225,7 @@
++   print "\t$boldon Set up a list of distribution source locations $boldoff \n";
++   print "\n";
++ 
++-  print " Please give the base URL of the debian distribution.\n";
+++  print " Please give the base URL of the Fink distribution.\n";
++   print " The access schemes I know about are:$boldon ";
++   print join (' ', @known_access), "$boldoff\n";
++ #  print " The mirror scheme is special  that it does not specify the\n";
++@@ -230,11 +233,13 @@
++ #  print " of a list of mirrors to use to access the archive.\n";
++   print "\n";
++   print " For example:\n";
++-  print "              file:/mnt/debian,\n";
++-  print "              ftp://ftp.debian.org/debian,\n";
++-  print "              http://ftp.de.debian.org/debian,\n";
+++#  print "              file:/mnt/debian,\n";
+++#  print "              ftp://ftp.debian.org/debian,\n";
+++#  print "              http://ftp.de.debian.org/debian,\n";
++ #  print " and the special mirror scheme,\n";
++ #  print "              mirror:http://www.debian.org/archivemirrors \n";
+++  print "              file:@FINKPREFIX@/fink,\n";
+++  print "              http://us.dl.sourceforge.net/fink/direct_download\n";
++   print "\n";
++ 
++   my $index = 0;
++@@ -246,7 +251,10 @@
++       push (@Config, &get_source());
++     }
++     print "\n";
++-    print "$boldon Would you like to add another source?[y/N]$boldoff ";
+++    print "$boldon In most cases, this file was installed by Fink or by apt,"
+++       ." and$boldoff\n";
+++        print "$boldon should NOT be changed.  " .
+++        "Do you wish to change (overwrite) it?[y/N]$boldoff ";
++     my $answer = <STDIN>;
++     chomp ($answer);
++     $answer =~ s/\s+/ /og;
