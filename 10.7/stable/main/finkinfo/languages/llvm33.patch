@@ -1,0 +1,2636 @@
+diff --git a/autoconf/configure.ac b/autoconf/configure.ac
+index a5caac9..c09311e 100644
+--- a/autoconf/configure.ac
++++ b/autoconf/configure.ac
+@@ -1692,11 +1692,11 @@ AC_LINK_IFELSE(
+ ],
+ [
+   AC_MSG_RESULT([yes])
+-  AC_DEFINE([LLVM_HAS_ATOMICS], [1], [Has gcc/MSVC atomic intrinsics])
++  AC_DEFINE([LLVM_HAS_ATOMICS], [1], [Has gcc/MSVC/Apple atomic intrinsics])
+ ],
+ [
+   AC_MSG_RESULT([no])
+-  AC_DEFINE([LLVM_HAS_ATOMICS], [0], [Has gcc/MSVC atomic intrinsics])
++  AC_DEFINE([LLVM_HAS_ATOMICS], [0], [Has gcc/MSVC/Apple atomic intrinsics])
+   AC_MSG_WARN([LLVM will be built thread-unsafe because atomic builtins are missing])
+ ])
+ AC_LANG_POP([C++])
+diff --git a/cmake/modules/CheckAtomic.cmake b/cmake/modules/CheckAtomic.cmake
+index 0d63a82..213b57f 100644
+--- a/cmake/modules/CheckAtomic.cmake
++++ b/cmake/modules/CheckAtomic.cmake
+@@ -6,6 +6,10 @@ CHECK_CXX_SOURCE_COMPILES("
+ #ifdef _MSC_VER
+ #include <windows.h>
+ #endif
++#define	NEED_DARWIN_ATOMICS (defined(__APPLE__) && defined(__GNUC__) && (__GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 2)))
++#if NEED_DARWIN_ATOMICS
++#include <libkern/OSAtomic.h>
++#endif
+ int main() {
+ #ifdef _MSC_VER
+         volatile LONG val = 1;
+@@ -13,6 +17,12 @@ int main() {
+         InterlockedCompareExchange(&val, 0, 1);
+         InterlockedIncrement(&val);
+         InterlockedDecrement(&val);
++#elif NEED_DARWIN_ATOMICS
++	int32_t val = 1;
++	OSMemoryBarrier();
++	OSAtomicCompareAndSwap32Barrier(1, 0, &val);
++	OSAtomicIncrement32(&val);
++	OSAtomicDecrement32(&val);
+ #else
+         volatile unsigned long val = 1;
+         __sync_synchronize();
+diff --git a/include/llvm/ADT/DenseMap.h b/include/llvm/ADT/DenseMap.h
+index 31fd6d8..98e9c76 100644
+--- a/include/llvm/ADT/DenseMap.h
++++ b/include/llvm/ADT/DenseMap.h
+@@ -713,7 +713,7 @@ public:
+     init(NumInitBuckets);
+   }
+ 
+-  SmallDenseMap(const SmallDenseMap &other) {
++  SmallDenseMap(const SmallDenseMap &other) : BaseT() {
+     init(0);
+     copyFrom(other);
+   }
+diff --git a/include/llvm/Bitcode/BitstreamReader.h b/include/llvm/Bitcode/BitstreamReader.h
+index f313973..f6f3857 100644
+--- a/include/llvm/Bitcode/BitstreamReader.h
++++ b/include/llvm/Bitcode/BitstreamReader.h
+@@ -136,7 +136,9 @@ public:
+ ///   Record   - This is a record with a specific AbbrevID.
+ ///
+ struct BitstreamEntry {
+-  enum {
++// anonymous enum named as workaround to g++-4.0.1 bug (fixed in 4.0.2):
++// http://gcc.gnu.org/bugzilla/show_bug.cgi?id=20589
++  enum KindEnum {
+     Error,
+     EndBlock,
+     SubBlock,
+diff --git a/include/llvm/CodeGen/ScheduleDFS.h b/include/llvm/CodeGen/ScheduleDFS.h
+index 73ce99f..75a35a1 100644
+--- a/include/llvm/CodeGen/ScheduleDFS.h
++++ b/include/llvm/CodeGen/ScheduleDFS.h
+@@ -68,7 +68,14 @@ struct ILPValue {
+ class SchedDFSResult {
+   friend class SchedDFSImpl;
+ 
++// workaround gcc-4.0 accessibility bug
++#if defined(__GNUC__) && (__GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 2))
++public:
++#endif
+   static const unsigned InvalidSubtreeID = ~0u;
++#if defined(__GNUC__) && (__GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 2))
++public:
++#endif
+ 
+   /// \brief Per-SUnit data computed during DFS for various metrics.
+   ///
+diff --git a/include/llvm/MC/MCAssembler.h b/include/llvm/MC/MCAssembler.h
+index 38a70f0..49737f1 100644
+--- a/include/llvm/MC/MCAssembler.h
++++ b/include/llvm/MC/MCAssembler.h
+@@ -122,7 +122,7 @@ public:
+   virtual void setBundlePadding(uint8_t N) {
+   }
+ 
+-  void dump();
++  void dump() const;
+ };
+ 
+ /// Interface implemented by fragments that contain encoded instructions and/or
+@@ -659,7 +659,7 @@ public:
+     BundleGroupBeforeFirstInst = IsFirst;
+   }
+ 
+-  void dump();
++  void dump() const;
+ 
+   /// @}
+ };
+@@ -784,7 +784,7 @@ public:
+ 
+   /// @}
+ 
+-  void dump();
++  void dump() const;
+ };
+ 
+ // FIXME: This really doesn't belong here. See comments below.
+@@ -1154,7 +1154,7 @@ public:
+ 
+   /// @}
+ 
+-  void dump();
++  void dump() const;
+ };
+ 
+ } // end namespace llvm
+diff --git a/include/llvm/MC/MCMachObjectWriter.h b/include/llvm/MC/MCMachObjectWriter.h
+index 3c9a588..1630049 100644
+--- a/include/llvm/MC/MCMachObjectWriter.h
++++ b/include/llvm/MC/MCMachObjectWriter.h
+@@ -17,6 +17,16 @@
+ #include "llvm/MC/MCObjectWriter.h"
+ #include "llvm/Object/MachOFormat.h"
+ #include "llvm/Support/DataTypes.h"
++
++/**
++	Mach-O needs indirect symbols grouped by section.
++	Goal: 1
++ */
++#define ORDER_INDIRECT_SYMBOLS_BY_SECTION       1
++#if ORDER_INDIRECT_SYMBOLS_BY_SECTION
++#include "llvm/ADT/SetVector.h"
++#endif
++
+ #include <vector>
+ 
+ namespace llvm {
+@@ -112,6 +122,22 @@ class MachObjectWriter : public MCObjectWriter {
+ 
+   /// @}
+ 
++#if ORDER_INDIRECT_SYMBOLS_BY_SECTION
++  /// @name Indirect Symbol Table Data
++  /// @{
++
++  typedef std::vector<const MCSymbol*>  IndirectSymbol_list_type;
++  typedef DenseMap<const MCSectionData*, IndirectSymbol_list_type>
++						IndirectSymbol_map_type;
++  // keep sections in order of appearance
++  typedef SetVector<const MCSectionData*>	IndirectSymbolSection_set_type;
++
++  IndirectSymbol_map_type			IndirectSymbolMap;
++  IndirectSymbolSection_set_type		IndirectSymbolSections;
++
++  /// @}
++#endif
++
+ public:
+   MachObjectWriter(MCMachObjectTargetWriter *MOTW, raw_ostream &_OS,
+                    bool _IsLittleEndian)
+diff --git a/include/llvm/MC/SectionKind.h b/include/llvm/MC/SectionKind.h
+index 85a91c6..fbb359a 100644
+--- a/include/llvm/MC/SectionKind.h
++++ b/include/llvm/MC/SectionKind.h
+@@ -133,6 +133,10 @@ class SectionKind {
+ 
+   } K : 8;
+ public:
++#if 1
++// for debugging purposes only
++  Kind getKindEnum(void) const { return K; }
++#endif
+ 
+   bool isMetadata() const { return K == Metadata; }
+   bool isText() const { return K == Text; }
+diff --git a/include/llvm/Object/MachOFormat.h b/include/llvm/Object/MachOFormat.h
+index ffca391..b111480 100644
+--- a/include/llvm/Object/MachOFormat.h
++++ b/include/llvm/Object/MachOFormat.h
+@@ -407,6 +407,53 @@ namespace macho {
+ 
+   };
+ 
++/**
++ * PPC relocation types from <mach-o/ppc/reloc.h>
++ * (renamed, following conventions in this header)
++ *
++ * Relocation types used in the ppc implementation.  Relocation entries for
++ * things other than instructions use the same generic relocation as discribed
++ * above and their r_type is RELOC_VANILLA.  The rest of the relocation types
++ * are for instructions.  Since they are for instructions the r_address field
++ * indicates the 32 bit instruction that the relocation is to be preformed on.
++ * The fields r_pcrel and r_length are ignored for non-RELOC_VANILLA r_types
++ * except for PPC_RELOC_BR14.
++ *
++ * For PPC_RELOC_BR14 if the r_length is the unused value 3, then the branch was
++ * statically predicted setting or clearing the Y-bit based on the sign of the
++ * displacement or the opcode.  If this is the case the static linker must flip
++ * the value of the Y-bit if the sign of the displacement changes for non-branch
++ * always conditions.
++ */
++  enum RelocationInfoTypePPC {
++    RIT_PPC_VANILLA,  /* generic relocation as discribed above */
++    RIT_PPC_PAIR,     /* the second relocation entry of a pair */
++    RIT_PPC_BR14,     /* 14 bit branch displacement (to a word address) */
++    RIT_PPC_BR24,     /* 24 bit branch displacement (to a word address) */
++    RIT_PPC_HI16,     /* a PAIR follows with the low half */
++    RIT_PPC_LO16,     /* a PAIR follows with the high half */
++    RIT_PPC_HA16,     /* Same as the RELOC_HI16 except the low 16 bits and the
++                         * high 16 bits are added together with the low 16 bits
++                         * sign extened first.  This means if bit 15 of the low
++                         * 16 bits is set the high 16 bits stored in the
++                         * instruction will be adjusted.
++                         */
++    RIT_PPC_LO14,     /* Same as the LO16 except that the low 2 bits are not
++                         * stored in the instruction and are always zero.  This
++                         * is used in double word load/store instructions.
++                         */
++    RIT_PPC_SECTDIFF, /* a PAIR follows with subtract symbol value */
++    RIT_PPC_PB_LA_PTR,/* prebound lazy pointer */
++    RIT_PPC_HI16_SECTDIFF, /* section difference forms of above.  a PAIR */
++    RIT_PPC_LO16_SECTDIFF, /* follows these with subtract symbol value */
++    RIT_PPC_HA16_SECTDIFF,
++    RIT_PPC_JBSR,
++    RIT_PPC_LO14_SECTDIFF,
++    RIT_PPC_LOCAL_SECTDIFF,  /* like PPC_SECTDIFF, but the symbol
++                                 referenced was local.  */
++    RIT_PPC_TLV
++  };
++
+ } // end namespace macho
+ 
+ } // end namespace object
+diff --git a/include/llvm/Object/RelocVisitor.h b/include/llvm/Object/RelocVisitor.h
+index 6239ec1..f7668bf 100644
+--- a/include/llvm/Object/RelocVisitor.h
++++ b/include/llvm/Object/RelocVisitor.h
+@@ -117,7 +117,7 @@ public:
+     return RelocToApply();
+   }
+ 
+-  bool error() { return HasError; }
++  bool error() const { return HasError; }
+ 
+ private:
+   StringRef FileFormat;
+diff --git a/include/llvm/Support/Atomic.h b/include/llvm/Support/Atomic.h
+index 9ec23e8..deea3ae 100644
+--- a/include/llvm/Support/Atomic.h
++++ b/include/llvm/Support/Atomic.h
+@@ -16,12 +16,18 @@
+ 
+ #include "llvm/Support/DataTypes.h"
+ 
++// convenience macro, to force use of darwin atomic functions
++// stage 1 with gcc-4.0 needs this, but maybe not stage 2?
++#define	USE_DARWIN_ATOMICS	(defined(__APPLE__) && defined(__GNUC__) && (__GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 2)))
++
+ namespace llvm {
+   namespace sys {
+     void MemoryFence();
+ 
+ #ifdef _MSC_VER
+     typedef long cas_flag;
++#elif USE_DARWIN_ATOMICS
++    typedef int32_t cas_flag;
+ #else
+     typedef uint32_t cas_flag;
+ #endif
+diff --git a/include/llvm/Support/Compiler.h b/include/llvm/Support/Compiler.h
+index 13d057b..a6a11d4 100644
+--- a/include/llvm/Support/Compiler.h
++++ b/include/llvm/Support/Compiler.h
+@@ -184,7 +184,10 @@
+ #define LLVM_READNONE
+ #endif
+ 
+-#ifdef __GNUC__  // aka 'PURE' but following LLVM Conventions.
++// this attribute may be buggy for older gcc-4.0.1 (apple)
++// removing this fixes bug #14244
++#if defined(__GNUC__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 2))
++// aka 'PURE' but following LLVM Conventions.
+ #define LLVM_READONLY __attribute__((__pure__))
+ #else
+ #define LLVM_READONLY
+diff --git a/include/llvm/Support/raw_ostream.h b/include/llvm/Support/raw_ostream.h
+index d2b4a2a..09bab4c 100644
+--- a/include/llvm/Support/raw_ostream.h
++++ b/include/llvm/Support/raw_ostream.h
+@@ -191,6 +191,11 @@ public:
+ 
+   raw_ostream &operator<<(double N);
+ 
++  /// basic manipulator, unary function
++  raw_ostream& operator<<(raw_ostream& (*pf)(raw_ostream&)) {
++    return (*pf)(*this);
++  }
++
+   /// write_hex - Output \p N in hexadecimal, without any prefix or padding.
+   raw_ostream &write_hex(unsigned long long N);
+ 
+@@ -432,6 +437,14 @@ raw_ostream &errs();
+ /// output.
+ raw_ostream &nulls();
+ 
++/// manipulator functions
++inline
++raw_ostream& endl(raw_ostream& o) {
++  o << '\n';
++  o.flush();
++  return o;
++}
++
+ //===----------------------------------------------------------------------===//
+ // Output Stream Adaptors
+ //===----------------------------------------------------------------------===//
+diff --git a/include/llvm/Support/raw_ostream_iterator.h b/include/llvm/Support/raw_ostream_iterator.h
+new file mode 100644
+index 0000000..72d6065
+--- /dev/null
++++ b/include/llvm/Support/raw_ostream_iterator.h
+@@ -0,0 +1,79 @@
++//===--- raw_ostream.h - Raw output stream ----------------------*- C++ -*-===//
++//
++//                     The LLVM Compiler Infrastructure
++//
++// This file is distributed under the University of Illinois Open Source
++// License. See LICENSE.TXT for details.
++//
++//===----------------------------------------------------------------------===//
++//
++//  This file defines the raw_ostream_iterator class.
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef LLVM_SUPPORT_RAW_OSTREAM_ITERATOR_H
++#define LLVM_SUPPORT_RAW_OSTREAM_ITERATOR_H
++
++#include "llvm/Support/raw_ostream.h"
++#include <iterator>
++
++namespace llvm {
++
++/// in the spirit of std::ostream_iterator
++template<typename T>
++class ostream_iterator :
++	public std::iterator<std::output_iterator_tag, void, void, void, void>
++{
++public:
++  //@{
++  /// Public typedef
++  typedef T				value_type;
++  typedef raw_ostream			ostream_type;
++  //@}
++
++private:
++  ostream_type*				_M_stream;
++  const char*				_M_delim;
++
++public:
++  /// Construct from an ostream.
++  ostream_iterator(ostream_type& __s) : _M_stream(&__s), _M_delim(0) {}
++
++  /**
++   *  Construct from an ostream with optional delimiter.
++   *  @param  s  Underlying ostream to write to.
++   *  @param  c  CharT delimiter string to insert.
++  */
++  ostream_iterator(ostream_type& __s, const char* __c) :
++    _M_stream(&__s), _M_delim(__c)  { }
++
++  /// Copy constructor.
++  ostream_iterator(const ostream_iterator& __obj) :
++    _M_stream(__obj._M_stream), _M_delim(__obj._M_delim)  { }
++
++  /// Writes @a value to underlying ostream using operator<<.  If
++  /// constructed with delimiter string, writes delimiter to ostream.
++  ostream_iterator&
++  operator=(const T& __value)
++  {
++    *_M_stream << __value;
++    if (_M_delim) *_M_stream << _M_delim;
++    return *this;
++  }
++
++  ostream_iterator&
++  operator*()
++  { return *this; }
++
++  ostream_iterator&
++  operator++()
++  { return *this; }
++
++  ostream_iterator&
++  operator++(int)
++  { return *this; }
++};	// end class raw_ostream_iterator
++
++} // end llvm namespace
++
++#endif
+diff --git a/lib/MC/MCAssembler.cpp b/lib/MC/MCAssembler.cpp
+index fb5ab28..00f8983 100644
+--- a/lib/MC/MCAssembler.cpp
++++ b/lib/MC/MCAssembler.cpp
+@@ -1010,7 +1010,7 @@ raw_ostream &operator<<(raw_ostream &OS, const MCFixup &AF) {
+ }
+ 
+ #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
+-void MCFragment::dump() {
++void MCFragment::dump() const {
+   raw_ostream &OS = llvm::errs();
+ 
+   OS << "<";
+@@ -1121,20 +1121,20 @@ void MCFragment::dump() {
+   OS << ">";
+ }
+ 
+-void MCSectionData::dump() {
++void MCSectionData::dump() const {
+   raw_ostream &OS = llvm::errs();
+ 
+   OS << "<MCSectionData";
+   OS << " Alignment:" << getAlignment()
+      << " Fragments:[\n      ";
+-  for (iterator it = begin(), ie = end(); it != ie; ++it) {
++  for (const_iterator it = begin(), ie = end(); it != ie; ++it) {
+     if (it != begin()) OS << ",\n      ";
+     it->dump();
+   }
+   OS << "]>";
+ }
+ 
+-void MCSymbolData::dump() {
++void MCSymbolData::dump() const {
+   raw_ostream &OS = llvm::errs();
+ 
+   OS << "<MCSymbolData Symbol:" << getSymbol()
+@@ -1150,19 +1150,19 @@ void MCSymbolData::dump() {
+   OS << ">";
+ }
+ 
+-void MCAssembler::dump() {
++void MCAssembler::dump() const {
+   raw_ostream &OS = llvm::errs();
+ 
+   OS << "<MCAssembler\n";
+   OS << "  Sections:[\n    ";
+-  for (iterator it = begin(), ie = end(); it != ie; ++it) {
++  for (const_iterator it = begin(), ie = end(); it != ie; ++it) {
+     if (it != begin()) OS << ",\n    ";
+     it->dump();
+   }
+   OS << "],\n";
+   OS << "  Symbols:[";
+ 
+-  for (symbol_iterator it = symbol_begin(), ie = symbol_end(); it != ie; ++it) {
++  for (const_symbol_iterator it = symbol_begin(), ie = symbol_end(); it != ie; ++it) {
+     if (it != symbol_begin()) OS << ",\n           ";
+     it->dump();
+   }
+diff --git a/lib/MC/MCDisassembler/CMakeLists.txt b/lib/MC/MCDisassembler/CMakeLists.txt
+index 5195b9e..75f6493 100644
+--- a/lib/MC/MCDisassembler/CMakeLists.txt
++++ b/lib/MC/MCDisassembler/CMakeLists.txt
+@@ -1,3 +1,27 @@
+ add_llvm_library(LLVMMCDisassembler
+   Disassembler.cpp
+   )
++
++target_link_libraries(LLVMMCDisassembler
++  LLVMMC
++  LLVMMCParser
++  LLVMSupport
++  LLVMTarget
++  )
++
++foreach(t ${LLVM_TARGETS_TO_BUILD})
++  set(td ${LLVM_MAIN_SRC_DIR}/lib/Target/${t})
++  if(EXISTS ${td}/TargetInfo/CMakeLists.txt)
++    target_link_libraries(LLVMMCDisassembler "LLVM${t}Info")
++  endif()
++  if(EXISTS ${td}/MCTargetDesc/CMakeLists.txt)
++    target_link_libraries(LLVMMCDisassembler "LLVM${t}Desc")
++  endif()
++  if(EXISTS ${td}/AsmParser/CMakeLists.txt)
++    target_link_libraries(LLVMMCDisassembler "LLVM${t}AsmParser")
++  endif()
++  if(EXISTS ${td}/Disassembler/CMakeLists.txt)
++    target_link_libraries(LLVMMCDisassembler "LLVM${t}Disassembler")
++  endif()
++endforeach(t)
++
+diff --git a/lib/MC/MachObjectWriter.cpp b/lib/MC/MachObjectWriter.cpp
+index a5ba3c3..d3eaf19 100644
+--- a/lib/MC/MachObjectWriter.cpp
++++ b/lib/MC/MachObjectWriter.cpp
+@@ -428,6 +428,7 @@ void MachObjectWriter::BindIndirectSymbols(MCAssembler &Asm) {
+   //
+   // FIXME: Revisit this when the dust settles.
+ 
++#if !ORDER_INDIRECT_SYMBOLS_BY_SECTION
+   // Bind non lazy symbol pointers first.
+   unsigned IndirectIndex = 0;
+   for (MCAssembler::indirect_symbol_iterator it = Asm.indirect_symbol_begin(),
+@@ -466,6 +467,46 @@ void MachObjectWriter::BindIndirectSymbols(MCAssembler &Asm) {
+     if (Created)
+       Entry.setFlags(Entry.getFlags() | 0x0001);
+   }
++#else // ORDER_INDIRECT_SYMBOLS_BY_SECTION
++  // sort indirect symbols by section
++  for (MCAssembler::indirect_symbol_iterator it = Asm.indirect_symbol_begin(),
++         ie = Asm.indirect_symbol_end(); it != ie; ++it) {
++    // track their sections by order of appearance
++    IndirectSymbolSections.insert(it->SectionData);
++    IndirectSymbolMap[it->SectionData].push_back(it->Symbol);
++  }
++  // process indirect symbols by section
++  unsigned offset = 0;	// running total of indirect symbol index offset
++  IndirectSymbolSection_set_type::const_iterator
++	i(IndirectSymbolSections.begin()), e(IndirectSymbolSections.end());
++  for ( ; i!=e; ++i) {
++    const IndirectSymbol_list_type& b(IndirectSymbolMap.find(*i)->second);
++    IndirectSymbol_list_type::const_iterator bi(b.begin()), be(b.end());
++    const MCSectionMachO& Section(cast<MCSectionMachO>((*i)->getSection()));
++    switch (Section.getType()) {
++    default: break;
++    case MCSectionMachO::S_NON_LAZY_SYMBOL_POINTERS: {
++      for ( ; bi!=be; ++bi)
++        Asm.getOrCreateSymbolData(**bi);
++      break;
++    }
++    case MCSectionMachO::S_LAZY_SYMBOL_POINTERS: // fall-through
++    case MCSectionMachO::S_SYMBOL_STUBS: {
++      for ( ; bi!=be; ++bi) {
++    // Set the symbol type to undefined lazy, but only on construction.
++    // FIXME: Do not hardcode.
++        bool Created;
++        MCSymbolData &Entry(Asm.getOrCreateSymbolData(**bi, &Created));
++        if (Created)
++          Entry.setFlags(Entry.getFlags() | 0x0001);
++      }	// end for
++      break;
++    }
++    }	// end switch(sectionType)
++    IndirectSymBase.insert(std::make_pair(*i, offset));
++    offset += b.size();
++  }
++#endif	// ORDER_INDIRECT_SYMBOLS_BY_SECTION
+ }
+ 
+ /// ComputeSymbolTable - Compute the symbol table data
+@@ -895,26 +936,44 @@ void MachObjectWriter::WriteObject(MCAssembler &Asm,
+   // Write the symbol table data, if used.
+   if (NumSymbols) {
+     // Write the indirect symbol entries.
++#if ORDER_INDIRECT_SYMBOLS_BY_SECTION
++    for (IndirectSymbolSection_set_type::const_iterator
++           si(IndirectSymbolSections.begin()), se(IndirectSymbolSections.end());
++           si != se; ++si) {
++      const IndirectSymbol_list_type& l(IndirectSymbolMap.find(*si)->second);
++      for (IndirectSymbol_list_type::const_iterator
++           it(l.begin()), ie(l.end()); it != ie; ++it)
++#else
+     for (MCAssembler::const_indirect_symbol_iterator
+            it = Asm.indirect_symbol_begin(),
+-           ie = Asm.indirect_symbol_end(); it != ie; ++it) {
++           ie = Asm.indirect_symbol_end(); it != ie; ++it)
++#endif
++    {
+       // Indirect symbols in the non lazy symbol pointer section have some
+       // special handling.
+       const MCSectionMachO &Section =
++#if ORDER_INDIRECT_SYMBOLS_BY_SECTION
++        static_cast<const MCSectionMachO&>((*si)->getSection());
++        const MCSymbol* Sym = *it;
++#else
+         static_cast<const MCSectionMachO&>(it->SectionData->getSection());
++        const MCSymbol* Sym = it->Symbol;
++#endif
+       if (Section.getType() == MCSectionMachO::S_NON_LAZY_SYMBOL_POINTERS) {
+         // If this symbol is defined and internal, mark it as such.
+-        if (it->Symbol->isDefined() &&
+-            !Asm.getSymbolData(*it->Symbol).isExternal()) {
++        if (Sym->isDefined() &&
++            !Asm.getSymbolData(*Sym).isExternal()) {
+           uint32_t Flags = macho::ISF_Local;
+-          if (it->Symbol->isAbsolute())
++          if (Sym->isAbsolute())
+             Flags |= macho::ISF_Absolute;
+           Write32(Flags);
+           continue;
+         }
+       }
+-
+-      Write32(Asm.getSymbolData(*it->Symbol).getIndex());
++      Write32(Asm.getSymbolData(*Sym).getIndex());
++#if ORDER_INDIRECT_SYMBOLS_BY_SECTION
++      }
++#endif
+     }
+ 
+     // FIXME: Check that offsets match computed ones.
+diff --git a/lib/Object/MachOObjectFile.cpp b/lib/Object/MachOObjectFile.cpp
+index dfd8d3d..992c176 100644
+--- a/lib/Object/MachOObjectFile.cpp
++++ b/lib/Object/MachOObjectFile.cpp
+@@ -1064,7 +1064,7 @@ MachOObjectFile::getRelocationValueString(DataRefImpl Rel,
+         break;
+     }
+   // X86 and ARM share some relocation types in common.
+-  } else if (Arch == Triple::x86 || Arch == Triple::arm) {
++  } else if (Arch == Triple::x86 || Arch == Triple::arm || Arch == Triple::ppc) {
+     // Generic relocation types...
+     switch (Type) {
+       case macho::RIT_Pair: // GENERIC_RELOC_PAIR - prints no info
+@@ -1089,7 +1089,7 @@ MachOObjectFile::getRelocationValueString(DataRefImpl Rel,
+       }
+     }
+ 
+-    if (Arch == Triple::x86) {
++    if (Arch == Triple::x86 || Arch == Triple::ppc) {
+       // All X86 relocations that need special printing were already
+       // handled in the generic code.
+       switch (Type) {
+@@ -1182,7 +1182,7 @@ MachOObjectFile::getRelocationHidden(DataRefImpl Rel, bool &Result) const {
+ 
+   // On arches that use the generic relocations, GENERIC_RELOC_PAIR
+   // is always hidden.
+-  if (Arch == Triple::x86 || Arch == Triple::arm) {
++  if (Arch == Triple::x86 || Arch == Triple::arm || Arch == Triple::ppc) {
+     if (Type == macho::RIT_Pair) Result = true;
+   } else if (Arch == Triple::x86_64) {
+     // On x86_64, X86_64_RELOC_UNSIGNED is hidden only when it follows
+diff --git a/lib/Support/Atomic.cpp b/lib/Support/Atomic.cpp
+index 9559ad7..389a8e9 100644
+--- a/lib/Support/Atomic.cpp
++++ b/lib/Support/Atomic.cpp
+@@ -21,21 +21,68 @@ using namespace llvm;
+ #undef MemoryFence
+ #endif
+ 
++// USE_DARWIN_ATOMICS conditionally defined in Atomics.h
++#if USE_DARWIN_ATOMICS
++#include <libkern/OSAtomic.h>
++// __APPLE__ should take precedence over __GNUC__
++// sys::cas_flag is int32_t from Support/Atomic.h, so use '32' variants
++// prototypes lack the 'volatile' qualifier, so we need to cast them away
++template <class T>
++static inline
++T* vcast(volatile T* ptr) { return const_cast<T*>(ptr); }
++
++// note on weakly-ordered architectures (PPC):
++/**
++DESCRIPTION
++     These functions are thread and multiprocessor safe.  For each function,
++     there is a version that does and another that does not incorporate a
++     memory barrier.  Barriers strictly order memory access on a weakly-
++     ordered architecture such as PPC.  All loads and stores executed in
++     sequential program order before the barrier will complete before any load
++     or store executed after the barrier.  On a uniprocessor, the barrier
++     operation is typically a nop.  On a multiprocessor, the barrier can be
++     quite expensive.
++
++     Most code will want to use the barrier functions to insure that memory
++     shared between threads is properly synchronized.  For example, if you
++     want to initialize a shared data structure and then atomically increment
++     a variable to indicate that the initialization is complete, then you MUST
++     use OSAtomicIncrement32Barrier() to ensure that the stores to your data
++     structure complete before the atomic add.  Likewise, the consumer of that
++     data structure MUST use OSAtomicDecrement32Barrier(), in order to ensure
++     that their loads of the structure are not executed before the atomic
++     decrement.  On the other hand, if you are simply incrementing a global
++     counter, then it is safe and potentially much faster to use OSAtomicIn-
++     crement32().  If you are unsure which version to use, prefer the barrier
++     variants as they are safer.
++
++RETURN VALUES
++     The arithmetic and logical operations return the new value, after the
++     operation has been performed.  The compare-and-swap operations return
++     true if the comparison was equal, ie if the swap occured.  The bit test
++     and set/clear operations return the original value of the bit.
++
++	-- man 3 atomic (BSD Library Functions Manual)
++**/
++#endif
++
+ #if defined(__GNUC__) || (defined(__IBMCPP__) && __IBMCPP__ >= 1210)
++#if !USE_DARWIN_ATOMICS
+ #define GNU_ATOMICS
+ #endif
++#endif
+ 
+ void sys::MemoryFence() {
+ #if LLVM_HAS_ATOMICS == 0
+   return;
+-#else
+-#  if defined(GNU_ATOMICS)
++#elif defined(GNU_ATOMICS)
+   __sync_synchronize();
+-#  elif defined(_MSC_VER)
++#elif USE_DARWIN_ATOMICS
++  OSMemoryBarrier();
++#elif defined(_MSC_VER)
+   MemoryBarrier();
+-#  else
++#else
+ # error No memory fence implementation for your platform!
+-#  endif
+ #endif
+ }
+ 
+@@ -49,6 +96,18 @@ sys::cas_flag sys::CompareAndSwap(volatile sys::cas_flag* ptr,
+   return result;
+ #elif defined(GNU_ATOMICS)
+   return __sync_val_compare_and_swap(ptr, old_value, new_value);
++/**
++These builtins perform an atomic compare and swap.
++That is, if the current value of *ptr is oldval, then write newval into *ptr.
++The bool version returns true if the comparison is successful and newval 
++was written. The val version returns the contents of *ptr before the operation. 
++	-- http://gcc.gnu.org/onlinedocs/gcc-4.1.1/gcc/Atomic-Builtins.html
++**/
++#elif USE_DARWIN_ATOMICS
++  const sys::cas_flag prev = *ptr;
++  // returns new value, but we don't want it
++  OSAtomicCompareAndSwap32Barrier(old_value, new_value, vcast(ptr));
++  return prev;		// return the previous value at *ptr
+ #elif defined(_MSC_VER)
+   return InterlockedCompareExchange(ptr, new_value, old_value);
+ #else
+@@ -62,6 +121,8 @@ sys::cas_flag sys::AtomicIncrement(volatile sys::cas_flag* ptr) {
+   return *ptr;
+ #elif defined(GNU_ATOMICS)
+   return __sync_add_and_fetch(ptr, 1);
++#elif USE_DARWIN_ATOMICS
++  return OSAtomicIncrement32Barrier(vcast(ptr));	// return new value
+ #elif defined(_MSC_VER)
+   return InterlockedIncrement(ptr);
+ #else
+@@ -75,6 +136,8 @@ sys::cas_flag sys::AtomicDecrement(volatile sys::cas_flag* ptr) {
+   return *ptr;
+ #elif defined(GNU_ATOMICS)
+   return __sync_sub_and_fetch(ptr, 1);
++#elif USE_DARWIN_ATOMICS
++  return OSAtomicDecrement32Barrier(vcast(ptr));	// return new value
+ #elif defined(_MSC_VER)
+   return InterlockedDecrement(ptr);
+ #else
+@@ -88,6 +151,8 @@ sys::cas_flag sys::AtomicAdd(volatile sys::cas_flag* ptr, sys::cas_flag val) {
+   return *ptr;
+ #elif defined(GNU_ATOMICS)
+   return __sync_add_and_fetch(ptr, val);
++#elif USE_DARWIN_ATOMICS
++  return OSAtomicAdd32Barrier(val, vcast(ptr));		// return new value
+ #elif defined(_MSC_VER)
+   return InterlockedExchangeAdd(ptr, val) + val;
+ #else
+diff --git a/lib/Support/PathV2.cpp b/lib/Support/PathV2.cpp
+index ac53a9e..4c439b2 100644
+--- a/lib/Support/PathV2.cpp
++++ b/lib/Support/PathV2.cpp
+@@ -497,6 +497,8 @@ void system_temp_directory(bool erasedOnReboot, SmallVectorImpl<char> &result) {
+   result.clear();
+ 
+ #ifdef __APPLE__
++// macros expected in <unistd.h>
++#if defined(_CS_DARWIN_USER_TEMP_DIR) && defined(_CS_DARWIN_USER_CACHE_DIR)
+   // On Darwin, use DARWIN_USER_TEMP_DIR or DARWIN_USER_CACHE_DIR.
+   int ConfName = erasedOnReboot? _CS_DARWIN_USER_TEMP_DIR
+                                : _CS_DARWIN_USER_CACHE_DIR;
+@@ -516,6 +518,7 @@ void system_temp_directory(bool erasedOnReboot, SmallVectorImpl<char> &result) {
+     result.clear();
+   }
+ #endif
++#endif
+ 
+   // Check whether the temporary directory is specified by an environment
+   // variable.
+diff --git a/lib/Support/Unix/Memory.inc b/lib/Support/Unix/Memory.inc
+index 72a8af6..ca04ba2 100644
+--- a/lib/Support/Unix/Memory.inc
++++ b/lib/Support/Unix/Memory.inc
+@@ -51,7 +51,8 @@ int getPosixProtectionFlags(unsigned Flags) {
+ 	 llvm::sys::Memory::MF_EXEC:
+     return PROT_READ | PROT_WRITE | PROT_EXEC;
+   case llvm::sys::Memory::MF_EXEC:
+-#if defined(__FreeBSD__)
++#if defined(__FreeBSD__) || defined(__APPLE__)
++    // patch from Roman Divacky, bug 14278
+     // On PowerPC, having an executable page that has no read permission
+     // can have unintended consequences.  The function InvalidateInstruction-
+     // Cache uses instructions dcbf and icbi, both of which are treated by
+diff --git a/lib/Support/Unix/Signals.inc b/lib/Support/Unix/Signals.inc
+index 64d1fc1..9195c54 100644
+--- a/lib/Support/Unix/Signals.inc
++++ b/lib/Support/Unix/Signals.inc
+@@ -335,7 +335,8 @@ static void PrintStackTraceSignalHandler(void *) {
+ void llvm::sys::PrintStackTraceOnErrorSignal() {
+   AddSignalHandler(PrintStackTraceSignalHandler, 0);
+ 
+-#if defined(__APPLE__)
++// some of these constants are not defined for darwin8
++#if defined(__APPLE__) && defined(MACH_EXCEPTION_CODES) && defined(EXC_MASK_CRASH)
+   // Environment variable to disable any kind of crash dialog.
+   if (getenv("LLVM_DISABLE_CRASH_REPORT")) {
+     mach_port_t self = mach_task_self();
+diff --git a/lib/Target/PowerPC/MCTargetDesc/CMakeLists.txt b/lib/Target/PowerPC/MCTargetDesc/CMakeLists.txt
+index b674883..110a64b 100644
+--- a/lib/Target/PowerPC/MCTargetDesc/CMakeLists.txt
++++ b/lib/Target/PowerPC/MCTargetDesc/CMakeLists.txt
+@@ -4,6 +4,7 @@ add_llvm_library(LLVMPowerPCDesc
+   PPCMCAsmInfo.cpp
+   PPCMCCodeEmitter.cpp
+   PPCPredicates.cpp
++  PPCMachObjectWriter.cpp
+   PPCELFObjectWriter.cpp
+   )
+ 
+diff --git a/lib/Target/PowerPC/MCTargetDesc/PPCAsmBackend.cpp b/lib/Target/PowerPC/MCTargetDesc/PPCAsmBackend.cpp
+index ec26574..eca5d56 100644
+--- a/lib/Target/PowerPC/MCTargetDesc/PPCAsmBackend.cpp
++++ b/lib/Target/PowerPC/MCTargetDesc/PPCAsmBackend.cpp
+@@ -20,6 +20,7 @@
+ #include "llvm/Support/ELF.h"
+ #include "llvm/Support/ErrorHandling.h"
+ #include "llvm/Support/TargetRegistry.h"
++
+ using namespace llvm;
+ 
+ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
+@@ -51,19 +52,6 @@ static unsigned adjustFixupValue(unsigned Kind, uint64_t Value) {
+ }
+ 
+ namespace {
+-class PPCMachObjectWriter : public MCMachObjectTargetWriter {
+-public:
+-  PPCMachObjectWriter(bool Is64Bit, uint32_t CPUType,
+-                      uint32_t CPUSubtype)
+-    : MCMachObjectTargetWriter(Is64Bit, CPUType, CPUSubtype) {}
+-
+-  void RecordRelocation(MachObjectWriter *Writer,
+-                        const MCAssembler &Asm, const MCAsmLayout &Layout,
+-                        const MCFragment *Fragment, const MCFixup &Fixup,
+-                        MCValue Target, uint64_t &FixedValue) {
+-    llvm_unreachable("Relocation emission for MachO/PPC unimplemented!");
+-  }
+-};
+ 
+ class PPCAsmBackend : public MCAsmBackend {
+ const Target &TheTarget;
+@@ -151,12 +139,11 @@ namespace {
+ 
+     MCObjectWriter *createObjectWriter(raw_ostream &OS) const {
+       bool is64 = getPointerSize() == 8;
+-      return createMachObjectWriter(new PPCMachObjectWriter(
++      return createPPCMachObjectWriter(OS, 
+                                       /*Is64Bit=*/is64,
+                                       (is64 ? object::mach::CTM_PowerPC64 :
+                                        object::mach::CTM_PowerPC),
+-                                      object::mach::CSPPC_ALL),
+-                                    OS, /*IsLittleEndian=*/false);
++                                      object::mach::CSPPC_ALL);
+     }
+ 
+     virtual bool doesSectionRequireSymbols(const MCSection &Section) const {
+diff --git a/lib/Target/PowerPC/MCTargetDesc/PPCMCTargetDesc.h b/lib/Target/PowerPC/MCTargetDesc/PPCMCTargetDesc.h
+index 38a7420..1240988 100644
+--- a/lib/Target/PowerPC/MCTargetDesc/PPCMCTargetDesc.h
++++ b/lib/Target/PowerPC/MCTargetDesc/PPCMCTargetDesc.h
+@@ -45,6 +45,11 @@ MCAsmBackend *createPPCAsmBackend(const Target &T, StringRef TT, StringRef CPU);
+ MCObjectWriter *createPPCELFObjectWriter(raw_ostream &OS,
+                                          bool Is64Bit,
+                                          uint8_t OSABI);
++/// createPPCELFObjectWriter - Construct a PPC Mach-O object writer.
++MCObjectWriter *createPPCMachObjectWriter(raw_ostream &OS,
++                                          bool Is64Bit,
++                                          uint32_t CPUType,
++                                          uint32_t CPUSubtype);
+ } // End llvm namespace
+ 
+ // Generated files will use "namespace PPC". To avoid symbol clash,
+diff --git a/lib/Target/PowerPC/MCTargetDesc/PPCMachObjectWriter.cpp b/lib/Target/PowerPC/MCTargetDesc/PPCMachObjectWriter.cpp
+new file mode 100644
+index 0000000..9820ca5
+--- /dev/null
++++ b/lib/Target/PowerPC/MCTargetDesc/PPCMachObjectWriter.cpp
+@@ -0,0 +1,596 @@
++//===-- PPCMachObjectWriter.cpp - PPC Mach-O Writer -----------------------===//
++//
++//                     The LLVM Compiler Infrastructure
++//
++// This file is distributed under the University of Illinois Open Source
++// License. See LICENSE.TXT for details.
++//
++//===----------------------------------------------------------------------===//
++
++/**
++The skeleton of this file was ripped from X86MachObjectWriter.cpp.
++NB: I have little clue what I'm doing. -- fangism
++note to self: some clues might be found in gcc/config/{rs6000.c,darwin.h},
++if I can ever decipher it. 
++This file once existed before MC:
++https://llvm.org/svn/llvm-project/llvm/tags/RELEASE_19/lib/Target/PowerPC/PPCMachOWriter.cpp
++	authors: Nate Begeman, Louis Gerbarg, ...?
++other references:
++http://opensource.apple.com/source/cctools/cctools-809/as/ppc.c
++**/
++
++#include "MCTargetDesc/PPCMCTargetDesc.h"
++#include "MCTargetDesc/PPCFixupKinds.h"
++#include "llvm/ADT/Twine.h"
++#include "llvm/MC/MCAsmLayout.h"
++#include "llvm/MC/MCAssembler.h"
++#include "llvm/MC/MCContext.h"
++#include "llvm/MC/MCMachObjectWriter.h"
++#include "llvm/MC/MCSectionMachO.h"
++#include "llvm/MC/MCValue.h"
++#include "llvm/Object/MachOFormat.h"
++#include "llvm/Support/ErrorHandling.h"
++#include "llvm/Support/Format.h"
++
++using namespace llvm;
++using namespace llvm::object;
++
++namespace {
++class PPCMachObjectWriter : public MCMachObjectTargetWriter {
++  bool RecordScatteredRelocation(MachObjectWriter *Writer,
++                                 const MCAssembler &Asm,
++                                 const MCAsmLayout &Layout,
++                                 const MCFragment *Fragment,
++                                 const MCFixup &Fixup,
++                                 MCValue Target,
++                                 unsigned Log2Size,
++                                 uint64_t &FixedValue);
++
++  void RecordPPCRelocation(MachObjectWriter *Writer,
++                              const MCAssembler &Asm,
++                              const MCAsmLayout &Layout,
++                              const MCFragment *Fragment,
++                              const MCFixup &Fixup,
++                              MCValue Target,
++                              uint64_t &FixedValue);
++public:
++  PPCMachObjectWriter(bool Is64Bit, uint32_t CPUType,
++                      uint32_t CPUSubtype)
++    : MCMachObjectTargetWriter(Is64Bit, CPUType, CPUSubtype,
++                               /*UseAggressiveSymbolFolding=*/Is64Bit) {}
++
++  void RecordRelocation(MachObjectWriter *Writer,
++                        const MCAssembler &Asm, const MCAsmLayout &Layout,
++                        const MCFragment *Fragment, const MCFixup &Fixup,
++                        MCValue Target, uint64_t &FixedValue) {
++    if (Writer->is64Bit()) {
++      llvm_unreachable("Relocation emission for MachO/PPC64 unimplemented, until Fang gets around to hacking...");
++    } else
++      RecordPPCRelocation(Writer, Asm, Layout, Fragment, Fixup, Target,
++                          FixedValue);
++  }
++};
++}
++
++/**
++	Log2Size is used for relocation_info::r_length.
++	See "include/llvm/MC/MCFixup.h"
++	and "lib/Target/PowerPC/MCTargetDesc/PPCFixupKinds.h"
++	See "lib/Target/PowerPC/MCTargetDesc/PPCAsmBackend.cpp":
++		adjustFixupValue() for cases of handling fixups.
++		getFixupKindInfo() for sizes.
++ */
++static unsigned getFixupKindLog2Size(unsigned Kind) {
++  switch (Kind) {
++  default:
++    llvm_unreachable("invalid fixup kind!");
++  case FK_PCRel_1:
++  case FK_Data_1: return 0;
++  case FK_PCRel_2:
++  case FK_Data_2: return 1;
++  case FK_PCRel_4:
++#if 0
++    // FIXME: Remove these!!!
++  case PPC::reloc_riprel_4byte:
++  case PPC::reloc_riprel_4byte_movq_load:
++  case PPC::reloc_signed_4byte:
++#endif
++  case PPC::fixup_ppc_brcond14:
++  case PPC::fixup_ppc_lo16:
++  case PPC::fixup_ppc_ha16:
++#if 0
++  case PPC::fixup_ppc_lo14:
++  case PPC::fixup_ppc_toc16:
++  case PPC::fixup_ppc_toc16_ds:
++#endif
++  case PPC::fixup_ppc_br24:
++  case FK_Data_4: return 2;
++#if 0
++  case PPC::fixup_ppc_toc:		// 64 bits
++#endif
++  case FK_PCRel_8:
++  case FK_Data_8: return 3;
++  }
++  return 0;
++}
++
++/**
++	Translates generic PPC fixup kind to Mach-O/PPC relocation type enum.
++	Outline based on PPCELFObjectWriter::getRelocTypeInner().
++ */
++static
++unsigned
++getRelocType(
++	const MCValue &Target,
++	const MCFixupKind FixupKind,	// from Fixup.getKind()
++	const bool IsPCRel) {
++#if 0
++  const MCSymbolRefExpr::VariantKind Modifier = Target.isAbsolute() ?
++    MCSymbolRefExpr::VK_None : Target.getSymA()->getKind();
++  // determine the type of the relocation
++#endif
++  unsigned Type = macho::RIT_PPC_VANILLA;
++  if (IsPCRel) {			// relative to PC
++    switch (FixupKind) {
++    default:
++      llvm_unreachable("Unimplemented (relative)");
++    case PPC::fixup_ppc_br24:
++      Type = macho::RIT_PPC_BR24;	// R_PPC_REL24
++      break;
++    case PPC::fixup_ppc_brcond14:
++      Type = macho::RIT_PPC_BR14;
++      break;
++    case PPC::fixup_ppc_lo16:
++      Type = macho::RIT_PPC_LO16;
++      break;
++    case PPC::fixup_ppc_ha16:
++      Type = macho::RIT_PPC_HA16;
++      break;
++#if 0
++    case PPC::fixup_ppc_lo14:
++      Type = macho::RIT_PPC_LO14;
++      break;
++#endif
++#if 0
++    case FK_Data_4:
++    case FK_PCRel_4:
++      Type = macho::RIT_PPC_REL32;
++      break;
++    case FK_Data_8:
++    case FK_PCRel_8:
++      Type = macho::RIT_PPC64_REL64;
++      break;
++#endif
++    }
++  } else {
++    switch (FixupKind) {
++      default:
++        llvm_unreachable("invalid fixup kind (absolute)!");
++#if 0
++    case PPC::fixup_ppc_br24:
++      Type = macho::RIT_PPC_ADDR24;		// RIT_PPC_BR24?
++      break;
++    case PPC::fixup_ppc_brcond14:
++      Type = macho::RIT_PPC_ADDR14;		// RIT_PPC_BR14?
++      break;
++#endif
++    case PPC::fixup_ppc_ha16:
++#if 0
++      switch (Modifier) {
++      default: llvm_unreachable("Unsupported Modifier");
++      case MCSymbolRefExpr::VK_PPC_TPREL16_HA:
++        Type = macho::RIT_PPC_HA16;		// RIT_PPC_TPREL16_HA;
++        break;
++#if 0
++      case MCSymbolRefExpr::VK_PPC_DTPREL16_HA:
++        Type = macho::RIT_PPC64_DTPREL16_HA;
++        break;
++#endif
++      case MCSymbolRefExpr::VK_None:
++        Type = macho::RIT_PPC_HA16;		// RIT_PPC_ADDR16_HA;
++	break;
++#if 0
++      case MCSymbolRefExpr::VK_PPC_TOC16_HA:
++        Type = macho::RIT_PPC64_TOC16_HA;
++        break;
++      case MCSymbolRefExpr::VK_PPC_GOT_TPREL16_HA:
++        Type = macho::RIT_PPC64_GOT_TPREL16_HA;
++        break;
++      case MCSymbolRefExpr::VK_PPC_GOT_TLSGD16_HA:
++        Type = macho::RIT_PPC64_GOT_TLSGD16_HA;
++        break;
++      case MCSymbolRefExpr::VK_PPC_GOT_TLSLD16_HA:
++        Type = macho::RIT_PPC64_GOT_TLSLD16_HA;
++        break;
++#endif
++      }
++#else
++	Type = macho::RIT_PPC_HA16_SECTDIFF;
++#endif
++      break;
++    case PPC::fixup_ppc_lo16:
++#if 0
++      switch (Modifier) {
++      default: llvm_unreachable("Unsupported Modifier");
++      case MCSymbolRefExpr::VK_PPC_TPREL16_LO:
++        Type = macho::RIT_PPC_LO16;		// RIT_PPC_TPREL16_LO;
++        break;
++      case MCSymbolRefExpr::VK_PPC_DTPREL16_LO:
++        Type = macho::RIT_PPC64_DTPREL16_LO;
++        break;
++      case MCSymbolRefExpr::VK_None:
++        Type = macho::RIT_PPC_ADDR16_LO;
++	break;
++      case MCSymbolRefExpr::VK_PPC_TOC16_LO:
++        Type = macho::RIT_PPC64_TOC16_LO;
++        break;
++      case MCSymbolRefExpr::VK_PPC_GOT_TLSGD16_LO:
++        Type = macho::RIT_PPC64_GOT_TLSGD16_LO;
++        break;
++      case MCSymbolRefExpr::VK_PPC_GOT_TLSLD16_LO:
++        Type = macho::RIT_PPC64_GOT_TLSLD16_LO;
++        break;
++      }
++#else
++	Type = macho::RIT_PPC_LO16_SECTDIFF;
++#endif
++      break;
++#if 0
++    case PPC::fixup_ppc_lo14:
++      Type = macho::RIT_PPC_LO14_SECTDIFF;
++      break;
++    case PPC::fixup_ppc_toc:
++      Type = macho::RIT_PPC64_TOC;
++      break;
++    case PPC::fixup_ppc_toc16:
++      Type = macho::RIT_PPC64_TOC16;
++      break;
++    case PPC::fixup_ppc_toc16_ds:
++      switch (Modifier) {
++      default: llvm_unreachable("Unsupported Modifier");
++      case MCSymbolRefExpr::VK_PPC_TOC_ENTRY:
++        Type = macho::RIT_PPC64_TOC16_DS;
++	break;
++      case MCSymbolRefExpr::VK_PPC_TOC16_LO:
++        Type = macho::RIT_PPC64_TOC16_LO_DS;
++        break;
++      case MCSymbolRefExpr::VK_PPC_GOT_TPREL16_LO:
++        Type = macho::RIT_PPC64_GOT_TPREL16_LO_DS;
++        break;
++      }
++      break;
++    case PPC::fixup_ppc_tlsreg:
++      Type = macho::RIT_PPC64_TLS;
++      break;
++    case PPC::fixup_ppc_nofixup:
++      switch (Modifier) {
++      default: llvm_unreachable("Unsupported Modifier");
++      case MCSymbolRefExpr::VK_PPC_TLSGD:
++        Type = macho::RIT_PPC64_TLSGD;
++        break;
++      case MCSymbolRefExpr::VK_PPC_TLSLD:
++        Type = macho::RIT_PPC64_TLSLD;
++        break;
++      }
++      break;
++    case FK_Data_8:
++      switch (Modifier) {
++      default: llvm_unreachable("Unsupported Modifier");
++      case MCSymbolRefExpr::VK_PPC_TOC:
++        Type = macho::RIT_PPC64_TOC;
++        break;
++      case MCSymbolRefExpr::VK_None:
++        Type = macho::RIT_PPC64_ADDR64;
++	break;
++      }
++      break;
++#endif
++    // go with RIT_PPC_VANILLA
++    case FK_Data_4:
++      // Type = macho::RIT_PPC_ADDR32;	// ELF: R_PPC_ADDR32
++      break;
++    case FK_Data_2:
++      // Type = macho::RIT_PPC_ADDR16;	// ELF: R_PPC_ADDR16
++      break;
++    }
++  }
++  return Type;
++}
++
++static
++// inline
++void
++makeRelocationInfo(
++	macho::RelocationEntry& MRE,
++	const uint32_t FixupOffset,
++	const uint32_t Index,
++	const unsigned IsPCRel,
++	const unsigned Log2Size,
++	const unsigned IsExtern, 
++	const unsigned Type) {
++  MRE.Word0 = FixupOffset;
++// experimenting with order (endian fishiness on PPC?)
++  MRE.Word1 = ((Index     << 8) |	// was << 0
++               (IsPCRel   << 7) |	// was << 24
++               (Log2Size  << 5) |	// was << 25
++               (IsExtern  << 4) |	// was << 27
++               (Type      << 0));	// was << 28
++}
++
++static
++// inline
++void
++makeScatteredRelocationInfo(
++	macho::RelocationEntry& MRE,
++	const uint32_t Addr,
++	const unsigned Type,
++	const unsigned Log2Size,
++	const unsigned IsPCRel, 
++	const uint32_t Value2) {
++  // FIXME: see <mach-o/reloc.h> for note on endianness
++  MRE.Word0 = ((Addr      <<  0) |
++               (Type      << 24) |
++               (Log2Size  << 28) |
++               (IsPCRel   << 30) |
++               macho::RF_Scattered);
++  MRE.Word1 = Value2;
++}
++
++/**
++	\return false if falling back to using non-scattered relocation,
++		otherwise true for normal scattered relocation.
++ */
++// based on X86MachObjectWriter::RecordScatteredRelocation
++// and ARMMachObjectWriter::RecordScatteredRelocation
++bool PPCMachObjectWriter::RecordScatteredRelocation(MachObjectWriter *Writer,
++                                                    const MCAssembler &Asm,
++                                                    const MCAsmLayout &Layout,
++                                                    const MCFragment *Fragment,
++                                                    const MCFixup &Fixup,
++                                                    MCValue Target,
++                                                    unsigned Log2Size,
++                                                    uint64_t &FixedValue) {
++  // caller already computes these, can we just pass and reuse?
++  uint32_t FixupOffset = Layout.getFragmentOffset(Fragment)+Fixup.getOffset();
++  const MCFixupKind FK = Fixup.getKind();
++  unsigned IsPCRel = Writer->isFixupKindPCRel(Asm, FK);
++//  unsigned Type = macho::RIT_PPC_VANILLA;
++  unsigned Type = getRelocType(Target, FK, IsPCRel);
++    /*
++     * odcctools-20090808:as/write_object.c:fix_to_relocation_entries():
++     * Determine if this is left as a local relocation entry or
++     * changed to a SECTDIFF relocation entry.  If this comes from a fix
++     * that has a subtract symbol it is a SECTDIFF relocation.  Which is
++     * "addsy - subsy + constant" where both symbols are defined in
++     * sections.  To encode all this information two scattered
++     * relocation entries are used.  The first has the add symbol value
++     * and the second has the subtract symbol value.
++     */
++
++
++  // See <reloc.h>.
++  const MCSymbol *A = &Target.getSymA()->getSymbol();
++  MCSymbolData *A_SD = &Asm.getSymbolData(*A);
++
++  if (!A_SD->getFragment())
++    report_fatal_error("symbol '" + A->getName() +
++                       "' can not be undefined in a subtraction expression");
++
++  uint32_t Value = Writer->getSymbolAddress(A_SD, Layout);
++  uint64_t SecAddr = Writer->getSectionAddress(A_SD->getFragment()->getParent());
++  FixedValue += SecAddr;
++  uint32_t Value2 = 0;
++
++  if (const MCSymbolRefExpr *B = Target.getSymB()) {
++    MCSymbolData *B_SD = &Asm.getSymbolData(B->getSymbol());
++
++    if (!B_SD->getFragment())
++      report_fatal_error("symbol '" + B->getSymbol().getName() +
++                         "' can not be undefined in a subtraction expression");
++
++    // Select the appropriate difference relocation type.
++    //
++    // Note that there is no longer any semantic difference between these two
++    // relocation types from the linkers point of view, this is done solely for
++    // pedantic compatibility with 'as'.
++#if 0
++    Type = A_SD->isExternal() ? (unsigned)macho::RIT_PPC_SECTDIFF :
++      (unsigned)macho::RIT_PPC_LO16_SECTDIFF;
++//      (unsigned)macho::RIT_PPC_LOCAL_SECTDIFF;
++//    Type = A_SD->isExternal() ? (unsigned)macho::RIT_Difference :
++//      (unsigned)macho::RIT_Generic_LocalDifference;
++#endif
++    // FIXME: is Type correct? see include/llvm/Object/MachOFormat.h
++    Value2 = Writer->getSymbolAddress(B_SD, Layout);
++    FixedValue -= Writer->getSectionAddress(B_SD->getFragment()->getParent());
++  }
++  // FIXME: does FixedValue get used??
++
++  // Relocations are written out in reverse order, so the PAIR comes first.
++  if (Type == macho::RIT_PPC_SECTDIFF ||
++      Type == macho::RIT_PPC_HI16_SECTDIFF ||
++      Type == macho::RIT_PPC_LO16_SECTDIFF ||
++      Type == macho::RIT_PPC_HA16_SECTDIFF ||
++      Type == macho::RIT_PPC_LO14_SECTDIFF ||
++      Type == macho::RIT_PPC_LOCAL_SECTDIFF)
++//  if (Type == macho::RIT_Difference ||
++//      Type == macho::RIT_Generic_LocalDifference)
++  {
++#if 1
++    // X86 had this piece, but ARM does not
++    // If the offset is too large to fit in a scattered relocation,
++    // we're hosed. It's an unfortunate limitation of the MachO format.
++    if (FixupOffset > 0xffffff) {
++      char Buffer[32];
++      format("0x%x", FixupOffset).print(Buffer, sizeof(Buffer));
++      Asm.getContext().FatalError(Fixup.getLoc(),
++                         Twine("Section too large, can't encode "
++                                "r_address (") + Buffer +
++                         ") into 24 bits of scattered "
++                         "relocation entry.");
++      llvm_unreachable("fatal error returned?!");
++    }
++#endif
++
++    // Is this supposed to follow MCTarget/PPCAsmBackend.cpp:adjustFixupValue()?
++    uint32_t other_half = 0;
++    switch (Type) {
++    case macho::RIT_PPC_LO16_SECTDIFF:
++      other_half = (FixedValue >> 16) & 0xffff;
++      break;
++    case macho::RIT_PPC_HA16_SECTDIFF:
++      other_half = FixedValue & 0xffff;
++      break;
++    default:
++//      llvm_unreachable("Unhandled PPC scattered relocation type.");
++      break;
++    }
++
++    macho::RelocationEntry MRE;
++    makeScatteredRelocationInfo(MRE,
++//	0,
++	other_half,		// guessing by trial and error...
++	macho::RIT_PPC_PAIR, Log2Size, IsPCRel, Value2);
++    Writer->addRelocation(Fragment->getParent(), MRE);
++#if 1
++  } else {
++    // If the offset is more than 24-bits, it won't fit in a scattered
++    // relocation offset field, so we fall back to using a non-scattered
++    // relocation. This is a bit risky, as if the offset reaches out of
++    // the block and the linker is doing scattered loading on this
++    // symbol, things can go badly.
++    //
++    // Required for 'as' compatibility.
++    if (FixupOffset > 0xffffff)
++      return false;
++#endif
++  }
++  macho::RelocationEntry MRE;
++  makeScatteredRelocationInfo(MRE,
++	FixupOffset, Type, Log2Size, IsPCRel, Value);
++  Writer->addRelocation(Fragment->getParent(), MRE);
++  return true;
++}
++
++// see PPCELFObjectWriter for a general outline of cases
++void PPCMachObjectWriter::RecordPPCRelocation(MachObjectWriter *Writer,
++                                              const MCAssembler &Asm,
++                                              const MCAsmLayout &Layout,
++                                              const MCFragment *Fragment,
++                                              const MCFixup &Fixup,
++                                              MCValue Target,
++                                              uint64_t &FixedValue) {
++  const MCFixupKind FK = Fixup.getKind();	// unsigned
++  const unsigned Log2Size = getFixupKindLog2Size(FK);
++  const bool IsPCRel = Writer->isFixupKindPCRel(Asm, FK);
++  const unsigned RelocType = getRelocType(Target, FK, IsPCRel);
++
++#if 0
++  if (!getRelocType(Target, FK, IsPCRel))
++    // If we failed to get fixup kind info, it's because there's no legal
++    // relocation type for the fixup kind. This happens when it's a fixup that's
++    // expected to always be resolvable at assembly time and not have any
++    // relocations needed.
++    Asm.getContext().FatalError(Fixup.getLoc(),
++                                "unsupported relocation on symbol");
++#endif
++
++  // If this is a difference or a defined symbol plus an offset, then we need a
++  // scattered relocation entry. Differences always require scattered
++  // relocations.
++  if (Target.getSymB() &&
++// Q: are branch targets ever scattered?
++	RelocType != macho::RIT_PPC_BR24 &&
++	RelocType != macho::RIT_PPC_BR14
++	) {
++    RecordScatteredRelocation(Writer, Asm, Layout, Fragment, Fixup,
++                              Target, Log2Size, FixedValue);
++    return;
++  }
++
++  // this doesn't seem right for RIT_PPC_BR24
++  // Get the symbol data, if any.
++  MCSymbolData *SD = 0;
++  if (Target.getSymA())
++    SD = &Asm.getSymbolData(Target.getSymA()->getSymbol());
++
++if (0) {
++  // If this is an internal relocation with an offset, it also needs a scattered
++  // relocation entry.
++  uint32_t Offset = Target.getConstant();
++  if (IsPCRel)
++    Offset += 1 << Log2Size;
++  // Try to record the scattered relocation if needed. Fall back to non
++  // scattered if necessary (see comments in RecordScatteredRelocation()
++  // for details).
++  if (Offset && SD && !Writer->doesSymbolRequireExternRelocation(SD) &&
++      RecordScatteredRelocation(Writer, Asm, Layout, Fragment, Fixup,
++                                Target, Log2Size, FixedValue))
++    return;
++}
++
++  // See <reloc.h>.
++  const uint32_t FixupOffset = Layout.getFragmentOffset(Fragment)+Fixup.getOffset();
++  unsigned Index = 0;
++  unsigned IsExtern = 0;
++//  unsigned Type = 0;
++  unsigned Type = RelocType;
++
++  if (Target.isAbsolute()) { // constant
++    // SymbolNum of 0 indicates the absolute section.
++    //
++    // FIXME: Currently, these are never generated (see code below). I cannot
++    // find a case where they are actually emitted.
++    report_fatal_error("FIXME: relocations to absolute targets "
++                       "not yet implemented");
++    // the above line stolen from ARM, not sure
++//    Type = macho::RIT_PPC_VANILLA;
++  } else {
++    // Resolve constant variables.
++    if (SD->getSymbol().isVariable()) {
++      int64_t Res;
++      if (SD->getSymbol().getVariableValue()->EvaluateAsAbsolute(
++            Res, Layout, Writer->getSectionAddressMap())) {
++        FixedValue = Res;
++        return;
++      }
++    }
++
++    // Check whether we need an external or internal relocation.
++    if (Writer->doesSymbolRequireExternRelocation(SD)) {
++      IsExtern = 1;
++      Index = SD->getIndex();
++      // For external relocations, make sure to offset the fixup value to
++      // compensate for the addend of the symbol address, if it was
++      // undefined. This occurs with weak definitions, for example.
++      if (!SD->Symbol->isUndefined())
++        FixedValue -= Layout.getSymbolOffset(SD);
++    } else {
++      // The index is the section ordinal (1-based).
++      const MCSectionData &SymSD = Asm.getSectionData(
++        SD->getSymbol().getSection());
++      Index = SymSD.getOrdinal() + 1;
++      FixedValue += Writer->getSectionAddress(&SymSD);
++    }
++    if (IsPCRel)
++      FixedValue -= Writer->getSectionAddress(Fragment->getParent());
++
++//    Type = macho::RIT_PPC_VANILLA;
++  }
++
++  // struct relocation_info (8 bytes)
++  macho::RelocationEntry MRE;
++  makeRelocationInfo(MRE,
++	FixupOffset, Index, IsPCRel, Log2Size, IsExtern, Type);
++  Writer->addRelocation(Fragment->getParent(), MRE);
++}
++
++MCObjectWriter *llvm::createPPCMachObjectWriter(raw_ostream &OS,
++                                                bool Is64Bit,
++                                                uint32_t CPUType,
++                                                uint32_t CPUSubtype) {
++  return createMachObjectWriter(new PPCMachObjectWriter(Is64Bit,
++                                                        CPUType,
++                                                        CPUSubtype),
++                                OS, /*IsLittleEndian=*/false);
++}
+diff --git a/lib/Target/PowerPC/PPCAsmPrinter.cpp b/lib/Target/PowerPC/PPCAsmPrinter.cpp
+index 3c7cc4e..9d080f1 100644
+--- a/lib/Target/PowerPC/PPCAsmPrinter.cpp
++++ b/lib/Target/PowerPC/PPCAsmPrinter.cpp
+@@ -56,6 +56,7 @@
+ #include "llvm/Target/TargetInstrInfo.h"
+ #include "llvm/Target/TargetOptions.h"
+ #include "llvm/Target/TargetRegisterInfo.h"
++
+ using namespace llvm;
+ 
+ namespace {
+@@ -875,6 +876,7 @@ static MCSymbol *GetLazyPtr(MCSymbol *Sym, MCContext &Ctx) {
+   return Ctx.GetOrCreateSymbol(NoStub + "$lazy_ptr");
+ }
+ 
++// 'L' needed to designate label as local
+ static MCSymbol *GetAnonSym(MCSymbol *Sym, MCContext &Ctx) {
+   // Add $tmp suffix to $stub, yielding $stub$tmp.
+   return Ctx.GetOrCreateSymbol(Sym->getName() + "$tmp");
+@@ -891,6 +893,7 @@ EmitFunctionStubs(const MachineModuleInfoMachO::SymbolListTy &Stubs) {
+   const MCSection *LSPSection = TLOFMacho.getLazySymbolPointerSection();
+   
+   // Output stubs for dynamically-linked functions
++  // see http://developer.apple.com/library/mac/#documentation/developertools/reference/assembler/050-PowerPC_Addressing_Modes_and_Assembler_Instructions/ppc_instructions.html
+   if (TM.getRelocationModel() == Reloc::PIC_) {
+     const MCSection *StubSection = 
+     OutContext.getMachOSection("__TEXT", "__picsymbolstub1",
+@@ -914,10 +917,12 @@ EmitFunctionStubs(const MachineModuleInfoMachO::SymbolListTy &Stubs) {
+       // mflr r0
+       OutStreamer.EmitInstruction(MCInstBuilder(PPC::MFLR).addReg(PPC::R0));
+       // bcl 20, 31, AnonSymbol
++      // unconditional, but doesn't push link register onto stack
+       OutStreamer.EmitInstruction(MCInstBuilder(PPC::BCLalways).addExpr(Anon));
+       OutStreamer.EmitLabel(AnonSymbol);
+-      // mflr r11
++      // mflr r11 ; move LR to r11
+       OutStreamer.EmitInstruction(MCInstBuilder(PPC::MFLR).addReg(PPC::R11));
++      // load address one half at a time
+       // addis r11, r11, ha16(LazyPtr - AnonSymbol)
+       const MCExpr *Sub =
+         MCBinaryExpr::CreateSub(MCSymbolRefExpr::Create(LazyPtr, OutContext),
+diff --git a/lib/Target/PowerPC/PPCISelLowering.cpp b/lib/Target/PowerPC/PPCISelLowering.cpp
+index 3fcafdc..dc00ba9 100644
+--- a/lib/Target/PowerPC/PPCISelLowering.cpp
++++ b/lib/Target/PowerPC/PPCISelLowering.cpp
+@@ -2603,14 +2603,19 @@ PPCTargetLowering::LowerFormalArguments_Darwin(
+   // FIXME: FuncArg and Ins[ArgNo] must reference the same argument.
+   // When passing anonymous aggregates, this is currently not true.
+   // See LowerFormalArguments_64SVR4 for a fix.
++  // see: http://llvm.org/bugs/show_bug.cgi?id=14779
++  // for Darwin, reported as: http://llvm.org/bugs/show_bug.cgi?id=15821
+   Function::const_arg_iterator FuncArg = MF.getFunction()->arg_begin();
+-  for (unsigned ArgNo = 0, e = Ins.size(); ArgNo != e; ++ArgNo, ++FuncArg) {
++  unsigned CurArgIdx = 0;
++  for (unsigned ArgNo = 0, e = Ins.size(); ArgNo != e; ++ArgNo) {
+     SDValue ArgVal;
+     bool needsLoad = false;
+     EVT ObjectVT = Ins[ArgNo].VT;
+     unsigned ObjSize = ObjectVT.getSizeInBits()/8;
+     unsigned ArgSize = ObjSize;
+     ISD::ArgFlagsTy Flags = Ins[ArgNo].Flags;
++    std::advance(FuncArg, Ins[ArgNo].OrigArgIndex - CurArgIdx);
++    CurArgIdx = Ins[ArgNo].OrigArgIndex;
+ 
+     unsigned CurArgOffset = ArgOffset;
+ 
+diff --git a/lib/Target/PowerPC/PPCMCInstLower.cpp b/lib/Target/PowerPC/PPCMCInstLower.cpp
+index f8cf3a5..18fd043 100644
+--- a/lib/Target/PowerPC/PPCMCInstLower.cpp
++++ b/lib/Target/PowerPC/PPCMCInstLower.cpp
+@@ -23,6 +23,7 @@
+ #include "llvm/MC/MCExpr.h"
+ #include "llvm/MC/MCInst.h"
+ #include "llvm/Target/Mangler.h"
++
+ using namespace llvm;
+ 
+ static MachineModuleInfoMachO &getMachOMMI(AsmPrinter &AP) {
+diff --git a/lib/Transforms/Hello/CMakeLists.txt b/lib/Transforms/Hello/CMakeLists.txt
+index 917b745..866b1f7 100644
+--- a/lib/Transforms/Hello/CMakeLists.txt
++++ b/lib/Transforms/Hello/CMakeLists.txt
+@@ -1,3 +1,5 @@
++# patch: this should be built as a bundle/module/plug-in
++set(MODULE TRUE)
+ add_llvm_loadable_module( LLVMHello
+   Hello.cpp
+   )
+diff --git a/lib/Transforms/Instrumentation/MemorySanitizer.cpp b/lib/Transforms/Instrumentation/MemorySanitizer.cpp
+index 4e75904..d22c897 100644
+--- a/lib/Transforms/Instrumentation/MemorySanitizer.cpp
++++ b/lib/Transforms/Instrumentation/MemorySanitizer.cpp
+@@ -181,8 +181,15 @@ class MemorySanitizer : public FunctionPass {
+  private:
+   void initializeCallbacks(Module &M);
+ 
++// workaround accessibility bug in g++-4.0
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2) 
++ public:
++#endif
+   /// \brief Track origins (allocation points) of uninitialized values.
+   bool TrackOrigins;
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2) 
++ private:
++#endif
+ 
+   DataLayout *TD;
+   LLVMContext *C;
+diff --git a/test/CodeGen/PowerPC/anon_aggr-darwin.ll b/test/CodeGen/PowerPC/anon_aggr-darwin.ll
+new file mode 100644
+index 0000000..c4762c0
+--- /dev/null
++++ b/test/CodeGen/PowerPC/anon_aggr-darwin.ll
+@@ -0,0 +1,152 @@
++; RUN: llc -O0 -mcpu=g4 -mtriple=powerpc-apple-darwin8 < %s | FileCheck -check-prefix=DARWIN32 %s
++; RUN: llc -O0 -mcpu=ppc970 -mtriple=powerpc64-apple-darwin8 < %s | FileCheck -check-prefix=DARWIN64 %s
++
++; Test case cloned from "anon-aggr.ll", used for PR 14779.
++; PR 15821: anonymous aggregates are not handled correctly.
++; The bug is triggered by passing a byval structure after an anonymous
++; aggregate.
++
++%tarray = type { i64, i8* }
++
++define i8* @func1({ i64, i8* } %array, i8* %ptr) {
++entry:
++  %array_ptr = extractvalue {i64, i8* } %array, 1
++  %cond = icmp eq i8* %array_ptr, %ptr
++  br i1 %cond, label %equal, label %unequal
++equal:
++  ret i8* %array_ptr
++unequal:
++  ret i8* %ptr
++}
++
++; DARWIN32: _func1:
++; DARWIN32: mr
++; DARWIN32: mr r[[REG1:[0-9]+]], r[[REGA:[0-9]+]]
++; DARWIN32: mr r[[REG2:[0-9]+]], r[[REGB:[0-9]+]]
++; DARWIN32: cmplw cr{{[0-9]+}}, r[[REGA]], r[[REGB]]
++; DARWIN32: stw r[[REG1]], -[[OFFSET1:[0-9]+]]
++; DARWIN32: stw r[[REG2]], -[[OFFSET2:[0-9]+]]
++; DARWIN32: lwz r3, -[[OFFSET1]]
++; DARWIN32: lwz r3, -[[OFFSET2]]
++
++; DARWIN64: _func1:
++; DARWIN64: mr
++; DARWIN64: mr r[[REG1:[0-9]+]], r[[REGA:[0-9]+]]
++; DARWIN64: mr r[[REG2:[0-9]+]], r[[REGB:[0-9]+]]
++; DARWIN64: cmpld cr{{[0-9]+}}, r[[REGA]], r[[REGB]]
++; DARWIN64: std r[[REG1]], -[[OFFSET1:[0-9]+]]
++; DARWIN64: std r[[REG2]], -[[OFFSET2:[0-9]+]]
++; DARWIN64: ld r3, -[[OFFSET1]]
++; DARWIN64: ld r3, -[[OFFSET2]]
++
++
++define i8* @func2({ i64, i8* } %array1, %tarray* byval %array2) {
++entry:
++  %array1_ptr = extractvalue {i64, i8* } %array1, 1
++  %tmp = getelementptr inbounds %tarray* %array2, i32 0, i32 1
++  %array2_ptr = load i8** %tmp
++  %cond = icmp eq i8* %array1_ptr, %array2_ptr
++  br i1 %cond, label %equal, label %unequal
++equal:
++  ret i8* %array1_ptr
++unequal:
++  ret i8* %array2_ptr
++}
++
++; DARWIN32: _func2:
++; DARWIN32: addi r[[REG1:[0-9]+]], r[[REGSP:[0-9]+]], 36
++; DARWIN32: lwz r[[REG2:[0-9]+]], 44(r[[REGSP]])
++; DARWIN32: mr
++; DARWIN32: mr r[[REG3:[0-9]+]], r[[REGA:[0-9]+]]
++; DARWIN32: cmplw cr{{[0-9]+}}, r[[REGA]], r[[REG2]]
++; DARWIN32: stw r[[REG3]], -[[OFFSET1:[0-9]+]]
++; DARWIN32: stw r[[REG2]], -[[OFFSET2:[0-9]+]]
++; DARWIN32: lwz r3, -[[OFFSET1]]
++; DARWIN32: lwz r3, -[[OFFSET2]]
++
++; DARWIN64: _func2:
++; DARWIN64: addi r[[REG1:[0-9]+]], r1, 64
++; DARWIN64: ld r[[REG2:[0-9]+]], 8(r[[REG1]])
++; DARWIN64: mr
++; DARWIN64: mr r[[REG3:[0-9]+]], r[[REGA:[0-9]+]]
++; DARWIN64: cmpld cr{{[0-9]+}}, r[[REGA]], r[[REG2]]
++; DARWIN64: std r[[REG3]], -[[OFFSET1:[0-9]+]]
++; DARWIN64: std r[[REG2]], -[[OFFSET2:[0-9]+]]
++; DARWIN64: ld r3, -[[OFFSET1]]
++; DARWIN64: ld r3, -[[OFFSET2]]
++
++
++define i8* @func3({ i64, i8* }* byval %array1, %tarray* byval %array2) {
++entry:
++  %tmp1 = getelementptr inbounds { i64, i8* }* %array1, i32 0, i32 1
++  %array1_ptr = load i8** %tmp1
++  %tmp2 = getelementptr inbounds %tarray* %array2, i32 0, i32 1
++  %array2_ptr = load i8** %tmp2
++  %cond = icmp eq i8* %array1_ptr, %array2_ptr
++  br i1 %cond, label %equal, label %unequal
++equal:
++  ret i8* %array1_ptr
++unequal:
++  ret i8* %array2_ptr
++}
++
++; DARWIN32: _func3:
++; DARWIN32: addi r[[REG1:[0-9]+]], r[[REGSP:[0-9]+]], 40
++; DARWIN32: addi r[[REG2:[0-9]+]], r[[REGSP]], 24
++; DARWIN32: lwz r[[REG3:[0-9]+]], 48(r[[REGSP]])
++; DARWIN32: lwz r[[REG4:[0-9]+]], 32(r[[REGSP]])
++; DARWIN32: cmplw cr{{[0-9]+}}, r[[REG4]], r[[REG3]]
++; DARWIN32: stw r[[REG3]], -[[OFFSET1:[0-9]+]]
++; DARWIN32: stw r[[REG4]], -[[OFFSET2:[0-9]+]]
++; DARWIN32: lwz r3, -[[OFFSET2]]
++; DARWIN32: lwz r3, -[[OFFSET1]]
++
++; DARWIN64: _func3:
++; DARWIN64: addi r[[REG1:[0-9]+]], r1, 64
++; DARWIN64: addi r[[REG2:[0-9]+]], r1, 48
++; DARWIN64: ld r[[REG3:[0-9]+]], 8(r[[REG1]])
++; DARWIN64: ld r[[REG4:[0-9]+]], 8(r[[REG2]])
++; DARWIN64: cmpld cr{{[0-9]+}}, r[[REG4]], r[[REG3]]
++; DARWIN64: std r[[REG3]], -[[OFFSET1:[0-9]+]]
++; DARWIN64: std r[[REG4]], -[[OFFSET2:[0-9]+]]
++; DARWIN64: ld r3, -[[OFFSET2]]
++; DARWIN64: ld r3, -[[OFFSET1]]
++
++
++define i8* @func4(i64 %p1, i64 %p2, i64 %p3, i64 %p4,
++                  i64 %p5, i64 %p6, i64 %p7, i64 %p8,
++                  { i64, i8* } %array1, %tarray* byval %array2) {
++entry:
++  %array1_ptr = extractvalue {i64, i8* } %array1, 1
++  %tmp = getelementptr inbounds %tarray* %array2, i32 0, i32 1
++  %array2_ptr = load i8** %tmp
++  %cond = icmp eq i8* %array1_ptr, %array2_ptr
++  br i1 %cond, label %equal, label %unequal
++equal:
++  ret i8* %array1_ptr
++unequal:
++  ret i8* %array2_ptr
++}
++
++; DARWIN32: _func4:
++; DARWIN32: lwz r[[REG4:[0-9]+]], 96(r1)
++; DARWIN32: addi r[[REG1:[0-9]+]], r1, 100
++; DARWIN32: lwz r[[REG3:[0-9]+]], 108(r1)
++; DARWIN32: mr r[[REG2:[0-9]+]], r[[REG4]]
++; DARWIN32: cmplw cr{{[0-9]+}}, r[[REG4]], r[[REG3]]
++; DARWIN32: stw r[[REG4]], -[[OFFSET1:[0-9]+]]
++; DARWIN32: stw r[[REG3]], -[[OFFSET2:[0-9]+]]
++; DARWIN32: lwz r[[REG1]], -[[OFFSET1]]
++; DARWIN32: lwz r[[REG1]], -[[OFFSET2]]
++
++; DARWIN64: _func4:
++; DARWIN64: addi r[[REG1:[0-9]+]], r1, 128
++; DARWIN64: ld r[[REG2:[0-9]+]], 120(r1)
++; DARWIN64: ld r[[REG3:[0-9]+]], 8(r[[REG1]])
++; DARWIN64: mr r[[REG4:[0-9]+]], r[[REG2]]
++; DARWIN64: cmpld cr{{[0-9]+}}, r[[REG2]], r[[REG3]]
++; DARWIN64: std r[[REG4]], -[[OFFSET1:[0-9]+]]
++; DARWIN64: std r[[REG3]], -[[OFFSET2:[0-9]+]]
++; DARWIN64: ld r3, -[[OFFSET1]]
++; DARWIN64: ld r3, -[[OFFSET2]]
++
+diff --git a/test/MC/MachO/indirect-symbols.s b/test/MC/MachO/indirect-symbols.s
+index 90fd231..deb9e7a 100644
+--- a/test/MC/MachO/indirect-symbols.s
++++ b/test/MC/MachO/indirect-symbols.s
+@@ -97,7 +97,7 @@ _e:
+ // CHECK:   ('nsyms', 6)
+ // CHECK:   ('stroff', 516)
+ // CHECK:   ('strsize', 20)
+-// CHECK:   ('_string_data', '\x00_d\x00_a\x00_b\x00_c\x00_e\x00_f\x00\x00')
++// CHECK:   ('_string_data', '\x00_a\x00_d\x00_b\x00_c\x00_e\x00_f\x00\x00')
+ // CHECK:   ('_symbols', [
+ // CHECK:     # Symbol 0
+ // CHECK:    (('n_strx', 7)
+@@ -132,7 +132,7 @@ _e:
+ // CHECK:     ('_string', '_f')
+ // CHECK:    ),
+ // CHECK:     # Symbol 4
+-// CHECK:    (('n_strx', 4)
++// CHECK:    (('n_strx', 1)
+ // CHECK:     ('n_type', 0x1)
+ // CHECK:     ('n_sect', 0)
+ // CHECK:     ('n_desc', 1)
+@@ -140,7 +140,7 @@ _e:
+ // CHECK:     ('_string', '_a')
+ // CHECK:    ),
+ // CHECK:     # Symbol 5
+-// CHECK:    (('n_strx', 1)
++// CHECK:    (('n_strx', 4)
+ // CHECK:     ('n_type', 0x1)
+ // CHECK:     ('n_sect', 0)
+ // CHECK:     ('n_desc', 0)
+diff --git a/test/MC/MachO/symbol-indirect.s b/test/MC/MachO/symbol-indirect.s
+index 2412970..6f5c842 100644
+--- a/test/MC/MachO/symbol-indirect.s
++++ b/test/MC/MachO/symbol-indirect.s
+@@ -137,7 +137,7 @@ sym_nlp_G:
+ // CHECK:   ('nsyms', 10)
+ // CHECK:   ('stroff', 592)
+ // CHECK:   ('strsize', 104)
+-// CHECK:   ('_string_data', '\x00sym_lsp_A\x00sym_lsp_G\x00sym_nlp_A\x00sym_nlp_G\x00sym_nlp_B\x00sym_nlp_E\x00sym_lsp_B\x00sym_lsp_E\x00sym_lsp_C\x00sym_nlp_C\x00\x00\x00\x00')
++// CHECK:   ('_string_data', '\x00sym_lsp_A\x00sym_lsp_G\x00sym_nlp_A\x00sym_nlp_G\x00sym_lsp_B\x00sym_lsp_E\x00sym_nlp_B\x00sym_nlp_E\x00sym_lsp_C\x00sym_nlp_C\x00\x00\x00\x00')
+ // CHECK:   ('_symbols', [
+ // CHECK:     # Symbol 0
+ // CHECK:    (('n_strx', 81)
+@@ -180,7 +180,7 @@ sym_nlp_G:
+ // CHECK:     ('_string', 'sym_lsp_A')
+ // CHECK:    ),
+ // CHECK:     # Symbol 5
+-// CHECK:    (('n_strx', 61)
++// CHECK:    (('n_strx', 41)
+ // CHECK:     ('n_type', 0x1)
+ // CHECK:     ('n_sect', 0)
+ // CHECK:     ('n_desc', 1)
+@@ -188,7 +188,7 @@ sym_nlp_G:
+ // CHECK:     ('_string', 'sym_lsp_B')
+ // CHECK:    ),
+ // CHECK:     # Symbol 6
+-// CHECK:    (('n_strx', 71)
++// CHECK:    (('n_strx', 51)
+ // CHECK:     ('n_type', 0x1)
+ // CHECK:     ('n_sect', 0)
+ // CHECK:     ('n_desc', 1)
+@@ -204,7 +204,7 @@ sym_nlp_G:
+ // CHECK:     ('_string', 'sym_nlp_A')
+ // CHECK:    ),
+ // CHECK:     # Symbol 8
+-// CHECK:    (('n_strx', 41)
++// CHECK:    (('n_strx', 61)
+ // CHECK:     ('n_type', 0x1)
+ // CHECK:     ('n_sect', 0)
+ // CHECK:     ('n_desc', 0)
+@@ -212,7 +212,7 @@ sym_nlp_G:
+ // CHECK:     ('_string', 'sym_nlp_B')
+ // CHECK:    ),
+ // CHECK:     # Symbol 9
+-// CHECK:    (('n_strx', 51)
++// CHECK:    (('n_strx', 71)
+ // CHECK:     ('n_type', 0x1)
+ // CHECK:     ('n_sect', 0)
+ // CHECK:     ('n_desc', 0)
+diff --git a/test/Transforms/GCOVProfiling/version.ll b/test/Transforms/GCOVProfiling/version.ll
+index d6d0f33..7f4507f 100644
+--- a/test/Transforms/GCOVProfiling/version.ll
++++ b/test/Transforms/GCOVProfiling/version.ll
+@@ -1,11 +1,11 @@
+ ; RUN: echo '!9 = metadata !{metadata !"%T/version.ll", metadata !0}' > %t1
+ ; RUN: cat %s %t1 > %t2
+ ; RUN: opt -insert-gcov-profiling -disable-output < %t2
+-; RUN: head -c12 %T/version.gcno | grep '^oncg\*204MVLL$'
++; RUN: ghead -c12 %T/version.gcno | grep '^oncg\*204MVLL$'
+ ; RUN: rm %T/version.gcno
+ ; RUN: not opt -insert-gcov-profiling -default-gcov-version=asdfasdf -disable-output < %t2
+ ; RUN: opt -insert-gcov-profiling -default-gcov-version=407* -disable-output < %t2
+-; RUN: head -c12 %T/version.gcno | grep '^oncg\*704MVLL$'
++; RUN: ghead -c12 %T/version.gcno | grep '^oncg\*704MVLL$'
+ ; RUN: rm %T/version.gcno
+ 
+ define void @test() {
+diff --git a/tools/bugpoint-passes/CMakeLists.txt b/tools/bugpoint-passes/CMakeLists.txt
+index 05f190a..45b4a23 100644
+--- a/tools/bugpoint-passes/CMakeLists.txt
++++ b/tools/bugpoint-passes/CMakeLists.txt
+@@ -1,3 +1,6 @@
++# patch: this should be built as a bundle/module/plug-in
++set(MODULE TRUE)
++
+ if( NOT LLVM_BUILD_TOOLS )
+   set(EXCLUDE_FROM_ALL ON)
+ endif()
+diff --git a/tools/clang/include/clang/Serialization/ASTBitCodes.h b/tools/clang/include/clang/Serialization/ASTBitCodes.h
+index 81f8980..8103eff 100644
+--- a/tools/clang/include/clang/Serialization/ASTBitCodes.h
++++ b/tools/clang/include/clang/Serialization/ASTBitCodes.h
+@@ -83,21 +83,21 @@ namespace clang {
+ 
+     /// \brief A type index; the type ID with the qualifier bits removed.
+     class TypeIdx {
+-      uint32_t Idx;
++      TypeID Idx;
+     public:
+       TypeIdx() : Idx(0) { }
+-      explicit TypeIdx(uint32_t index) : Idx(index) { }
++      explicit TypeIdx(TypeID index) : Idx(index) { }
+ 
+-      uint32_t getIndex() const { return Idx; }
++      TypeID getIndex() const { return Idx; }
+       TypeID asTypeID(unsigned FastQuals) const {
+-        if (Idx == uint32_t(-1))
++        if (Idx == TypeID(-1))
+           return TypeID(-1);
+         
+         return (Idx << Qualifiers::FastWidth) | FastQuals;
+       }
+       static TypeIdx fromTypeID(TypeID ID) {
+         if (ID == TypeID(-1))
+-          return TypeIdx(-1);
++          return TypeIdx(TypeID(-1));
+         
+         return TypeIdx(ID >> Qualifiers::FastWidth);
+       }
+diff --git a/tools/clang/include/clang/Serialization/ASTReader.h b/tools/clang/include/clang/Serialization/ASTReader.h
+index 2c0102e..4df9be8 100644
+--- a/tools/clang/include/clang/Serialization/ASTReader.h
++++ b/tools/clang/include/clang/Serialization/ASTReader.h
+@@ -299,10 +299,16 @@ private:
+   FileManager &FileMgr;
+   DiagnosticsEngine &Diags;
+ 
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
++public:	// workaround to grant access to classes nested within ASTDeclReader
++#endif
+   /// \brief The semantic analysis object that will be processing the
+   /// AST files and the translation unit that uses it.
+   Sema *SemaObj;
+ 
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
++private:
++#endif
+   /// \brief The preprocessor that will be loading the source file.
+   Preprocessor &PP;
+ 
+@@ -847,6 +853,9 @@ private:
+   /// since the last time the declaration chains were linked.
+   llvm::SmallPtrSet<Decl *, 16> RedeclsDeserialized;
+   
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
++public:	// workaround to grant access to classes nested within ASTDeclReader
++#endif
+   /// \brief The list of redeclaration chains that still need to be 
+   /// reconstructed.
+   ///
+@@ -858,6 +867,9 @@ private:
+   /// \brief Keeps track of the elements added to PendingDeclChains.
+   llvm::SmallSet<serialization::DeclID, 16> PendingDeclChainsKnown;
+ 
++#if defined(__GNUC__) && (__GNUC__ == 4 && __GNUC_MINOR__ < 2)
++private:
++#endif
+   /// \brief The Decl IDs for the Sema/Lexical DeclContext of a Decl that has
+   /// been loaded but its DeclContext was not set yet.
+   struct PendingDeclContextInfo {
+diff --git a/tools/clang/lib/AST/ASTContext.cpp b/tools/clang/lib/AST/ASTContext.cpp
+index 176aec5..8d77927 100644
+--- a/tools/clang/lib/AST/ASTContext.cpp
++++ b/tools/clang/lib/AST/ASTContext.cpp
+@@ -5029,6 +5029,7 @@ static char getObjCEncodingForPrimitiveKind(const ASTContext *C,
+       llvm_unreachable("invalid builtin type for @encode");
+     }
+     llvm_unreachable("invalid BuiltinType::Kind value");
++    return '\0';	// unreachable, just to suppress warning
+ }
+ 
+ static char ObjCEncodingForEnumType(const ASTContext *C, const EnumType *ET) {
+diff --git a/tools/clang/lib/AST/ExprConstant.cpp b/tools/clang/lib/AST/ExprConstant.cpp
+index 8c65029..7bf6984 100644
+--- a/tools/clang/lib/AST/ExprConstant.cpp
++++ b/tools/clang/lib/AST/ExprConstant.cpp
+@@ -1690,7 +1690,7 @@ findSubobject(EvalInfo &Info, const Expr *E, const CompleteObject &Obj,
+         assert(I == N - 1 && "extracting subobject of character?");
+         assert(!O->hasLValuePath() || O->getLValuePath().empty());
+         if (handler.AccessKind != AK_Read)
+-          expandStringLiteral(Info, O->getLValueBase().get<const Expr *>(),
++          expandStringLiteral(Info, O->getLValueBase().template get<const Expr *>(),
+                               *O);
+         else
+           return handler.foundString(*O, ObjType, Index);
+@@ -3322,7 +3322,8 @@ public:
+     if (E->isArrow()) {
+       if (!EvaluatePointer(E->getBase(), Result, this->Info))
+         return false;
+-      BaseTy = E->getBase()->getType()->castAs<PointerType>()->getPointeeType();
++      BaseTy = E->getBase()->getType()->template castAs<PointerType>()
++		->getPointeeType();
+     } else if (E->getBase()->isRValue()) {
+       assert(E->getBase()->getType()->isRecordType());
+       if (!EvaluateTemporary(E->getBase(), Result, this->Info))
+diff --git a/tools/clang/lib/Basic/Targets.cpp b/tools/clang/lib/Basic/Targets.cpp
+index a622a11..9604e6e 100644
+--- a/tools/clang/lib/Basic/Targets.cpp
++++ b/tools/clang/lib/Basic/Targets.cpp
+@@ -1220,6 +1220,7 @@ public:
+     : DarwinTargetInfo<PPC32TargetInfo>(triple) {
+     HasAlignMac68kSupport = true;
+     BoolWidth = BoolAlign = 32; //XXX support -mone-byte-bool?
++    PtrDiffType = SignedInt;	// for http://llvm.org/bugs/show_bug.cgi?id=15726
+     LongLongAlign = 32;
+     SuitableAlign = 128;
+     DescriptionString = "E-p:32:32:32-i1:8:8-i8:8:8-i16:16:16-i32:32:32-"
+diff --git a/tools/clang/lib/Driver/Driver.cpp b/tools/clang/lib/Driver/Driver.cpp
+index 1dbbc9a..848451e 100644
+--- a/tools/clang/lib/Driver/Driver.cpp
++++ b/tools/clang/lib/Driver/Driver.cpp
+@@ -1723,6 +1723,14 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
+     case llvm::Triple::IOS:
+       if (Target.getArch() == llvm::Triple::x86 ||
+           Target.getArch() == llvm::Triple::x86_64 ||
++#if 1
++	// uncomment this to use DarwinClang driver for ppc family
++          Target.getArch() == llvm::Triple::ppc ||
++          Target.getArch() == llvm::Triple::ppc64 ||
++	// see bugs:
++	// http://llvm.org/bugs/show_bug.cgi?id=14387
++	// http://llvm.org/bugs/show_bug.cgi?id=14275
++#endif
+           Target.getArch() == llvm::Triple::arm ||
+           Target.getArch() == llvm::Triple::thumb)
+         TC = new toolchains::DarwinClang(*this, Target, Args);
+diff --git a/tools/clang/lib/Driver/Tools.cpp b/tools/clang/lib/Driver/Tools.cpp
+index aba1fe4..6c5db92 100644
+--- a/tools/clang/lib/Driver/Tools.cpp
++++ b/tools/clang/lib/Driver/Tools.cpp
+@@ -4316,6 +4316,14 @@ void darwin::DarwinTool::AddDarwinArch(const ArgList &Args,
+ 
+   // Derived from darwin_arch spec.
+   CmdArgs.push_back("-arch");
++#if 1
++// suggested patch from http://llvm.org/bugs/show_bug.cgi?id=3830
++  if (ArchName == "powerpc")
++    CmdArgs.push_back("ppc");
++  else if (ArchName == "powerpc64")
++    CmdArgs.push_back("ppc64");
++  else
++#endif
+   CmdArgs.push_back(Args.MakeArgString(ArchName));
+ 
+   // FIXME: Is this needed anymore?
+@@ -4455,6 +4463,7 @@ void darwin::Link::AddLinkArgs(Compilation &C,
+ 
+   // Add the deployment target.
+   VersionTuple TargetVersion = DarwinTC.getTargetVersion();
++  const std::string mmvs1(TargetVersion.getAsString());
+ 
+   // If we had an explicit -mios-simulator-version-min argument, honor that,
+   // otherwise use the traditional deployment targets. We can't just check the
+@@ -4463,13 +4472,25 @@ void darwin::Link::AddLinkArgs(Compilation &C,
+   //
+   // FIXME: We may be able to remove this, once we can verify no one depends on
+   // it.
+-  if (Args.hasArg(options::OPT_mios_simulator_version_min_EQ))
++  if (Args.hasArg(options::OPT_mios_simulator_version_min_EQ)) {
+     CmdArgs.push_back("-ios_simulator_version_min");
+-  else if (DarwinTC.isTargetIPhoneOS())
++    CmdArgs.push_back(Args.MakeArgString(mmvs1));
++  } else if (DarwinTC.isTargetIPhoneOS()) {
+     CmdArgs.push_back("-iphoneos_version_min");
+-  else
++    CmdArgs.push_back(Args.MakeArgString(mmvs1));
++  } else {
+     CmdArgs.push_back("-macosx_version_min");
+-  CmdArgs.push_back(Args.MakeArgString(TargetVersion.getAsString()));
++    const unsigned vmin = *TargetVersion.getMinor();
++    if (vmin <= 4) {
++    const VersionTuple
++      MmTargetVersion(TargetVersion.getMajor(), vmin);
++      // for darwin8 ld: omit subminor number, so we get 10.4 instead of 10.4.0
++      const std::string mmvs2(MmTargetVersion.getAsString());
++      CmdArgs.push_back(Args.MakeArgString(mmvs2));
++    } else {
++      CmdArgs.push_back(Args.MakeArgString(mmvs1));
++    }
++  }
+ 
+   Args.AddLastArg(CmdArgs, options::OPT_nomultidefs);
+   Args.AddLastArg(CmdArgs, options::OPT_multi__module);
+diff --git a/tools/clang/lib/Sema/TypeLocBuilder.h b/tools/clang/lib/Sema/TypeLocBuilder.h
+index f36ec9f..79548e1 100644
+--- a/tools/clang/lib/Sema/TypeLocBuilder.h
++++ b/tools/clang/lib/Sema/TypeLocBuilder.h
+@@ -98,7 +98,7 @@ class TypeLocBuilder {
+   /// any TypeLocs previously retrieved from this builder.
+   template <class TyLocType> TyLocType push(QualType T) {
+     size_t LocalSize = TypeLoc(T, 0).castAs<TyLocType>().getLocalDataSize();
+-    return pushImpl(T, LocalSize).castAs<TyLocType>();
++    return pushImpl(T, LocalSize).template castAs<TyLocType>();
+   }
+ 
+   /// Creates a TypeSourceInfo for the given type.
+diff --git a/tools/clang/test/Driver/target-triple-deployment.c b/tools/clang/test/Driver/target-triple-deployment.c
+index 8e4824a..a41938e 100644
+--- a/tools/clang/test/Driver/target-triple-deployment.c
++++ b/tools/clang/test/Driver/target-triple-deployment.c
+@@ -12,7 +12,7 @@
+ 
+ // CHECK: {{ld(.exe)?"}}
+ // CHECK: -macosx_version_min
+-// CHECK: 10.4.0
++// CHECK: 10.4
+ // CHECK: {{ld(.exe)?"}}
+ // CHECK: -macosx_version_min
+ // CHECK: 10.5.0
+diff --git a/tools/clang/test/Tooling/auto-detect-from-source-parent-of-cwd.cpp b/tools/clang/test/Tooling/auto-detect-from-source-parent-of-cwd.cpp
+index 6b632b0..b1778a6 100644
+--- a/tools/clang/test/Tooling/auto-detect-from-source-parent-of-cwd.cpp
++++ b/tools/clang/test/Tooling/auto-detect-from-source-parent-of-cwd.cpp
+@@ -2,7 +2,7 @@
+ // RUN: mkdir -p %t/abc/def/ijk/qwe
+ // RUN: echo "[{\"directory\":\".\",\"command\":\"clang++ -c %t/abc/def/ijk/qwe/test.cpp\",\"file\":\"%t/abc/def/ijk/qwe/test.cpp\"}]" | sed -e 's/\\/\\\\/g' > %t/compile_commands.json
+ // RUN: cp "%s" "%t/abc/def/ijk/qwe/test.cpp"
+-// RUN: PWD="%t/abc/def" clang-check "ijk/qwe/test.cpp" 2>&1 | FileCheck %s
++// RUN: env PWD="%t/abc/def" clang-check "ijk/qwe/test.cpp" 2>&1 | FileCheck %s
+ 
+ // CHECK: C++ requires
+ invalid;
+diff --git a/tools/clang/test/Tooling/clang-check-pwd.cpp b/tools/clang/test/Tooling/clang-check-pwd.cpp
+index 463ed40..ac245f7 100644
+--- a/tools/clang/test/Tooling/clang-check-pwd.cpp
++++ b/tools/clang/test/Tooling/clang-check-pwd.cpp
+@@ -2,7 +2,7 @@
+ // RUN: mkdir %t
+ // RUN: echo "[{\"directory\":\".\",\"command\":\"clang++ -c %t/test.cpp\",\"file\":\"%t/test.cpp\"}]" | sed -e 's/\\/\\\\/g' > %t/compile_commands.json
+ // RUN: cp "%s" "%t/test.cpp"
+-// RUN: PWD="%t" clang-check -p "%t" "test.cpp" 2>&1|FileCheck %s
++// RUN: env PWD="%t" clang-check -p "%t" "test.cpp" 2>&1|FileCheck %s
+ // FIXME: Make the above easier.
+ 
+ // CHECK: C++ requires
+diff --git a/tools/clang/tools/libclang/CIndex.cpp b/tools/clang/tools/libclang/CIndex.cpp
+index a43c1ab..09ed323 100644
+--- a/tools/clang/tools/libclang/CIndex.cpp
++++ b/tools/clang/tools/libclang/CIndex.cpp
+@@ -6367,8 +6367,11 @@ void clang::setThreadBackgroundPriority() {
+ 
+   // FIXME: Move to llvm/Support and make it cross-platform.
+ #ifdef __APPLE__
++// constants are not defined on darwin8, expected in <sys/resource.h>
++#if	defined(PRIO_DARWIN_THREAD) && defined(PRIO_DARWIN_BG)
+   setpriority(PRIO_DARWIN_THREAD, 0, PRIO_DARWIN_BG);
+ #endif
++#endif
+ }
+ 
+ void cxindex::printDiagsToStderr(ASTUnit *Unit) {
+diff --git a/projects/compiler-rt/CMakeLists.txt b/projects/compiler-rt/CMakeLists.txt
+index 9deb608..7c54a00 100644
+--- a/projects/compiler-rt/CMakeLists.txt
++++ b/projects/compiler-rt/CMakeLists.txt
+@@ -91,8 +91,8 @@ if("${LLVM_NATIVE_ARCH}" STREQUAL "X86")
+ elseif("${LLVM_NATIVE_ARCH}" STREQUAL "PowerPC")
+   # Explicitly set -m flag on powerpc, because on ppc64 defaults for gcc and
+   # clang are different.
+-  test_target_arch(powerpc64 "-m64")
+-  test_target_arch(powerpc "-m32")
++  test_target_arch(ppc64 "-m64")
++  test_target_arch(ppc "-m32")
+ endif()
+ 
+ # We only support running instrumented tests when we're not cross compiling
+@@ -125,7 +125,7 @@ set(SANITIZER_COMMON_CFLAGS
+   -fno-builtin
+   -fno-exceptions
+   -fomit-frame-pointer
+-  -funwind-tables
++  -fasynchronous-unwind-tables
+   -O3
+   )
+ if(NOT WIN32)
+@@ -136,6 +136,7 @@ check_cxx_compiler_flag(-gline-tables-only SUPPORTS_GLINE_TABLES_ONLY_FLAG)
+ if(SUPPORTS_GLINE_TABLES_ONLY_FLAG)
+   list(APPEND SANITIZER_COMMON_CFLAGS -gline-tables-only)
+ else()
++# only enable -g for stage 1, stage 2 (-no-integrated-as) unable to handle -g
+   list(APPEND SANITIZER_COMMON_CFLAGS -g)
+ endif()
+ # Warnings suppressions.
+@@ -159,7 +160,7 @@ if(APPLE)
+   if(COMPILER_RT_USES_LIBCXX)
+     set(SANITIZER_MIN_OSX_VERSION 10.7)
+   else()
+-    set(SANITIZER_MIN_OSX_VERSION 10.5)
++    set(SANITIZER_MIN_OSX_VERSION 10.4)
+   endif()
+   list(APPEND SANITIZER_COMMON_CFLAGS
+     -mmacosx-version-min=${SANITIZER_MIN_OSX_VERSION})
+@@ -168,7 +169,7 @@ endif()
+ # Architectures supported by Sanitizer runtimes. Specific sanitizers may
+ # support only subset of these (e.g. TSan works on x86_64 only).
+ filter_available_targets(SANITIZER_COMMON_SUPPORTED_ARCH
+-  x86_64 i386 powerpc64 powerpc)
++  x86_64 i386 ppc64 ppc)
+ 
+ # Add the public header's directory to the includes for all of compiler-rt.
+ include_directories(include)
+diff --git a/projects/compiler-rt/SDKs/darwin/usr/include/stdio.h b/projects/compiler-rt/SDKs/darwin/usr/include/stdio.h
+index 63b10a8..6b9da2d 100644
+--- a/projects/compiler-rt/SDKs/darwin/usr/include/stdio.h
++++ b/projects/compiler-rt/SDKs/darwin/usr/include/stdio.h
+@@ -35,11 +35,14 @@ typedef __SIZE_TYPE__ size_t;
+ #  elif defined(__arm)
+ #    define __FOPEN_NAME "_fopen"
+ #    define __FWRITE_NAME "_fwrite"
++#  elif defined(__ppc__)
++#    define __FOPEN_NAME "_fopen"
++#    define __FWRITE_NAME "_fwrite"
+ #  else
+ #    error "unrecognized architecture for targetting OS X"
+ #  endif
+ #elif defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
+-#  if defined(__i386) || defined (__x86_64)
++#  if defined(__i386) || defined (__x86_64) || defined(__ppc__)
+ #    define __FOPEN_NAME "_fopen"
+ #    define __FWRITE_NAME "_fwrite"
+ #  elif defined(__arm)
+diff --git a/projects/compiler-rt/lib/CMakeLists.txt b/projects/compiler-rt/lib/CMakeLists.txt
+index 611e4a1..da5a494 100644
+--- a/projects/compiler-rt/lib/CMakeLists.txt
++++ b/projects/compiler-rt/lib/CMakeLists.txt
+@@ -178,7 +178,23 @@ set(i386_SOURCES
+   i386/umoddi3.S
+   ${GENERIC_SOURCES})
+ 
+-foreach(arch x86_64 i386)
++set(ppc_SOURCES
++	ppc/divtc3.c
++	ppc/fixtfdi.c
++	ppc/floatditf.c
++	ppc/floatunditf.c
++	ppc/fixunstfdi.c
++	ppc/gcc_qadd.c
++	ppc/gcc_qdiv.c
++	ppc/gcc_qmul.c
++	ppc/gcc_qsub.c
++	ppc/multc3.c
++	ppc/restFP.S
++	ppc/saveFP.S
++	ppc/cache_flush.S
++	${GENERIC_SOURCES})
++
++foreach(arch x86_64 i386 ppc)
+   if(CAN_TARGET_${arch})
+     add_compiler_rt_static_runtime(clang_rt.${arch} ${arch}
+       SOURCES ${${arch}_SOURCES}
+diff --git a/projects/compiler-rt/lib/OSCacheControl.h b/projects/compiler-rt/lib/OSCacheControl.h
+new file mode 100644
+index 0000000..a9955f4
+--- /dev/null
++++ b/projects/compiler-rt/lib/OSCacheControl.h
+@@ -0,0 +1,51 @@
++/* ===-- OSCacheControl.h - Interface cache flush functions ----------------===
++ *
++ *                     The LLVM Compiler Infrastructure
++ *
++ * This file is dual licensed under the MIT and the University of Illinois Open
++ * Source Licenses. See LICENSE.TXT for details.
++ *
++ * ===----------------------------------------------------------------------===
++ */
++
++#ifndef	__OS_CACHHE_CONTROL_H__
++#define	__OS_CACHHE_CONTROL_H__
++
++#include <stddef.h>		/* size_t */
++#include <sys/cdefs.h>
++
++__BEGIN_DECLS
++
++/* we will provide assembly from darwin9 sources */
++/* perform one of the above cache functions: */
++
++/** Prepare memory for execution.  This should be called
++ * after writing machine instructions to memory, before
++ * executing them.  It syncs the dcache and icache.
++ * On IA32 processors this function is a NOP, because
++ * no synchronization is required.
++ */
++#define kCacheFunctionPrepareForExecution       1
++
++/* Flush data cache(s).  This ensures that cached data 
++ * makes it all the way out to DRAM, and then removes
++ * copies of the data from all processor caches.
++ * It can be useful when dealing with cache incoherent
++ * devices or DMA.
++ */
++#define kCacheFunctionFlushDcache       2
++
++extern
++int     sys_cache_control( int function, void *start, size_t len);
++
++/* equivalent to sys_cache_control(kCacheFunctionPrepareForExecution): */
++extern
++void    sys_icache_invalidate( void *start, size_t len);
++
++/* equivalent to sys_cache_control(kCacheFunctionFlushDcache): */
++extern
++void    sys_dcache_flush( void *start, size_t len);
++
++__END_DECLS
++
++#endif	/* __OS_CACHHE_CONTROL_H__ */
+diff --git a/projects/compiler-rt/lib/asan/CMakeLists.txt b/projects/compiler-rt/lib/asan/CMakeLists.txt
+index b70a29c..a5b9ea2 100644
+--- a/projects/compiler-rt/lib/asan/CMakeLists.txt
++++ b/projects/compiler-rt/lib/asan/CMakeLists.txt
+@@ -48,7 +48,7 @@ endif()
+ 
+ # Architectures supported by ASan.
+ filter_available_targets(ASAN_SUPPORTED_ARCH
+-  x86_64 i386 powerpc64 powerpc)
++  x86_64 i386 ppc64 ppc)
+ 
+ set(ASAN_RUNTIME_LIBRARIES)
+ if(APPLE)
+diff --git a/projects/compiler-rt/lib/asan/asan_interceptors.cc b/projects/compiler-rt/lib/asan/asan_interceptors.cc
+index 0c467b3..c7ac83f 100644
+--- a/projects/compiler-rt/lib/asan/asan_interceptors.cc
++++ b/projects/compiler-rt/lib/asan/asan_interceptors.cc
+@@ -102,6 +102,7 @@ static void DisableStrictInitOrderChecker() {
+ }  // namespace __asan
+ 
+ // ---------------------- Wrappers ---------------- {{{1
++using __sanitizer::OFF_T;
+ using namespace __asan;  // NOLINT
+ 
+ #define COMMON_INTERCEPTOR_WRITE_RANGE(ctx, ptr, size) \
+diff --git a/projects/compiler-rt/lib/asan/asan_mac.cc b/projects/compiler-rt/lib/asan/asan_mac.cc
+index 63fb5f6..a3c5659 100644
+--- a/projects/compiler-rt/lib/asan/asan_mac.cc
++++ b/projects/compiler-rt/lib/asan/asan_mac.cc
+@@ -37,19 +37,30 @@
+ #include <unistd.h>
+ #include <libkern/OSAtomic.h>
+ 
++#if defined(__GNUC__) && (__GNUC__ == 4) && (__GNUC_MINOR__ < 2)
++#define	MISSING_BLOCKS_SUPPORT
++#endif
++
+ namespace __asan {
+ 
+ void GetPcSpBp(void *context, uptr *pc, uptr *sp, uptr *bp) {
+   ucontext_t *ucontext = (ucontext_t*)context;
++#if defined(__ppc__) || defined(__ppc64__)
++  *pc = ucontext->uc_mcontext->ss.srr0;
++  *bp = ucontext->uc_mcontext->ss.r1;		// or r31
++	// powerpc has no dedicated frame pointer
++  *sp = ucontext->uc_mcontext->ss.r1;
++#else
+ # if SANITIZER_WORDSIZE == 64
+   *pc = ucontext->uc_mcontext->__ss.__rip;
+   *bp = ucontext->uc_mcontext->__ss.__rbp;
+   *sp = ucontext->uc_mcontext->__ss.__rsp;
+ # else
+-  *pc = ucontext->uc_mcontext->__ss.__eip;
+-  *bp = ucontext->uc_mcontext->__ss.__ebp;
+-  *sp = ucontext->uc_mcontext->__ss.__esp;
++  *pc = ucontext->uc_mcontext->ss.eip;
++  *bp = ucontext->uc_mcontext->ss.ebp;
++  *sp = ucontext->uc_mcontext->ss.esp;
+ # endif  // SANITIZER_WORDSIZE
++#endif
+ }
+ 
+ int GetMacosVersion() {
+diff --git a/projects/compiler-rt/lib/clear_cache.c b/projects/compiler-rt/lib/clear_cache.c
+index b934fd4..99bc554 100644
+--- a/projects/compiler-rt/lib/clear_cache.c
++++ b/projects/compiler-rt/lib/clear_cache.c
+@@ -11,7 +11,12 @@
+ #include "int_lib.h"
+ 
+ #if __APPLE__
++#if (@DARWIN_VERSION@ > 8)
++/* only appeared in 10.5+ (darwin9) */
+   #include <libkern/OSCacheControl.h>
++#else
++  #include "OSCacheControl.h"		/* provided */
++#endif
+ #endif
+ 
+ /*
+diff --git a/projects/compiler-rt/lib/interception/interception_type_test.cc b/projects/compiler-rt/lib/interception/interception_type_test.cc
+index 7b79b78..e3c00d0 100644
+--- a/projects/compiler-rt/lib/interception/interception_type_test.cc
++++ b/projects/compiler-rt/lib/interception/interception_type_test.cc
+@@ -33,6 +33,7 @@ COMPILER_CHECK(sizeof(OFF64_T) == sizeof(off64_t));
+ // rest (they depend on _FILE_OFFSET_BITS setting when building an application).
+ # if defined(__ANDROID__) || !defined _FILE_OFFSET_BITS || \
+   _FILE_OFFSET_BITS != 64
++using __sanitizer::OFF_T;	// gcc-4.0 workaround?  shouldn't be needed
+ COMPILER_CHECK(sizeof(OFF_T) == sizeof(off_t));
+ # endif
+ 
+diff --git a/projects/compiler-rt/lib/ppc/cache_flush.S b/projects/compiler-rt/lib/ppc/cache_flush.S
+new file mode 100644
+index 0000000..fb61f94
+--- /dev/null
++++ b/projects/compiler-rt/lib/ppc/cache_flush.S
+@@ -0,0 +1,20 @@
++#include <machine/cpu_capabilities.h>
++
++/* void sys_icache_invalidate(char *start, long len) */
++
++	.text
++	.globl  _sys_icache_invalidate
++	.align  2
++_sys_icache_invalidate:
++	ba      _COMM_PAGE_FLUSH_ICACHE
++
++
++
++/* void sys_dcache_flush(char *start, long len) */
++
++	.text
++	.globl  _sys_dcache_flush
++	.align  2
++_sys_dcache_flush:
++	ba      _COMM_PAGE_FLUSH_DCACHE
++
+diff --git a/projects/compiler-rt/lib/profile/CMakeLists.txt b/projects/compiler-rt/lib/profile/CMakeLists.txt
+index 641f085..2e16ca4 100644
+--- a/projects/compiler-rt/lib/profile/CMakeLists.txt
++++ b/projects/compiler-rt/lib/profile/CMakeLists.txt
+@@ -7,7 +7,9 @@ if(APPLE)
+   add_compiler_rt_osx_static_runtime(clang_rt.profile_osx
+     ARCH ${PROFILE_SUPPORTED_ARCH}
+     SOURCES ${PROFILE_SOURCES}
+-    CFLAGS --sysroot=${COMPILER_RT_DARWIN_SDK_SYSROOT})
++#    CFLAGS -isysroot ${COMPILER_RT_DARWIN_SDK_SYSROOT}
++#    CFLAGS --sysroot=${COMPILER_RT_DARWIN_SDK_SYSROOT}
++)
+ else()
+   foreach(arch ${PROFILE_SUPPORTED_ARCH})
+     add_compiler_rt_static_runtime(clang_rt.profile-${arch} ${arch}
+diff --git a/projects/compiler-rt/lib/sanitizer_common/sanitizer_allocator.h b/projects/compiler-rt/lib/sanitizer_common/sanitizer_allocator.h
+index d0716a4..e52413c 100644
+--- a/projects/compiler-rt/lib/sanitizer_common/sanitizer_allocator.h
++++ b/projects/compiler-rt/lib/sanitizer_common/sanitizer_allocator.h
+@@ -1052,6 +1052,7 @@ class LargeMmapAllocator {
+   }
+ 
+  private:
++  enum { kMaxNumChunks_e = 1 << FIRST_32_SECOND_64(15, 18) };
+   static const int kMaxNumChunks = 1 << FIRST_32_SECOND_64(15, 18);
+   struct Header {
+     uptr map_beg;
+@@ -1076,7 +1077,7 @@ class LargeMmapAllocator {
+   }
+ 
+   uptr page_size_;
+-  Header *chunks_[kMaxNumChunks];
++  Header *chunks_[kMaxNumChunks_e];
+   uptr n_chunks_;
+   struct Stats {
+     uptr n_allocs, n_frees, currently_allocated, max_allocated, by_size_log[64];
+diff --git a/projects/compiler-rt/lib/sanitizer_common/sanitizer_atomic_clang.h b/projects/compiler-rt/lib/sanitizer_common/sanitizer_atomic_clang.h
+index 30158b4..bbb92db 100644
+--- a/projects/compiler-rt/lib/sanitizer_common/sanitizer_atomic_clang.h
++++ b/projects/compiler-rt/lib/sanitizer_common/sanitizer_atomic_clang.h
+@@ -15,6 +15,52 @@
+ #ifndef SANITIZER_ATOMIC_CLANG_H
+ #define SANITIZER_ATOMIC_CLANG_H
+ 
++/**
++	When compiling with gcc-4.0 during stage 1, 
++	these workaround definitions are needed.
++	Stage 2 and beyond should use clang's built-ins.
++	See also workarounds in llvm/lib/Support/Atomic.cpp.
++ */
++#define USE_DARWIN_ATOMICS		(defined(__APPLE__) && defined(__GNUC__) && (__GNUC__ == 4) && (__GNUC_MINOR__ < 2))
++#if USE_DARWIN_ATOMICS
++#include <libkern/OSAtomic.h>
++
++#define	__sync_synchronize		OSMemoryBarrier
++// argument and return types for OSAtomic library functions
++typedef	int32_t		atomic32_t;
++
++template <class T>
++static inline
++T* vcast(volatile T* ptr) { return const_cast<T*>(ptr); }
++
++template <class T, class S>
++static inline
++T as_a(S ptr) {
++//  static_assert(sizeof(S) == sizeof(T));
++//  return static_cast<T>(ptr);
++  return reinterpret_cast<T>(ptr);
++}
++
++template <class T>
++static inline
++T
++__sync_fetch_and_add(volatile T* ptr, const T v) {
++	const T ret = *ptr;
++	OSAtomicAdd32Barrier(v, as_a<atomic32_t*>(vcast(ptr)));
++	return ret;
++}
++
++template <class T>
++static
++inline
++T
++__sync_val_compare_and_swap(volatile T* ptr, const T oldv, const T newv) {
++  const T ret = *ptr;
++  OSAtomicCompareAndSwap32Barrier(oldv, newv, as_a<atomic32_t*>(vcast(ptr)));
++  return ret;
++}
++#endif	// USE_DARWIN_ATOMICS
++
+ namespace __sanitizer {
+ 
+ INLINE void atomic_signal_fence(memory_order) {
+@@ -91,7 +137,11 @@ INLINE typename T::Type atomic_exchange(volatile T *a,
+   DCHECK(!((uptr)a % sizeof(*a)));
+   if (mo & (memory_order_release | memory_order_acq_rel | memory_order_seq_cst))
+     __sync_synchronize();
++#if USE_DARWIN_ATOMICS
++  v = OSAtomicTestAndSetBarrier(v, vcast(&a->val_dont_use));
++#else
+   v = __sync_lock_test_and_set(&a->val_dont_use, v);
++#endif
+   if (mo == memory_order_seq_cst)
+     __sync_synchronize();
+   return v;
+diff --git a/projects/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cc b/projects/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cc
+index 1beab89..1373aff 100644
+--- a/projects/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cc
++++ b/projects/compiler-rt/lib/sanitizer_common/sanitizer_platform_limits_posix.cc
+@@ -45,7 +45,9 @@
+ namespace __sanitizer {
+   unsigned struct_utsname_sz = sizeof(struct utsname);
+   unsigned struct_stat_sz = sizeof(struct stat);
++#ifdef	HAVE_STRUCT_STAT64
+   unsigned struct_stat64_sz = sizeof(struct stat64);
++#endif
+   unsigned struct_rusage_sz = sizeof(struct rusage);
+   unsigned struct_tm_sz = sizeof(struct tm);
+   unsigned struct_passwd_sz = sizeof(struct passwd);
+diff --git a/tools/polly/lib/CMakeLists.txt b/tools/polly/lib/CMakeLists.txt
+index f6ace3a..e61c82a 100644
+--- a/tools/polly/lib/CMakeLists.txt
++++ b/tools/polly/lib/CMakeLists.txt
+@@ -1,29 +1,66 @@
+-add_subdirectory(Analysis)
+-add_subdirectory(CodeGen)
+-add_subdirectory(Exchange)
+-add_subdirectory(Support)
++# patch: flattened sub-components of Polly into monolithic link
++# to avoid intra-module circular dependencies
++# because cmake shared-lib build of convenience libraries is broken.
+ add_subdirectory(JSON)
+ 
+ set(MODULE TRUE)
+ set(LLVM_NO_RTTI 1)
+ 
+-if (SCOPLIB_FOUND)
+-  set(POLLY_SCOPLIB_FILES Pocc.cpp)
+-endif (SCOPLIB_FOUND)
+-
+ if (PLUTO_FOUND)
+   set(POLLY_PLUTO_FILES Pluto.cpp)
+ endif (PLUTO_FOUND)
+ 
+ set(LLVM_USED_LIBS
+-  PollyAnalysis
+-  PollyCodeGen
+-  PollyExchange
+-  PollySupport
+   PollyJSON
+   )
+ 
++if (CLOOG_FOUND)
++  set(CLOOG_FILES
++      CodeGen/Cloog.cpp
++      CodeGen/CodeGeneration.cpp)
++endif (CLOOG_FOUND)
++
++set(ISL_CODEGEN_FILES
++    CodeGen/IslAst.cpp
++    CodeGen/IslCodeGeneration.cpp)
++
++if (GPU_CODEGEN)
++  set (GPGPU_CODEGEN_FILES
++       CodeGen/PTXGenerator.cpp)
++endif (GPU_CODEGEN)
++
++if (OPENSCOP_FOUND)
++  set(POLLY_OPENSCOP_FILES
++      Exchange/OpenScopImporter.cpp
++      Exchange/OpenScopExporter.cpp)
++endif (OPENSCOP_FOUND)
++
++if (SCOPLIB_FOUND)
++  set(POLLY_SCOPLIB_FILES
++      Pocc.cpp
++      Exchange/ScopLib.cpp
++      Exchange/ScopLibExporter.cpp
++      Exchange/ScopLibImporter.cpp)
++endif (SCOPLIB_FOUND)
++
+ add_polly_loadable_module(LLVMPolly
++  Analysis/Dependences.cpp
++  Analysis/ScopDetection.cpp
++  Analysis/ScopInfo.cpp
++  Analysis/ScopGraphPrinter.cpp
++  Analysis/ScopPass.cpp
++  Analysis/TempScopInfo.cpp
++  CodeGen/BlockGenerators.cpp
++  ${CLOOG_FILES}
++  ${ISL_CODEGEN_FILES}
++  CodeGen/LoopGenerators.cpp
++  CodeGen/Utils.cpp
++  ${GPGPU_CODEGEN_FILES}
++  Support/GICHelper.cpp
++  Support/SCEVValidator.cpp
++  Support/ScopHelper.cpp
++  Exchange/JSONExporter.cpp
++  ${POLLY_OPENSCOP_FILES}
+   CodePreparation.cpp
+   DeadCodeElimination.cpp
+   IndependentBlocks.cpp
+@@ -42,10 +79,6 @@ if (TARGET intrinsics_gen)
+ endif()
+ 
+ add_dependencies(LLVMPolly
+-  PollyAnalysis
+-  PollyCodeGen
+-  PollyExchange
+-  PollySupport
+   PollyJSON
+   )
+ 
+@@ -57,3 +90,8 @@ set_target_properties(LLVMPolly
+ if (PLUTO_FOUND)
+   target_link_libraries(LLVMPolly ${PLUTO_LIBRARY})
+ endif(PLUTO_FOUND)
++
++target_link_libraries(LLVMPolly
++  LLVMSupport
++  LLVMTransformUtils
++)
