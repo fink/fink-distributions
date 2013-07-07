@@ -1,0 +1,432 @@
+diff -ru db-4.7.25.orig/dbinc/repmgr.h db-4.7.25/dbinc/repmgr.h
+--- db-4.7.25.orig/dbinc/repmgr.h	2008-01-08 15:58:18.000000000 -0500
++++ db-4.7.25/dbinc/repmgr.h	2009-05-13 20:44:47.000000000 -0400
+@@ -374,6 +374,7 @@
+ #define	SITE_FROM_EID(eid)	(&db_rep->sites[eid])
+ #define	EID_FROM_SITE(s)	((int)((s) - (&db_rep->sites[0])))
+ #define	IS_VALID_EID(e)		((e) >= 0)
++#define	IS_KNOWN_REMOTE_SITE(e)	((e) >= 0 && ((u_int)(e)) < db_rep->site_cnt)
+ #define	SELF_EID		INT_MAX
+ 
+ #define	IS_PEER_POLICY(p) ((p) == DB_REPMGR_ACKS_ALL_PEERS ||		\
+diff -ru db-4.7.25.orig/lock/lock.c db-4.7.25/lock/lock.c
+--- db-4.7.25.orig/lock/lock.c	2008-05-07 08:27:35.000000000 -0400
++++ db-4.7.25/lock/lock.c	2009-05-13 20:43:56.000000000 -0400
+@@ -1274,10 +1274,12 @@
+ 		SH_TAILQ_REMOVE(
+ 		    &lt->obj_tab[obj_ndx], sh_obj, links, __db_lockobj);
+ 		if (sh_obj->lockobj.size > sizeof(sh_obj->objdata)) {
+-			LOCK_REGION_LOCK(env);
++			if (region->part_t_size != 1)
++				LOCK_REGION_LOCK(env);
+ 			__env_alloc_free(&lt->reginfo,
+ 			    SH_DBT_PTR(&sh_obj->lockobj));
+-			LOCK_REGION_UNLOCK(env);
++			if (region->part_t_size != 1)
++				LOCK_REGION_UNLOCK(env);
+ 		}
+ 		SH_TAILQ_INSERT_HEAD(
+ 		    &FREE_OBJS(lt, part_id), sh_obj, links, __db_lockobj);
+@@ -1467,15 +1469,21 @@
+ 		if (obj->size <= sizeof(sh_obj->objdata))
+ 			p = sh_obj->objdata;
+ 		else {
+-			LOCK_REGION_LOCK(env);
++			/*
++			 * If we have only one partition, the region is locked.
++			 */
++			if (region->part_t_size != 1)
++				LOCK_REGION_LOCK(env);
+ 			if ((ret =
+ 			    __env_alloc(&lt->reginfo, obj->size, &p)) != 0) {
+ 				__db_errx(env,
+ 				    "No space for lock object storage");
+-				LOCK_REGION_UNLOCK(env);
++				if (region->part_t_size != 1)
++					LOCK_REGION_UNLOCK(env);
+ 				goto err;
+ 			}
+-			LOCK_REGION_UNLOCK(env);
++			if (region->part_t_size != 1)
++				LOCK_REGION_UNLOCK(env);
+ 		}
+ 
+ 		memcpy(p, obj->data, obj->size);
+diff -ru db-4.7.25.orig/lock/lock_deadlock.c db-4.7.25/lock/lock_deadlock.c
+--- db-4.7.25.orig/lock/lock_deadlock.c	2008-03-10 09:31:33.000000000 -0400
++++ db-4.7.25/lock/lock_deadlock.c	2009-05-13 20:43:56.000000000 -0400
+@@ -121,7 +121,7 @@
+ 	DB_LOCKTAB *lt;
+ 	db_timespec now;
+ 	locker_info *idmap;
+-	u_int32_t *bitmap, *copymap, **deadp, **free_me, *tmpmap;
++	u_int32_t *bitmap, *copymap, **deadp, **deadlist, *tmpmap;
+ 	u_int32_t i, cid, keeper, killid, limit, nalloc, nlockers;
+ 	u_int32_t lock_max, txn_max;
+ 	int ret, status;
+@@ -133,7 +133,8 @@
+ 	if (IS_REP_CLIENT(env))
+ 		atype = DB_LOCK_MINWRITE;
+ 
+-	free_me = NULL;
++	copymap = tmpmap = NULL;
++	deadlist = NULL;
+ 
+ 	lt = env->lk_handle;
+ 	if (rejectp != NULL)
+@@ -179,11 +180,11 @@
+ 	memcpy(copymap, bitmap, nlockers * sizeof(u_int32_t) * nalloc);
+ 
+ 	if ((ret = __os_calloc(env, sizeof(u_int32_t), nalloc, &tmpmap)) != 0)
+-		goto err1;
++		goto err;
+ 
+ 	/* Find a deadlock. */
+ 	if ((ret =
+-	    __dd_find(env, bitmap, idmap, nlockers, nalloc, &deadp)) != 0)
++	    __dd_find(env, bitmap, idmap, nlockers, nalloc, &deadlist)) != 0)
+ 		return (ret);
+ 
+ 	/*
+@@ -204,8 +205,7 @@
+ 		txn_max = TXN_MAXIMUM;
+ 
+ 	killid = BAD_KILLID;
+-	free_me = deadp;
+-	for (; *deadp != NULL; deadp++) {
++	for (deadp = deadlist; *deadp != NULL; deadp++) {
+ 		if (rejectp != NULL)
+ 			++*rejectp;
+ 		killid = (u_int32_t)(*deadp - bitmap) / nalloc;
+@@ -342,11 +342,12 @@
+ 			__db_msg(env,
+ 			    "Aborting locker %lx", (u_long)idmap[killid].id);
+ 	}
+-	__os_free(env, tmpmap);
+-err1:	__os_free(env, copymap);
+-
+-err:	if (free_me != NULL)
+-		__os_free(env, free_me);
++err:	if(copymap != NULL)
++		__os_free(env, copymap);
++	if (deadlist != NULL)
++		__os_free(env, deadlist);
++	if(tmpmap != NULL)
++		__os_free(env, tmpmap);
+ 	__os_free(env, bitmap);
+ 	__os_free(env, idmap);
+ 
+@@ -360,6 +361,17 @@
+ 
+ #define	DD_INVALID_ID	((u_int32_t) -1)
+ 
++/*
++ * __dd_build --
++ *	Build the lock dependency bit maps.
++ * Notes on syncronization:  
++ *	LOCK_SYSTEM_LOCK is used to hold objects locked when we have
++ *		a single partition.
++ *	LOCK_LOCKERS is held while we are walking the lockers list and
++ *		to single thread the use of lockerp->dd_id.
++ *	LOCK_DD protects the DD list of objects.
++ */
++
+ static int
+ __dd_build(env, atype, bmp, nlockers, allocp, idmap, rejectp)
+ 	ENV *env;
+@@ -393,6 +405,7 @@
+ 	 * In particular we do not build the conflict array and our caller
+ 	 * needs to expect this.
+ 	 */
++	LOCK_SYSTEM_LOCK(lt, region);
+ 	if (atype == DB_LOCK_EXPIRE) {
+ skip:		LOCK_DD(env, region);
+ 		op = SH_TAILQ_FIRST(&region->dd_objs, __db_lockobj);
+@@ -430,17 +443,18 @@
+ 			OBJECT_UNLOCK(lt, region, indx);
+ 		}
+ 		UNLOCK_DD(env, region);
++		LOCK_SYSTEM_UNLOCK(lt, region);
+ 		goto done;
+ 	}
+ 
+ 	/*
+-	 * We'll check how many lockers there are, add a few more in for
+-	 * good measure and then allocate all the structures.  Then we'll
+-	 * verify that we have enough room when we go back in and get the
+-	 * mutex the second time.
++	 * Allocate after locking the region
++	 * to make sure the structures are large enough.
+ 	 */
+-retry:	count = region->stat.st_nlockers;
++	LOCK_LOCKERS(env, region);
++	count = region->stat.st_nlockers;
+ 	if (count == 0) {
++		UNLOCK_LOCKERS(env, region);
+ 		*nlockers = 0;
+ 		return (0);
+ 	}
+@@ -448,50 +462,37 @@
+ 	if (FLD_ISSET(env->dbenv->verbose, DB_VERB_DEADLOCK))
+ 		__db_msg(env, "%lu lockers", (u_long)count);
+ 
+-	count += 20;
+ 	nentries = (u_int32_t)DB_ALIGN(count, 32) / 32;
+ 
+-	/*
+-	 * Allocate enough space for a count by count bitmap matrix.
+-	 *
+-	 * XXX
+-	 * We can probably save the malloc's between iterations just
+-	 * reallocing if necessary because count grew by too much.
+-	 */
++	/* Allocate enough space for a count by count bitmap matrix. */
+ 	if ((ret = __os_calloc(env, (size_t)count,
+-	    sizeof(u_int32_t) * nentries, &bitmap)) != 0)
++	    sizeof(u_int32_t) * nentries, &bitmap)) != 0) {
++		UNLOCK_LOCKERS(env, region);
+ 		return (ret);
++	}
+ 
+ 	if ((ret = __os_calloc(env,
+ 	    sizeof(u_int32_t), nentries, &tmpmap)) != 0) {
++		UNLOCK_LOCKERS(env, region);
+ 		__os_free(env, bitmap);
+ 		return (ret);
+ 	}
+ 
+ 	if ((ret = __os_calloc(env,
+ 	    (size_t)count, sizeof(locker_info), &id_array)) != 0) {
++		UNLOCK_LOCKERS(env, region);
+ 		__os_free(env, bitmap);
+ 		__os_free(env, tmpmap);
+ 		return (ret);
+ 	}
+ 
+ 	/*
+-	 * Now go back in and actually fill in the matrix.
+-	 */
+-	if (region->stat.st_nlockers > count) {
+-		__os_free(env, bitmap);
+-		__os_free(env, tmpmap);
+-		__os_free(env, id_array);
+-		goto retry;
+-	}
+-
+-	/*
+ 	 * First we go through and assign each locker a deadlock detector id.
+ 	 */
+ 	id = 0;
+-	LOCK_LOCKERS(env, region);
+ 	SH_TAILQ_FOREACH(lip, &region->lockers, ulinks, __db_locker) {
+ 		if (lip->master_locker == INVALID_ROFF) {
++			DB_ASSERT(env, id < count);
+ 			lip->dd_id = id++;
+ 			id_array[lip->dd_id].id = lip->id;
+ 			switch (atype) {
+@@ -510,7 +511,6 @@
+ 			lip->dd_id = DD_INVALID_ID;
+ 
+ 	}
+-	UNLOCK_LOCKERS(env, region);
+ 
+ 	/*
+ 	 * We only need consider objects that have waiters, so we use
+@@ -669,7 +669,6 @@
+ 	 * status after building the bit maps so that we will not detect
+ 	 * a blocked transaction without noting that it is already aborting.
+ 	 */
+-	LOCK_LOCKERS(env, region);
+ 	for (id = 0; id < count; id++) {
+ 		if (!id_array[id].valid)
+ 			continue;
+@@ -738,6 +737,7 @@
+ 			id_array[id].in_abort = 1;
+ 	}
+ 	UNLOCK_LOCKERS(env, region);
++	LOCK_SYSTEM_UNLOCK(lt, region);
+ 
+ 	/*
+ 	 * Now we can release everything except the bitmap matrix that we
+@@ -839,6 +839,7 @@
+ 	ret = 0;
+ 
+ 	/* We must lock so this locker cannot go away while we abort it. */
++	LOCK_SYSTEM_LOCK(lt, region);
+ 	LOCK_LOCKERS(env, region);
+ 
+ 	/*
+@@ -895,6 +896,7 @@
+ done:	OBJECT_UNLOCK(lt, region, info->last_ndx);
+ err:
+ out:	UNLOCK_LOCKERS(env, region);
++	LOCK_SYSTEM_UNLOCK(lt, region);
+ 	return (ret);
+ }
+ 
+diff -ru db-4.7.25.orig/rep/rep_elect.c db-4.7.25/rep/rep_elect.c
+--- db-4.7.25.orig/rep/rep_elect.c	2008-03-13 12:21:04.000000000 -0400
++++ db-4.7.25/rep/rep_elect.c	2009-05-13 20:44:47.000000000 -0400
+@@ -33,7 +33,7 @@
+ static int __rep_fire_elected __P((ENV *, REP *, u_int32_t));
+ static void __rep_elect_master __P((ENV *, REP *));
+ static int __rep_tally __P((ENV *, REP *, int, u_int32_t *, u_int32_t, roff_t));
+-static int __rep_wait __P((ENV *, db_timeout_t *, int *, int, u_int32_t));
++static int __rep_wait __P((ENV *, db_timeout_t *, int, u_int32_t));
+ 
+ /*
+  * __rep_elect --
+@@ -55,7 +55,7 @@
+ 	ENV *env;
+ 	LOG *lp;
+ 	REP *rep;
+-	int done, eid, elected, full_elect, locked, in_progress, need_req;
++	int done, elected, full_elect, locked, in_progress, need_req;
+ 	int ret, send_vote, t_ret;
+ 	u_int32_t ack, ctlflags, egen, nsites, orig_tally, priority, realpri;
+ 	u_int32_t tiebreaker;
+@@ -181,8 +181,7 @@
+ 			REP_SYSTEM_UNLOCK(env);
+ 			(void)__rep_send_message(env, DB_EID_BROADCAST,
+ 			    REP_MASTER_REQ, NULL, NULL, 0, 0);
+-			ret = __rep_wait(env, &to, &eid,
+-			    0, REP_F_EPHASE0);
++			ret = __rep_wait(env, &to, 0, REP_F_EPHASE0);
+ 			REP_SYSTEM_LOCK(env);
+ 			F_CLR(rep, REP_F_EPHASE0);
+ 			switch (ret) {
+@@ -286,11 +285,11 @@
+ 		REP_SYSTEM_LOCK(env);
+ 		goto vote;
+ 	}
+-	ret = __rep_wait(env, &to, &eid, full_elect, REP_F_EPHASE1);
++	ret = __rep_wait(env, &to, full_elect, REP_F_EPHASE1);
+ 	switch (ret) {
+ 		case 0:
+ 			/* Check if election complete or phase complete. */
+-			if (eid != DB_EID_INVALID && !IN_ELECTION(rep)) {
++			if (!IN_ELECTION(rep)) {
+ 				RPRINT(env, DB_VERB_REP_ELECT,
+ 				    (env, "Ended election phase 1"));
+ 				goto edone;
+@@ -398,15 +397,12 @@
+ 		REP_SYSTEM_LOCK(env);
+ 		goto i_won;
+ 	}
+-	ret = __rep_wait(env, &to, &eid, full_elect, REP_F_EPHASE2);
++	ret = __rep_wait(env, &to, full_elect, REP_F_EPHASE2);
+ 	RPRINT(env, DB_VERB_REP_ELECT,
+ 	    (env, "Ended election phase 2 %d", ret));
+ 	switch (ret) {
+ 		case 0:
+-			if (eid != DB_EID_INVALID)
+-				goto edone;
+-			ret = DB_REP_UNAVAIL;
+-			break;
++			goto edone;
+ 		case DB_REP_EGENCHG:
+ 			if (to > timeout)
+ 				to = timeout;
+@@ -1050,13 +1046,6 @@
+ 	ENV *env;
+ 	REP *rep;
+ {
+-	/*
+-	 * We often come through here twice, sometimes even more.  We mustn't
+-	 * let the redundant calls affect stats counting.  But rep_elect relies
+-	 * on this first part for setting eidp.
+-	 */
+-	rep->master_id = rep->eid;
+-
+ 	if (F_ISSET(rep, REP_F_MASTERELECT | REP_F_MASTER)) {
+ 		/* We've been through here already; avoid double counting. */
+ 		return;
+@@ -1093,10 +1082,10 @@
+ 	(timeout > 5000000) ? 500000 : ((timeout >= 10) ? timeout / 10 : 1);
+ 
+ static int
+-__rep_wait(env, timeoutp, eidp, full_elect, flags)
++__rep_wait(env, timeoutp, full_elect, flags)
+ 	ENV *env;
+ 	db_timeout_t *timeoutp;
+-	int *eidp, full_elect;
++	int full_elect;
+ 	u_int32_t flags;
+ {
+ 	DB_REP *db_rep;
+@@ -1174,7 +1163,6 @@
+ 			F_CLR(rep, REP_F_EGENUPDATE);
+ 			ret = DB_REP_EGENCHG;
+ 		} else if (phase_over) {
+-			*eidp = rep->master_id;
+ 			done = 1;
+ 			ret = 0;
+ 		}
+diff -ru db-4.7.25.orig/repmgr/repmgr_net.c db-4.7.25/repmgr/repmgr_net.c
+--- db-4.7.25.orig/repmgr/repmgr_net.c	2008-03-13 13:31:28.000000000 -0400
++++ db-4.7.25/repmgr/repmgr_net.c	2009-05-13 20:44:47.000000000 -0400
+@@ -100,6 +100,8 @@
+ 		    control, rec, &nsites_sent, &npeers_sent)) != 0)
+ 			goto out;
+ 	} else {
++		DB_ASSERT(env, IS_KNOWN_REMOTE_SITE(eid));
++
+ 		/*
+ 		 * If this is a request that can be sent anywhere, then see if
+ 		 * we can send it to our peer (to save load on the master), but
+diff -ru db-4.7.25.orig/sequence/sequence.c db-4.7.25/sequence/sequence.c
+--- db-4.7.25.orig/sequence/sequence.c	2008-05-05 16:25:09.000000000 -0400
++++ db-4.7.25/sequence/sequence.c	2009-05-13 20:43:56.000000000 -0400
+@@ -187,7 +187,11 @@
+ 	if ((ret = __db_get_flags(dbp, &tflags)) != 0)
+ 		goto err;
+ 
+-	if (DB_IS_READONLY(dbp)) {
++	/*
++	 * We can let replication clients open sequences, but must
++	 * check later that they do not update them.
++	 */
++	if (F_ISSET(dbp, DB_AM_RDONLY)) {
+ 		ret = __db_rdonly(dbp->env, "DB_SEQUENCE->open");
+ 		goto err;
+ 	}
+@@ -244,6 +248,11 @@
+ 		if ((ret != DB_NOTFOUND && ret != DB_KEYEMPTY) ||
+ 		    !LF_ISSET(DB_CREATE))
+ 			goto err;
++		if (IS_REP_CLIENT(env) &&
++		    !F_ISSET(dbp, DB_AM_NOT_DURABLE)) {
++			ret = __db_rdonly(env, "DB_SEQUENCE->open");
++			goto err;
++		}
+ 		ret = 0;
+ 
+ 		rp = &seq->seq_record;
+@@ -296,7 +305,12 @@
+ 	 */
+ 	rp = seq->seq_data.data;
+ 	if (rp->seq_version == DB_SEQUENCE_OLDVER) {
+-oldver:		rp->seq_version = DB_SEQUENCE_VERSION;
++oldver:		if (IS_REP_CLIENT(env) &&
++		    !F_ISSET(dbp, DB_AM_NOT_DURABLE)) {
++			ret = __db_rdonly(env, "DB_SEQUENCE->open");
++			goto err;
++		}
++		rp->seq_version = DB_SEQUENCE_VERSION;
+ 		if (!F_ISSET(env, ENV_LITTLEENDIAN)) {
+ 			if (IS_DB_AUTO_COMMIT(dbp, txn)) {
+ 				if ((ret =
+@@ -707,6 +721,13 @@
+ 
+ 	MUTEX_LOCK(env, seq->mtx_seq);
+ 
++	if (handle_check && IS_REP_CLIENT(env) &&
++	    !F_ISSET(dbp, DB_AM_NOT_DURABLE)) {
++		ret = __db_rdonly(env, "DB_SEQUENCE->get");
++		goto err;
++	}
++
++
+ 	if (rp->seq_min + delta > rp->seq_max) {
+ 		__db_errx(env, "Sequence overflow");
+ 		ret = EINVAL;

@@ -1,0 +1,124 @@
+diff -Nurd wv2-0.4.2/CMakeLists.txt wv2-0.4.2-new/CMakeLists.txt
+--- wv2-0.4.2/CMakeLists.txt	2009-10-31 14:22:43.000000000 -0400
++++ wv2-0.4.2-new/CMakeLists.txt	2010-02-10 14:01:36.000000000 -0500
+@@ -59,9 +59,58 @@
+   SET( ICONV_COMPILE_DEFINITIONS ${ICONV_COMPILE_DEFINITIONS} "-DHAVE_SYS_ICONV_H" )
+ ENDIF( HAVE_SYS_ICONV_H )
+ 
+-TRY_RUN( MODERN_ICONV_RUN MODERN_ICONV_COMPILE ${wvWare_BINARY_DIR}/CMakeTmp ${wvWare_SOURCE_DIR}/cmake/TestModernIconv.c COMPILE_DEFINITIONS ${ICONV_COMPILE_DEFINITIONS} )
++SET( CMAKE_REQUIRED_DEFINITIONS ${ICONV_COMPILE_DEFINITIONS} )
++SET( CMAKE_REQUIRED_INCLUDES ${ICONV_INCLUDE_DIR} )
++SET( CMAKE_REQUIRED_LIBRARIES ${ICONV_LIBRARIES} )
+ 
+-IF( MODERN_ICONV_RUN GREATER 0 OR NOT MODERN_ICONV_COMPILE )
++INCLUDE( CheckCSourceRuns )
++
++CHECK_C_SOURCE_RUNS("
++#ifdef HAVE_ICONV_H
++#include <iconv.h>
++#endif
++#ifdef HAVE_SYS_ICONV_H
++#include <sys/iconv.h>
++#endif
++#include <stdlib.h>
++
++int check( const char* from, const char* to )
++{
++	iconv_t myConverter = iconv_open( to, from );
++
++	if ( myConverter != (iconv_t)-1 ) {
++		iconv_close( myConverter );
++		return 0;
++	}
++	else
++		return 1;
++}
++
++int main(int argc, char** argv)
++{
++	const char* from[] = { \"CP874\", \"CP932\", \"CP936\", \"CP949\",
++	\"CP950\", \"CP1250\", \"CP1251\", \"CP1252\",
++	\"CP1253\", \"CP1254\", \"CP1255\", \"CP1256\",
++	\"CP1257\", \"koi8-r\", 0 };
++	const char* to[] = { \"UNICODELITTLE\", \"UNICODEBIG\", 0 };
++	int fromIndex = 0;
++	int toIndex = 0;
++	
++	while ( to[ toIndex ] != 0 ) {
++		while( from[ fromIndex ] != 0 ) {
++			if ( check( from[ fromIndex ], to[ toIndex ] ) != 0 )
++				exit( 1 );
++			fromIndex = fromIndex + 1;
++		}
++		toIndex = toIndex + 1;
++		fromIndex = 0;
++	}
++	exit( 0 );
++}" MODERN_ICONV_RUN)
++
++#TRY_RUN( MODERN_ICONV_RUN MODERN_ICONV_COMPILE ${wvWare_BINARY_DIR}/CMakeTmp ${wvWare_SOURCE_DIR}/cmake/TestModernIconv.c COMPILE_DEFINITIONS ${ICONV_COMPILE_DEFINITIONS} CMAKE_FLAGS "-I${ICONV_INCLUDE_DIR} ${ICONV_LIBRARIES}" OUTPUT_VARIABLE MODERN_ICONV_RUN_OUTPUT )
++
++IF( NOT MODERN_ICONV_RUN )
+   MESSAGE( STATUS "wv2 depends on a modern iconv installation, supporting UNICODELITTLE and" )
+   MESSAGE( STATUS "UNICODEBIG. The detected iconv version doesn't support these conversions." )
+   MESSAGE( STATUS "" )
+@@ -70,8 +119,11 @@
+   MESSAGE( STATUS "order not to overwrite your current installation. Please use the options" )
+   MESSAGE( STATUS "-DICONV_INCLUDE_DIR=DIR and -DICONV_LIBRARIES=DIR to specify the location." )
+   MESSAGE( STATUS "" )
++  MESSAGE( STATUS "Output was:" )
++  MESSAGE( STATUS ${MODERN_ICONV_RUN_OUTPUT} )
++  MESSAGE( STATUS "" )
+   MESSAGE( FATAL_ERROR "* * * No iconv support - unable to continue. * * *" )
+-ENDIF( MODERN_ICONV_RUN GREATER 0 OR NOT MODERN_ICONV_COMPILE )
++ENDIF( NOT MODERN_ICONV_RUN )
+ 
+ #
+ # Various checks
+@@ -163,6 +215,13 @@
+ LIST( REMOVE_DUPLICATES _WV2_LDFLAGS )
+ LIST( REMOVE_DUPLICATES _WV2_CFLAGS )
+ 
++if(APPLE)
++	# since we require rpath, do this for cpack
++	set(CPACK_SET_DESTDIR ON)
++	set(CPACK_PACKAGE_RELOCATABLE OFF)
++	set(CMAKE_INSTALL_NAME_DIR ${CMAKE_INSTALL_PREFIX}/lib)
++endif(APPLE)
++
+ FOREACH( _lib ${_WV2_LDFLAGS} )
+   # Remove path to the library and suffixes. Transformation example: libglib-2.0.so => glib-2.0
+   STRING( REGEX REPLACE "[\\\\ _\\/\\.a-zA-Z0-9\\-]*\\/lib([_\\.a-zA-Z0-9\\-]*)\\.[_a-zA-Z0-9\\-\\.]*" \\1 _lib_no_path ${_lib} )
+diff -Nurd wv2-0.4.2/cmake/FindGLIB2.cmake wv2-0.4.2-new/cmake/FindGLIB2.cmake
+--- wv2-0.4.2/cmake/FindGLIB2.cmake	2009-10-31 14:22:43.000000000 -0400
++++ wv2-0.4.2-new/cmake/FindGLIB2.cmake	2010-02-10 13:51:47.000000000 -0500
+@@ -26,11 +26,18 @@
+           PATHS ${_LibGLIB2IncDir} )
+ 
+ # search the glibconfig.h include dir under the same root where the library is found
+-find_library(GLIB2_LIBRARIES 
++find_library(GLIB2_GLIB_LIB
+              NAMES glib-2.0 
+              PATHS ${_LibGLIB2LinkDir} )
++find_library(GLIB2_GOBJECT_LIB
++             NAMES gobject-2.0 
++             PATHS ${_LibGLIB2LinkDir} )
+ 
+-get_filename_component(glib2LibDir "${GLIB2_LIBRARIES}" PATH)
++if (GLIB2_GLIB_LIB AND GLIB2_GOBJECT_LIB)
++	set(GLIB2_LIBRARIES ${GLIB2_GLIB_LIB} ${GLIB2_GOBJECT_LIB})
++endif (GLIB2_GLIB_LIB AND GLIB2_GOBJECT_LIB)
++
++get_filename_component(glib2LibDir "${GLIB2_GLIB_LIB}" PATH)
+ 
+ find_path(GLIB2_INTERNAL_INCLUDE_DIR glibconfig.h
+           PATH_SUFFIXES glib-2.0/include
+diff -Nurd wv2-0.4.2/src/CMakeLists.txt wv2-0.4.2-new/src/CMakeLists.txt
+--- wv2-0.4.2/src/CMakeLists.txt	2009-10-31 14:22:43.000000000 -0400
++++ wv2-0.4.2-new/src/CMakeLists.txt	2010-02-10 13:36:33.000000000 -0500
+@@ -1,4 +1,4 @@
+-INCLUDE_DIRECTORIES( ${CMAKE_CURRENT_SOURCE_DIR} ${wvWare_BINARY_DIR} )
++INCLUDE_DIRECTORIES( ${CMAKE_CURRENT_SOURCE_DIR} ${wvWare_BINARY_DIR} ${ICONV_INCLUDE_DIR} )
+ 
+ # I'd say the 'if' is unneeded because we always CONFIGURE_FILE
+ IF( EXISTS ${wvWare_BINARY_DIR}/config.h )

@@ -1,0 +1,691 @@
+diff -ruN net-snmp-5.7.1.orig/agent/Makefile.in net-snmp-5.7.1/agent/Makefile.in
+--- net-snmp-5.7.1.orig/agent/Makefile.in	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/Makefile.in	2012-05-22 12:53:09.000000000 -0400
+@@ -114,7 +114,7 @@
+ AGENTLIB	= libnetsnmpagent.$(LIB_EXTENSION)$(LIB_VERSION)
+ MIBLIB		= libnetsnmpmibs.$(LIB_EXTENSION)$(LIB_VERSION)
+ 
+-LOCAL_LIBS	= -L../snmplib/.libs -L../snmplib -L./.libs
++LOCAL_LIBS	= 
+ LAGENTLIBS	= @LAGENTLIBS@
+ LMIBLIBS	= @LMIBLIBS@
+ VAL_LIBS	= @VAL_LIBS@
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/agentx/master_admin.c net-snmp-5.7.1/agent/mibgroup/agentx/master_admin.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/agentx/master_admin.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/agentx/master_admin.c	2012-05-22 12:41:30.000000000 -0400
+@@ -64,7 +64,7 @@
+ open_agentx_session(netsnmp_session * session, netsnmp_pdu *pdu)
+ {
+     netsnmp_session *sp;
+-    struct timeval  now;
++    struct timeval now;
+ 
+     DEBUGMSGTL(("agentx/master", "open %8p\n", session));
+     sp = (netsnmp_session *) malloc(sizeof(netsnmp_session));
+@@ -105,7 +105,7 @@
+     sp->securityAuthProtoLen = pdu->variables->name_length;
+     sp->securityName = strdup((char *) pdu->variables->val.string);
+     gettimeofday(&now, NULL);
+-    sp->engineTime = calculate_sectime_diff(&now, netsnmp_get_agent_starttime());
++    sp->engineTime = calculate_sectime_diff(&now, (const struct timeval*)netsnmp_get_agent_starttime());
+ 
+     sp->subsession = session;   /* link back to head */
+     sp->flags |= SNMP_FLAGS_SUBSESSION;
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/hardware/memory/memory_darwin.c net-snmp-5.7.1/agent/mibgroup/hardware/memory/memory_darwin.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/hardware/memory/memory_darwin.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/hardware/memory/memory_darwin.c	2012-05-22 12:41:30.000000000 -0400
+@@ -5,10 +5,20 @@
+ 
+ #include <dirent.h>
+ #include <unistd.h>
++#include <mach/host_priv.h>
++#include <mach/mach_error.h>
+ #include <mach/mach_host.h>
++#include <mach/mach_port.h>
++#include <mach/processor_set.h>
++#include <mach/vm_map.h>
+ #include <sys/stat.h>
+ #include <sys/sysctl.h>
+ 
++#ifdef HAVE_VM_REGION_64
++#define VM_REGION_FUNC vm_region_64
++#else
++#define VM_REGION_FUNC vm_region
++#endif
+ 
+ /*
+  * Retained from UCD implementation
+@@ -75,7 +85,7 @@
+             for (address = 0;; address += size) {
+                 /* Get memory region. */
+                 count = VM_REGION_EXTENDED_INFO_COUNT; 
+-                if (vm_region(tasks[j], &address, &size, VM_REGION_EXTENDED_INFO, (vm_region_extended_info_t)&info, &count, &object_name) != KERN_SUCCESS) {
++                if (VM_REGION_FUNC(tasks[j], &address, &size, VM_REGION_EXTENDED_INFO, (int*)&info, &count, &object_name) != KERN_SUCCESS) {
+                     /* No more memory regions. */
+                     break;
+                 }
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/host/hr_swrun.c net-snmp-5.7.1/agent/mibgroup/host/hr_swrun.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/host/hr_swrun.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/host/hr_swrun.c	2012-05-22 12:41:30.000000000 -0400
+@@ -39,9 +39,6 @@
+ #if HAVE_SYS_PROC_H
+ #include <sys/proc.h>
+ #endif
+-#if HAVE_KVM_H
+-#include <kvm.h>
+-#endif
+ #if HAVE_SYS_SYSCTL_H
+ #include <sys/sysctl.h>
+ #endif
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/ip-mib/ipv4InterfaceTable/ipv4InterfaceTable_data_access.c net-snmp-5.7.1/agent/mibgroup/ip-mib/ipv4InterfaceTable/ipv4InterfaceTable_data_access.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/ip-mib/ipv4InterfaceTable/ipv4InterfaceTable_data_access.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/ip-mib/ipv4InterfaceTable/ipv4InterfaceTable_data_access.c	2012-05-22 12:41:30.000000000 -0400
+@@ -127,7 +127,7 @@
+     /*
+      * do we have a corresponding row?
+      */
+-    ip4if_rrc = CONTAINER_FIND(c, ift_rrc);
++    ip4if_rrc = (ifTable_rowreq_ctx*)CONTAINER_FIND(c, ift_rrc);
+     if (NULL == ip4if_rrc) {
+         /*
+          * no corresponding row. should we have one?
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/ip-mib/ipv4InterfaceTable/ipv4InterfaceTable_interface.c net-snmp-5.7.1/agent/mibgroup/ip-mib/ipv4InterfaceTable/ipv4InterfaceTable_interface.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/ip-mib/ipv4InterfaceTable/ipv4InterfaceTable_interface.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/ip-mib/ipv4InterfaceTable/ipv4InterfaceTable_interface.c	2012-05-22 12:41:30.000000000 -0400
+@@ -494,7 +494,7 @@
+ {
+     int             rc = SNMP_ERR_NOERROR;
+     ipv4InterfaceTable_rowreq_ctx *rowreq_ctx =
+-        netsnmp_container_table_row_extract(requests);
++        (ipv4InterfaceTable_rowreq_ctx*)netsnmp_container_table_row_extract(requests);
+ 
+     DEBUGMSGTL(("internal:ipv4InterfaceTable:_mfd_ipv4InterfaceTable_object_lookup", "called\n"));
+ 
+@@ -585,7 +585,7 @@
+                                    netsnmp_request_info *requests)
+ {
+     ipv4InterfaceTable_rowreq_ctx *rowreq_ctx =
+-        netsnmp_container_table_row_extract(requests);
++        (ipv4InterfaceTable_rowreq_ctx*)netsnmp_container_table_row_extract(requests);
+     netsnmp_table_request_info *tri;
+     u_char         *old_string;
+     void            (*dataFreeHook) (void *);
+@@ -750,7 +750,7 @@
+                                       netsnmp_request_info *requests)
+ {
+     ipv4InterfaceTable_rowreq_ctx *rowreq_ctx =
+-        netsnmp_container_table_row_extract(requests);
++        (ipv4InterfaceTable_rowreq_ctx*)netsnmp_container_table_row_extract(requests);
+     netsnmp_table_request_info *tri;
+     int             rc;
+ 
+@@ -834,7 +834,7 @@
+ {
+     int             rc;
+     ipv4InterfaceTable_rowreq_ctx *rowreq_ctx =
+-        netsnmp_container_table_row_extract(requests);
++        (ipv4InterfaceTable_rowreq_ctx*)netsnmp_container_table_row_extract(requests);
+ 
+     DEBUGMSGTL(("internal:ipv4InterfaceTable:_mfd_ipv4InterfaceTable_undo_setup", "called\n"));
+ 
+@@ -896,7 +896,7 @@
+                                      netsnmp_request_info *requests)
+ {
+     ipv4InterfaceTable_rowreq_ctx *rowreq_ctx =
+-        netsnmp_container_table_row_extract(requests);
++        (ipv4InterfaceTable_rowreq_ctx*)netsnmp_container_table_row_extract(requests);
+     int             rc;
+ 
+     DEBUGMSGTL(("internal:ipv4InterfaceTable:_mfd_ipv4InterfaceTable_undo_cleanup", "called\n"));
+@@ -976,7 +976,7 @@
+                                    netsnmp_request_info *requests)
+ {
+     ipv4InterfaceTable_rowreq_ctx *rowreq_ctx =
+-        netsnmp_container_table_row_extract(requests);
++        (ipv4InterfaceTable_rowreq_ctx*)netsnmp_container_table_row_extract(requests);
+     netsnmp_table_request_info *tri;
+     int             rc = SNMP_ERR_NOERROR;
+ 
+@@ -1024,7 +1024,7 @@
+ {
+     int             rc;
+     ipv4InterfaceTable_rowreq_ctx *rowreq_ctx =
+-        netsnmp_container_table_row_extract(requests);
++        (ipv4InterfaceTable_rowreq_ctx*)netsnmp_container_table_row_extract(requests);
+ 
+     DEBUGMSGTL(("internal:ipv4InterfaceTable:_mfd_ipv4InterfaceTable_commit", "called\n"));
+ 
+@@ -1058,7 +1058,7 @@
+ {
+     int             rc;
+     ipv4InterfaceTable_rowreq_ctx *rowreq_ctx =
+-        netsnmp_container_table_row_extract(requests);
++        (ipv4InterfaceTable_rowreq_ctx*)netsnmp_container_table_row_extract(requests);
+ 
+     DEBUGMSGTL(("internal:ipv4InterfaceTable:_mfd_ipv4InterfaceTable_undo_commit", "called\n"));
+ 
+@@ -1137,7 +1137,7 @@
+ {
+     int             rc;
+     ipv4InterfaceTable_rowreq_ctx *rowreq_ctx =
+-        netsnmp_container_table_row_extract(requests);
++        (ipv4InterfaceTable_rowreq_ctx*)netsnmp_container_table_row_extract(requests);
+     netsnmp_table_request_info *tri;
+ 
+     DEBUGMSGTL(("internal:ipv4InterfaceTable:_mfd_ipv4InterfaceTable_undo_values", "called\n"));
+@@ -1192,7 +1192,7 @@
+                                             netsnmp_request_info *requests)
+ {
+     ipv4InterfaceTable_rowreq_ctx *rowreq_ctx =
+-        netsnmp_container_table_row_extract(requests);
++        (ipv4InterfaceTable_rowreq_ctx*)netsnmp_container_table_row_extract(requests);
+ 
+     DEBUGMSGTL(("internal:ipv4InterfaceTable:_mfd_ipv4InterfaceTable_irreversible:commit", "called\n"));
+ 
+@@ -1308,7 +1308,7 @@
+         return NULL;
+ 
+     rowreq_ctx =
+-        CONTAINER_FIND(ipv4InterfaceTable_if_ctx.container, &oid_idx);
++        (ipv4InterfaceTable_rowreq_ctx*)CONTAINER_FIND(ipv4InterfaceTable_if_ctx.container, &oid_idx);
+ 
+     return rowreq_ctx;
+ }
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/mibII/at.c net-snmp-5.7.1/agent/mibgroup/mibII/at.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/mibII/at.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/mibII/at.c	2012-05-22 12:41:30.000000000 -0400
+@@ -700,7 +700,7 @@
+     if (sysctl(mib, 6, NULL, &needed, NULL, 0) < 0)
+         snmp_log_perror("route-sysctl-estimate");
+     else {
+-        if ((at = malloc(needed ? needed : 1)) == NULL)
++        if ((at = (char*)malloc(needed ? needed : 1)) == NULL)
+             snmp_log_perror("malloc");
+         else {
+             if (sysctl(mib, 6, at, &needed, NULL, 0) < 0)
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/mibII/ipAddr.c net-snmp-5.7.1/agent/mibgroup/mibII/ipAddr.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/mibII/ipAddr.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/mibII/ipAddr.c	2012-05-22 12:41:30.000000000 -0400
+@@ -777,7 +777,7 @@
+     if (sysctl(mib, 6, 0, &len, 0, 0) < 0)
+         return;
+ 
+-    ifbuf = malloc(len);
++    ifbuf = (char*)malloc(len);
+     if (ifbuf == 0)
+         return;
+     if (sysctl(mib, 6, ifbuf, &len, 0, 0) < 0) {
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/mibII/tcpTable.c net-snmp-5.7.1/agent/mibgroup/mibII/tcpTable.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/mibII/tcpTable.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/mibII/tcpTable.c	2012-05-22 12:41:30.000000000 -0400
+@@ -865,7 +865,7 @@
+      */
+     len = 0;
+     if (sysctl(sname, 4, 0, &len, 0, 0) < 0 ||
+-       (tcpcb_buf = malloc(len)) == NULL)
++       (tcpcb_buf = (char*)malloc(len)) == NULL)
+         return -1;
+     if (sysctl(sname, 4, tcpcb_buf, &len, 0, 0) < 0) {
+         free(tcpcb_buf);
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/mibII/udpTable.c net-snmp-5.7.1/agent/mibgroup/mibII/udpTable.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/mibII/udpTable.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/mibII/udpTable.c	2012-05-22 12:41:30.000000000 -0400
+@@ -637,7 +637,7 @@
+      */
+     len = 0;
+     if (sysctl(sname, 4, 0, &len, 0, 0) < 0 ||
+-       (udpcb_buf = malloc(len)) == NULL)
++       (udpcb_buf = (char*)malloc(len)) == NULL)
+         return -1;
+     if (sysctl(sname, 4, udpcb_buf, &len, 0, 0) < 0) {
+         free(udpcb_buf);
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/mibII/var_route.c net-snmp-5.7.1/agent/mibgroup/mibII/var_route.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/mibII/var_route.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/mibII/var_route.c	2012-05-22 12:41:30.000000000 -0400
+@@ -1807,7 +1807,7 @@
+ 
+     if (len > rtbuflen) {
+         char           *newbuf;
+-        newbuf = realloc(rtbuf, len);
++        newbuf = (char*)realloc(rtbuf, len);
+         if (newbuf == 0)
+             return -1;
+         rtbuf = newbuf;
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/ucd-snmp/dlmod.c net-snmp-5.7.1/agent/mibgroup/ucd-snmp/dlmod.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/ucd-snmp/dlmod.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/ucd-snmp/dlmod.c	2012-05-22 12:41:30.000000000 -0400
+@@ -133,7 +133,7 @@
+         int  (*dl_init) (void);
+ 
+         snprintf(sym_init, sizeof(sym_init), "init_%s", dlm->name);
+-        dl_init = dlsym(dlm->handle, sym_init);
++        dl_init = (int (*)())dlsym(dlm->handle, sym_init);
+         if (dl_init == NULL) {
+             dlclose(dlm->handle);
+             snprintf(dlm->error, sizeof(dlm->error),
+@@ -158,10 +158,10 @@
+         return;
+ 
+     snprintf(sym_deinit, sizeof(sym_deinit), "deinit_%s", dlm->name);
+-    dl_deinit = dlsym(dlm->handle, sym_deinit);
++    dl_deinit = (int (*)())dlsym(dlm->handle, sym_deinit);
+     if (!dl_deinit) {
+         snprintf(sym_deinit, sizeof(sym_deinit), "shutdown_%s", dlm->name);
+-        dl_deinit = dlsym(dlm->handle, sym_deinit);
++        dl_deinit = (int (*)())dlsym(dlm->handle, sym_deinit);
+     }
+     if (dl_deinit) {
+         DEBUGMSGTL(("dlmod", "Calling %s()\n", sym_deinit));
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/ucd-snmp/memory_darwin7.c net-snmp-5.7.1/agent/mibgroup/ucd-snmp/memory_darwin7.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/ucd-snmp/memory_darwin7.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/ucd-snmp/memory_darwin7.c	2012-05-22 12:41:30.000000000 -0400
+@@ -48,6 +48,12 @@
+ #include "memory.h"
+ #include "memory_darwin7.h"
+ 
++#ifdef HAVE_VM_REGION_64
++#define VM_REGION_FUNC vm_region_64
++#else
++#define VM_REGION_FUNC vm_region
++#endif
++
+ /*
+  *  * Swap info 
+  *   */
+@@ -387,7 +393,7 @@
+             for (address = 0;; address += size) {
+                 /* Get memory region. */
+                 count = VM_REGION_EXTENDED_INFO_COUNT; 
+-                if (vm_region(tasks[j], &address, &size, VM_REGION_EXTENDED_INFO, (vm_region_extended_info_t)&info, &count, &object_name) != KERN_SUCCESS) {
++                if (VM_REGION_FUNC(tasks[j], &address, &size, VM_REGION_EXTENDED_INFO, (vm_region_extended_info_t)&info, &count, &object_name) != KERN_SUCCESS) {
+                     /* No more memory regions. */
+                     break;
+                 }
+diff -ruN net-snmp-5.7.1.orig/agent/mibgroup/utilities/iquery.c net-snmp-5.7.1/agent/mibgroup/utilities/iquery.c
+--- net-snmp-5.7.1.orig/agent/mibgroup/utilities/iquery.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/agent/mibgroup/utilities/iquery.c	2012-05-22 12:41:30.000000000 -0400
+@@ -198,7 +198,7 @@
+             memdup( &(ss->community), secName, strlen(secName));
+             ss->community_len = strlen(secName);
+         }
+-        ss->myvoid = netsnmp_check_outstanding_agent_requests;
++        ss->myvoid = (void*)netsnmp_check_outstanding_agent_requests;
+         ss->flags |= SNMP_FLAGS_RESP_CALLBACK | SNMP_FLAGS_DONT_PROBE;
+     }
+ #endif
+diff -ruN net-snmp-5.7.1.orig/apps/Makefile.in net-snmp-5.7.1/apps/Makefile.in
+--- net-snmp-5.7.1.orig/apps/Makefile.in	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/apps/Makefile.in	2012-05-22 12:53:57.000000000 -0400
+@@ -86,7 +86,7 @@
+ 
+ #
+ # link path in src dir
+-LOCAL_LIBS	= -L../snmplib/.libs -L../snmplib -L../agent/.libs -L../agent
++LOCAL_LIBS	= 
+ VAL_LIBS	= @VAL_LIBS@
+ LIBS		= $(USELIBS) $(VAL_LIBS) @LIBS@
+ PERLLDOPTS_FOR_APPS = @PERLLDOPTS_FOR_APPS@
+diff -ruN net-snmp-5.7.1.orig/configure.d/config_os_functions net-snmp-5.7.1/configure.d/config_os_functions
+--- net-snmp-5.7.1.orig/configure.d/config_os_functions	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/configure.d/config_os_functions	2012-05-22 12:41:30.000000000 -0400
+@@ -100,7 +100,8 @@
+                [sigprocmask                                    ] dnl
+                [statfs          statvfs       stime            ] dnl
+                [strncasecmp     system                         ] dnl
+-               [uname           usleep                         ] )
++               [uname           usleep                         ] dnl
++               [vm_region       vm_region_64                   ] )
+ 
+ #  Apps:
+ AC_CHECK_FUNCS([getdtablesize                                  ] dnl
+diff -ruN net-snmp-5.7.1.orig/configure.d/config_os_progs net-snmp-5.7.1/configure.d/config_os_progs
+--- net-snmp-5.7.1.orig/configure.d/config_os_progs	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/configure.d/config_os_progs	2012-05-22 12:41:30.000000000 -0400
+@@ -207,6 +207,7 @@
+   ;;
+ esac
+ 
++LD_NO_UNDEFINED=-no-undefined
+ AC_SUBST(LD_NO_UNDEFINED)
+ 
+ 
+@@ -404,12 +405,7 @@
+         #   Flat Namespace linking                      (Mac OS/X)
+         #
+         AC_MSG_CHECKING([whether darwin ld might need -flat_namespace])
+-	if test -z "$MACOSX_DEPLOYMENT_TARGET"; then
+-		LDFLAGS="-flat_namespace $LDFLAGS"
+-		AC_MSG_RESULT([yes])
+-	else
+ 		AC_MSG_RESULT([no])
+-	fi
+ 	;;
+ 
+     *)
+diff -ruN net-snmp-5.7.1.orig/configure.d/config_project_perl_python net-snmp-5.7.1/configure.d/config_project_perl_python
+--- net-snmp-5.7.1.orig/configure.d/config_project_perl_python	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/configure.d/config_project_perl_python	2012-05-22 12:41:30.000000000 -0400
+@@ -87,7 +87,7 @@
+     if test "xenable_perl_cc_checks" != "xno" ; then
+         AC_MSG_CHECKING([for Perl cc])
+         changequote(, )
+-        PERLCC=`$myperl -V:cc | $myperl -n -e 'print if (s/^\s*cc=.([-=\w\s\/]+).;\s*/$1/);'`
++        PERLCC=`$myperl -V:cc | $myperl -n -e 'print if (s/^\s*cc=.([-=\w\s\.\/]+).;\s*/$1/);'`
+         changequote([, ])
+         if test "x$PERLCC" != "x" ; then
+             AC_MSG_RESULT([$PERLCC])
+@@ -192,7 +192,7 @@
+ #
+ if test "x$embed_perl" != "xno" ; then
+     AC_MSG_CHECKING([for Perl CFLAGS])
+-    perlcflags=`$myperl -MExtUtils::Embed -e ccopts`
++    perlcflags=`$myperl -MExtUtils::Embed -e ccopts | /usr/bin/sed -e 's,-arch [^ ]*,,g'`
+     if test "x$perlcflags" != "x" ; then
+       AC_MSG_RESULT([$perlcflags])
+       CFLAGS="$CFLAGS $perlcflags"
+@@ -209,7 +209,7 @@
+ #
+ if test "x$embed_perl" != "xno" ; then
+     AC_MSG_CHECKING([for Perl LDFLAGS])
+-    netsnmp_perlldopts=`$myperl -MExtUtils::Embed -e ldopts`
++    netsnmp_perlldopts=`$myperl -MExtUtils::Embed -e ldopts | /usr/bin/sed -e 's,-arch [^ ]*,,g'`
+     if test "x$netsnmp_perlldopts" != "x" ; then
+       AC_MSG_RESULT([$netsnmp_perlldopts])
+     else
+@@ -228,7 +228,7 @@
+       #
+       AC_MSG_CHECKING([for Perl CCDLFLAGS])
+       changequote(, )
+-      netsnmp_perlccdlflags=`$myperl -V:ccdlflags | $myperl -n -e 'print $1 '"if (/^\s*ccdlflags='([^']+)';/);"`
++      netsnmp_perlccdlflags=`$myperl -V:ccdlflags | /usr/bin/sed -e 's,-arch [^ ]*,,g'`
+       changequote([, ])
+       AC_MSG_RESULT([$netsnmp_perlccdlflags])
+       PERLLDOPTS_FOR_APPS="$netsnmp_perlccdlflags"
+diff -ruN net-snmp-5.7.1.orig/net-snmp-config.in net-snmp-5.7.1/net-snmp-config.in
+--- net-snmp-5.7.1.orig/net-snmp-config.in	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/net-snmp-config.in	2012-05-22 13:31:12.000000000 -0400
+@@ -48,10 +48,10 @@
+ datarootdir=@datarootdir@
+ NSC_LDFLAGS="@LDFLAGS@"
+ 
+-NSC_LIBS="@LIBS@"
+-NSC_LNETSNMPLIBS="@LNETSNMPLIBS@"
+-NSC_LAGENTLIBS="@LAGENTLIBS@ @PERLLDOPTS_FOR_APPS@"
+-NSC_LMIBLIBS="@LMIBLIBS@"
++#NSC_LIBS="@LIBS@"
++#NSC_LNETSNMPLIBS="@LNETSNMPLIBS@"
++#NSC_LAGENTLIBS="@LAGENTLIBS@ @PERLLDOPTS_FOR_APPS@"
++#NSC_LMIBLIBS="@LMIBLIBS@"
+ 
+ NSC_INCLUDEDIR=${includedir}
+ NSC_LIBDIR=-L${libdir}
+@@ -67,7 +67,7 @@
+ 
+ NSC_BASE_SNMP_LIBS="-lnetsnmp"
+ NSC_BASE_SUBAGENT_LIBS="-lnetsnmpagent ${NSC_BASE_SNMP_LIBS}"
+-NSC_BASE_AGENT_LIBS="-lnetsnmpmibs ${NSC_BASE_SUBAGENT_LIBS}"
++NSC_BASE_AGENT_LIBS="-lnetsnmpmibs ${NSC_BASE_SUBAGENT_LIBS} -lnetsnmphelpers"
+ 
+ NSC_SRC_LIBDIRS="agent/.libs snmplib/.libs"
+ NSC_SRC_LIBDEPS="agent/.libs/libnetsnmpmibs.a agent/.libs/libnetsnmpagent.a snmplib/.libs/libnetsnmp.a"
+@@ -141,7 +141,7 @@
+       echo @CFLAGS@ @CPPFLAGS@ -I${NSC_INCLUDEDIR}
+       ;;
+     --cflags|--cf*)
+-      echo @CFLAGS@ @DEVFLAGS@ @CPPFLAGS@ -I. -I${NSC_INCLUDEDIR}
++      echo @CFLAGS@ @DEVFLAGS@ -I. @CPPFLAGS@ -I${NSC_INCLUDEDIR}
+       ;;
+     --srcdir)
+       echo $NSC_SRCDIR
+diff -ruN net-snmp-5.7.1.orig/perl/ASN/Makefile.PL net-snmp-5.7.1/perl/ASN/Makefile.PL
+--- net-snmp-5.7.1.orig/perl/ASN/Makefile.PL	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/perl/ASN/Makefile.PL	2012-05-23 02:56:09.000000000 -0400
+@@ -83,7 +83,19 @@
+       $lib_version = `$opts->{'nsconfig'} --version`;
+       
+       if (lc($opts->{'insource'}) eq "true") {
+-	$Params{'LIBS'} = "-L../../snmplib/.libs -L../../snmplib/ " . $Params{'LIBS'};
++	    my %local_libs = (
++		'netsnmp'        => 'snmplib',
++		'netsnmpagent'   => 'agent',
++		'netsnmphelpers' => 'agent/helpers',
++		'netsnmpmibs'    => 'agent',
++		'netsnmptrapd'   => 'apps',
++		);
++	    foreach (split ' ', $Params{'LIBS'}) {
++		if (s/^-l// && exists $local_libs{$_}) {
++		    $Params{'LDDLFLAGS'} = $opts->{'rootpath'} . "../$local_libs{$_}/.libs/lib$_.dylib " . $Params{'LDDLFLAGS'};
++		}
++	    }
++	    $Params{'LIBS'} = ' ';
+ 	$Params{'CCFLAGS'} = "-I../../include " . $Params{'CCFLAGS'};
+       }
+       $Params{'CCFLAGS'} =~ s/ -W(all|inline|strict-prototypes|write-strings|cast-qual|no-char-subscripts)//g; # ignore developer warnings
+diff -ruN net-snmp-5.7.1.orig/perl/OID/Makefile.PL net-snmp-5.7.1/perl/OID/Makefile.PL
+--- net-snmp-5.7.1.orig/perl/OID/Makefile.PL	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/perl/OID/Makefile.PL	2012-05-23 02:56:09.000000000 -0400
+@@ -81,7 +81,19 @@
+ 	$Params{'CCFLAGS'} .= " " . $Config{'ccflags'};
+         $lib_version = `$opts->{'nsconfig'} --version`;
+ 	if (lc($opts->{'insource'}) eq "true") {
+-	    $Params{'LIBS'} = "-L../../snmplib/.libs -L../../snmplib/ " . $Params{'LIBS'};
++	    my %local_libs = (
++		'netsnmp'        => 'snmplib',
++		'netsnmpagent'   => 'agent',
++		'netsnmphelpers' => 'agent/helpers',
++		'netsnmpmibs'    => 'agent',
++		'netsnmptrapd'   => 'apps',
++		);
++	    foreach (split ' ', $Params{'LIBS'}) {
++		if (s/^-l// && exists $local_libs{$_}) {
++		    $Params{'LDDLFLAGS'} = $opts->{'rootpath'} . "../$local_libs{$_}/.libs/lib$_.dylib " . $Params{'LDDLFLAGS'};
++		}
++	    }
++	    $Params{'LIBS'} = ' ';
+ 	    $Params{'CCFLAGS'} = "-I../../include " . $Params{'CCFLAGS'};
+ #	} else {
+ #	    $Params{'PREREQ_PM'} = {'SNMP' => '5.0'};
+diff -ruN net-snmp-5.7.1.orig/perl/SNMP/Makefile.PL net-snmp-5.7.1/perl/SNMP/Makefile.PL
+--- net-snmp-5.7.1.orig/perl/SNMP/Makefile.PL	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/perl/SNMP/Makefile.PL	2012-05-23 02:56:09.000000000 -0400
+@@ -93,7 +93,19 @@
+ 	}
+         $lib_version = `$opts->{'nsconfig'} --version`;
+ 	if (lc($opts->{'insource'}) eq "true") {
+-	    $Params{'LIBS'} = "-L../../snmplib/.libs -L../../snmplib/ " . $Params{'LIBS'};
++	    my %local_libs = (
++		'netsnmp'        => 'snmplib',
++		'netsnmpagent'   => 'agent',
++		'netsnmphelpers' => 'agent/helpers',
++		'netsnmpmibs'    => 'agent',
++		'netsnmptrapd'   => 'apps',
++		);
++	    foreach (split ' ', $Params{'LIBS'}) {
++		if (s/^-l// && exists $local_libs{$_}) {
++		    $Params{'LDDLFLAGS'} = $opts->{'rootpath'} . "../$local_libs{$_}/.libs/lib$_.dylib " . $Params{'LDDLFLAGS'};
++		}
++	    }
++	    $Params{'LIBS'} = ' ';
+ 	    $Params{'CCFLAGS'} = "-I../../include " . $Params{'CCFLAGS'};
+ #	} else {
+ #	    $Params{'PREREQ_PM'} = { 'NetSNMP::default_store' => 0.01 };
+diff -ruN net-snmp-5.7.1.orig/perl/TrapReceiver/Makefile.PL net-snmp-5.7.1/perl/TrapReceiver/Makefile.PL
+--- net-snmp-5.7.1.orig/perl/TrapReceiver/Makefile.PL	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/perl/TrapReceiver/Makefile.PL	2012-05-23 02:56:09.000000000 -0400
+@@ -118,7 +118,19 @@
+ 	}
+ 
+ 	if (lc($opts->{'insource'}) eq "true") {
+-            $Params{'LIBS'} = "-L../../apps/.libs -L../../apps -L../../agent/.libs -L../../agent -L../../snmplib/.libs -L../../snmplib " . $Params{'LIBS'};
++	    my %local_libs = (
++		'netsnmp'        => 'snmplib',
++		'netsnmpagent'   => 'agent',
++		'netsnmphelpers' => 'agent/helpers',
++		'netsnmpmibs'    => 'agent',
++		'netsnmptrapd'   => 'apps',
++		);
++	    foreach (split ' ', $Params{'LIBS'}) {
++		if (s/^-l// && exists $local_libs{$_}) {
++		    $Params{'LDDLFLAGS'} = $opts->{'rootpath'} . "../$local_libs{$_}/.libs/lib$_.dylib " . $Params{'LDDLFLAGS'};
++		}
++	    }
++	    $Params{'LIBS'} = ' ';
+ 	    $Params{'CCFLAGS'} = "-I../../include " . $Params{'CCFLAGS'};
+ 	} else {
+             $Params{'LIBS'} = `$opts->{'nsconfig'} --libdir` . " $Params{'LIBS'}";
+diff -ruN net-snmp-5.7.1.orig/perl/agent/Makefile.PL net-snmp-5.7.1/perl/agent/Makefile.PL
+--- net-snmp-5.7.1.orig/perl/agent/Makefile.PL	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/perl/agent/Makefile.PL	2012-05-23 02:56:09.000000000 -0400
+@@ -86,7 +86,19 @@
+ 	$Params{'CCFLAGS'} .= " " . $Config{'ccflags'};
+         $lib_version = `$opts->{'nsconfig'} --version`;
+ 	if (lc($opts->{'insource'}) eq "true") {
+-	    $Params{'LIBS'} = "-L../../snmplib/.libs -L../../snmplib/ -L../../agent/.libs -L../../agent/ " . $Params{'LIBS'};
++	    my %local_libs = (
++		'netsnmp'        => 'snmplib',
++		'netsnmpagent'   => 'agent',
++		'netsnmphelpers' => 'agent/helpers',
++		'netsnmpmibs'    => 'agent',
++		'netsnmptrapd'   => 'apps',
++		);
++	    foreach (split ' ', $Params{'LIBS'}) {
++		if (s/^-l// && exists $local_libs{$_}) {
++		    $Params{'LDDLFLAGS'} = $opts->{'rootpath'} . "../$local_libs{$_}/.libs/lib$_.dylib " . $Params{'LDDLFLAGS'};
++		}
++	    }
++	    $Params{'LIBS'} = ' ';
+ 	    $Params{'CCFLAGS'} = "-I../../include " . $Params{'CCFLAGS'};
+ #	} else {
+ 	    $Params{'LIBS'} = `$opts->{'nsconfig'} --libdir` . $Params{'LIBS'};
+diff -ruN net-snmp-5.7.1.orig/perl/agent/Support/Makefile.PL net-snmp-5.7.1/perl/agent/Support/Makefile.PL
+--- net-snmp-5.7.1.orig/perl/agent/Support/Makefile.PL	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/perl/agent/Support/Makefile.PL	2012-05-23 02:56:09.000000000 -0400
+@@ -75,6 +75,7 @@
+     else
+     {
+       $opts = NetSNMPGetOpts("../../");
++	$Params{'LDDLFLAGS'} = "$Config{lddlflags} " . `$opts->{'nsconfig'} --ldflags`;
+       $Params{'LIBS'}    = `$opts->{'nsconfig'} --libs`;
+       chomp($Params{'LIBS'});
+       $Params{'CCFLAGS'} = `$opts->{'nsconfig'} --cflags`;
+@@ -83,7 +84,19 @@
+       $lib_version = `$opts->{'nsconfig'} --version`;
+       
+       if (lc($opts->{'insource'}) eq "true") {
+-	$Params{'LIBS'} = "-L../../snmplib/.libs -L../../snmplib/ " . $Params{'LIBS'};
++	    my %local_libs = (
++		'netsnmp'        => 'snmplib',
++		'netsnmpagent'   => 'agent',
++		'netsnmphelpers' => 'agent/helpers',
++		'netsnmpmibs'    => 'agent',
++		'netsnmptrapd'   => 'apps',
++		);
++	    foreach (split ' ', $Params{'LIBS'}) {
++		if (s/^-l// && exists $local_libs{$_}) {
++		    $Params{'LDDLFLAGS'} = $opts->{'rootpath'} . "../$local_libs{$_}/.libs/lib$_.dylib " . $Params{'LDDLFLAGS'};
++		}
++	    }
++	    $Params{'LIBS'} = ' ';
+ 	$Params{'CCFLAGS'} = "-I../../include " . $Params{'CCFLAGS'};
+       }
+       $Params{'CCFLAGS'} =~ s/ -W(all|inline|strict-prototypes|write-strings|cast-qual|no-char-subscripts)//g; # ignore developer warnings
+diff -ruN net-snmp-5.7.1.orig/perl/agent/default_store/Makefile.PL net-snmp-5.7.1/perl/agent/default_store/Makefile.PL
+--- net-snmp-5.7.1.orig/perl/agent/default_store/Makefile.PL	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/perl/agent/default_store/Makefile.PL	2012-05-23 02:56:09.000000000 -0400
+@@ -69,6 +69,7 @@
+     }
+     else {
+ 	$opts = NetSNMPGetOpts("../../");
++	$Params{'LDDLFLAGS'} = "$Config{lddlflags} " . `$opts->{'nsconfig'} --ldflags`;
+ 	$Params{'LIBS'}    = `$opts->{'nsconfig'} --libs`;
+ 	chomp($Params{'LIBS'});
+ 	$Params{'CCFLAGS'} = `$opts->{'nsconfig'} --cflags`;
+@@ -76,7 +77,19 @@
+ 	$Params{'CCFLAGS'} .= " " . $Config{'ccflags'};
+         $lib_version = `$opts->{'nsconfig'} --version`;
+ 	if ($opts->{'insource'} eq "true") {
+-	    $Params{'LIBS'} = "-L../../../snmplib/.libs -L../../../snmplib/ " . $Params{'LIBS'};
++	    my %local_libs = (
++		'netsnmp'        => 'snmplib',
++		'netsnmpagent'   => 'agent',
++		'netsnmphelpers' => 'agent/helpers',
++		'netsnmpmibs'    => 'agent',
++		'netsnmptrapd'   => 'apps',
++		);
++	    foreach (split ' ', $Params{'LIBS'}) {
++		if (s/^-l// && exists $local_libs{$_}) {
++		    $Params{'LDDLFLAGS'} = $opts->{'rootpath'} . "../$local_libs{$_}/.libs/lib$_.dylib " . $Params{'LDDLFLAGS'};
++		}
++	    }
++	    $Params{'LIBS'} = ' ';
+ 	    $Params{'CCFLAGS'} = "-I../../../include " . $Params{'CCFLAGS'};
+ 	}
+ 	$Params{'CCFLAGS'} =~ s/ -W(all|inline|strict-prototypes|write-strings|cast-qual|no-char-subscripts)//g; # ignore developer warnings
+diff -ruN net-snmp-5.7.1.orig/perl/default_store/Makefile.PL net-snmp-5.7.1/perl/default_store/Makefile.PL
+--- net-snmp-5.7.1.orig/perl/default_store/Makefile.PL	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/perl/default_store/Makefile.PL	2012-05-23 02:56:09.000000000 -0400
+@@ -76,7 +76,19 @@
+ 	$Params{'CCFLAGS'} .= " " . $Config{'ccflags'};
+         $lib_version = `$opts->{'nsconfig'} --version`;
+ 	if (lc($opts->{'insource'}) eq "true") {
+-	    $Params{'LIBS'} = "-L../../snmplib/.libs -L../../snmplib/ " . $Params{'LIBS'};
++	    my %local_libs = (
++		'netsnmp'        => 'snmplib',
++		'netsnmpagent'   => 'agent',
++		'netsnmphelpers' => 'agent/helpers',
++		'netsnmpmibs'    => 'agent',
++		'netsnmptrapd'   => 'apps',
++		);
++	    foreach (split ' ', $Params{'LIBS'}) {
++		if (s/^-l// && exists $local_libs{$_}) {
++		    $Params{'LDDLFLAGS'} = $opts->{'rootpath'} . "../$local_libs{$_}/.libs/lib$_.dylib " . $Params{'LDDLFLAGS'};
++		}
++	    }
++	    $Params{'LIBS'} = ' ';
+ 	    $Params{'CCFLAGS'} = "-I../../include " . $Params{'CCFLAGS'};
+ 	}
+ 	$Params{'CCFLAGS'} =~ s/ -W(all|inline|strict-prototypes|write-strings|cast-qual|no-char-subscripts)//g; # ignore developer warnings
+diff -ruN net-snmp-5.7.1.orig/snmplib/md5.c net-snmp-5.7.1/snmplib/md5.c
+--- net-snmp-5.7.1.orig/snmplib/md5.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/snmplib/md5.c	2012-05-22 12:41:30.000000000 -0400
+@@ -195,7 +195,7 @@
+ {
+     register unsigned int tmp, A, B, C, D;      /* hpux sysv sun */
+ #ifdef WORDS_BIGENDIAN
+-    MDreverse(X);
++    MDreverse((unsigned int*)X);
+ #endif
+     A = MDp->buffer[0];
+     B = MDp->buffer[1];
+@@ -275,7 +275,7 @@
+     MDp->buffer[2] += C;
+     MDp->buffer[3] += D;
+ #ifdef WORDS_BIGENDIAN
+-    MDreverse(X);
++    MDreverse((unsigned int*)X);
+ #endif
+ }
+ 
+diff -ruN net-snmp-5.7.1.orig/snmplib/system.c net-snmp-5.7.1/snmplib/system.c
+--- net-snmp-5.7.1.orig/snmplib/system.c	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/snmplib/system.c	2012-05-22 12:41:30.000000000 -0400
+@@ -150,6 +150,7 @@
+ 
+ #if defined(darwin9)
+ #include <crt_externs.h>        /* for _NSGetArgv() */
++#include <mach-o/dyld.h>        /* for _NSGetExecutablePath() */
+ #endif
+ 
+ #if HAVE_PWD_H
+diff -ruN net-snmp-5.7.1.orig/testing/Makefile.in net-snmp-5.7.1/testing/Makefile.in
+--- net-snmp-5.7.1.orig/testing/Makefile.in	2011-09-28 00:53:47.000000000 -0400
++++ net-snmp-5.7.1/testing/Makefile.in	2012-05-22 12:55:17.000000000 -0400
+@@ -11,7 +11,7 @@
+ @NON_GNU_VPATH@ $(srcdir)
+ 
+ USELIBS		= ../snmplib/libsnmp.$(LIB_EXTENSION)$(LIB_VERSION)
+-LIBS		= -L../snmplib $(CC_RUNTIME_ARG) -lsnmp @LIBS@
++LIBS		= $(CC_RUNTIME_ARG) @LIBS@
+ 
+ PARSEOBJS	=
+ 

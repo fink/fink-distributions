@@ -1,0 +1,1991 @@
+diff --exclude .svn -Nau qtguitune-0.5/Makefile.in qtguitune-0.5_portaudio-1.18.1/Makefile.in
+--- qtguitune-0.5/Makefile.in	2001-08-02 22:34:04.000000000 +0200
++++ qtguitune-0.5_portaudio-1.18.1/Makefile.in	2007-02-13 01:58:12.000000000 +0100
+@@ -66,22 +66,22 @@
+ VERSION = @VERSION@
+ 
+ bin_PROGRAMS = qtguitune
+-qtguitune_SOURCES = main.cpp                      guitune.cpp logview.cpp osziview.cpp                      guitune.h   logview.h   osziview.h   mainwindow.h                      moc_mainwindow.cpp moc_guitune.cpp                      resources.h
++qtguitune_SOURCES = main.cpp                      guitune.cpp logview.cpp osziview.cpp                      guitune.h   logview.h   osziview.h   mainwindow.h                      moc_mainwindow.cpp moc_guitune.cpp                      resources.h pablio.c ringbuffer.c
+ 
+ #qtguitune_LDADD   = @LIBOBJS@
+-qtguitune_LDFLAGS = -lqt -lm -L${QTDIR}/lib
++qtguitune_LDFLAGS = -lqt-mt -lportaudio -lm -L${QTDIR}/lib -L@PREFIX@/lib
+ CPPFLAGS = -I${QTDIR}/include	
+ ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
+ mkinstalldirs = $(SHELL) $(top_srcdir)/mkinstalldirs
+ CONFIG_CLEAN_FILES = 
+ PROGRAMS =  $(bin_PROGRAMS)
+ 
+-
++INCLUDES=-I@PREFIX@/include
+ DEFS = @DEFS@ -I. -I$(srcdir) 
+ LDFLAGS = @LDFLAGS@
+ LIBS = @LIBS@
+ qtguitune_OBJECTS =  main.o guitune.o logview.o osziview.o \
+-moc_mainwindow.o moc_guitune.o
++moc_mainwindow.o moc_guitune.o pablio.o ringbuffer.o
+ qtguitune_LDADD = $(LDADD)
+ qtguitune_DEPENDENCIES = 
+ CXXFLAGS = @CXXFLAGS@
+diff --exclude .svn -Nau qtguitune-0.5/guitune.cpp qtguitune-0.5_portaudio-1.18.1/guitune.cpp
+--- qtguitune-0.5/guitune.cpp	2001-08-02 20:18:36.000000000 +0200
++++ qtguitune-0.5_portaudio-1.18.1/guitune.cpp	2007-02-13 01:37:26.000000000 +0100
+@@ -24,8 +24,6 @@
+ #include <sys/stat.h>
+ #include <fcntl.h>
+ #include <sys/ioctl.h>
+-#include <linux/soundcard.h>
+-
+ 
+ #include <unistd.h>
+ #include <stdio.h>
+@@ -62,13 +60,12 @@
+ 
+ 
+ 
++
+ //globally
+ double KAMMERTON, KAMMERTON_LOG;
+ 
+ 
+ 
+-int close_unistd(int fd){ return( close(fd) ); }
+-// unistd - close is not visible to widget because of own close function
+ 
+ 
+ void MainWidget::setTuningNorm()
+@@ -131,286 +128,221 @@
+ 
+ void MainWidget::showLogView()
+ {
+- 	  logview->show();
++    logview->show();
+ }
+ 
+ void MainWidget::hideLogView()
+ {
+- 	  logview->hide();
++    logview->hide();
+ }
+ 
+ void MainWidget::showOszi()
+ {
+- 	  oszi->show();
++    oszi->show();
+ }
+ 
+ void MainWidget::hideOszi()
+ {
+- 	  oszi->hide();
++    oszi->hide();
+ }
+ 
+ double MainWidget::getTrigger()
+ {
+- 	  return(oszi->getTrigFact());
++    return(oszi->getTrigFact());
+ }
+ 
+-void MainWidget::setSampFreq(int f)
+-{
+-    sampfreq = f;
+-    timer->stop();
+-    close_unistd(audio);
+-    audio=init_audio();
+-    timer->start(0);
+-    oszi->setSampleFreq(sampfreq_exact);
+-    emit signalSampFreqChanged();
+-}
+ 
+ 
+-void MainWidget::setSampNr(int nr)
++void MainWidget::init_audio()
+ {
+-    sampnr=nr;
+-    oszi->setSampleNr(nr);
+-    emit signalSampNrChanged();
+-}
++    PaError  err;
+ 
++    /* Open simplified blocking I/O layer on top of PortAudio. */
++    err = OpenAudioStream( &aStream, SAMPLE_RATE, SAMPLE_TYPE,
++                           (PABLIO_READ_WRITE | PABLIO_MONO) );
++    if( err != paNoError )
++        goto error;
++    return;
++error:
++    Pa_Terminate();
++    fprintf( stderr, "An error occured while using the portaudio stream\n" );
++    fprintf( stderr, "Error number: %d\n", err );
++    fprintf( stderr, "Error message: %s\n", Pa_GetErrorText( err ) );
+ 
+-void MainWidget::setTrigger(double trig)
+-{
+-    oszi->setTrigFact(trig);
+-    emit signalTriggerChanged();
+ }
+ 
+-
+-void MainWidget::setTriggerPercent(int trig)
++void MainWidget::close_audio()
+ {
+-    setTrigger((double)trig/100.0);
++    CloseAudioStream( aStream );
+ }
+ 
+-void MainWidget::setDSPName(const char *name)
+-{
+-    timer->stop();
+-    close_unistd(audio);
+-    strcpy(dsp_devicename,name);
+-    audio=init_audio();
+-    timer->start(0);
+-}
+ 
+-int MainWidget::init_audio()
++MainWidget::MainWidget( QWidget *parent, const char *name, int argc, char **argv )
++        : QWidget(parent,name)
+ {
+-// int audio_fd;
+-
+-   printf("initializing audio at %s\n",dsp_devicename);
++    int i;
++    //InitAudio();
++    //   setMinimumSize(490,240);
+ 
+-   audio = open(dsp_devicename, O_RDONLY);
+-   if (audio == -1) {
+-      perror(dsp_devicename);
+-      exit(1);
+-   }
+-   fcntl(audio,F_SETFD,FD_CLOEXEC);
+-
+-//   ioctl(audio, SNDCTL_DSP_RESET, 0);
+-   if( strcmp(dsp_devicename,"/dev/stdin")==0 ){
+-
+-      printf("reading data fronm stdin\n");
+-   		blksize=32;
+-      printf("  blocksize=%d\n",blksize);
+-      printf("  sampfreq=%d\n",sampfreq);
+-      sampfreq_exact=sampfreq;
+-
+-   }else{
+-
+-      ioctl(audio, SNDCTL_DSP_SETDUPLEX, 0);
+-
+-      {int caps;
+-          ioctl( audio, SNDCTL_DSP_GETCAPS, &caps );
+-          printf("OSS-Version %d\n", caps & DSP_CAP_REVISION );
+-       		printf("  DUPLEX   = %X\n",caps & DSP_CAP_DUPLEX   );
+-          printf("  REALTIME = %X\n",caps & DSP_CAP_REALTIME );
+-          printf("  BATCH    = %X\n",caps & DSP_CAP_BATCH    );
+-          printf("  COPROC   = %X\n",caps & DSP_CAP_COPROC   );
+-          printf("  TRIGGER  = %X\n",caps & DSP_CAP_TRIGGER  );
+-          printf("  MMAP     = %X\n",caps & DSP_CAP_MMAP     );
+-   		}
+-
+-   		blksize=8;  // 2^8 = 256
+-  		ioctl(audio, SNDCTL_DSP_SETFRAGMENT, &blksize);
+-//   ioctl(audio, SNDCTL_DSP_SETBLKSIZE, &blksize);
+-
+-      ioctl(audio, SNDCTL_DSP_GETBLKSIZE, &blksize);
+-      printf("blocksize=%d\n",blksize);
+-   //blksize=4096;
+-
+-      ioctl(audio, SNDCTL_DSP_SYNC, NULL);
+-//   int a_sampsize = 8;
+-      int a_sampsize = AFMT_U8;
+-      ioctl(audio, SNDCTL_DSP_SAMPLESIZE, &a_sampsize);
+-      int a_stereo = 0;
+-      ioctl(audio, SNDCTL_DSP_STEREO, &a_stereo);
+-
+-      int a_speed = sampfreq;
+-      printf("sampfreq=%d\n",sampfreq);
+-      ioctl(audio, SNDCTL_DSP_SPEED, &a_speed);
+-      ioctl(audio, SOUND_PCM_READ_RATE, &sampfreq);
+-      printf("sampfreq=%d\n",sampfreq);
+-      sampfreq_exact=sampfreq;
+-
+-   }
+-
+-   //int mixer = open("/dev/mixer", O_RDONLY, 0);
+-   //int vol=0xFFFF;
+-   //ioctl(mixer, SOUND_MIXER_WRITE_MIC, &vol);
+-   //printf("MIC-Volume=%d\n",vol);
+-   //close(mixer);
+-
+-// printf("close(audio)=%d\n",close(audio));
+-// printf("close(audio)=%d\n",close(audio));
++    KAMMERTON=KAMMERTON_NORM;
++    KAMMERTON_LOG=KAMMERTON_LOG_NORM;
+ 
+-   return(audio);
++    sampnr=FRAMES_PER_BLOCK;
++    sampfreq=SAMPLE_RATE;
++    processing_audio=0;
++    init_audio();
++    printf("Audiodriver initialized\n");
++
++    freqs[0]=KAMMERTON;
++    lfreqs[0]=KAMMERTON_LOG;
++    for(i=1;i<12;i++)
++    {
++        freqs [i] = freqs [i-1] * D_NOTE;
++        lfreqs[i] = lfreqs[i-1] + D_NOTE_LOG;
++    }
++    /*   filemenu = new QPopupMenu( this,"file_menu" );
++       filemenu->setFont( QFont("OldEnglish") );
++       filemenu->insertItem( "&Open", this, SLOT( mfile_open() ) );
++       filemenu->insertItem( "&Save", this, SLOT( mfile_save() ) );
++       filemenu->insertItem( "E&xit", qApp, SLOT( quit() ), ALT+Key_X );
++       optmenu = new QPopupMenu( this,"options_menu" );
++       optmenu->setFont( QFont("OldEnglish") );
++       optmenu->insertItem( "Set Sample&freq", this, SLOT( mopt_setsfreq() ) );
++       viewmenu = new QPopupMenu( this,"view_menu" );
++       viewmenu->setFont( QFont("OldEnglish") );
++       viewmenu->insertItem( "&Oszi", this, SLOT( mview_oszi() ) );
++       viewmenu->insertItem( "&Tone Scale", this, SLOT( mview_tonesc() ) );
++       viewmenu->setCheckable( TRUE );
++       menu = new QMenuBar( this, "menu_bar" );
++       menu->setFont( QFont("OldEnglish") );
++       menu->insertItem( "&File", filemenu );
++       menu->insertItem( "&Options", optmenu );
++       menu->insertItem( "&View", viewmenu );*/
++    oszi = new OsziView( this, "oszi_name" );
++    //   oszi->setGeometry(0,0,400,150);
++    oszi->setSampleNr( sampnr );
++    oszi->setSampleFreq(sampfreq);
++    logview = new LogView( this, "logview_name" );
++    logview->setFrameStyle( QFrame::Box | QFrame::Sunken );
++    logview->setLineWidth( 2 );
++    //   logview->setGeometry(0,oszi->height(),width(),80);
++    QColorGroup cg(qRgb(0xFF,0,0),qRgb(0,0,0),qRgb(0xFF,0x88,0x88),qRgb(0x88,0,0),qRgb(0xFF,0,0),qRgb(0xFF,0xFF,0xFF),qRgb(0x88,0x88,0x88));
++    QPalette pal(cg,cg,cg);
++    freqview = new QLCDNumber( this, "freqview_name");
++    freqview->setNumDigits(9);
++    freqview->setFrameStyle(QFrame::NoFrame);
++    freqview->setSegmentStyle(QLCDNumber::Filled);
++    freqview->setPalette(pal);
++    nfreqview = new QLCDNumber( this, "nfreqview_name");
++    nfreqview->setNumDigits(9);
++    nfreqview->setFrameStyle(QFrame::NoFrame);
++    nfreqview->setSegmentStyle(QLCDNumber::Filled);
++    nfreqview->setPalette(pal);
++    //   freqview->setSegmentStyle(QLCDNumber::Filled);
++    sampfreq_input = new QSpinBox( 1000, 48000, 50, this );
++    //   sampfreq_input -> setGeometry( freqview->x()+freqview->width()+30,
++    //                                  logview->y()+logview->height()+20,
++    //                                  70,20 );
++    sampfreq_input -> setValue(sampfreq);
++    connect( sampfreq_input, SIGNAL(valueChanged(int)),
++             this,           SLOT(setSampFreq(int))     );
++    sampnr_input = new QSpinBox( 32, 11048, 32, this );
++    //   sampnr_input -> setGeometry( sampfreq_input->x(),
++    //                                sampfreq_input->y()+
++    //                                sampfreq_input->height()+10,  70,20 );
++    sampnr_input -> setValue(sampnr);
++    connect( sampnr_input, SIGNAL(valueChanged(int)),
++             this,         SLOT(setSampNr(int))   );
++    trigger_input = new QSpinBox( 0, 100, 10, this );
++    trigger_input -> setValue((int)(getTrigger()*100.0+0.5));
++    connect( trigger_input, SIGNAL(valueChanged(int)),
++             this,          SLOT(setTriggerPercent(int))  );
++    timer = new QTimer(this);
++    connect(  timer, SIGNAL(timeout()), this, SLOT(proc_audio()) );
++    timer->start(0);
+ }
+ 
+ 
+ 
++void MainWidget::proc_audio()
++{
+ 
+-MainWidget::MainWidget( QWidget *parent, const char *name, int argc, char **argv )
+-               : QWidget(parent,name)
+-{int i;
+-   //InitAudio();
+-//   setMinimumSize(490,240);
+-
+-   KAMMERTON=KAMMERTON_NORM;
+-   KAMMERTON_LOG=KAMMERTON_LOG_NORM;
+-
+-   strcpy(dsp_devicename,"/dev/dsp");
+-
+-   sampnr=1024;
+-   sampfreq=11048;
+-   processing_audio=0;
+-   audio = init_audio();
+-   printf("Audiodriver initialized\n");
+-
+-   freqs[0]=KAMMERTON; lfreqs[0]=KAMMERTON_LOG;
+-   for(i=1;i<12;i++){
+-      freqs [i] = freqs [i-1] * D_NOTE;
+-      lfreqs[i] = lfreqs[i-1] + D_NOTE_LOG;
+-   }
+-/*   filemenu = new QPopupMenu( this,"file_menu" );
+-   filemenu->setFont( QFont("OldEnglish") );
+-   filemenu->insertItem( "&Open", this, SLOT( mfile_open() ) );
+-   filemenu->insertItem( "&Save", this, SLOT( mfile_save() ) );
+-   filemenu->insertItem( "E&xit", qApp, SLOT( quit() ), ALT+Key_X );
+-   optmenu = new QPopupMenu( this,"options_menu" );
+-   optmenu->setFont( QFont("OldEnglish") );
+-   optmenu->insertItem( "Set Sample&freq", this, SLOT( mopt_setsfreq() ) );
+-   viewmenu = new QPopupMenu( this,"view_menu" );
+-   viewmenu->setFont( QFont("OldEnglish") );
+-   viewmenu->insertItem( "&Oszi", this, SLOT( mview_oszi() ) );
+-   viewmenu->insertItem( "&Tone Scale", this, SLOT( mview_tonesc() ) );
+-   viewmenu->setCheckable( TRUE );
+-   menu = new QMenuBar( this, "menu_bar" );
+-   menu->setFont( QFont("OldEnglish") );
+-   menu->insertItem( "&File", filemenu );
+-   menu->insertItem( "&Options", optmenu );
+-   menu->insertItem( "&View", viewmenu );*/
+-   oszi = new OsziView( this, "oszi_name" );
+-//   oszi->setGeometry(0,0,400,150);
+-   oszi->setSampleNr( sampnr );
+-   oszi->setSampleFreq(sampfreq_exact);
+-   logview = new LogView( this, "logview_name" );
+-   logview->setFrameStyle( QFrame::Box | QFrame::Sunken );
+-   logview->setLineWidth( 2 );
+-//   logview->setGeometry(0,oszi->height(),width(),80);
+-   QColorGroup cg(qRgb(0xFF,0,0),qRgb(0,0,0),qRgb(0xFF,0x88,0x88),qRgb(0x88,0,0),qRgb(0xFF,0,0),qRgb(0xFF,0xFF,0xFF),qRgb(0x88,0x88,0x88));
+-   QPalette pal(cg,cg,cg);
+-   freqview = new QLCDNumber( this, "freqview_name");
+-   freqview->setNumDigits(9);
+-   freqview->setFrameStyle(QFrame::NoFrame);
+-   freqview->setSegmentStyle(QLCDNumber::Filled);
+-   freqview->setPalette(pal);
+-   nfreqview = new QLCDNumber( this, "nfreqview_name");
+-   nfreqview->setNumDigits(9);
+-   nfreqview->setFrameStyle(QFrame::NoFrame);
+-   nfreqview->setSegmentStyle(QLCDNumber::Filled);
+-   nfreqview->setPalette(pal);
+-//   freqview->setSegmentStyle(QLCDNumber::Filled);
+-   sampfreq_input = new QSpinBox( 1000, 48000, 50, this );
+-//   sampfreq_input -> setGeometry( freqview->x()+freqview->width()+30,
+-//                                  logview->y()+logview->height()+20,
+-//                                  70,20 );
+-   sampfreq_input -> setValue(sampfreq);
+-   connect( sampfreq_input, SIGNAL(valueChanged(int)),
+-            this,           SLOT(setSampFreq(int))     );
+-   sampnr_input = new QSpinBox( 32, 11048, 32, this );
+-//   sampnr_input -> setGeometry( sampfreq_input->x(),
+-//                                sampfreq_input->y()+
+-//                                sampfreq_input->height()+10,  70,20 );
+-   sampnr_input -> setValue(sampnr);
+-   connect( sampnr_input, SIGNAL(valueChanged(int)),
+-            this,         SLOT(setSampNr(int))   );
+-   trigger_input = new QSpinBox( 0, 100, 10, this );
+-   trigger_input -> setValue((int)(getTrigger()*100.0+0.5));
+-   connect( trigger_input, SIGNAL(valueChanged(int)),
+-            this,          SLOT(setTriggerPercent(int))  );
+-   timer = new QTimer(this);
+-   connect(  timer, SIGNAL(timeout()), this, SLOT(proc_audio()) );
+-   timer->start(0);
+-}
+-
+-
++    SAMPLE   *c;
++    int i,j,n,trig,trigpos;
+ 
+-void MainWidget::proc_audio()
+-{int i,j,n,trig,trigpos;
+- static int k=0;
+- unsigned char *c;
+- double ldf,mldf;
+- char str[50];
+-   processing_audio=1;
+-   trigpos=0;
+-   c=sample; n=0;
+-   n = read(audio, c, blksize);
+-   for( i=0; i<n && Abs(c[i]-128)<2; i++ );
+-   //i=-1;
+-   j=0; trig=0;
+-   if (i<n) do {
+-      for( ; i<n-1; i++ )   /* n-1 because of POSTRIG uses i+1 */
+-          if ( POSTRIG(c,i) ) { trig=1; trigpos=i; }
+-      if( trig==0 ){
+-          n = read(audio, c, blksize);
+-          j++;
+-          i=0;
+-      }
+-   }while( (!trig) && j<100 );
+-//   else printf("No Signal %d\n",blksize);
+-   if( trig ){
+-      for( i=n-trigpos; i<sampnr; i+=n ){
+-         c+=n;
+-         n = read(audio, c, blksize);
+-      }
+-//      oszi->setSampleFreq( sampfreq_exact );
+-      oszi->setSamplePtr( &sample[trigpos] );
+-//      oszi->setSampleNr( sampnr );
+-      oszi->paintSample();
+-      freq_0t = (double)sampfreq*oszi->getfreq2();
+-      lfreq_0t = log(freq_0t);
+-      while ( lfreq_0t < lfreqs[0]-D_NOTE_LOG/2.0 ) lfreq_0t+=LOG_2;
+-      while ( lfreq_0t >= lfreqs[0]+LOG_2-D_NOTE_LOG/2.0 ) lfreq_0t-=LOG_2;
+-      mldf=D_NOTE_LOG; note_0t=0;
+-      for( i=0; i<12; i++ ){
+-				 ldf = fabs(lfreq_0t-lfreqs[i]);
+-				 if (ldf<mldf) { mldf=ldf; note_0t=i; }
+-      }
+-      logview->change_lfreq(lfreq_0t);
+-      sprintf(str,"%.3f",freq_0t);
+-      freqview->display(str);
+-      double nfreq_0t=freqs[note_0t];
+-      while( nfreq_0t/freq_0t > D_NOTE_SQRT ) nfreq_0t/=2.0;
+-      while( freq_0t/nfreq_0t > D_NOTE_SQRT ) nfreq_0t*=2.0;
+-      sprintf(str,"%.3f",nfreq_0t);
+-      nfreqview->display(str);
+-//      printf("Note: %s (%lfHz) Freq=%lf\n",
+-//	        note[note_0t],freqs[note_0t],freq_0t);
+-   }
+-   k++;
+-   processing_audio=0;
++    double ldf,mldf;
++    char str[50];
++    processing_audio=1;
++    trigpos=0;
++    c=sample;
++    n = FRAMES_PER_BLOCK;
++    
++    ReadAudioStream( aStream, c, FRAMES_PER_BLOCK );
++
++    for( i=0; i<n && Abs(c[i]-128)<2; i++ )
++        ;
++    //i=-1,
++    j=0;
++    trig=0;
++    if (i<n)
++        do
++        {
++            for( ; i<n-1; i++ )   /* n-1 because of POSTRIG uses i+1 */
++                if ( POSTRIG(c,i) )
++                {
++                    trig=1;
++                    trigpos=i;
++                }
++            if( trig==0 )
++            {
++                ReadAudioStream( aStream, c, FRAMES_PER_BLOCK );
++                j++;
++                i=0;
++            }
++        }
++        while( (!trig) && j<100 );
++    //   else printf("No Signal %d\n",blksize);
++    if( trig )
++    {
++        for( i=n-trigpos; i<sampnr; i+=n )
++        {
++            c+=n;
++            ReadAudioStream( aStream, c, FRAMES_PER_BLOCK );
++        }
++        //      oszi->setSampleFreq( sampfreq_exact );
++        oszi->setSamplePtr( &sample[trigpos] );
++        //      oszi->setSampleNr( sampnr );
++        oszi->paintSample();
++        freq_0t = (double)sampfreq*oszi->getfreq2();
++        lfreq_0t = log(freq_0t);
++        while ( lfreq_0t < lfreqs[0]-D_NOTE_LOG/2.0 )
++            lfreq_0t+=LOG_2;
++        while ( lfreq_0t >= lfreqs[0]+LOG_2-D_NOTE_LOG/2.0 )
++            lfreq_0t-=LOG_2;
++        mldf=D_NOTE_LOG;
++        note_0t=0;
++        for( i=0; i<12; i++ )
++        {
++            ldf = fabs(lfreq_0t-lfreqs[i]);
++            if (ldf<mldf)
++            {
++                mldf=ldf;
++                note_0t=i;
++            }
++        }
++        logview->change_lfreq(lfreq_0t);
++        sprintf(str,"%.3f",freq_0t);
++        freqview->display(str);
++        double nfreq_0t=freqs[note_0t];
++        while( nfreq_0t/freq_0t > D_NOTE_SQRT )
++            nfreq_0t/=2.0;
++        while( freq_0t/nfreq_0t > D_NOTE_SQRT )
++            nfreq_0t*=2.0;
++        sprintf(str,"%.3f",nfreq_0t);
++        nfreqview->display(str);
++        //printf("Note: %d (%lfHz) Freq=%lf\n",note[note_0t],freqs[note_0t],freq_0t);
++    }
++    processing_audio=0;
+ }
+ 
+ 
+@@ -418,159 +350,85 @@
+ void MainWidget::paintEvent( QPaintEvent * )
+ {
+ 
+-	 QPainter p(this);
++    QPainter p(this);
+ 
+-     p.setFont(QFont("System",8));
+-     p.setPen( qRgb(0xFF,0xFF,0xFF) );
+-	   p.drawText( freqview->x()-p.fontMetrics().width("Freq.:")-5+1,
+-	  	           freqview->y()+p.fontMetrics().ascent()+1
+-			           +p.fontMetrics().height(), "Freq.:" );
+-     p.setPen( qRgb(0,0,0) );
+-	   p.drawText( freqview->x()-p.fontMetrics().width("Freq.:")-5,
+-	  	           freqview->y()+p.fontMetrics().ascent()
+-			           +p.fontMetrics().height(), "Freq.:" );
+-
+-     p.setPen( qRgb(0xFF,0xFF,0xFF) );
+-	   p.drawText( nfreqview->x()-p.fontMetrics().width("Note:")-5+1,
+-	  	           nfreqview->y()+p.fontMetrics().ascent()+1
+-			           +p.fontMetrics().height(), "Note:" );
+-     p.setPen( qRgb(0,0,0) );
+-	   p.drawText( nfreqview->x()-p.fontMetrics().width("Note:")-5,
+-	  	           nfreqview->y()+p.fontMetrics().ascent()
+-			           +p.fontMetrics().height(), "Note:" );
+-
+-     p.setPen( qRgb(0xFF,0xFF,0xFF) );
+-	   p.drawText( sampfreq_input->x()-p.fontMetrics().width("Sample Freq.:")-5+1,
+-	  	           sampfreq_input->y()+p.fontMetrics().ascent()+1
+-			           +p.fontMetrics().height()-3, "Sample Freq.:" );
+-     p.setPen( qRgb(0,0,0) );
+-	   p.drawText( sampfreq_input->x()-p.fontMetrics().width("Sample Freq.:")-5,
+-	  	           sampfreq_input->y()+p.fontMetrics().ascent()
+-			           +p.fontMetrics().height()-3, "Sample Freq.:" );
+-
+-     p.setPen( qRgb(0xFF,0xFF,0xFF) );
+-	   p.drawText( sampnr_input->x()-p.fontMetrics().width("Sample #:")-5+1,
+-	  	           sampnr_input->y()+p.fontMetrics().ascent()+1
+-			           +p.fontMetrics().height()-3, "Sample #:" );
+-     p.setPen( qRgb(0,0,0) );
+-	   p.drawText( sampnr_input->x()-p.fontMetrics().width("Sample #:")-5,
+-	  	           sampnr_input->y()+p.fontMetrics().ascent()
+-			           +p.fontMetrics().height()-3, "Sample #:" );
+-
+-     p.setPen( qRgb(0xFF,0xFF,0xFF) );
+-	   p.drawText( trigger_input->x()-p.fontMetrics().width("Trig.(% of max):")-5+1,
+-	  	           trigger_input->y()+p.fontMetrics().ascent()+1
+-			           +p.fontMetrics().height()-3, "Trig.(% of max):" );
+-     p.setPen( qRgb(0,0,0) );
+-	   p.drawText( trigger_input->x()-p.fontMetrics().width("Trig.(% of max):")-5,
+-	  	           trigger_input->y()+p.fontMetrics().ascent()
+-			           +p.fontMetrics().height()-3, "Trig.(% of max):" );
+-   p.end();
++    p.setFont(QFont("System",8));
++    p.setPen( qRgb(0xFF,0xFF,0xFF) );
++    p.drawText( freqview->x()-p.fontMetrics().width("Freq.:")-5+1,
++                freqview->y()+p.fontMetrics().ascent()+1
++                +p.fontMetrics().height(), "Freq.:" );
++    p.setPen( qRgb(0,0,0) );
++    p.drawText( freqview->x()-p.fontMetrics().width("Freq.:")-5,
++                freqview->y()+p.fontMetrics().ascent()
++                +p.fontMetrics().height(), "Freq.:" );
++
++    p.setPen( qRgb(0xFF,0xFF,0xFF) );
++    p.drawText( nfreqview->x()-p.fontMetrics().width("Note:")-5+1,
++                nfreqview->y()+p.fontMetrics().ascent()+1
++                +p.fontMetrics().height(), "Note:" );
++    p.setPen( qRgb(0,0,0) );
++    p.drawText( nfreqview->x()-p.fontMetrics().width("Note:")-5,
++                nfreqview->y()+p.fontMetrics().ascent()
++                +p.fontMetrics().height(), "Note:" );
++
++    p.setPen( qRgb(0xFF,0xFF,0xFF) );
++    p.drawText( sampfreq_input->x()-p.fontMetrics().width("Sample Freq.:")-5+1,
++                sampfreq_input->y()+p.fontMetrics().ascent()+1
++                +p.fontMetrics().height()-3, "Sample Freq.:" );
++    p.setPen( qRgb(0,0,0) );
++    p.drawText( sampfreq_input->x()-p.fontMetrics().width("Sample Freq.:")-5,
++                sampfreq_input->y()+p.fontMetrics().ascent()
++                +p.fontMetrics().height()-3, "Sample Freq.:" );
++
++    p.setPen( qRgb(0xFF,0xFF,0xFF) );
++    p.drawText( sampnr_input->x()-p.fontMetrics().width("Sample #:")-5+1,
++                sampnr_input->y()+p.fontMetrics().ascent()+1
++                +p.fontMetrics().height()-3, "Sample #:" );
++    p.setPen( qRgb(0,0,0) );
++    p.drawText( sampnr_input->x()-p.fontMetrics().width("Sample #:")-5,
++                sampnr_input->y()+p.fontMetrics().ascent()
++                +p.fontMetrics().height()-3, "Sample #:" );
++
++    p.setPen( qRgb(0xFF,0xFF,0xFF) );
++    p.drawText( trigger_input->x()-p.fontMetrics().width("Trig.(% of max):")-5+1,
++                trigger_input->y()+p.fontMetrics().ascent()+1
++                +p.fontMetrics().height()-3, "Trig.(% of max):" );
++    p.setPen( qRgb(0,0,0) );
++    p.drawText( trigger_input->x()-p.fontMetrics().width("Trig.(% of max):")-5,
++                trigger_input->y()+p.fontMetrics().ascent()
++                +p.fontMetrics().height()-3, "Trig.(% of max):" );
++    p.end();
+ 
+-//   oszi->repaint();
+-   logview->update();
++    //   oszi->repaint();
++    logview->update();
+ }
+ 
+ 
+ void MainWidget::resizeEvent( QResizeEvent * )
+ {
+-   int fwidth;
+-   fwidth=150;
+-   oszi->setGeometry( 0, 0, width()-fwidth, height()-100 );
+-   logview->setGeometry( 0, (oszi->isVisible())?oszi->height():0, width(), 100 );
+-//   freqview->setGeometry( width()-fwidth, ((oszi->isVisible())?oszi->height():0)+((logview->isVisible())?logview->height():0), 150, 30 );
+-//   nfreqview->setGeometry( width()-fwidth, ((oszi->isVisible())?oszi->height():0)+((logview->isVisible())?logview->height():0)+40, 150, 30 );
+-   freqview->setGeometry( width()-fwidth+40, 3, 100, 25 );
+-   nfreqview->setGeometry( width()-fwidth+40, 35, 100, 25 );
+-   sampfreq_input -> setGeometry( width()-80,65,70,20 );
+-   sampnr_input -> setGeometry( sampfreq_input->x(),
+-                                sampfreq_input->y()+
+-                                sampfreq_input->height()+5,  70,20 );
+-   trigger_input -> setGeometry( sampnr_input->x()+20,
+-                                 sampnr_input->y()+
+-                                 sampnr_input->height()+5,  50,20 );
++    int fwidth;
++    fwidth=150;
++    oszi->setGeometry( 0, 0, width()-fwidth, height()-100 );
++    logview->setGeometry( 0, (oszi->isVisible())?oszi->height():0, width(), 100 );
++    //   freqview->setGeometry( width()-fwidth, ((oszi->isVisible())?oszi->height():0)+((logview->isVisible())?logview->height():0), 150, 30 );
++    //   nfreqview->setGeometry( width()-fwidth, ((oszi->isVisible())?oszi->height():0)+((logview->isVisible())?logview->height():0)+40, 150, 30 );
++    freqview->setGeometry( width()-fwidth+40, 3, 100, 25 );
++    nfreqview->setGeometry( width()-fwidth+40, 35, 100, 25 );
++    sampfreq_input -> setGeometry( width()-80,65,70,20 );
++    sampnr_input -> setGeometry( sampfreq_input->x(),
++                                 sampfreq_input->y()+
++                                 sampfreq_input->height()+5,  70,20 );
++    trigger_input -> setGeometry( sampnr_input->x()+20,
++                                  sampnr_input->y()+
++                                  sampnr_input->height()+5,  50,20 );
+ }
+ 
+ 
+ MainWidget::~MainWidget()
+ {
+-//   delete oszi;
+-   close_unistd(audio);
++    //   delete oszi;
++    close_audio();
+ }
+ 
+ 
+ //#include"moc_guitune.cpp"
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+-
+diff --exclude .svn -Nau qtguitune-0.5/guitune.h qtguitune-0.5_portaudio-1.18.1/guitune.h
+--- qtguitune-0.5/guitune.h	2000-07-17 00:00:41.000000000 +0200
++++ qtguitune-0.5_portaudio-1.18.1/guitune.h	2007-02-13 01:35:35.000000000 +0100
+@@ -20,7 +20,12 @@
+ //
+ 
+ #include <qwidget.h>
++#include "pablio.h"
+ 
++#define SAMPLE_RATE          (22050)
++#define FRAMES_PER_BLOCK        (1024)
++#define SAMPLE_TYPE  paUInt8
++typedef unsigned char SAMPLE;
+ 
+ class    OsziView;
+ class    LogView;
+@@ -36,12 +41,11 @@
+  public:
+    MainWidget( QWidget *parent, const char *name , int argc, char **argv);
+    ~MainWidget();
+-   int init_audio();
++   void init_audio();
++   void close_audio();
+    int sampnr;
+    int sampfreq;
+-   double sampfreq_exact;
+-   int blksize;
+-   int audio;
++   //double sampfreq_exact;
+    int trig1;
+    int trig2;
+    int    note_0t;
+@@ -64,17 +68,7 @@
+    void showLogView();
+    void hideLogView();
+    double getTrigger();
+- public slots:
+-     void setSampFreq(int f);
+-     void setSampNr(int nr);
+-     void setTrigger(double trig);
+-     void setTriggerPercent(int trig);
+-     void setDSPName(const char* name);
+- signals:
+-   void signalSampFreqChanged();
+-   void signalSampNrChanged();
+-   void signalTriggerChanged();
+-
++ 
+  protected:
+    void paintEvent(QPaintEvent *);
+    void resizeEvent(QResizeEvent *);
+@@ -95,11 +89,11 @@
+    QSpinBox   *trigger_input;
+ //   FreqView *freqview;
+    int oszi_height;
+-   unsigned char sample[64000];
++   SAMPLE sample[64000];
+    double freqs[12];
+    double lfreqs[12];
+    int    processing_audio;
+-   char dsp_devicename[100];
++   PABLIO_Stream     *aStream;
+  private slots:
+    void proc_audio();
+ };
+diff --exclude .svn -Nau qtguitune-0.5/logview.cpp qtguitune-0.5_portaudio-1.18.1/logview.cpp
+--- qtguitune-0.5/logview.cpp	2000-10-29 01:00:23.000000000 +0200
++++ qtguitune-0.5_portaudio-1.18.1/logview.cpp	2007-02-09 22:46:04.000000000 +0100
+@@ -47,7 +47,7 @@
+ 
+ // public:
+    LogView::LogView( QWidget *parent, char *name, WFlags f, bool allowLines )
+-           : QFrame(parent,name,f,allowLines)
++           : QFrame(parent,name,f/*,allowLines*/)
+    {
+        int r,g,b,gray;
+ 
+diff --exclude .svn -Nau qtguitune-0.5/main.cpp qtguitune-0.5_portaudio-1.18.1/main.cpp
+--- qtguitune-0.5/main.cpp	2000-07-17 00:00:41.000000000 +0200
++++ qtguitune-0.5_portaudio-1.18.1/main.cpp	2007-02-10 10:43:29.000000000 +0100
+@@ -143,7 +143,7 @@
+     scalemenu->setItemChecked( idm_scale_GE,  true  );
+     scalemenu->setItemChecked( idm_scale_GEa, false );
+ }
+-void MainWindow::m_scale_GE_a()
++void MainWindow::m_scale_GEa()
+ {
+     mw->setScaleGEAlt();
+     scalemenu->setItemChecked( idm_scale_US,  false );
+@@ -158,7 +158,7 @@
+ }
+ */
+ 
+-main(int argc, char *argv[])
++int main(int argc, char *argv[])
+ {
+    QApplication a( argc,argv );
+    //   QApplication::setFont( QFont("OldEnglish") );
+diff --exclude .svn -Nau qtguitune-0.5/mainwindow.h qtguitune-0.5_portaudio-1.18.1/mainwindow.h
+--- qtguitune-0.5/mainwindow.h	2000-07-17 00:00:41.000000000 +0200
++++ qtguitune-0.5_portaudio-1.18.1/mainwindow.h	2007-02-10 10:39:41.000000000 +0100
+@@ -62,6 +62,6 @@
+     void m_scale_US();
+     void m_scale_USa();
+     void m_scale_GE();
+-    void m_scale_GE_a();
++    void m_scale_GEa();
+ 
+ };
+diff --exclude .svn -Nau qtguitune-0.5/moc_guitune.cpp qtguitune-0.5_portaudio-1.18.1/moc_guitune.cpp
+--- qtguitune-0.5/moc_guitune.cpp	2001-08-02 20:36:13.000000000 +0200
++++ qtguitune-0.5_portaudio-1.18.1/moc_guitune.cpp	2007-02-11 15:29:03.000000000 +0100
+@@ -1,21 +1,23 @@
+ /****************************************************************************
+ ** MainWidget meta object code from reading C++ file 'guitune.h'
+ **
+-** Created: Thu Aug 2 20:36:13 2001
+-**      by: The Qt Meta Object Compiler ($Revision: 2.25.2.12 $)
++** Created: Sun Feb 11 15:29:03 2007
++**      by: The Qt MOC ($Id: qt/moc_yacc.cpp   3.3.7   edited Oct 19 16:22 $)
+ **
+ ** WARNING! All changes made in this file will be lost!
+ *****************************************************************************/
+ 
+-#if !defined(Q_MOC_OUTPUT_REVISION)
+-#define Q_MOC_OUTPUT_REVISION 2
+-#elif Q_MOC_OUTPUT_REVISION != 2
+-#error "Moc format conflict - please regenerate all moc files"
+-#endif
+-
++#undef QT_NO_COMPAT
+ #include "guitune.h"
+ #include <qmetaobject.h>
++#include <qapplication.h>
+ 
++#include <private/qucomextra_p.h>
++#if !defined(Q_MOC_OUTPUT_REVISION) || (Q_MOC_OUTPUT_REVISION != 26)
++#error "This file was generated using the moc from 3.3.7. It"
++#error "cannot be used with the include files from this version of Qt."
++#error "(The moc has changed too much.)"
++#endif
+ 
+ const char *MainWidget::className() const
+ {
+@@ -23,91 +25,77 @@
+ }
+ 
+ QMetaObject *MainWidget::metaObj = 0;
++static QMetaObjectCleanUp cleanUp_MainWidget( "MainWidget", &MainWidget::staticMetaObject );
+ 
++#ifndef QT_NO_TRANSLATION
++QString MainWidget::tr( const char *s, const char *c )
++{
++    if ( qApp )
++	return qApp->translate( "MainWidget", s, c, QApplication::DefaultCodec );
++    else
++	return QString::fromLatin1( s );
++}
++#ifndef QT_NO_TRANSLATION_UTF8
++QString MainWidget::trUtf8( const char *s, const char *c )
++{
++    if ( qApp )
++	return qApp->translate( "MainWidget", s, c, QApplication::UnicodeUTF8 );
++    else
++	return QString::fromUtf8( s );
++}
++#endif // QT_NO_TRANSLATION_UTF8
+ 
+-#if QT_VERSION >= 200
+-static QMetaObjectInit init_MainWidget(&MainWidget::staticMetaObject);
+-
+-#endif
++#endif // QT_NO_TRANSLATION
+ 
+-void MainWidget::initMetaObject()
++QMetaObject* MainWidget::staticMetaObject()
+ {
+     if ( metaObj )
+-	return;
+-    if ( strcmp(QWidget::className(), "QWidget") != 0 )
+-	badSuperclassWarning("MainWidget","QWidget");
+-
+-#if QT_VERSION >= 200
+-    staticMetaObject();
++	return metaObj;
++    QMetaObject* parentObject = QWidget::staticMetaObject();
++    static const QUMethod slot_0 = {"proc_audio", 0, 0 };
++    static const QMetaData slot_tbl[] = {
++	{ "proc_audio()", &slot_0, QMetaData::Private }
++    };
++    metaObj = QMetaObject::new_metaobject(
++	"MainWidget", parentObject,
++	slot_tbl, 1,
++	0, 0,
++#ifndef QT_NO_PROPERTIES
++	0, 0,
++	0, 0,
++#endif // QT_NO_PROPERTIES
++	0, 0 );
++    cleanUp_MainWidget.setMetaObject( metaObj );
++    return metaObj;
+ }
+ 
+-void MainWidget::staticMetaObject()
++void* MainWidget::qt_cast( const char* clname )
+ {
+-    if ( metaObj )
+-	return;
+-    QWidget::staticMetaObject();
+-#else
++    if ( !qstrcmp( clname, "MainWidget" ) )
++	return this;
++    return QWidget::qt_cast( clname );
++}
+ 
+-    QWidget::initMetaObject();
+-#endif
++bool MainWidget::qt_invoke( int _id, QUObject* _o )
++{
++    switch ( _id - staticMetaObject()->slotOffset() ) {
++    case 0: proc_audio(); break;
++    default:
++	return QWidget::qt_invoke( _id, _o );
++    }
++    return TRUE;
++}
+ 
+-    typedef void(MainWidget::*m1_t0)(int);
+-    typedef void(MainWidget::*m1_t1)(int);
+-    typedef void(MainWidget::*m1_t2)(double);
+-    typedef void(MainWidget::*m1_t3)(int);
+-    typedef void(MainWidget::*m1_t4)(const char*);
+-    typedef void(MainWidget::*m1_t5)();
+-    m1_t0 v1_0 = &MainWidget::setSampFreq;
+-    m1_t1 v1_1 = &MainWidget::setSampNr;
+-    m1_t2 v1_2 = &MainWidget::setTrigger;
+-    m1_t3 v1_3 = &MainWidget::setTriggerPercent;
+-    m1_t4 v1_4 = &MainWidget::setDSPName;
+-    m1_t5 v1_5 = &MainWidget::proc_audio;
+-    QMetaData *slot_tbl = new QMetaData[6];
+-    slot_tbl[0].name = "setSampFreq(int)";
+-    slot_tbl[1].name = "setSampNr(int)";
+-    slot_tbl[2].name = "setTrigger(double)";
+-    slot_tbl[3].name = "setTriggerPercent(int)";
+-    slot_tbl[4].name = "setDSPName(const char*)";
+-    slot_tbl[5].name = "proc_audio()";
+-    slot_tbl[0].ptr = *((QMember*)&v1_0);
+-    slot_tbl[1].ptr = *((QMember*)&v1_1);
+-    slot_tbl[2].ptr = *((QMember*)&v1_2);
+-    slot_tbl[3].ptr = *((QMember*)&v1_3);
+-    slot_tbl[4].ptr = *((QMember*)&v1_4);
+-    slot_tbl[5].ptr = *((QMember*)&v1_5);
+-    typedef void(MainWidget::*m2_t0)();
+-    typedef void(MainWidget::*m2_t1)();
+-    typedef void(MainWidget::*m2_t2)();
+-    m2_t0 v2_0 = &MainWidget::signalSampFreqChanged;
+-    m2_t1 v2_1 = &MainWidget::signalSampNrChanged;
+-    m2_t2 v2_2 = &MainWidget::signalTriggerChanged;
+-    QMetaData *signal_tbl = new QMetaData[3];
+-    signal_tbl[0].name = "signalSampFreqChanged()";
+-    signal_tbl[1].name = "signalSampNrChanged()";
+-    signal_tbl[2].name = "signalTriggerChanged()";
+-    signal_tbl[0].ptr = *((QMember*)&v2_0);
+-    signal_tbl[1].ptr = *((QMember*)&v2_1);
+-    signal_tbl[2].ptr = *((QMember*)&v2_2);
+-    metaObj = new QMetaObject( "MainWidget", "QWidget",
+-	slot_tbl, 6,
+-	signal_tbl, 3 );
+-}
+-
+-// SIGNAL signalSampFreqChanged
+-void MainWidget::signalSampFreqChanged()
+-{
+-    activate_signal( "signalSampFreqChanged()" );
+-}
+-
+-// SIGNAL signalSampNrChanged
+-void MainWidget::signalSampNrChanged()
++bool MainWidget::qt_emit( int _id, QUObject* _o )
+ {
+-    activate_signal( "signalSampNrChanged()" );
++    return QWidget::qt_emit(_id,_o);
+ }
++#ifndef QT_NO_PROPERTIES
+ 
+-// SIGNAL signalTriggerChanged
+-void MainWidget::signalTriggerChanged()
++bool MainWidget::qt_property( int id, int f, QVariant* v)
+ {
+-    activate_signal( "signalTriggerChanged()" );
++    return QWidget::qt_property( id, f, v);
+ }
++
++bool MainWidget::qt_static_property( QObject* , int , int , QVariant* ){ return FALSE; }
++#endif // QT_NO_PROPERTIES
+diff --exclude .svn -Nau qtguitune-0.5/moc_mainwindow.cpp qtguitune-0.5_portaudio-1.18.1/moc_mainwindow.cpp
+--- qtguitune-0.5/moc_mainwindow.cpp	2001-08-02 20:36:11.000000000 +0200
++++ qtguitune-0.5_portaudio-1.18.1/moc_mainwindow.cpp	2007-02-10 10:41:05.000000000 +0100
+@@ -1,21 +1,23 @@
+ /****************************************************************************
+ ** MainWindow meta object code from reading C++ file 'mainwindow.h'
+ **
+-** Created: Thu Aug 2 20:36:11 2001
+-**      by: The Qt Meta Object Compiler ($Revision: 2.25.2.12 $)
++** Created: Sat Feb 10 10:41:05 2007
++**      by: The Qt MOC ($Id: qt/moc_yacc.cpp   3.3.7   edited Oct 19 16:22 $)
+ **
+ ** WARNING! All changes made in this file will be lost!
+ *****************************************************************************/
+ 
+-#if !defined(Q_MOC_OUTPUT_REVISION)
+-#define Q_MOC_OUTPUT_REVISION 2
+-#elif Q_MOC_OUTPUT_REVISION != 2
+-#error "Moc format conflict - please regenerate all moc files"
+-#endif
+-
++#undef QT_NO_COMPAT
+ #include "mainwindow.h"
+ #include <qmetaobject.h>
++#include <qapplication.h>
+ 
++#include <private/qucomextra_p.h>
++#if !defined(Q_MOC_OUTPUT_REVISION) || (Q_MOC_OUTPUT_REVISION != 26)
++#error "This file was generated using the moc from 3.3.7. It"
++#error "cannot be used with the include files from this version of Qt."
++#error "(The moc has changed too much.)"
++#endif
+ 
+ const char *MainWindow::className() const
+ {
+@@ -23,72 +25,101 @@
+ }
+ 
+ QMetaObject *MainWindow::metaObj = 0;
++static QMetaObjectCleanUp cleanUp_MainWindow( "MainWindow", &MainWindow::staticMetaObject );
+ 
++#ifndef QT_NO_TRANSLATION
++QString MainWindow::tr( const char *s, const char *c )
++{
++    if ( qApp )
++	return qApp->translate( "MainWindow", s, c, QApplication::DefaultCodec );
++    else
++	return QString::fromLatin1( s );
++}
++#ifndef QT_NO_TRANSLATION_UTF8
++QString MainWindow::trUtf8( const char *s, const char *c )
++{
++    if ( qApp )
++	return qApp->translate( "MainWindow", s, c, QApplication::UnicodeUTF8 );
++    else
++	return QString::fromUtf8( s );
++}
++#endif // QT_NO_TRANSLATION_UTF8
+ 
+-#if QT_VERSION >= 200
+-static QMetaObjectInit init_MainWindow(&MainWindow::staticMetaObject);
+-
+-#endif
++#endif // QT_NO_TRANSLATION
+ 
+-void MainWindow::initMetaObject()
++QMetaObject* MainWindow::staticMetaObject()
+ {
+     if ( metaObj )
+-	return;
+-    if ( strcmp(QMainWindow::className(), "QMainWindow") != 0 )
+-	badSuperclassWarning("MainWindow","QMainWindow");
++	return metaObj;
++    QMetaObject* parentObject = QMainWindow::staticMetaObject();
++    static const QUMethod slot_0 = {"m_tuning_norm", 0, 0 };
++    static const QUMethod slot_1 = {"m_tuning_wien", 0, 0 };
++    static const QUMethod slot_2 = {"m_tuning_phys", 0, 0 };
++    static const QUMethod slot_3 = {"m_tuning_equi", 0, 0 };
++    static const QUMethod slot_4 = {"m_tuning_nat", 0, 0 };
++    static const QUMethod slot_5 = {"m_scale_US", 0, 0 };
++    static const QUMethod slot_6 = {"m_scale_USa", 0, 0 };
++    static const QUMethod slot_7 = {"m_scale_GE", 0, 0 };
++    static const QUMethod slot_8 = {"m_scale_GEa", 0, 0 };
++    static const QMetaData slot_tbl[] = {
++	{ "m_tuning_norm()", &slot_0, QMetaData::Private },
++	{ "m_tuning_wien()", &slot_1, QMetaData::Private },
++	{ "m_tuning_phys()", &slot_2, QMetaData::Private },
++	{ "m_tuning_equi()", &slot_3, QMetaData::Private },
++	{ "m_tuning_nat()", &slot_4, QMetaData::Private },
++	{ "m_scale_US()", &slot_5, QMetaData::Private },
++	{ "m_scale_USa()", &slot_6, QMetaData::Private },
++	{ "m_scale_GE()", &slot_7, QMetaData::Private },
++	{ "m_scale_GEa()", &slot_8, QMetaData::Private }
++    };
++    metaObj = QMetaObject::new_metaobject(
++	"MainWindow", parentObject,
++	slot_tbl, 9,
++	0, 0,
++#ifndef QT_NO_PROPERTIES
++	0, 0,
++	0, 0,
++#endif // QT_NO_PROPERTIES
++	0, 0 );
++    cleanUp_MainWindow.setMetaObject( metaObj );
++    return metaObj;
++}
+ 
+-#if QT_VERSION >= 200
+-    staticMetaObject();
++void* MainWindow::qt_cast( const char* clname )
++{
++    if ( !qstrcmp( clname, "MainWindow" ) )
++	return this;
++    return QMainWindow::qt_cast( clname );
+ }
+ 
+-void MainWindow::staticMetaObject()
++bool MainWindow::qt_invoke( int _id, QUObject* _o )
+ {
+-    if ( metaObj )
+-	return;
+-    QMainWindow::staticMetaObject();
+-#else
++    switch ( _id - staticMetaObject()->slotOffset() ) {
++    case 0: m_tuning_norm(); break;
++    case 1: m_tuning_wien(); break;
++    case 2: m_tuning_phys(); break;
++    case 3: m_tuning_equi(); break;
++    case 4: m_tuning_nat(); break;
++    case 5: m_scale_US(); break;
++    case 6: m_scale_USa(); break;
++    case 7: m_scale_GE(); break;
++    case 8: m_scale_GEa(); break;
++    default:
++	return QMainWindow::qt_invoke( _id, _o );
++    }
++    return TRUE;
++}
+ 
+-    QMainWindow::initMetaObject();
+-#endif
++bool MainWindow::qt_emit( int _id, QUObject* _o )
++{
++    return QMainWindow::qt_emit(_id,_o);
++}
++#ifndef QT_NO_PROPERTIES
+ 
+-    typedef void(MainWindow::*m1_t0)();
+-    typedef void(MainWindow::*m1_t1)();
+-    typedef void(MainWindow::*m1_t2)();
+-    typedef void(MainWindow::*m1_t3)();
+-    typedef void(MainWindow::*m1_t4)();
+-    typedef void(MainWindow::*m1_t5)();
+-    typedef void(MainWindow::*m1_t6)();
+-    typedef void(MainWindow::*m1_t7)();
+-    typedef void(MainWindow::*m1_t8)();
+-    m1_t0 v1_0 = &MainWindow::m_tuning_norm;
+-    m1_t1 v1_1 = &MainWindow::m_tuning_wien;
+-    m1_t2 v1_2 = &MainWindow::m_tuning_phys;
+-    m1_t3 v1_3 = &MainWindow::m_tuning_equi;
+-    m1_t4 v1_4 = &MainWindow::m_tuning_nat;
+-    m1_t5 v1_5 = &MainWindow::m_scale_US;
+-    m1_t6 v1_6 = &MainWindow::m_scale_USa;
+-    m1_t7 v1_7 = &MainWindow::m_scale_GE;
+-    m1_t8 v1_8 = &MainWindow::m_scale_GE_a;
+-    QMetaData *slot_tbl = new QMetaData[9];
+-    slot_tbl[0].name = "m_tuning_norm()";
+-    slot_tbl[1].name = "m_tuning_wien()";
+-    slot_tbl[2].name = "m_tuning_phys()";
+-    slot_tbl[3].name = "m_tuning_equi()";
+-    slot_tbl[4].name = "m_tuning_nat()";
+-    slot_tbl[5].name = "m_scale_US()";
+-    slot_tbl[6].name = "m_scale_USa()";
+-    slot_tbl[7].name = "m_scale_GE()";
+-    slot_tbl[8].name = "m_scale_GE_a()";
+-    slot_tbl[0].ptr = *((QMember*)&v1_0);
+-    slot_tbl[1].ptr = *((QMember*)&v1_1);
+-    slot_tbl[2].ptr = *((QMember*)&v1_2);
+-    slot_tbl[3].ptr = *((QMember*)&v1_3);
+-    slot_tbl[4].ptr = *((QMember*)&v1_4);
+-    slot_tbl[5].ptr = *((QMember*)&v1_5);
+-    slot_tbl[6].ptr = *((QMember*)&v1_6);
+-    slot_tbl[7].ptr = *((QMember*)&v1_7);
+-    slot_tbl[8].ptr = *((QMember*)&v1_8);
+-    metaObj = new QMetaObject( "MainWindow", "QMainWindow",
+-	slot_tbl, 9,
+-	0, 0 );
++bool MainWindow::qt_property( int id, int f, QVariant* v)
++{
++    return QMainWindow::qt_property( id, f, v);
+ }
++
++bool MainWindow::qt_static_property( QObject* , int , int , QVariant* ){ return FALSE; }
++#endif // QT_NO_PROPERTIES
+diff --exclude .svn -Nau qtguitune-0.5/pablio.c qtguitune-0.5_portaudio-1.18.1/pablio.c
+--- qtguitune-0.5/pablio.c	1970-01-01 01:00:00.000000000 +0100
++++ qtguitune-0.5_portaudio-1.18.1/pablio.c	2007-02-11 15:07:26.000000000 +0100
+@@ -0,0 +1,327 @@
++/*
++ * $Id: pablio.c,v 1.1.1.1.4.4 2003/03/13 17:28:33 philburk Exp $
++ * pablio.c
++ * Portable Audio Blocking Input/Output utility.
++ *
++ * Author: Phil Burk, http://www.softsynth.com
++ *
++ * This program uses the PortAudio Portable Audio Library.
++ * For more information see: http://www.audiomulch.com/portaudio/
++ * Copyright (c) 1999-2000 Ross Bencina and Phil Burk
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining
++ * a copy of this software and associated documentation files
++ * (the "Software"), to deal in the Software without restriction,
++ * including without limitation the rights to use, copy, modify, merge,
++ * publish, distribute, sublicense, and/or sell copies of the Software,
++ * and to permit persons to whom the Software is furnished to do so,
++ * subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be
++ * included in all copies or substantial portions of the Software.
++ *
++ * Any person wishing to distribute modifications to the Software is
++ * requested to send the modifications to the original developer so that
++ * they can be incorporated into the canonical version.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
++ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR
++ * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
++ * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
++ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ *
++ */
++
++/* History:
++ * PLB021214 - check for valid stream in CloseAudioStream() to prevent hang.
++ *             add timeOutMSec to CloseAudioStream() to prevent hang.
++ */
++#include <stdio.h>
++#include <stdlib.h>
++#include <math.h>
++#include "portaudio.h"
++#include "ringbuffer.h"
++#include "pablio.h"
++#include <string.h>
++
++/************************************************************************/
++/******** Constants *****************************************************/
++/************************************************************************/
++
++#define FRAMES_PER_BUFFER    (256)
++
++/************************************************************************/
++/******** Prototypes ****************************************************/
++/************************************************************************/
++
++static int blockingIOCallback( void *inputBuffer, void *outputBuffer,
++                               unsigned long framesPerBuffer,
++                               PaTimestamp outTime, void *userData );
++static PaError PABLIO_InitFIFO( RingBuffer *rbuf, long numFrames, long bytesPerFrame );
++static PaError PABLIO_TermFIFO( RingBuffer *rbuf );
++
++/************************************************************************/
++/******** Functions *****************************************************/
++/************************************************************************/
++
++/* Called from PortAudio.
++ * Read and write data only if there is room in FIFOs.
++ */
++static int blockingIOCallback( void *inputBuffer, void *outputBuffer,
++                               unsigned long framesPerBuffer,
++                               PaTimestamp outTime, void *userData )
++{
++    PABLIO_Stream *data = (PABLIO_Stream*)userData;
++    long numBytes = data->bytesPerFrame * framesPerBuffer;
++    (void) outTime;
++
++    /* This may get called with NULL inputBuffer during initial setup. */
++    if( inputBuffer != NULL )
++    {
++        RingBuffer_Write( &data->inFIFO, inputBuffer, numBytes );
++    }
++    if( outputBuffer != NULL )
++    {
++        int i;
++        int numRead = RingBuffer_Read( &data->outFIFO, outputBuffer, numBytes );
++        /* Zero out remainder of buffer if we run out of data. */
++        for( i=numRead; i<numBytes; i++ )
++        {
++            ((char *)outputBuffer)[i] = 0;
++        }
++    }
++
++    return 0;
++}
++
++/* Allocate buffer. */
++static PaError PABLIO_InitFIFO( RingBuffer *rbuf, long numFrames, long bytesPerFrame )
++{
++    long numBytes = numFrames * bytesPerFrame;
++    char *buffer = (char *) malloc( numBytes );
++    if( buffer == NULL ) return paInsufficientMemory;
++    memset( buffer, 0, numBytes );
++    return (PaError) RingBuffer_Init( rbuf, numBytes, buffer );
++}
++
++/* Free buffer. */
++static PaError PABLIO_TermFIFO( RingBuffer *rbuf )
++{
++    if( rbuf->buffer ) free( rbuf->buffer );
++    rbuf->buffer = NULL;
++    return paNoError;
++}
++
++/************************************************************
++ * Write data to ring buffer.
++ * Will not return until all the data has been written.
++ */
++long WriteAudioStream( PABLIO_Stream *aStream, void *data, long numFrames )
++{
++    long bytesWritten;
++    char *p = (char *) data;
++    long numBytes = aStream->bytesPerFrame * numFrames;
++    while( numBytes > 0)
++    {
++        bytesWritten = RingBuffer_Write( &aStream->outFIFO, p, numBytes );
++        numBytes -= bytesWritten;
++        p += bytesWritten;
++        if( numBytes > 0) Pa_Sleep(10);
++    }
++    return numFrames;
++}
++
++/************************************************************
++ * Read data from ring buffer.
++ * Will not return until all the data has been read.
++ */
++long ReadAudioStream( PABLIO_Stream *aStream, void *data, long numFrames )
++{
++    long bytesRead;
++    char *p = (char *) data;
++    long numBytes = aStream->bytesPerFrame * numFrames;
++    while( numBytes > 0)
++    {
++        bytesRead = RingBuffer_Read( &aStream->inFIFO, p, numBytes );
++        numBytes -= bytesRead;
++        p += bytesRead;
++        if( numBytes > 0) Pa_Sleep(10);
++    }
++    return numFrames;
++}
++
++/************************************************************
++ * Return the number of frames that could be written to the stream without
++ * having to wait.
++ */
++long GetAudioStreamWriteable( PABLIO_Stream *aStream )
++{
++    int bytesEmpty = RingBuffer_GetWriteAvailable( &aStream->outFIFO );
++    return bytesEmpty / aStream->bytesPerFrame;
++}
++
++/************************************************************
++ * Return the number of frames that are available to be read from the
++ * stream without having to wait.
++ */
++long GetAudioStreamReadable( PABLIO_Stream *aStream )
++{
++    int bytesFull = RingBuffer_GetReadAvailable( &aStream->inFIFO );
++    return bytesFull / aStream->bytesPerFrame;
++}
++
++/************************************************************/
++static unsigned long RoundUpToNextPowerOf2( unsigned long n )
++{
++    long numBits = 0;
++    if( ((n-1) & n) == 0) return n; /* Already Power of two. */
++    while( n > 0 )
++    {
++        n= n>>1;
++        numBits++;
++    }
++    return (1<<numBits);
++}
++
++/************************************************************
++ * Opens a PortAudio stream with default characteristics.
++ * Allocates PABLIO_Stream structure.
++ *
++ * flags parameter can be an ORed combination of:
++ *    PABLIO_READ, PABLIO_WRITE, or PABLIO_READ_WRITE,
++ *    and either PABLIO_MONO or PABLIO_STEREO
++ */
++PaError OpenAudioStream( PABLIO_Stream **rwblPtr, double sampleRate,
++                         PaSampleFormat format, long flags )
++{
++    long   bytesPerSample;
++    long   doRead = 0;
++    long   doWrite = 0;
++    PaError err;
++    PABLIO_Stream *aStream;
++    long   minNumBuffers;
++    long   numFrames;
++
++    /* Allocate PABLIO_Stream structure for caller. */
++    aStream = (PABLIO_Stream *) malloc( sizeof(PABLIO_Stream) );
++    if( aStream == NULL ) return paInsufficientMemory;
++    memset( aStream, 0, sizeof(PABLIO_Stream) );
++
++    /* Determine size of a sample. */
++    bytesPerSample = Pa_GetSampleSize( format );
++    if( bytesPerSample < 0 )
++    {
++        err = (PaError) bytesPerSample;
++        goto error;
++    }
++    aStream->samplesPerFrame = ((flags&PABLIO_MONO) != 0) ? 1 : 2;
++    aStream->bytesPerFrame = bytesPerSample * aStream->samplesPerFrame;
++
++    /* Initialize PortAudio  */
++    err = Pa_Initialize();
++    if( err != paNoError ) goto error;
++
++    /* Warning: numFrames must be larger than amount of data processed per interrupt
++     *    inside PA to prevent glitches. Just to be safe, adjust size upwards.
++     */
++    minNumBuffers = 2 * Pa_GetMinNumBuffers( FRAMES_PER_BUFFER, sampleRate );
++    numFrames = minNumBuffers * FRAMES_PER_BUFFER;
++    /* The PortAudio callback runs in a high priority thread. But PABLIO
++     * runs in a normal foreground thread. So we may have much worse
++     * latency in PABLIO. So adjust latency to a safe level.
++     */
++    {
++        const int safeLatencyMSec = 200;
++        int minLatencyMSec = (int) ((1000 * numFrames) / sampleRate);
++        if( minLatencyMSec < safeLatencyMSec )
++        {
++            numFrames = (int) ((safeLatencyMSec * sampleRate) / 1000);
++        }
++    }
++    numFrames = RoundUpToNextPowerOf2( numFrames );
++
++    /* Initialize Ring Buffers */
++    doRead = ((flags & PABLIO_READ) != 0);
++    doWrite = ((flags & PABLIO_WRITE) != 0);
++    if(doRead)
++    {
++        err = PABLIO_InitFIFO( &aStream->inFIFO, numFrames, aStream->bytesPerFrame );
++        if( err != paNoError ) goto error;
++    }
++    if(doWrite)
++    {
++        long numBytes;
++        err = PABLIO_InitFIFO( &aStream->outFIFO, numFrames, aStream->bytesPerFrame );
++        if( err != paNoError ) goto error;
++        /* Make Write FIFO appear full initially. */
++        numBytes = RingBuffer_GetWriteAvailable( &aStream->outFIFO );
++        RingBuffer_AdvanceWriteIndex( &aStream->outFIFO, numBytes );
++    }
++
++    /* Open a PortAudio stream that we will use to communicate with the underlying
++     * audio drivers. */
++    err = Pa_OpenStream(
++              &aStream->stream,
++              (doRead ? Pa_GetDefaultInputDeviceID() : paNoDevice),
++              (doRead ? aStream->samplesPerFrame : 0 ),
++              format,
++              NULL,
++              (doWrite ? Pa_GetDefaultOutputDeviceID() : paNoDevice),
++              (doWrite ? aStream->samplesPerFrame : 0 ),
++              format,
++              NULL,
++              sampleRate,
++              FRAMES_PER_BUFFER,
++              minNumBuffers,
++              paClipOff,       /* we won't output out of range samples so don't bother clipping them */
++              blockingIOCallback,
++              aStream );
++    if( err != paNoError ) goto error;
++
++    err = Pa_StartStream( aStream->stream );
++    if( err != paNoError ) goto error;
++
++    *rwblPtr = aStream;
++    return paNoError;
++
++error:
++    CloseAudioStream( aStream );
++    *rwblPtr = NULL;
++    return err;
++}
++
++/************************************************************/
++PaError CloseAudioStream( PABLIO_Stream *aStream )
++{
++    PaError err = paNoError;
++    int bytesEmpty;
++    int byteSize = aStream->outFIFO.bufferSize;
++
++    if( aStream->stream != NULL ) /* Make sure stream was opened. PLB021214 */
++    {
++        /* If we are writing data, make sure we play everything written. */
++        if( byteSize > 0 )
++        {
++            int timeOutMSec = 2000;
++            bytesEmpty = RingBuffer_GetWriteAvailable( &aStream->outFIFO );
++            while( (bytesEmpty < byteSize) && (timeOutMSec > 0) )
++            {
++                Pa_Sleep( 20 );
++                timeOutMSec -= 20;
++                bytesEmpty = RingBuffer_GetWriteAvailable( &aStream->outFIFO );
++            }
++        }
++        err = Pa_StopStream( aStream->stream );
++        if( err != paNoError ) goto error;
++        err = Pa_CloseStream( aStream->stream );
++    }
++
++error:
++    Pa_Terminate();
++    PABLIO_TermFIFO( &aStream->inFIFO );
++    PABLIO_TermFIFO( &aStream->outFIFO );
++    free( aStream );
++    return err;
++}
+diff --exclude .svn -Nau qtguitune-0.5/pablio.h qtguitune-0.5_portaudio-1.18.1/pablio.h
+--- qtguitune-0.5/pablio.h	1970-01-01 01:00:00.000000000 +0100
++++ qtguitune-0.5_portaudio-1.18.1/pablio.h	2007-02-11 15:07:24.000000000 +0100
+@@ -0,0 +1,109 @@
++#ifndef _PABLIO_H
++#define _PABLIO_H
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif /* __cplusplus */
++
++/*
++ * $Id: pablio.h,v 1.1.1.1 2002/01/22 00:52:53 phil Exp $
++ * PABLIO.h
++ * Portable Audio Blocking read/write utility.
++ *
++ * Author: Phil Burk, http://www.softsynth.com/portaudio/
++ *
++ * Include file for PABLIO, the Portable Audio Blocking I/O Library.
++ * PABLIO is built on top of PortAudio, the Portable Audio Library.
++ * For more information see: http://www.audiomulch.com/portaudio/
++ * Copyright (c) 1999-2000 Ross Bencina and Phil Burk
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining
++ * a copy of this software and associated documentation files
++ * (the "Software"), to deal in the Software without restriction,
++ * including without limitation the rights to use, copy, modify, merge,
++ * publish, distribute, sublicense, and/or sell copies of the Software,
++ * and to permit persons to whom the Software is furnished to do so,
++ * subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be
++ * included in all copies or substantial portions of the Software.
++ *
++ * Any person wishing to distribute modifications to the Software is
++ * requested to send the modifications to the original developer so that
++ * they can be incorporated into the canonical version.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
++ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR
++ * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
++ * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
++ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ *
++ */
++#include <stdio.h>
++#include <stdlib.h>
++#include <math.h>
++#include "portaudio.h"
++#include "ringbuffer.h"
++#include <string.h>
++
++typedef struct
++{
++    RingBuffer   inFIFO;
++    RingBuffer   outFIFO;
++    PortAudioStream *stream;
++    int          bytesPerFrame;
++    int          samplesPerFrame;
++}
++PABLIO_Stream;
++
++/* Values for flags for OpenAudioStream(). */
++#define PABLIO_READ     (1<<0)
++#define PABLIO_WRITE    (1<<1)
++#define PABLIO_READ_WRITE    (PABLIO_READ|PABLIO_WRITE)
++#define PABLIO_MONO     (1<<2)
++#define PABLIO_STEREO   (1<<3)
++
++/************************************************************
++ * Write data to ring buffer.
++ * Will not return until all the data has been written.
++ */
++long WriteAudioStream( PABLIO_Stream *aStream, void *data, long numFrames );
++
++/************************************************************
++ * Read data from ring buffer.
++ * Will not return until all the data has been read.
++ */
++long ReadAudioStream( PABLIO_Stream *aStream, void *data, long numFrames );
++
++/************************************************************
++ * Return the number of frames that could be written to the stream without
++ * having to wait.
++ */
++long GetAudioStreamWriteable( PABLIO_Stream *aStream );
++
++/************************************************************
++ * Return the number of frames that are available to be read from the
++ * stream without having to wait.
++ */
++long GetAudioStreamReadable( PABLIO_Stream *aStream );
++
++/************************************************************
++ * Opens a PortAudio stream with default characteristics.
++ * Allocates PABLIO_Stream structure.
++ *
++ * flags parameter can be an ORed combination of:
++ *    PABLIO_READ, PABLIO_WRITE, or PABLIO_READ_WRITE,
++ *    and either PABLIO_MONO or PABLIO_STEREO
++ */
++PaError OpenAudioStream( PABLIO_Stream **aStreamPtr, double sampleRate,
++                         PaSampleFormat format, long flags );
++
++PaError CloseAudioStream( PABLIO_Stream *aStream );
++
++#ifdef __cplusplus
++}
++#endif /* __cplusplus */
++#endif /* _PABLIO_H */
+diff --exclude .svn -Nau qtguitune-0.5/ringbuffer.c qtguitune-0.5_portaudio-1.18.1/ringbuffer.c
+--- qtguitune-0.5/ringbuffer.c	1970-01-01 01:00:00.000000000 +0100
++++ qtguitune-0.5_portaudio-1.18.1/ringbuffer.c	2007-02-11 15:07:31.000000000 +0100
+@@ -0,0 +1,199 @@
++/*
++ * $Id: ringbuffer.c,v 1.1.1.1 2002/01/22 00:52:53 phil Exp $
++ * ringbuffer.c
++ * Ring Buffer utility..
++ *
++ * Author: Phil Burk, http://www.softsynth.com
++ *
++ * This program uses the PortAudio Portable Audio Library.
++ * For more information see: http://www.audiomulch.com/portaudio/
++ * Copyright (c) 1999-2000 Ross Bencina and Phil Burk
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining
++ * a copy of this software and associated documentation files
++ * (the "Software"), to deal in the Software without restriction,
++ * including without limitation the rights to use, copy, modify, merge,
++ * publish, distribute, sublicense, and/or sell copies of the Software,
++ * and to permit persons to whom the Software is furnished to do so,
++ * subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be
++ * included in all copies or substantial portions of the Software.
++ *
++ * Any person wishing to distribute modifications to the Software is
++ * requested to send the modifications to the original developer so that
++ * they can be incorporated into the canonical version.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
++ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR
++ * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
++ * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
++ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ *
++ */
++#include <stdio.h>
++#include <stdlib.h>
++#include <math.h>
++#include "ringbuffer.h"
++#include <string.h>
++
++/***************************************************************************
++ * Initialize FIFO.
++ * numBytes must be power of 2, returns -1 if not.
++ */
++long RingBuffer_Init( RingBuffer *rbuf, long numBytes, void *dataPtr )
++{
++    if( ((numBytes-1) & numBytes) != 0) return -1; /* Not Power of two. */
++    rbuf->bufferSize = numBytes;
++    rbuf->buffer = (char *)dataPtr;
++    RingBuffer_Flush( rbuf );
++    rbuf->bigMask = (numBytes*2)-1;
++    rbuf->smallMask = (numBytes)-1;
++    return 0;
++}
++/***************************************************************************
++** Return number of bytes available for reading. */
++long RingBuffer_GetReadAvailable( RingBuffer *rbuf )
++{
++    return ( (rbuf->writeIndex - rbuf->readIndex) & rbuf->bigMask );
++}
++/***************************************************************************
++** Return number of bytes available for writing. */
++long RingBuffer_GetWriteAvailable( RingBuffer *rbuf )
++{
++    return ( rbuf->bufferSize - RingBuffer_GetReadAvailable(rbuf));
++}
++
++/***************************************************************************
++** Clear buffer. Should only be called when buffer is NOT being read. */
++void RingBuffer_Flush( RingBuffer *rbuf )
++{
++    rbuf->writeIndex = rbuf->readIndex = 0;
++}
++
++/***************************************************************************
++** Get address of region(s) to which we can write data.
++** If the region is contiguous, size2 will be zero.
++** If non-contiguous, size2 will be the size of second region.
++** Returns room available to be written or numBytes, whichever is smaller.
++*/
++long RingBuffer_GetWriteRegions( RingBuffer *rbuf, long numBytes,
++                                 void **dataPtr1, long *sizePtr1,
++                                 void **dataPtr2, long *sizePtr2 )
++{
++    long   index;
++    long   available = RingBuffer_GetWriteAvailable( rbuf );
++    if( numBytes > available ) numBytes = available;
++    /* Check to see if write is not contiguous. */
++    index = rbuf->writeIndex & rbuf->smallMask;
++    if( (index + numBytes) > rbuf->bufferSize )
++    {
++        /* Write data in two blocks that wrap the buffer. */
++        long   firstHalf = rbuf->bufferSize - index;
++        *dataPtr1 = &rbuf->buffer[index];
++        *sizePtr1 = firstHalf;
++        *dataPtr2 = &rbuf->buffer[0];
++        *sizePtr2 = numBytes - firstHalf;
++    }
++    else
++    {
++        *dataPtr1 = &rbuf->buffer[index];
++        *sizePtr1 = numBytes;
++        *dataPtr2 = NULL;
++        *sizePtr2 = 0;
++    }
++    return numBytes;
++}
++
++
++/***************************************************************************
++*/
++long RingBuffer_AdvanceWriteIndex( RingBuffer *rbuf, long numBytes )
++{
++    return rbuf->writeIndex = (rbuf->writeIndex + numBytes) & rbuf->bigMask;
++}
++
++/***************************************************************************
++** Get address of region(s) from which we can read data.
++** If the region is contiguous, size2 will be zero.
++** If non-contiguous, size2 will be the size of second region.
++** Returns room available to be written or numBytes, whichever is smaller.
++*/
++long RingBuffer_GetReadRegions( RingBuffer *rbuf, long numBytes,
++                                void **dataPtr1, long *sizePtr1,
++                                void **dataPtr2, long *sizePtr2 )
++{
++    long   index;
++    long   available = RingBuffer_GetReadAvailable( rbuf );
++    if( numBytes > available ) numBytes = available;
++    /* Check to see if read is not contiguous. */
++    index = rbuf->readIndex & rbuf->smallMask;
++    if( (index + numBytes) > rbuf->bufferSize )
++    {
++        /* Write data in two blocks that wrap the buffer. */
++        long firstHalf = rbuf->bufferSize - index;
++        *dataPtr1 = &rbuf->buffer[index];
++        *sizePtr1 = firstHalf;
++        *dataPtr2 = &rbuf->buffer[0];
++        *sizePtr2 = numBytes - firstHalf;
++    }
++    else
++    {
++        *dataPtr1 = &rbuf->buffer[index];
++        *sizePtr1 = numBytes;
++        *dataPtr2 = NULL;
++        *sizePtr2 = 0;
++    }
++    return numBytes;
++}
++/***************************************************************************
++*/
++long RingBuffer_AdvanceReadIndex( RingBuffer *rbuf, long numBytes )
++{
++    return rbuf->readIndex = (rbuf->readIndex + numBytes) & rbuf->bigMask;
++}
++
++/***************************************************************************
++** Return bytes written. */
++long RingBuffer_Write( RingBuffer *rbuf, void *data, long numBytes )
++{
++    long size1, size2, numWritten;
++    void *data1, *data2;
++    numWritten = RingBuffer_GetWriteRegions( rbuf, numBytes, &data1, &size1, &data2, &size2 );
++    if( size2 > 0 )
++    {
++
++        memcpy( data1, data, size1 );
++        data = ((char *)data) + size1;
++        memcpy( data2, data, size2 );
++    }
++    else
++    {
++        memcpy( data1, data, size1 );
++    }
++    RingBuffer_AdvanceWriteIndex( rbuf, numWritten );
++    return numWritten;
++}
++
++/***************************************************************************
++** Return bytes read. */
++long RingBuffer_Read( RingBuffer *rbuf, void *data, long numBytes )
++{
++    long size1, size2, numRead;
++    void *data1, *data2;
++    numRead = RingBuffer_GetReadRegions( rbuf, numBytes, &data1, &size1, &data2, &size2 );
++    if( size2 > 0 )
++    {
++        memcpy( data, data1, size1 );
++        data = ((char *)data) + size1;
++        memcpy( data, data2, size2 );
++    }
++    else
++    {
++        memcpy( data, data1, size1 );
++    }
++    RingBuffer_AdvanceReadIndex( rbuf, numRead );
++    return numRead;
++}
+diff --exclude .svn -Nau qtguitune-0.5/ringbuffer.h qtguitune-0.5_portaudio-1.18.1/ringbuffer.h
+--- qtguitune-0.5/ringbuffer.h	1970-01-01 01:00:00.000000000 +0100
++++ qtguitune-0.5_portaudio-1.18.1/ringbuffer.h	2007-02-11 15:07:32.000000000 +0100
+@@ -0,0 +1,102 @@
++#ifndef _RINGBUFFER_H
++#define _RINGBUFFER_H
++#ifdef __cplusplus
++extern "C"
++{
++#endif /* __cplusplus */
++
++/*
++ * $Id: ringbuffer.h,v 1.1.1.1.4.2 2003/04/28 17:45:34 philburk Exp $
++ * ringbuffer.h
++ * Ring Buffer utility..
++ *
++ * Author: Phil Burk, http://www.softsynth.com
++ *
++ * This program is distributed with the PortAudio Portable Audio Library.
++ * For more information see: http://www.audiomulch.com/portaudio/
++ * Copyright (c) 1999-2000 Ross Bencina and Phil Burk
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining
++ * a copy of this software and associated documentation files
++ * (the "Software"), to deal in the Software without restriction,
++ * including without limitation the rights to use, copy, modify, merge,
++ * publish, distribute, sublicense, and/or sell copies of the Software,
++ * and to permit persons to whom the Software is furnished to do so,
++ * subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be
++ * included in all copies or substantial portions of the Software.
++ *
++ * Any person wishing to distribute modifications to the Software is
++ * requested to send the modifications to the original developer so that
++ * they can be incorporated into the canonical version.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
++ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR
++ * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
++ * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
++ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ *
++ */
++#include <stdio.h>
++#include <stdlib.h>
++#include <math.h>
++#include "ringbuffer.h"
++#include <string.h>
++
++typedef struct
++{
++    long   bufferSize; /* Number of bytes in FIFO. Power of 2. Set by RingBuffer_Init. */
++/* These are declared volatile because they are written by a different thread than the reader. */
++    volatile long   writeIndex; /* Index of next writable byte. Set by RingBuffer_AdvanceWriteIndex. */
++    volatile long   readIndex;  /* Index of next readable byte. Set by RingBuffer_AdvanceReadIndex. */
++    long   bigMask;    /* Used for wrapping indices with extra bit to distinguish full/empty. */
++    long   smallMask;  /* Used for fitting indices to buffer. */
++    char *buffer;
++}
++RingBuffer;
++/*
++ * Initialize Ring Buffer.
++ * numBytes must be power of 2, returns -1 if not.
++ */
++long RingBuffer_Init( RingBuffer *rbuf, long numBytes, void *dataPtr );
++
++/* Clear buffer. Should only be called when buffer is NOT being read. */
++void RingBuffer_Flush( RingBuffer *rbuf );
++
++/* Return number of bytes available for writing. */
++long RingBuffer_GetWriteAvailable( RingBuffer *rbuf );
++/* Return number of bytes available for read. */
++long RingBuffer_GetReadAvailable( RingBuffer *rbuf );
++/* Return bytes written. */
++long RingBuffer_Write( RingBuffer *rbuf, void *data, long numBytes );
++/* Return bytes read. */
++long RingBuffer_Read( RingBuffer *rbuf, void *data, long numBytes );
++
++/* Get address of region(s) to which we can write data.
++** If the region is contiguous, size2 will be zero.
++** If non-contiguous, size2 will be the size of second region.
++** Returns room available to be written or numBytes, whichever is smaller.
++*/
++long RingBuffer_GetWriteRegions( RingBuffer *rbuf, long numBytes,
++                                 void **dataPtr1, long *sizePtr1,
++                                 void **dataPtr2, long *sizePtr2 );
++long RingBuffer_AdvanceWriteIndex( RingBuffer *rbuf, long numBytes );
++
++/* Get address of region(s) from which we can read data.
++** If the region is contiguous, size2 will be zero.
++** If non-contiguous, size2 will be the size of second region.
++** Returns room available to be read or numBytes, whichever is smaller.
++*/
++long RingBuffer_GetReadRegions( RingBuffer *rbuf, long numBytes,
++                                void **dataPtr1, long *sizePtr1,
++                                void **dataPtr2, long *sizePtr2 );
++
++long RingBuffer_AdvanceReadIndex( RingBuffer *rbuf, long numBytes );
++
++#ifdef __cplusplus
++}
++#endif /* __cplusplus */
++#endif /* _RINGBUFFER_H */
+
+ 	  	 

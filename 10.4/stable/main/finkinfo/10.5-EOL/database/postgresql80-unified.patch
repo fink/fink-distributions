@@ -1,0 +1,376 @@
+diff -Nurd postgresql-8.0.24/contrib/Makefile postgresql-8.0.24-new/contrib/Makefile
+--- postgresql-8.0.24/contrib/Makefile	2004-12-14 16:50:23.000000000 -0600
++++ postgresql-8.0.24-new/contrib/Makefile	2010-03-18 21:31:34.000000000 -0500
+@@ -37,7 +37,6 @@
+ 		string		\
+ 		tablefunc	\
+ 		tips		\
+-		tsearch		\
+ 		tsearch2	\
+ 		userlock	\
+ 		vacuumlo
+diff -Nurd postgresql-8.0.24/pgsql.sh postgresql-8.0.24-new/pgsql.sh
+--- postgresql-8.0.24/pgsql.sh	1969-12-31 18:00:00.000000000 -0600
++++ postgresql-8.0.24-new/pgsql.sh	2010-03-18 21:31:34.000000000 -0500
+@@ -0,0 +1,81 @@
++#!/bin/sh
++
++die () {
++	echo "failed"
++	echo ""
++	echo "*** bailing because an error ocurred:"
++	echo ""
++	echo "$*"
++	exit 1
++}
++
++PREFIX="@INSTPREFIX@"
++DATADIR="${PREFIX}/var/postgresql-8.0/data"
++LOGFILE="${PREFIX}/var/postgresql-8.0/pgsql.log"
++
++export LANG=C
++unset LC_ALL
++
++SHMMAX=`sysctl kern.sysv.shmmax | cut -d' ' -f2-`
++SHMMNI=`sysctl kern.sysv.shmmni | cut -d' ' -f2-`
++SHMALL=`sysctl kern.sysv.shmall | cut -d' ' -f2-`
++
++if [ "$SHMMAX" -lt "8388608" ] || [ "$SHMMNI" -lt "64" ] || [ "$SHMALL" -lt "32768" ]; then
++	echo "WARNING: You probably need to set your shared memory resources higher for"
++	echo "         PostgreSQL to function.  For more information on raising your shared"
++	echo "         memory settings, see:"
++	echo "         http://wiki.finkproject.org/index.php/Shared_Memory_Regions_on_Darwin"
++	echo ""
++	echo "         I am also creating a default configuration in /etc/sysctl.conf.pg"
++	echo "         that contains values that will work with the default PostgreSQL "
++	echo "         memory settings.  To use it, rename it to /etc/sysctl.conf (if you"
++	echo "         don't have one already) and reboot."
++	echo ""
++	echo "         For now, I'll try setting your sysctl to something higher and then"
++	echo "         running things anyways.  Good luck!  =)"
++	echo ""
++	sysctl -w kern.sysv.shmmax=8388608
++	sysctl -w kern.sysv.shmmin=1
++	sysctl -w kern.sysv.shmmni=64
++	sysctl -w kern.sysv.shmseg=8
++	sysctl -w kern.sysv.shmall=32768
++	echo ""
++	cat <<END >/etc/sysctl.conf.pg
++kern.sysv.shmmax=8388608
++kern.sysv.shmmin=1
++kern.sysv.shmmni=64
++kern.sysv.shmseg=8
++kern.sysv.shmall=32768
++END
++fi
++
++if [ ! -d "$DATADIR" ]; then
++	printf -- "- making postgresql directories: "
++	sudo mkdir -p "$DATADIR"
++	sudo chown -R postgres "$DATADIR/.."
++	echo "ok"
++
++	printf -- "- initializing database in $DATADIR: "
++	sudo -u postgres ${PREFIX}/bin/initdb-8.0 -E UNICODE -D "$DATADIR" >/tmp/pgsql-init-8.0.log 2>&1 || die "couldn't initialize database"
++	echo "ok"
++fi
++
++PG_COMMAND="sudo -u postgres env"
++if [ -n "$PGPORT" ]; then
++	PG_COMMAND="$PG_COMMAND PGPORT=$PGPORT"
++fi
++PG_COMMAND="$PG_COMMAND ${PREFIX}/bin/pg_ctl-8.0"
++
++case "$1" in
++	init)
++		;;
++	start)
++		$PG_COMMAND start -D "$DATADIR" -l "$LOGFILE"
++		;;
++	restart)
++		$PG_COMMAND restart -D "$DATADIR" -m fast
++		;;
++	stop)
++		$PG_COMMAND stop -D "$DATADIR" -m fast
++		;;
++esac
+diff -Nurd postgresql-8.0.24/src/Makefile.global.in postgresql-8.0.24-new/src/Makefile.global.in
+--- postgresql-8.0.24/src/Makefile.global.in	2005-03-25 12:18:39.000000000 -0600
++++ postgresql-8.0.24-new/src/Makefile.global.in	2010-03-18 21:31:34.000000000 -0500
+@@ -65,21 +65,21 @@
+ libexecdir := @libexecdir@
+ ifeq "$(findstring pgsql, $(libexecdir))" ""
+ ifeq "$(findstring postgres, $(libexecdir))" ""
+-override libexecdir := $(libexecdir)/postgresql
++override libexecdir := $(libexecdir)/postgresql-8.0
+ endif
+ endif
+ 
+ datadir := @datadir@
+ ifeq "$(findstring pgsql, $(datadir))" ""
+ ifeq "$(findstring postgres, $(datadir))" ""
+-override datadir := $(datadir)/postgresql
++override datadir := $(datadir)/postgresql-8.0
+ endif
+ endif
+ 
+ sysconfdir := @sysconfdir@
+ ifeq "$(findstring pgsql, $(sysconfdir))" ""
+ ifeq "$(findstring postgres, $(sysconfdir))" ""
+-override sysconfdir := $(sysconfdir)/postgresql
++override sysconfdir := $(sysconfdir)/postgresql-8.0
+ endif
+ endif
+ 
+@@ -87,7 +87,7 @@
+ pkglibdir = $(libdir)
+ ifeq "$(findstring pgsql, $(pkglibdir))" ""
+ ifeq "$(findstring postgres, $(pkglibdir))" ""
+-override pkglibdir := $(pkglibdir)/postgresql
++override pkglibdir := $(pkglibdir)/postgresql-8.0
+ endif
+ endif
+ 
+@@ -95,7 +95,7 @@
+ pkgincludedir = $(includedir)
+ ifeq "$(findstring pgsql, $(pkgincludedir))" ""
+ ifeq "$(findstring postgres, $(pkgincludedir))" ""
+-override pkgincludedir := $(pkgincludedir)/postgresql
++override pkgincludedir := $(pkgincludedir)/postgresql-8.0
+ endif
+ endif
+ includedir_server = $(pkgincludedir)/server
+@@ -109,7 +109,7 @@
+ ifneq (,$(docdir))
+ ifeq "$(findstring pgsql, $(docdir))" ""
+ ifeq "$(findstring postgres, $(docdir))" ""
+-override docdir := $(docdir)/postgresql
++override docdir := $(docdir)/postgresql-8.0
+ endif
+ endif
+ endif
+diff -Nurd postgresql-8.0.24/src/Makefile.shlib postgresql-8.0.24-new/src/Makefile.shlib
+--- postgresql-8.0.24/src/Makefile.shlib	2005-12-03 14:16:50.000000000 -0600
++++ postgresql-8.0.24-new/src/Makefile.shlib	2010-03-18 21:31:34.000000000 -0500
+@@ -107,11 +107,11 @@
+   ifeq ($(DLTYPE), library)
+     # linkable library
+     DLSUFFIX		:= .dylib
+-    LINK.shared		= $(COMPILER) -dynamiclib -install_name $(libdir)/lib$(NAME).$(SO_MAJOR_VERSION)$(DLSUFFIX) $(version_link) -multiply_defined suppress
++    LINK.shared		= $(CXX) $(CFLAGS) -dynamiclib -install_name $(libdir)/lib$(NAME).$(SO_MAJOR_VERSION)$(DLSUFFIX) $(version_link) -multiply_defined suppress
+   else
+     # loadable module (default case)
+     DLSUFFIX		:= .so
+-    LINK.shared		= $(COMPILER) -bundle
++    LINK.shared		= $(CXX) $(CFLAGS) -bundle
+   endif
+   shlib			= lib$(NAME).$(SO_MAJOR_VERSION).$(SO_MINOR_VERSION)$(DLSUFFIX)
+   shlib_major		= lib$(NAME).$(SO_MAJOR_VERSION)$(DLSUFFIX)
+diff -Nurd postgresql-8.0.24/src/backend/main/main.c postgresql-8.0.24-new/src/backend/main/main.c
+--- postgresql-8.0.24/src/backend/main/main.c	2006-01-31 18:47:02.000000000 -0600
++++ postgresql-8.0.24-new/src/backend/main/main.c	2010-03-18 21:31:34.000000000 -0500
+@@ -56,6 +56,7 @@
+ 	struct passwd *pw;
+ #endif
+ 	char	   *pw_name_persist;
++	char	   *progname;
+ 
+ 	/*
+ 	 * Place platform-specific startup hacks here.	This is the right
+@@ -267,7 +268,26 @@
+ 	 */
+ 	len = strlen(argv[0]);
+ 
+-	if ((len >= 10 && strcmp(argv[0] + len - 10, "postmaster") == 0)
++	/*
++	 * Find the program name, which is after the final slash in the
++	 * program argument.
++	 */
++	progname = strrchr(argv[0], '/');
++	if (progname != NULL)
++	{
++		progname = progname + 1;
++	  }
++	else
++	{
++		progname = argv[0];
++	}
++
++	/*
++	 * Now check if the program name starts with the
++	 * word "postmaster", in which case PostmasterMain is called.
++	 */
++	len = strlen(progname);
++	if ((len >= 10 && strncmp(progname, "postmaster", 10) == 0)
+ #ifdef WIN32
+ 	  || (len >= 14 && strcmp(argv[0] + len - 14, "postmaster.exe") == 0)
+ #endif
+diff -Nurd postgresql-8.0.24/src/backend/utils/fmgr/dfmgr.c postgresql-8.0.24-new/src/backend/utils/fmgr/dfmgr.c
+--- postgresql-8.0.24/src/backend/utils/fmgr/dfmgr.c	2004-12-31 16:01:31.000000000 -0600
++++ postgresql-8.0.24-new/src/backend/utils/fmgr/dfmgr.c	2010-03-18 21:31:34.000000000 -0500
+@@ -305,6 +305,26 @@
+ 		pfree(full);
+ 	}
+ 
++	new = palloc(strlen(name) + strlen(".so") + 1);
++	strcpy(new, name);
++	strcat(new, ".so");
++
++	if (!have_slash)
++	{
++		full = find_in_dynamic_libpath(new);
++		pfree(new);
++		if (full)
++			return full;
++	}
++	else
++	{
++		full = substitute_libpath_macro(new);
++		pfree(new);
++		if (file_exists(full))
++			return full;
++		pfree(full);
++	}
++
+ 	new = palloc(strlen(name) + strlen(DLSUFFIX) + 1);
+ 	strcpy(new, name);
+ 	strcat(new, DLSUFFIX);
+diff -Nurd postgresql-8.0.24/src/backend/utils/misc/postgresql.conf.sample postgresql-8.0.24-new/src/backend/utils/misc/postgresql.conf.sample
+--- postgresql-8.0.24/src/backend/utils/misc/postgresql.conf.sample	2010-02-25 17:45:04.000000000 -0600
++++ postgresql-8.0.24-new/src/backend/utils/misc/postgresql.conf.sample	2010-03-18 21:31:34.000000000 -0500
+@@ -61,7 +61,7 @@
+ # - Security & Authentication -
+ 
+ #authentication_timeout = 60	# 1-600, in seconds
+-#ssl = false
++ssl = false
+ #ssl_renegotiation_limit = 524288	# amount of data between renegotiations
+ 					# in kilobytes
+ #password_encryption = true
+diff -Nurd postgresql-8.0.24/src/bin/initdb/initdb.c postgresql-8.0.24-new/src/bin/initdb/initdb.c
+--- postgresql-8.0.24/src/bin/initdb/initdb.c	2009-03-31 13:58:20.000000000 -0500
++++ postgresql-8.0.24-new/src/bin/initdb/initdb.c	2010-03-18 21:31:35.000000000 -0500
+@@ -117,7 +117,7 @@
+ 
+ /* defaults */
+ int			n_connections = 10;
+-int			n_buffers = 50;
++int			n_buffers = 20;
+ 
+ /*
+  * Warning messages for authentication methods
+@@ -2324,7 +2324,7 @@
+ 	sprintf(pgdenv, "PGDATA=%s", pg_data);
+ 	putenv(pgdenv);
+ 
+-	if ((ret = find_other_exec(argv[0], "postgres", PG_VERSIONSTR,
++	if ((ret = find_other_exec(argv[0], "postgres-8.0", PG_VERSIONSTR,
+ 							   backend_exec)) < 0)
+ 	{
+ 		char full_path[MAXPGPATH];
+@@ -2334,14 +2334,14 @@
+ 
+ 		if (ret == -1)
+ 			fprintf(stderr,
+-					_("The program \"postgres\" is needed by %s "
++					_("The program \"postgres-8.0\" is needed by %s "
+ 					  "but was not found in the\n"
+ 					  "same directory as \"%s\".\n"
+ 					  "Check your installation.\n"),
+ 					progname, full_path);
+ 		else
+ 			fprintf(stderr,
+-					_("The program \"postgres\" was found by \"%s\"\n"
++					_("The program \"postgres-8.0\" was found by \"%s\"\n"
+ 					  "but was not the same version as %s.\n"
+ 					  "Check your installation.\n"),
+ 					full_path, progname);
+@@ -2628,7 +2628,7 @@
+ 	get_parent_directory(bin_dir);
+ 	
+ 	printf(_("\nSuccess. You can now start the database server using:\n\n"
+-			 "    %s%s%s%spostmaster -D %s%s%s\n"
++			 "    %s%s%s%spostmaster-8.0 -D %s%s%s\n"
+ 			 "or\n"
+ 			 "    %s%s%s%spg_ctl -D %s%s%s -l logfile start\n\n"),
+ 	  QUOTE_PATH, bin_dir, QUOTE_PATH, (strlen(bin_dir) > 0) ? DIR_SEP : "",
+diff -Nurd postgresql-8.0.24/src/bin/pg_ctl/pg_ctl.c postgresql-8.0.24-new/src/bin/pg_ctl/pg_ctl.c
+--- postgresql-8.0.24/src/bin/pg_ctl/pg_ctl.c	2009-09-01 21:41:27.000000000 -0500
++++ postgresql-8.0.24-new/src/bin/pg_ctl/pg_ctl.c	2010-03-18 21:31:35.000000000 -0500
+@@ -570,7 +570,7 @@
+ 
+ 		postmaster_path = xmalloc(MAXPGPATH);
+ 
+-		if ((ret = find_other_exec(argv0, "postmaster", PM_VERSIONSTR,
++		if ((ret = find_other_exec(argv0, "postmaster-8.0", PM_VERSIONSTR,
+ 								   postmaster_path)) < 0)
+ 		{
+ 			char full_path[MAXPGPATH];
+@@ -579,13 +579,13 @@
+ 				StrNCpy(full_path, progname, MAXPGPATH);
+ 	
+ 			if (ret == -1)
+-				write_stderr(_("The program \"postmaster\" is needed by %s "
++				write_stderr(_("The program \"postmaster-8.0\" is needed by %s "
+ 							   "but was not found in the\n"
+ 							   "same directory as \"%s\".\n"
+ 							   "Check your installation.\n"),
+ 							 progname, full_path);
+ 			else
+-				write_stderr(_("The program \"postmaster\" was found by \"%s\"\n"
++				write_stderr(_("The program \"postmaster-8.0\" was found by \"%s\"\n"
+ 							   "but was not the same version as %s.\n"
+ 							   "Check your installation.\n"),
+ 							 full_path, progname);
+@@ -924,7 +924,7 @@
+ 	}
+ 	else
+ 	{
+-		ret = find_other_exec(argv0, "postmaster", PM_VERSIONSTR, cmdLine);
++		ret = find_other_exec(argv0, "postmaster-8.0", PM_VERSIONSTR, cmdLine);
+ 		if (ret != 0)
+ 		{
+ 			write_stderr(_("%s: could not find postmaster program executable\n"), progname);
+diff -Nurd postgresql-8.0.24/src/interfaces/ecpg/compatlib/Makefile postgresql-8.0.24-new/src/interfaces/ecpg/compatlib/Makefile
+--- postgresql-8.0.24/src/interfaces/ecpg/compatlib/Makefile	2005-03-13 16:04:45.000000000 -0600
++++ postgresql-8.0.24-new/src/interfaces/ecpg/compatlib/Makefile	2010-03-18 21:31:35.000000000 -0500
+@@ -20,6 +20,7 @@
+ override CPPFLAGS := -I$(top_srcdir)/src/interfaces/ecpg/include -I$(libpq_srcdir) \
+ 	-I$(top_srcdir)/src/include/utils $(CPPFLAGS)
+ override CFLAGS += $(PTHREAD_CFLAGS)
++override LDFLAGS := -L../ecpglib -L../pgtypeslib -L../../libpq $(LDFLAGS)
+ SHLIB_LINK = -L../ecpglib -lecpg -L../pgtypeslib -lpgtypes $(libpq) \
+ 	$(filter -lintl -lssl -lcrypto -lkrb5 -lcrypt -lm, $(LIBS)) $(PTHREAD_LIBS)
+ 
+diff -Nurd postgresql-8.0.24/src/interfaces/ecpg/ecpglib/Makefile postgresql-8.0.24-new/src/interfaces/ecpg/ecpglib/Makefile
+--- postgresql-8.0.24/src/interfaces/ecpg/ecpglib/Makefile	2005-03-13 16:04:45.000000000 -0600
++++ postgresql-8.0.24-new/src/interfaces/ecpg/ecpglib/Makefile	2010-03-18 21:31:35.000000000 -0500
+@@ -19,6 +19,7 @@
+ 
+ override CPPFLAGS := -DFRONTEND -I$(top_srcdir)/src/interfaces/ecpg/include \
+ 	-I$(libpq_srcdir) -I$(top_builddir)/src/port $(CPPFLAGS)
++override LDFLAGS := -L../ecpglib -L../pgtypeslib -L../../libpq $(LDFLAGS)
+ override CFLAGS += $(PTHREAD_CFLAGS)
+ 
+ # Need to recomple any libpgport object files
+diff -Nurd postgresql-8.0.24/src/makefiles/Makefile.darwin postgresql-8.0.24-new/src/makefiles/Makefile.darwin
+--- postgresql-8.0.24/src/makefiles/Makefile.darwin	2006-01-19 15:20:32.000000000 -0600
++++ postgresql-8.0.24-new/src/makefiles/Makefile.darwin	2010-03-18 21:31:35.000000000 -0500
+@@ -13,6 +13,6 @@
+ # Rule for building shared libs (currently used only for regression test
+ # shlib ... should go away, since this is not really enough knowledge)
+ %.so: %.o
+-	$(CC) -bundle -o $@ $< $(BE_DLLLIBS)
++	$(CXX) -bundle -undefined dynamic_lookup -o $@ $< $(BE_DLLLIBS)
+ 
+ sqlmansect = 7
+diff -Nurd postgresql-8.0.24/src/template/darwin postgresql-8.0.24-new/src/template/darwin
+--- postgresql-8.0.24/src/template/darwin	2004-04-25 23:04:42.000000000 -0500
++++ postgresql-8.0.24-new/src/template/darwin	2010-03-18 21:31:35.000000000 -0500
+@@ -1,6 +1,2 @@
+-# Apple's cpp-precomp seems a tad broken, so don't use it
+-# (Note: on OS X before 10.2, you might need -traditional-cpp instead)
+-CC="$CC -no-cpp-precomp"
+-
+ # Select appropriate semaphore support
+ USE_NAMED_POSIX_SEMAPHORES=1

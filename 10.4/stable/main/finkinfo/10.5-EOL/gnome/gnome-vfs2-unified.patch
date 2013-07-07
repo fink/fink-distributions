@@ -1,0 +1,142 @@
+diff -Nurd -x'*~' gnome-vfs-2.24.0.orig/acinclude.m4 gnome-vfs-2.24.0/acinclude.m4
+--- gnome-vfs-2.24.0.orig/acinclude.m4	2008-09-14 07:24:46.000000000 -0400
++++ gnome-vfs-2.24.0/acinclude.m4	2008-10-15 00:52:13.000000000 -0400
+@@ -235,7 +235,6 @@
+ AC_MSG_NOTICE([using bundled neon ($NEON_VERSION)])
+ NEON_BUILD_BUNDLED="yes"
+ LIBNEON_SOURCE_CHECKS
+-NEON_CFLAGS="$CFLAGS -I.. -I../.. -I$srcdir/$neon_bundled_srcdir"
+ NEON_NEED_XML_PARSER=yes
+ neon_library_message="included libneon (${NEON_VERSION})"
+ 
+@@ -267,8 +266,8 @@
+ 
+ #xml parser stuff
+ PKG_CHECK_MODULES(LIBXML, libxml-2.0 >= $XML_REQUIRED)
+-NEON_CFLAGS="$NEON_CFLAGS $LIBXML_CFLAGS" 
+-NEON_LIBS="$NEON_LIBS $LIBXML_LIBS"
++NEON_CFLAGS="$NEON_CFLAGS $OPENSSL_CFLAGS $LIBXML_CFLAGS" 
++NEON_LIBS="$NEON_LIBS $OPENSSL_LIBS $LIBXML_LIBS"
+ 
+ AC_DEFINE(HAVE_LIBXML, 1, [Define if you have libxml])
+ 
+@@ -403,10 +402,11 @@
+ Darwin) ne_cv_os_macosx=yes ;;
+ *) ne_cv_os_macosx=no ;;
+ esac])
+-if test $ne_cv_os_macosx = yes; then
+-  CPPFLAGS="$CPPFLAGS -no-cpp-precomp"
+-  LDFLAGS="$LDFLAGS -flat_namespace"
+-fi
++dnl not appropriate for modern darwin (back at least to 10.3)
++dnl if test $ne_cv_os_macosx = yes; then
++dnl   CPPFLAGS="$CPPFLAGS -no-cpp-precomp"
++dnl   LDFLAGS="$LDFLAGS -flat_namespace"
++dnl fi
+ ])
+ 
+ AC_DEFUN([NEON_FORMAT_PREP], [
+diff -Nurd -x'*~' gnome-vfs-2.24.0.orig/configure.in gnome-vfs-2.24.0/configure.in
+--- gnome-vfs-2.24.0.orig/configure.in	2008-09-22 05:34:00.000000000 -0400
++++ gnome-vfs-2.24.0/configure.in	2008-10-15 01:01:07.000000000 -0400
+@@ -451,8 +451,8 @@
+ AC_PATH_PROG([KRB5_CONFIG], krb5-config, none, $PATH:/usr/kerberos/bin)
+ 					   
+ if test "x$KRB5_CONFIG" != "xnone"; then
+-   GSSAPI_LIBS="`${KRB5_CONFIG} --libs gssapi`"
+-   GSSAPI_CFLAGS="`${KRB5_CONFIG} --cflags gssapi`"
++   GSSAPI_LIBS="`${KRB5_CONFIG} --libs gssapi | sed -e 's,-L/usr/lib,,'`"
++   GSSAPI_CFLAGS="`${KRB5_CONFIG} --cflags gssapi | sed -e 's,-L/usr/include,,'`"
+    
+    saved_CPPFLAGS="$CPPFLAGS"
+    saved_LIBS="$LIBS"
+@@ -489,7 +489,6 @@
+ dnl ******************************
+ dnl http-method (neon checks)
+ dnl ******************************
+-VFS_NEON_BUNDLED(imported/neon)
+ 
+ AC_ARG_ENABLE(http-debug,
+ 	[AS_HELP_STRING([--enable-http-debug],[Enable HTTP method debugging])],
+@@ -658,6 +657,10 @@
+   dnl end of PKG_CHECK_MODULES(openssl)
+ fi
+ 
++# this is patched (acinclude.m4) to slurp OPENSSL_, so must be after
++# openssl tests, cf http://bugzilla.gnome.org/show_bug.cgi?id=511189
++VFS_NEON_BUNDLED(imported/neon)
++
+ dnl ****************************
+ dnl GNUTLS
+ dnl ****************************
+@@ -1045,8 +1048,8 @@
+ dnl ==============================================================================
+ 
+ PKG_CHECK_MODULES(LIBGNOMEVFS, glib-2.0 >= $GLIB_REQUIRED gmodule-no-export-2.0 >= $GLIB_REQUIRED gthread-2.0 >= $GLIB_REQUIRED gobject-2.0 >= $GLIB_REQUIRED gconf-2.0 >= $GCONF_REQUIRED libxml-2.0 >= $XML_REQUIRED gnome-mime-data-2.0 $dbus_requirement)
+-LIBGNOMEVFS_CFLAGS="$LIBGNOMEVFS_CFLAGS $OPENSSL_CFLAGS $LIBGNUTLS_CFLAGS $HOWL_CFLAGS $AVAHI_CFLAGS"
+-LIBGNOMEVFS_LIBS="$LIBGNOMEVFS_LIBS $OPENSSL_LIBS $LIBGNUTLS_LIBS $HOWL_LIBS $AVAHI_LIBS $RESOLVER_LIBS"
++LIBGNOMEVFS_CFLAGS="$OPENSSL_CFLAGS $LIBGNOMEVFS_CFLAGS $LIBGNUTLS_CFLAGS $HOWL_CFLAGS $AVAHI_CFLAGS"
++LIBGNOMEVFS_LIBS="$OPENSSL_LIBS $LIBGNOMEVFS_LIBS $LIBGNUTLS_LIBS $HOWL_LIBS $AVAHI_LIBS $RESOLVER_LIBS"
+ AC_SUBST(LIBGNOMEVFS_CFLAGS)
+ AC_SUBST(LIBGNOMEVFS_LIBS)
+ 
+@@ -1095,7 +1098,7 @@
+ 
+ AC_CACHE_CHECK([for POSIX ACL], gvfs_cv_HAVE_POSIX_ACLS,[
+ 		acl_LIBS=$LIBS
+-		LIBS="$LIBS -lacl"
++		LIBS="$LIBS $ACL_LIBS"
+ 		AC_TRY_LINK([#include <sys/types.h>
+ #include <sys/acl.h>],
+ [ acl_t acl; int entry_id; acl_entry_t *entry_p; return acl_get_entry (acl, entry_id, entry_p);],
+diff -Nurd -x'*~' gnome-vfs-2.24.0.orig/imported/neon/Makefile.am gnome-vfs-2.24.0/imported/neon/Makefile.am
+--- gnome-vfs-2.24.0.orig/imported/neon/Makefile.am	2008-09-14 07:24:45.000000000 -0400
++++ gnome-vfs-2.24.0/imported/neon/Makefile.am	2008-10-15 00:55:42.000000000 -0400
+@@ -9,13 +9,12 @@
+ INCLUDES =					\
+ 	-DNE_HAVE_DAV				\
+ 	$(SSL_DEFINES)                          \
+-	$(NEON_CFLAGS)				\
+-	$(LIBGNOMEVFS_CFLAGS)			\
+-	$(GSSAPI_CFLAGS)			\
+         -I$(top_srcdir)                         \
+         -I$(top_builddir)                       \
+         -I$(top_srcdir)/libgnomevfs             \
+         -I$(top_builddir)/libgnomevfs           \
++	$(NEON_CFLAGS)				\
++	$(LIBGNOMEVFS_CFLAGS)			\
+         $(NULL)
+ 
+ noinst_LTLIBRARIES = libneon.la
+@@ -64,6 +63,7 @@
+ 
+ libneon_la_LIBADD =			\
+ 	$(NEON_LIBS) $(NEON_LTLIBS)	\
++	$(LIBGNOMEVFS_LIBS)		\
+ 	$(NULL)
+ 
+ libneon_la_LDFLAGS =			\
+diff -Nurd -x'*~' gnome-vfs-2.24.0.orig/libgnomevfs/Makefile.am gnome-vfs-2.24.0/libgnomevfs/Makefile.am
+--- gnome-vfs-2.24.0.orig/libgnomevfs/Makefile.am	2008-09-14 07:24:45.000000000 -0400
++++ gnome-vfs-2.24.0/libgnomevfs/Makefile.am	2008-10-15 01:21:03.000000000 -0400
+@@ -114,6 +114,7 @@
+ 	$(SOCKET_LIBS)				\
+ 	$(INTLLIBS)				\
+ 	$(SELINUX_LIBS)				\
++	-lresolv				\
+ 	$(NULL)
+ 
+ libgnomevfs_2_la_LDFLAGS =			\
+diff -Nurd -x'*~' gnome-vfs-2.24.0.orig/modules/Makefile.am gnome-vfs-2.24.0/modules/Makefile.am
+--- gnome-vfs-2.24.0.orig/modules/Makefile.am	2008-09-14 07:24:45.000000000 -0400
++++ gnome-vfs-2.24.0/modules/Makefile.am	2008-10-15 01:10:46.000000000 -0400
+@@ -204,8 +204,8 @@
+ 
+ libhttp_la_LDFLAGS = $(module_flags)
+ libhttp_la_LIBADD  = 			\
+-	$(MODULES_GCONF_LIBS) 	\
+ 	$(OPENSSL_LIBS) \
++	$(MODULES_GCONF_LIBS) 	\
+ 	../imported/neon/libneon.la   \
+ 	../libgnomevfs/libgnomevfs-2.la
+ 

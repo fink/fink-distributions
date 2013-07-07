@@ -1,0 +1,3024 @@
+diff -Naur apt-0.5.4/Makefile apt-new/Makefile
+--- apt-0.5.4/Makefile	2001-02-20 02:03:16.000000000 -0500
++++ apt-new/Makefile	2005-05-25 00:08:51.000000000 -0400
+@@ -11,13 +11,7 @@
+ 
+ .PHONY: headers library clean veryclean all binary program doc
+ all headers library clean veryclean binary program doc dirs:
+-	$(MAKE) -C apt-pkg $@
+-	$(MAKE) -C apt-inst $@
+-	$(MAKE) -C methods $@
+-	$(MAKE) -C cmdline $@
+ 	$(MAKE) -C ftparchive $@
+-	$(MAKE) -C dselect $@
+-	$(MAKE) -C doc $@
+ 
+ # Some very common aliases
+ .PHONY: maintainer-clean dist-clean distclean pristine sanity 
+diff -Naur apt-0.5.4/apt-inst/makefile apt-new/apt-inst/makefile
+--- apt-0.5.4/apt-inst/makefile	2001-02-26 23:16:05.000000000 -0500
++++ apt-new/apt-inst/makefile	2005-05-25 00:08:51.000000000 -0400
+@@ -10,6 +10,7 @@
+ include ../buildlib/defaults.mak
+ 
+ # The library name
++LDFLAGS += -L../apt-pkg -lapt-pkg
+ LIBRARY=apt-inst
+ LIBEXT=$(GLIBC_VER)$(LIBSTDCPP_VER)
+ MAJOR=1.0
+diff -Naur apt-0.5.4/apt-pkg/contrib/mmap.cc apt-new/apt-pkg/contrib/mmap.cc
+--- apt-0.5.4/apt-pkg/contrib/mmap.cc	2001-05-27 01:19:30.000000000 -0400
++++ apt-new/apt-pkg/contrib/mmap.cc	2005-05-25 00:08:51.000000000 -0400
+@@ -41,7 +41,7 @@
+ // ---------------------------------------------------------------------
+ /* */
+ MMap::MMap(FileFd &F,unsigned long Flags) : Flags(Flags), iSize(0),
+-                     Base(0)
++                     Base(0), iFd(0)
+ {
+    if ((Flags & NoImmMap) != NoImmMap)
+       Map(F);
+@@ -51,7 +51,7 @@
+ // ---------------------------------------------------------------------
+ /* */
+ MMap::MMap(unsigned long Flags) : Flags(Flags), iSize(0),
+-                     Base(0)
++                     Base(0), iFd(0)
+ {
+ }
+ 									/*}}}*/
+@@ -68,6 +68,7 @@
+ /* */
+ bool MMap::Map(FileFd &Fd)
+ {
++   iFd = &Fd;
+    iSize = Fd.Size();
+    
+    // Set the permissions.
+@@ -81,10 +82,19 @@
+    if (iSize == 0)
+       return _error->Error(_("Can't mmap an empty file"));
+    
++#ifndef EMULATE_MMAP
+    // Map it.
+    Base = mmap(0,iSize,Prot,Map,Fd.Fd(),0);
+    if (Base == (void *)-1)
+       return _error->Errno("mmap",_("Couldn't make mmap of %lu bytes"),iSize);
++#else
++   Base = new unsigned char[iSize];
++   if (Base == NULL)
++      return _error->Errno("mmap",_("Couldn't allocate %lu bytes to emulate mmap"),iSize);
++
++   Fd.Seek(0);
++   Fd.Read(Base, iSize, true);
++#endif
+ 
+    return true;
+ }
+@@ -100,8 +110,16 @@
+    if (DoSync == true)
+       Sync();
+    
++#ifndef EMULATE_MMAP   
+    if (munmap((char *)Base,iSize) != 0)
+       _error->Warning("Unable to munmap");
++#else
++   if ((Flags & ReadOnly) != ReadOnly && iFd != 0) {
++      iFd->Seek(0);
++      iFd->Write(Base, iSize);
++   }
++   delete [] (unsigned char *)Base;
++#endif
+    
+    iSize = 0;
+    Base = 0;
+@@ -117,11 +135,13 @@
+    if ((Flags & UnMapped) == UnMapped)
+       return true;
+    
++#ifndef EMULATE_MMAP
+ #ifdef _POSIX_SYNCHRONIZED_IO   
+    if ((Flags & ReadOnly) != ReadOnly)
+       if (msync((char *)Base,iSize,MS_SYNC) != 0)
+ 	 return _error->Errno("msync","Unable to write mmap");
+ #endif   
++#endif
+    return true;
+ }
+ 									/*}}}*/
+@@ -133,12 +153,14 @@
+    if ((Flags & UnMapped) == UnMapped)
+       return true;
+    
++#ifndef EMULATE_MMAP
+ #ifdef _POSIX_SYNCHRONIZED_IO
+    unsigned long PSize = sysconf(_SC_PAGESIZE);
+    if ((Flags & ReadOnly) != ReadOnly)
+       if (msync((char *)Base+(int)(Start/PSize)*PSize,Stop - Start,MS_SYNC) != 0)
+ 	 return _error->Errno("msync","Unable to write mmap");
+ #endif   
++#endif   
+    return true;
+ }
+ 									/*}}}*/
+diff -Naur apt-0.5.4/apt-pkg/contrib/mmap.h apt-new/apt-pkg/contrib/mmap.h
+--- apt-0.5.4/apt-pkg/contrib/mmap.h	2001-05-14 01:16:43.000000000 -0400
++++ apt-new/apt-pkg/contrib/mmap.h	2005-05-25 00:08:51.000000000 -0400
+@@ -46,6 +46,7 @@
+    unsigned long Flags;
+    unsigned long iSize;
+    void *Base;
++   FileFd *iFd;
+ 
+    bool Map(FileFd &Fd);
+    bool Close(bool DoSync = true);
+diff -Naur apt-0.5.4/apt-pkg/deb/debindexfile.cc apt-new/apt-pkg/deb/debindexfile.cc
+--- apt-0.5.4/apt-pkg/deb/debindexfile.cc	2001-04-29 01:13:51.000000000 -0400
++++ apt-new/apt-pkg/deb/debindexfile.cc	2005-05-25 00:08:51.000000000 -0400
+@@ -505,3 +505,11 @@
+ }
+ 
+ 									/*}}}*/
++void init_deb2()
++{
++  (void)_apt_DebType;
++  (void)_apt_DebSrcType;
++  (void)_apt_Src;
++  (void)_apt_Pkg;
++  (void)_apt_Status;
++}
+diff -Naur apt-0.5.4/apt-pkg/deb/debsystem.cc apt-new/apt-pkg/deb/debsystem.cc
+--- apt-0.5.4/apt-pkg/deb/debsystem.cc	2001-04-29 01:13:51.000000000 -0400
++++ apt-new/apt-pkg/deb/debsystem.cc	2005-05-25 00:08:51.000000000 -0400
+@@ -27,6 +27,108 @@
+ #include <dirent.h>
+ #include <errno.h>
+ 									/*}}}*/
++/* FINK LOCAL begin */
++#include <sys/utsname.h>
++#include <CoreFoundation/CoreFoundation.h>
++#include <fstream>
++#include <sys/stat.h>
++
++extern void init_deb2();
++extern void init_deb3();
++
++#define FINKSTATUSFILE "/tmp/finkaptstatus"
++
++struct versionrevision {
++  unsigned long epoch;
++  const char *version;
++  const char *revision;
++};  
++
++struct versionrevision darwin_version = {0,NULL,NULL};
++struct versionrevision macosx_version = {0,NULL,NULL};
++
++static void finkinit()
++{
++  Boolean status;
++  SInt32 errorCode;
++  CFURLRef fileURL = NULL;
++  CFDataRef resourceData = NULL;
++  CFPropertyListRef propertyList = NULL;
++  CFStringRef string;
++  static char buffer[256];	// This is static, to ensure the buffer stays around
++
++  static struct utsname ver;	// This is static, to ensure the buffer stays around
++  
++  /* Determine system version */
++  /* TODO - should maybe check if this is really Darwin? */
++  if (!uname(&ver)) {
++    darwin_version.version = ver.release;
++  }
++
++  /* Check whether this is Mac OS X, and which version of it */
++
++  fileURL = CFURLCreateWithFileSystemPath( NULL, 	
++		CFSTR("/System/Library/CoreServices/SystemVersion.plist"),
++		kCFURLPOSIXPathStyle,				
++		false );
++  if (!fileURL)
++    goto BAIL;
++  
++  /* Read the XML */
++  status = CFURLCreateDataAndPropertiesFromResource(
++		NULL,
++		fileURL,
++		&resourceData,
++		NULL,		
++		NULL,
++		&errorCode);
++  if (!status || errorCode != 0)
++    goto BAIL;
++  
++  /* Reconstitute the dictionary using the XML data. */
++  propertyList = CFPropertyListCreateFromXMLData( NULL,
++		resourceData,
++		kCFPropertyListImmutable,
++		&string);
++  if (!propertyList)
++    goto BAIL;
++  
++  /* Try to read the system version from it. */
++  status = CFDictionaryGetValueIfPresent( propertyList,
++		CFSTR("ProductVersion"),
++		(void*)&string);
++  if (!status)
++    goto BAIL;
++  
++  /* Convert into a C string */
++  status = CFStringGetCString( string,
++		buffer,
++		sizeof(buffer),
++		kCFStringEncodingISOLatin1);
++  if (!status)
++    goto BAIL;
++  
++  /* Finally link the buffer into the macosx_version struct. */
++  macosx_version.version = buffer;
++  
++BAIL:
++  // Release all of the CF objects we're responsible for.
++  if (fileURL)
++    CFRelease(fileURL);
++  if (resourceData)
++    CFRelease(resourceData);
++  if (propertyList)
++    CFRelease(propertyList);
++}
++
++void initDebSystem()
++{
++  finkinit();
++  (void)debSys;
++  init_deb2();
++  init_deb3();
++}
++/* FINK LOCAL end */
+ 
+ debSystem debSys;
+ 
+@@ -48,6 +150,8 @@
+ debSystem::~debSystem()
+ {
+    delete StatusFile;
++   delete FinkStatusFile;
++   unlink(FINKSTATUSFILE);
+ }
+ 									/*}}}*/
+ // System::Lock - Get the lock						/*{{{*/
+@@ -161,8 +265,8 @@
+       which is yet to be determined. The functions in pkgcachegen should
+       be the only users of these */
+    Cnf.CndSet("Dir::State::userstatus","status.user"); // Defunct
+-   Cnf.CndSet("Dir::State::status","/var/lib/dpkg/status");
+-   Cnf.CndSet("Dir::Bin::dpkg","/usr/bin/dpkg");
++   Cnf.CndSet("Dir::State::status","@PREFIX@/var/lib/dpkg/status");
++   Cnf.CndSet("Dir::Bin::dpkg","@PREFIX@/bin/dpkg");
+    
+    return true;
+ }
+@@ -185,9 +289,9 @@
+ signed debSystem::Score(Configuration const &Cnf)
+ {
+    signed Score = 0;
+-   if (FileExists(Cnf.FindFile("Dir::State::status","/var/lib/dpkg/status")) == true)
++   if (FileExists(Cnf.FindFile("Dir::State::status","@PREFIX@/var/lib/dpkg/status")) == true)
+        Score += 10;
+-   if (FileExists(Cnf.FindFile("Dir::Bin::dpkg","/usr/bin/dpkg")) == true)
++   if (FileExists(Cnf.FindFile("Dir::Bin::dpkg","@PREFIX@/bin/dpkg")) == true)
+       Score += 10;
+    if (FileExists("/etc/debian_version") == true)
+       Score += 10;
+@@ -202,6 +306,44 @@
+    if (StatusFile == 0)
+       StatusFile = new debStatusIndex(_config->FindFile("Dir::State::status"));
+    List.push_back(StatusFile);
++/* FINK LOCAL begin */
++
++   if (FinkStatusFile == 0) {
++      struct stat unused_sbuf;
++      int sys_ok=0;
++      unlink(FINKSTATUSFILE);
++      if ( 0 == stat("@PREFIX@/bin/fink-virtual-pkgs",&unused_sbuf)) {
++          if ( 0 == system("@PREFIX@/bin/fink-virtual-pkgs --apt")) sys_ok=1;
++      }    
++      if (stat(FINKSTATUSFILE, &unused_sbuf) || !sys_ok) {
++	  std::ofstream finkstatus(FINKSTATUSFILE);
++      if(macosx_version.version != 0)
++      {
++        finkstatus << "Package: macosx" << endl;
++        finkstatus << "Status: install ok installed" << endl;      
++        finkstatus << "Priority: optional" << endl;
++        finkstatus << "Section: base" << endl;
++        finkstatus << "Maintainer: None" << endl;
++        finkstatus << "Source: macosx" << endl;
++        finkstatus << "Version: " << macosx_version.version << endl;
++        finkstatus << "Description: Pseudo package representing Mac OS X" << endl;
++        finkstatus << " Pseudo package representing Mac OS X" << endl << endl;
++      }
++      finkstatus << "Package: darwin" << endl;
++      finkstatus << "Status: install ok installed" << endl;
++      finkstatus << "Priority: optional" << endl;
++      finkstatus << "Section: base" << endl;
++      finkstatus << "Maintainer: None" << endl;
++      finkstatus << "Source: darwin" << endl;
++      finkstatus << "Version: " << darwin_version.version  << endl;
++      finkstatus << "Description: Pseudo package representing Darwin" << endl;
++      finkstatus << " Pseudo package representing Darwin" << endl << endl;
++      finkstatus.close();
++      }		
++      FinkStatusFile = new debStatusIndex(FINKSTATUSFILE);
++   }
++   List.push_back(FinkStatusFile);
++/* FINK LOCAL end */
+    return true;
+ }
+ 									/*}}}*/
+@@ -217,6 +359,10 @@
+    {
+       Found = StatusFile;
+       return true;
++   }  else if ((FinkStatusFile != 0) && (FinkStatusFile->FindInCache(*File.Cache()) == File))
++   {
++      Found = FinkStatusFile;
++      return true;
+    }
+    
+    return false;
+diff -Naur apt-0.5.4/apt-pkg/deb/debsystem.h apt-new/apt-pkg/deb/debsystem.h
+--- apt-0.5.4/apt-pkg/deb/debsystem.h	2001-04-29 01:13:51.000000000 -0400
++++ apt-new/apt-pkg/deb/debsystem.h	2005-05-25 00:08:51.000000000 -0400
+@@ -25,6 +25,7 @@
+    bool CheckUpdates();
+    
+    debStatusIndex *StatusFile;
++   debStatusIndex *FinkStatusFile;
+    
+    public:
+ 
+diff -Naur apt-0.5.4/apt-pkg/deb/debversion.cc apt-new/apt-pkg/deb/debversion.cc
+--- apt-0.5.4/apt-pkg/deb/debversion.cc	2001-05-07 01:14:53.000000000 -0400
++++ apt-new/apt-pkg/deb/debversion.cc	2005-05-25 00:08:51.000000000 -0400
+@@ -24,6 +24,11 @@
+ 
+ debVersioningSystem debVS;
+ 
++void init_deb3()
++{
++  (void)debVS;
++}
++
+ // debVS::debVersioningSystem - Constructor				/*{{{*/
+ // ---------------------------------------------------------------------
+ /* */
+diff -Naur apt-0.5.4/apt-pkg/init.cc apt-new/apt-pkg/init.cc
+--- apt-0.5.4/apt-pkg/init.cc	2001-03-13 01:51:46.000000000 -0500
++++ apt-new/apt-pkg/init.cc	2005-05-25 00:08:51.000000000 -0400
+@@ -15,6 +15,8 @@
+ #include <apti18n.h>
+ #include <config.h>
+ #include <sys/stat.h>
++
++extern void initDebSystem();
+ 									/*}}}*/
+ 
+ #define Stringfy_(x) # x
+@@ -39,7 +41,7 @@
+       Cnf.Set("APT::Architecture",COMMON_CPU);
+    else
+       Cnf.Set("APT::Architecture",COMMON_OS "-" COMMON_CPU);
+-   Cnf.Set("Dir","/");
++   Cnf.Set("Dir","@PREFIX@/");
+    
+    // State   
+    Cnf.Set("Dir::State","var/lib/apt/");
+@@ -68,7 +70,7 @@
+    Cnf.Set("Dir::Etc::main","apt.conf");
+    Cnf.Set("Dir::Etc::parts","apt.conf.d");
+    Cnf.Set("Dir::Etc::preferences","preferences");
+-   Cnf.Set("Dir::Bin::methods","/usr/lib/apt/methods");
++   Cnf.Set("Dir::Bin::methods","@PREFIX@/lib/apt/methods");
+ 	      
+    bool Res = true;
+    
+@@ -101,6 +103,8 @@
+ /* */
+ bool pkgInitSystem(Configuration &Cnf,pkgSystem *&Sys)
+ {
++   initDebSystem();
++
+    Sys = 0;
+    string Label = Cnf.Find("Apt::System","");
+    if (Label.empty() == false)
+diff -Naur apt-0.5.4/apt-pkg/policy.cc apt-new/apt-pkg/policy.cc
+--- apt-0.5.4/apt-pkg/policy.cc	2001-05-27 19:40:56.000000000 -0400
++++ apt-new/apt-pkg/policy.cc	2005-05-25 00:08:51.000000000 -0400
+@@ -183,7 +183,7 @@
+    Pin *P = 0;
+    
+    if (Name.empty() == true)
+-      P = &*Defaults.insert(Defaults.end());
++      P = &*Defaults.insert(Defaults.end(),PkgPin());
+    else
+    {
+       // Get a spot to put the pin
+@@ -197,7 +197,7 @@
+ 	       P = &*I;
+ 	 
+ 	 if (P == 0)
+-	    P = &*Unmatched.insert(Unmatched.end());      
++	    P = &*Unmatched.insert(Unmatched.end(), PkgPin());      
+       }
+       else
+       {
+diff -Naur apt-0.5.4/apt-pkg/tagfile.cc apt-new/apt-pkg/tagfile.cc
+--- apt-0.5.4/apt-pkg/tagfile.cc	2001-05-14 01:56:26.000000000 -0400
++++ apt-new/apt-pkg/tagfile.cc	2005-05-25 00:08:51.000000000 -0400
+@@ -197,7 +197,7 @@
+       return false;
+    
+    TagCount = 0;
+-   while (TagCount < sizeof(Indexes)/sizeof(Indexes[0]) && Stop < End)
++   while (TagCount+1 < sizeof(Indexes)/sizeof(Indexes[0]) && Stop < End)
+    {
+       // Start a new index and add it to the hash
+       if (isspace(Stop[0]) == 0)
+@@ -211,13 +211,13 @@
+       if (Stop == 0)
+ 	 return false;
+       
+-      for (; Stop[1] == '\r' && Stop+1 < End; Stop++);
++      for (; Stop+1 < End && Stop[1] == '\r'; Stop++);
+ 
+       // Double newline marks the end of the record
+       if (Stop+1 < End && Stop[1] == '\n')
+       {
+ 	 Indexes[TagCount] = Stop - Section;
+-	 for (; (Stop[0] == '\n' || Stop[0] == '\r') && Stop < End; Stop++);
++	 for (; Stop < End && (Stop[0] == '\n' || Stop[0] == '\r'); Stop++);
+ 	 return true;
+       }
+       
+diff -Naur apt-0.5.4/apt-pkg/tagfile.h apt-new/apt-pkg/tagfile.h
+--- apt-0.5.4/apt-pkg/tagfile.h	2001-04-22 01:42:52.000000000 -0400
++++ apt-new/apt-pkg/tagfile.h	2005-05-25 00:08:51.000000000 -0400
+@@ -34,7 +34,7 @@
+    
+    // We have a limit of 256 tags per section.
+    unsigned short Indexes[256];
+-   unsigned short AlphaIndexes[0xff];
++   unsigned short AlphaIndexes[0x100];
+    
+    unsigned int TagCount;
+      
+diff -Naur apt-0.5.4/buildlib/environment.mak.in apt-new/buildlib/environment.mak.in
+--- apt-0.5.4/buildlib/environment.mak.in	2001-05-29 01:11:03.000000000 -0400
++++ apt-new/buildlib/environment.mak.in	2005-05-25 00:08:51.000000000 -0400
+@@ -11,8 +11,8 @@
+ LIBSTDCPP_VER = @LIBSTDCPP_VER@
+ 
+ # Linker stuff
+-PICFLAGS+= -fPIC -DPIC
+-LFLAGS+= @LDFLAGS@
++PICFLAGS+= -fno-common -DPIC
++LFLAGS+= @LDFLAGS@ -framework CoreFoundation
+ LEFLAGS+= 
+ SOCKETLIBS:= @SOCKETLIBS@
+ AR:=@AR@
+@@ -38,7 +38,7 @@
+ PYTHONPREFIX = @PYTHONPREFIX@
+ PYTHONEXECPREFIX = @PYTHONEXECPREFIX@
+ PYTHONINCLUDE = @PYTHONINCLUDE@
+-DB2LIB = @DB2LIB@
++BDBLIB = @BDBLIB@
+ 
+ # Shim Headerfile control
+ HAVE_C9X = @HAVE_C9X@
+@@ -47,11 +47,13 @@
+ 
+ # Shared library things
+ HOST_OS = @host_os@
+-ifneq ($(words $(filter linux-gnu gnu%,$(HOST_OS))),0)
+-   SONAME_MAGIC=-Wl,-soname -Wl,
+-   LFLAGS_SO=
+-else
+-   # Do not know how to create shared libraries here.
+-   ONLYSTATICLIBS = yes
+-endif
++#ifneq ($(words $(filter linux-gnu gnu%,$(HOST_OS))),0)
++#   SONAME_MAGIC=-Wl,-soname -Wl,
++#   LFLAGS_SO=
++#else
++#   # Do not know how to create shared libraries here.
++#   ONLYSTATICLIBS = yes
++#endif
++SONAME_MAGIC=-install_name @PREFIX@/lib/
++LFLAGS_SO=-dynamiclib
+ 	
+diff -Naur apt-0.5.4/buildlib/library.mak apt-new/buildlib/library.mak
+--- apt-0.5.4/buildlib/library.mak	2001-02-26 23:16:05.000000000 -0500
++++ apt-new/buildlib/library.mak	2005-05-25 00:08:51.000000000 -0400
+@@ -15,17 +15,17 @@
+ # See defaults.mak for information about LOCAL
+ 
+ # Some local definitions
+-LOCAL := lib$(LIBRARY)$(LIBEXT).so.$(MAJOR).$(MINOR)
++LOCAL := lib$(LIBRARY)$(LIBEXT).$(MAJOR).$(MINOR).dylib
+ $(LOCAL)-OBJS := $(addprefix $(OBJ)/,$(addsuffix .opic,$(notdir $(basename $(SOURCE)))))
+ $(LOCAL)-DEP := $(addprefix $(DEP)/,$(addsuffix .opic.d,$(notdir $(basename $(SOURCE)))))
+ $(LOCAL)-HEADERS := $(addprefix $(INCLUDE)/,$(HEADERS))
+-$(LOCAL)-SONAME := lib$(LIBRARY)$(LIBEXT).so.$(MAJOR)
++$(LOCAL)-SONAME := lib$(LIBRARY)$(LIBEXT).$(MAJOR).dylib
+ $(LOCAL)-SLIBS := $(SLIBS)
+ $(LOCAL)-LIBRARY := $(LIBRARY)
+ 
+ # Install the command hooks
+ headers: $($(LOCAL)-HEADERS)
+-library: $(LIB)/lib$(LIBRARY).so $(LIB)/lib$(LIBRARY)$(LIBEXT).so.$(MAJOR)
++library: $(LIB)/lib$(LIBRARY).dylib $(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).dylib
+ clean: clean/$(LOCAL)
+ veryclean: veryclean/$(LOCAL)
+ 
+@@ -37,21 +37,23 @@
+ clean/$(LOCAL):
+ 	-rm -f $($(@F)-OBJS) $($(@F)-DEP)
+ veryclean/$(LOCAL): clean/$(LOCAL)
+-	-rm -f $($(@F)-HEADERS) $(LIB)/lib$($(@F)-LIBRARY)*.so*
++	-rm -f $($(@F)-HEADERS) $(LIB)/lib$($(@F)-LIBRARY)*.dylib
+ 
+ # Build rules for the two symlinks
+-.PHONY: $(LIB)/lib$(LIBRARY)$(LIBEXT).so.$(MAJOR) $(LIB)/lib$(LIBRARY).so
+-$(LIB)/lib$(LIBRARY)$(LIBEXT).so.$(MAJOR): $(LIB)/lib$(LIBRARY)$(LIBEXT).so.$(MAJOR).$(MINOR)
++.PHONY: $(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).dylib $(LIB)/lib$(LIBRARY).dylib
++$(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).dylib: $(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).$(MINOR).dylib
+ 	ln -sf $(<F) $@
+-$(LIB)/lib$(LIBRARY).so: $(LIB)/lib$(LIBRARY)$(LIBEXT).so.$(MAJOR).$(MINOR)
++$(LIB)/lib$(LIBRARY).dylib: $(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).$(MINOR).dylib
+ 	ln -sf $(<F) $@
+ 	
+ # The binary build rule
+-$(LIB)/lib$(LIBRARY)$(LIBEXT).so.$(MAJOR).$(MINOR): $($(LOCAL)-HEADERS) $($(LOCAL)-OBJS)
+-	-rm -f $(LIB)/lib$($(@F)-LIBRARY)*.so* 2> /dev/null
++$(LIB)/lib$(LIBRARY)$(LIBEXT).$(MAJOR).$(MINOR).dylib: $($(LOCAL)-HEADERS) $($(LOCAL)-OBJS)
++	-rm -f $(LIB)/lib$($(@F)-LIBRARY)*.dylib 2> /dev/null
+ 	echo Building shared library $@
+ 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(PICFLAGS) $(LFLAGS) $(LFLAGS_SO)\
+-	   -o $@ $(SONAME_MAGIC)$($(@F)-SONAME) -shared \
++	   -o $@ $(SONAME_MAGIC)$($(@F)-SONAME) \
++	   -compatibility_version $(MAJOR).$(MINOR) \
++	   -current_version $(MAJOR).$(MINOR) \
+ 	   $(filter %.opic,$^) \
+ 	   $($(@F)-SLIBS) 
+ 
+diff -Naur apt-0.5.4/buildlib/ostable apt-new/buildlib/ostable
+--- apt-0.5.4/buildlib/ostable	2001-02-20 02:03:17.000000000 -0500
++++ apt-new/buildlib/ostable	2005-05-25 00:08:51.000000000 -0400
+@@ -14,6 +14,7 @@
+ hp-hpux[^-]*	    hp-ux
+ sun-solaris[^-]*    solaris
+ [^-]*-openbsd[^-]*  openbsd
++[^-]*-darwin[^-]*   darwin
+ 
+ # Catch all
+ .*	unknown
+diff -Naur apt-0.5.4/cmdline/apt-cache.cc apt-new/cmdline/apt-cache.cc
+--- apt-0.5.4/cmdline/apt-cache.cc	2001-07-01 20:10:32.000000000 -0400
++++ apt-new/cmdline/apt-cache.cc	2005-05-25 00:08:51.000000000 -0400
+@@ -374,8 +374,10 @@
+    if (ReadPinFile(Plcy) == false)
+       return false;
+    
+-   pkgCache::VerFile **VFList = new pkgCache::VerFile *[Cache.HeaderP->PackageCount];
+-   memset(VFList,0,sizeof(*VFList)*Cache.HeaderP->PackageCount);
++   // Make sure we have a sentinel for the list.
++   unsigned long Count = Cache.HeaderP->PackageCount+1;
++   pkgCache::VerFile **VFList = new pkgCache::VerFile *[Count];
++   memset(VFList,0,sizeof(*VFList)*Count);
+    
+    // Map versions that we want to write out onto the VerList array.
+    for (pkgCache::PkgIterator P = Cache.PkgBegin(); P.end() == false; P++)
+@@ -428,7 +430,7 @@
+       VFList[P->ID] = VF;
+    }
+    
+-   LocalitySort(VFList,Cache.HeaderP->PackageCount,sizeof(*VFList));
++   LocalitySort(VFList,Count,sizeof(*VFList));
+ 
+    // Iterate over all the package files and write them out.
+    char *Buffer = new char[Cache.HeaderP->MaxVerFileSize+10];
+diff -Naur apt-0.5.4/cmdline/apt-get.cc apt-new/cmdline/apt-get.cc
+--- apt-0.5.4/cmdline/apt-get.cc	2001-07-01 18:59:04.000000000 -0400
++++ apt-new/cmdline/apt-get.cc	2005-05-25 00:08:51.000000000 -0400
+@@ -113,6 +113,8 @@
+       return true;
+    }
+    
++   fflush(NULL);
++   
+    char C = 0;
+    char Jnk = 0;
+    if (read(STDIN_FILENO,&C,1) != 1)
+@@ -281,7 +283,14 @@
+ 		  if (Cache[Targ].CandidateVerIter(Cache).end() == true)
+ 		  {
+ 		     if (Targ->ProvidesList == 0)
+-			out << _("but it is not installable");
++		     {
++			out << _("but it is not installable. For Fink users, ");
++			out << _("this often means that you have attempted ");
++			out << _("to install a package from the binary distribution ");
++			out << _("which depends on a \"Restrictive\" package. ");
++			out << _("See <http://fink.sourceforge.net/faq/usage-fink.php#bindist>, ");
++			out << _("<http://fink.sourceforge.net/doc/users-guide/packages.php#bin-exceptions>");
++		     }
+ 		     else
+ 			out << _("but it is a virtual package");
+ 		  }		  
+@@ -569,7 +578,9 @@
+       return false;
+    
+    // Nothing is broken
+-   if (DCache->BrokenCount() == 0 || AllowBroken == true)
++   // FINK LOCAL added APT::Get::Ignore-Breakage test
++   if (DCache->BrokenCount() == 0 || AllowBroken == true
++       || _config->FindB("APT::Get::Ignore-Breakage") == true)
+       return true;
+ 
+    // Attempt to fix broken things
+@@ -634,7 +645,9 @@
+    Stats(c1out,Cache);
+    
+    // Sanity check
+-   if (Cache->BrokenCount() != 0)
++   // FINK LOCAL added APT::Get::Ignore-Breakage test
++   if (Cache->BrokenCount() != 0
++       && _config->FindB("APT::Get::Ignore-Breakage",false) == false)
+    {
+       ShowBroken(c1out,Cache,false);
+       return _error->Error("Internal Error, InstallPackages was called with broken packages!");
+@@ -1019,7 +1032,9 @@
+       ExpectedInst++;
+    
+    // Install it with autoinstalling enabled.
+-   if (State.InstBroken() == true && BrokenFix == false)
++   // FINK LOCAL added APT::Get::Ignore-Breakage test
++   if (State.InstBroken() == true && BrokenFix == false
++      && _config->FindB("APT::Get::Ignore-Breakage") == false)
+       Cache.MarkInstall(Pkg,true);
+    return true;
+ }
+@@ -1366,7 +1381,9 @@
+    /* If we are in the Broken fixing mode we do not attempt to fix the
+       problems. This is if the user invoked install without -f and gave
+       packages */
+-   if (BrokenFix == true && Cache->BrokenCount() != 0)
++   // FINK LOCAL added APT::Get::Ignore-Breakage test
++   if (BrokenFix == true && Cache->BrokenCount() != 0
++       && _config->FindB("APT::Get::Ignore-Breakage") == false)
+    {
+       c1out << _("You might want to run `apt-get -f install' to correct these:") << endl;
+       ShowBroken(c1out,Cache,false);
+@@ -1376,11 +1393,13 @@
+    
+    // Call the scored problem resolver
+    Fix.InstallProtect();
+-   if (Fix.Resolve(true) == false)
++   // FINK LOCAL added APT::Get::Ignore-Breakage test
++   if (_config->FindB("APT::Get::Ignore-Breakage") == false && Fix.Resolve(true) == false)
+       _error->Discard();
+ 
+    // Now we check the state of the packages,
+-   if (Cache->BrokenCount() != 0)
++   // FINK LOCAL added APT::Get::Ignore-Breakage test
++   if (Cache->BrokenCount() != 0 && _config->FindB("APT::Get::Ignore-Breakage") == false)
+    {
+       c1out << 
+        _("Some packages could not be installed. This may mean that you have\n" 
+@@ -2057,6 +2076,8 @@
+    _config->Set("APT::Get::Simulate",false);
+    _config->Set("APT::Get::Assume-Yes",false);
+    _config->Set("APT::Get::Fix-Broken",false);
++   // FINK LOCAL added APT::Get::Ignore-Breakage
++   _config->Set("APT::Get::Ignore-Breakage",false);
+    _config->Set("APT::Get::Force-Yes",false);
+    _config->Set("APT::Get::APT::Get::No-List-Cleanup",true);
+ }
+@@ -2094,6 +2115,8 @@
+       {'y',"yes","APT::Get::Assume-Yes",0},
+       {'y',"assume-yes","APT::Get::Assume-Yes",0},      
+       {'f',"fix-broken","APT::Get::Fix-Broken",0},
++      // FINK LOCAL added APT::Get::Ignore-Breakage
++      {0,"ignore-breakage","APT::Get::Ignore-Breakage",0},
+       {'u',"show-upgraded","APT::Get::Show-Upgraded",0},
+       {'m',"ignore-missing","APT::Get::Fix-Missing",0},
+       {'t',"target-release","APT::Default-Release",CommandLine::HasArg},
+@@ -2151,6 +2174,22 @@
+       ShowHelp(CmdL);
+       return 0;
+    }
++
++   /* FINK LOCAL begin */
++   if (_config->FindB("APT::Get::Ignore-Breakage",false) == true) {
++     if (_config->FindB("APT::Get::Print-URIs",false) == false &&
++	 _config->FindB("APT::Get::Download-Only",false) == false) {
++       _error->Error("--ignore-breakage can only be used with --print-uris or --download-only");
++       _error->DumpErrors();
++       return 100;
++     }
++     if (strcmp(CmdL.FileList[0],"install") != 0) {
++       _error->Error("--ignore-breakage can only be used with apt-get install");
++       _error->DumpErrors();
++       return 100;
++     }
++   }
++   /* FINK LOCAL end */
+    
+    // Deal with stdout not being a tty
+    if (ttyname(STDOUT_FILENO) == 0 && _config->FindI("quiet",0) < 1)
+diff -Naur apt-0.5.4/configure apt-new/configure
+--- apt-0.5.4/configure	2001-08-18 20:46:43.000000000 -0400
++++ apt-new/configure	2005-05-25 00:08:51.000000000 -0400
+@@ -1351,82 +1351,208 @@
+ LIBS="$SAVE_LIBS"
+  
+ 
++saveLIBS="$LIBS"
++LIBS="$LIBS -ldb"
+ 
+-ac_safe=`echo "db2/db.h" | sed 'y%./+-%__p_%'`
+-echo $ac_n "checking for db2/db.h""... $ac_c" 1>&6
+-echo "configure:1358: checking for db2/db.h" >&5
+-if eval "test \"`echo '$''{'ac_cv_header_$ac_safe'+set}'`\" = set"; then
+-  echo $ac_n "(cached) $ac_c" 1>&6
+-else
+-  cat > conftest.$ac_ext <<EOF
+-#line 1363 "configure"
+-#include "confdefs.h"
+-#include <db2/db.h>
+-EOF
+-ac_try="$ac_cpp conftest.$ac_ext >/dev/null 2>conftest.out"
+-{ (eval echo configure:1368: \"$ac_try\") 1>&5; (eval $ac_try) 2>&5; }
+-ac_err=`grep -v '^ *+' conftest.out | grep -v "^conftest.${ac_ext}\$"`
+-if test -z "$ac_err"; then
+-  rm -rf conftest*
+-  eval "ac_cv_header_$ac_safe=yes"
++
++if test "${ac_cv_header_db_h+set}" = set; then
++  echo "$as_me:$LINENO: checking for db.h" >&5
++echo $ECHO_N "checking for db.h... $ECHO_C" >&6
++if test "${ac_cv_header_db_h+set}" = set; then
++  echo $ECHO_N "(cached) $ECHO_C" >&6
++fi
++echo "$as_me:$LINENO: result: $ac_cv_header_db_h" >&5
++echo "${ECHO_T}$ac_cv_header_db_h" >&6
++else
++  # Is the header compilable?
++echo "$as_me:$LINENO: checking db.h usability" >&5
++echo $ECHO_N "checking db.h usability... $ECHO_C" >&6
++cat >conftest.$ac_ext <<_ACEOF
++/* confdefs.h.  */
++_ACEOF
++cat confdefs.h >>conftest.$ac_ext
++cat >>conftest.$ac_ext <<_ACEOF
++/* end confdefs.h.  */
++$ac_includes_default
++#include <db.h>
++_ACEOF
++rm -f conftest.$ac_objext
++if { (eval echo "$as_me:$LINENO: \"$ac_compile\"") >&5
++  (eval $ac_compile) 2>conftest.er1
++  ac_status=$?
++  grep -v '^ *+' conftest.er1 >conftest.err
++  rm -f conftest.er1
++  cat conftest.err >&5
++  echo "$as_me:$LINENO: \$? = $ac_status" >&5
++  (exit $ac_status); } &&
++	 { ac_try='test -z "$ac_c_werror_flag"			 || test ! -s conftest.err'
++  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  echo "$as_me:$LINENO: \$? = $ac_status" >&5
++  (exit $ac_status); }; } &&
++	 { ac_try='test -s conftest.$ac_objext'
++  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  echo "$as_me:$LINENO: \$? = $ac_status" >&5
++  (exit $ac_status); }; }; then
++  ac_header_compiler=yes
++else
++  echo "$as_me: failed program was:" >&5
++sed 's/^/| /' conftest.$ac_ext >&5
++
++ac_header_compiler=no
++fi
++rm -f conftest.err conftest.$ac_objext conftest.$ac_ext
++echo "$as_me:$LINENO: result: $ac_header_compiler" >&5
++echo "${ECHO_T}$ac_header_compiler" >&6
++
++# Is the header present?
++echo "$as_me:$LINENO: checking db.h presence" >&5
++echo $ECHO_N "checking db.h presence... $ECHO_C" >&6
++cat >conftest.$ac_ext <<_ACEOF
++/* confdefs.h.  */
++_ACEOF
++cat confdefs.h >>conftest.$ac_ext
++cat >>conftest.$ac_ext <<_ACEOF
++/* end confdefs.h.  */
++#include <db.h>
++_ACEOF
++if { (eval echo "$as_me:$LINENO: \"$ac_cpp conftest.$ac_ext\"") >&5
++  (eval $ac_cpp conftest.$ac_ext) 2>conftest.er1
++  ac_status=$?
++  grep -v '^ *+' conftest.er1 >conftest.err
++  rm -f conftest.er1
++  cat conftest.err >&5
++  echo "$as_me:$LINENO: \$? = $ac_status" >&5
++  (exit $ac_status); } >/dev/null; then
++  if test -s conftest.err; then
++    ac_cpp_err=$ac_c_preproc_warn_flag
++    ac_cpp_err=$ac_cpp_err$ac_c_werror_flag
++  else
++    ac_cpp_err=
++  fi
+ else
+-  echo "$ac_err" >&5
+-  echo "configure: failed program was:" >&5
+-  cat conftest.$ac_ext >&5
+-  rm -rf conftest*
+-  eval "ac_cv_header_$ac_safe=no"
++  ac_cpp_err=yes
+ fi
+-rm -f conftest*
+-fi
+-if eval "test \"`echo '$ac_cv_header_'$ac_safe`\" = yes"; then
+-  echo "$ac_t""yes" 1>&6
+-  echo $ac_n "checking for db_open in -ldb2""... $ac_c" 1>&6
+-echo "configure:1385: checking for db_open in -ldb2" >&5
+-ac_lib_var=`echo db2'_'db_open | sed 'y%./+-%__p_%'`
+-if eval "test \"`echo '$''{'ac_cv_lib_$ac_lib_var'+set}'`\" = set"; then
+-  echo $ac_n "(cached) $ac_c" 1>&6
++if test -z "$ac_cpp_err"; then
++  ac_header_preproc=yes
+ else
+-  ac_save_LIBS="$LIBS"
+-LIBS="-ldb2  $LIBS"
+-cat > conftest.$ac_ext <<EOF
+-#line 1393 "configure"
+-#include "confdefs.h"
+-/* Override any gcc2 internal prototype to avoid an error.  */
+-/* We use char because int might match the return type of a gcc2
+-    builtin and then its argument prototype would still apply.  */
+-char db_open();
++  echo "$as_me: failed program was:" >&5
++sed 's/^/| /' conftest.$ac_ext >&5
+ 
+-int main() {
+-db_open()
+-; return 0; }
+-EOF
+-if { (eval echo configure:1404: \"$ac_link\") 1>&5; (eval $ac_link) 2>&5; } && test -s conftest${ac_exeext}; then
+-  rm -rf conftest*
+-  eval "ac_cv_lib_$ac_lib_var=yes"
+-else
+-  echo "configure: failed program was:" >&5
+-  cat conftest.$ac_ext >&5
+-  rm -rf conftest*
+-  eval "ac_cv_lib_$ac_lib_var=no"
+-fi
+-rm -f conftest*
+-LIBS="$ac_save_LIBS"
++  ac_header_preproc=no
++fi
++rm -f conftest.err conftest.$ac_ext
++echo "$as_me:$LINENO: result: $ac_header_preproc" >&5
++echo "${ECHO_T}$ac_header_preproc" >&6
++
++# So?  What about this header?
++case $ac_header_compiler:$ac_header_preproc:$ac_c_preproc_warn_flag in
++  yes:no: )
++    { echo "$as_me:$LINENO: WARNING: db.h: accepted by the compiler, rejected by the preprocessor!" >&5
++echo "$as_me: WARNING: db.h: accepted by the compiler, rejected by the preprocessor!" >&2;}
++    { echo "$as_me:$LINENO: WARNING: db.h: proceeding with the compiler's result" >&5
++echo "$as_me: WARNING: db.h: proceeding with the compiler's result" >&2;}
++    ac_header_preproc=yes
++    ;;
++  no:yes:* )
++    { echo "$as_me:$LINENO: WARNING: db.h: present but cannot be compiled" >&5
++echo "$as_me: WARNING: db.h: present but cannot be compiled" >&2;}
++    { echo "$as_me:$LINENO: WARNING: db.h:     check for missing prerequisite headers?" >&5
++echo "$as_me: WARNING: db.h:     check for missing prerequisite headers?" >&2;}
++    { echo "$as_me:$LINENO: WARNING: db.h: see the Autoconf documentation" >&5
++echo "$as_me: WARNING: db.h: see the Autoconf documentation" >&2;}
++    { echo "$as_me:$LINENO: WARNING: db.h:     section \"Present But Cannot Be Compiled\"" >&5
++echo "$as_me: WARNING: db.h:     section \"Present But Cannot Be Compiled\"" >&2;}
++    { echo "$as_me:$LINENO: WARNING: db.h: proceeding with the preprocessor's result" >&5
++echo "$as_me: WARNING: db.h: proceeding with the preprocessor's result" >&2;}
++    { echo "$as_me:$LINENO: WARNING: db.h: in the future, the compiler will take precedence" >&5
++echo "$as_me: WARNING: db.h: in the future, the compiler will take precedence" >&2;}
++    (
++      cat <<\_ASBOX
++## ------------------------------------------ ##
++## Report this to the AC_PACKAGE_NAME lists.  ##
++## ------------------------------------------ ##
++_ASBOX
++    ) |
++      sed "s/^/$as_me: WARNING:     /" >&2
++    ;;
++esac
++echo "$as_me:$LINENO: checking for db.h" >&5
++echo $ECHO_N "checking for db.h... $ECHO_C" >&6
++if test "${ac_cv_header_db_h+set}" = set; then
++  echo $ECHO_N "(cached) $ECHO_C" >&6
++else
++  ac_cv_header_db_h=$ac_header_preproc
++fi
++echo "$as_me:$LINENO: result: $ac_cv_header_db_h" >&5
++echo "${ECHO_T}$ac_cv_header_db_h" >&6
++
++fi
++if test $ac_cv_header_db_h = yes; then
++  echo "$as_me:$LINENO: checking if we can link against BerkeleyDB" >&5
++echo $ECHO_N "checking if we can link against BerkeleyDB... $ECHO_C" >&6
++      cat >conftest.$ac_ext <<_ACEOF
++/* confdefs.h.  */
++_ACEOF
++cat confdefs.h >>conftest.$ac_ext
++cat >>conftest.$ac_ext <<_ACEOF
++/* end confdefs.h.  */
++#include <db.h>
++int
++main ()
++{
++int r, s, t; db_version(&r, &s, &t);
++
++  ;
++  return 0;
++}
++_ACEOF
++rm -f conftest.$ac_objext conftest$ac_exeext
++if { (eval echo "$as_me:$LINENO: \"$ac_link\"") >&5
++  (eval $ac_link) 2>conftest.er1
++  ac_status=$?
++  grep -v '^ *+' conftest.er1 >conftest.err
++  rm -f conftest.er1
++  cat conftest.err >&5
++  echo "$as_me:$LINENO: \$? = $ac_status" >&5
++  (exit $ac_status); } &&
++	 { ac_try='test -z "$ac_c_werror_flag"			 || test ! -s conftest.err'
++  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  echo "$as_me:$LINENO: \$? = $ac_status" >&5
++  (exit $ac_status); }; } &&
++	 { ac_try='test -s conftest$ac_exeext'
++  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
++  (eval $ac_try) 2>&5
++  ac_status=$?
++  echo "$as_me:$LINENO: \$? = $ac_status" >&5
++  (exit $ac_status); }; }; then
++  cat >>confdefs.h <<\_ACEOF
++#define HAVE_BDB 1
++_ACEOF
++
++       BDBLIB="-ldb"
++       echo "$as_me:$LINENO: result: yes" >&5
++echo "${ECHO_T}yes" >&6
++else
++  echo "$as_me: failed program was:" >&5
++sed 's/^/| /' conftest.$ac_ext >&5
++
++BDBLIB=""
++       echo "$as_me:$LINENO: result: no" >&5
++echo "${ECHO_T}no" >&6
+ 
+ fi
+-if eval "test \"`echo '$ac_cv_lib_'$ac_lib_var`\" = yes"; then
+-  echo "$ac_t""yes" 1>&6
+-  cat >> confdefs.h <<\EOF
+-#define HAVE_DB2 1
+-EOF
+- DB2LIB="-ldb2"
+-else
+-  echo "$ac_t""no" 1>&6
+-fi
++rm -f conftest.err conftest.$ac_objext \
++      conftest$ac_exeext conftest.$ac_ext
+ 
+-else
+-  echo "$ac_t""no" 1>&6
+ fi
+ 
++LIBS="$saveLIBS"
+ 
+ 
+ echo $ac_n "checking system architecture""... $ac_c" 1>&6
+@@ -2394,7 +2520,7 @@
+ 
+ ac_given_srcdir=$srcdir
+ 
+-trap 'rm -fr `echo "environment.mak:buildlib/environment.mak.in makefile:buildlib/makefile.in include/config.h:buildlib/config.h.in include/apti18n.h:buildlib/apti18n.h.in" | sed "s/:[^ ]*//g"` conftest*; exit 1' 1 2 15
++trap 'rm -fr `echo "environment.mak:buildlib/environment.mak.in makefile.wrap:buildlib/makefile.in include/config.h:buildlib/config.h.in include/apti18n.h:buildlib/apti18n.h.in" | sed "s/:[^ ]*//g"` conftest*; exit 1' 1 2 15
+ EOF
+ cat >> $CONFIG_STATUS <<EOF
+ 
+@@ -2448,7 +2574,7 @@
+ s%@AR@%$AR%g
+ s%@SOCKETLIBS@%$SOCKETLIBS%g
+ s%@PTHREADLIB@%$PTHREADLIB%g
+-s%@DB2LIB@%$DB2LIB%g
++s%@BDBLIB@%$BDBLIB%g
+ s%@HAVE_STATVFS@%$HAVE_STATVFS%g
+ s%@HAVE_C9X@%$HAVE_C9X%g
+ s%@NEED_SOCKLEN_T_DEFINE@%$NEED_SOCKLEN_T_DEFINE%g
+@@ -2504,7 +2630,7 @@
+ 
+ cat >> $CONFIG_STATUS <<EOF
+ 
+-CONFIG_FILES=\${CONFIG_FILES-"environment.mak:buildlib/environment.mak.in makefile:buildlib/makefile.in"}
++CONFIG_FILES=\${CONFIG_FILES-"environment.mak:buildlib/environment.mak.in makefile.wrap:buildlib/makefile.in"}
+ EOF
+ cat >> $CONFIG_STATUS <<\EOF
+ for ac_file in .. $CONFIG_FILES; do if test "x$ac_file" != x..; then
+@@ -2670,7 +2796,7 @@
+ 
+ EOF
+ cat >> $CONFIG_STATUS <<\EOF
+-make -s dirs
++make -f makefile.wrap -s dirs
+ exit 0
+ EOF
+ chmod +x $CONFIG_STATUS
+diff -Naur apt-0.5.4/configure.in apt-new/configure.in
+--- apt-0.5.4/configure.in	2001-06-18 01:56:32.000000000 -0400
++++ apt-new/configure.in	2005-05-25 00:08:51.000000000 -0400
+@@ -163,4 +163,4 @@
+ rc_LIBSTDCPP_VER
+ ah_GCC3DEP
+ 
+-AC_OUTPUT(environment.mak:buildlib/environment.mak.in makefile:buildlib/makefile.in,make -s dirs)
++AC_OUTPUT(environment.mak:buildlib/environment.mak.in makefile.wrap:buildlib/makefile.in,make -f makefile.wrap -s dirs)
+diff -Naur apt-0.5.4/doc/apt-cache.8 apt-new/doc/apt-cache.8
+--- apt-0.5.4/doc/apt-cache.8	2001-08-18 20:48:24.000000000 -0400
++++ apt-new/doc/apt-cache.8	2005-05-25 00:08:51.000000000 -0400
+@@ -277,16 +277,16 @@
+ option. The syntax is \fB-o Foo::Bar=bar\fR.
+ .SH "FILES"
+ .TP
+-\fB\fI/etc/apt/sources.list\fB\fR
++\fB\fI@PREFIX@/etc/apt/sources.list\fB\fR
+ locations to fetch packages from.
+ Configuration Item: Dir::Etc::SourceList.
+ .TP
+-\fB\fI/var/lib/apt/lists/\fB\fR
++\fB\fI@PREFIX@/var/lib/apt/lists/\fB\fR
+ storage area for state information for each package resource specified in
+ \fB\fIsources.list\fB\fR(5)
+ Configuration Item: Dir::State::Lists.
+ .TP
+-\fB\fI/var/lib/apt/lists/partial/\fB\fR
++\fB\fI@PREFIX@/var/lib/apt/lists/partial/\fB\fR
+ storage area for state information in transit.
+ Configuration Item: Dir::State::Lists (implicit partial).
+ .SH "SEE ALSO"
+diff -Naur apt-0.5.4/doc/apt-cdrom.8 apt-new/doc/apt-cdrom.8
+--- apt-0.5.4/doc/apt-cdrom.8	2001-08-18 20:48:25.000000000 -0400
++++ apt-new/doc/apt-cdrom.8	2005-05-25 00:08:51.000000000 -0400
+@@ -32,7 +32,7 @@
+ 
+ APT uses a CDROM ID to track which disc is currently in the drive and
+ maintains a database of these IDs in 
+-\fI/var/lib/apt/cdroms.list\fR
++\fI@PREFIX@/var/lib/apt/cdroms.list\fR
+ .TP
+ \fBident\fR
+ A debugging tool to report the identity of the current disc as well
+diff -Naur apt-0.5.4/doc/apt-config.8 apt-new/doc/apt-config.8
+--- apt-0.5.4/doc/apt-config.8	2001-08-18 20:48:27.000000000 -0400
++++ apt-new/doc/apt-config.8	2005-05-25 00:08:51.000000000 -0400
+@@ -13,7 +13,7 @@
+ .PP
+ \fBapt-config\fR is an internal program used by various portions of
+ the APT suite to provide consistent configurability. It accesses the main 
+-configuarion file \fI/etc/apt/apt.conf\fR in a manner that is 
++configuarion file \fI@PREFIX@/etc/apt/apt.conf\fR in a manner that is 
+ easy to use by scripted applications.
+ .PP
+ Unless the \fB-h\fR, or \fB--help\fR option is given one of the
+diff -Naur apt-0.5.4/doc/apt-get.8 apt-new/doc/apt-get.8
+--- apt-0.5.4/doc/apt-get.8	2001-08-18 20:48:25.000000000 -0400
++++ apt-new/doc/apt-get.8	2005-05-25 00:08:52.000000000 -0400
+@@ -20,7 +20,7 @@
+ \fBupdate\fR
+ update is used to resynchronize the package index files from
+ their sources. The indexes of available packages are fetched from the
+-location(s) specified in \fI/etc/apt/sources.list\fR.
++location(s) specified in \fI@PREFIX@/etc/apt/sources.list\fR.
+ For example, when using a Debian archive, this command retrieves and
+ scans the \fIPackages.gz\fR files, so that information about new 
+ and updated packages is available. An update should always be 
+@@ -31,7 +31,7 @@
+ \fBupgrade\fR
+ upgrade is used to install the newest versions of all packages 
+ currently installed on the system from the sources enumerated in
+-\fI/etc/apt/sources.list\fR. Packages currently installed with 
++\fI@PREFIX@/etc/apt/sources.list\fR. Packages currently installed with 
+ new versions available are retrieved and upgraded; under no circumstances 
+ are currently installed packages removed, or packages not already installed 
+ retrieved and installed. New versions of currently installed packages that 
+@@ -54,7 +54,7 @@
+ with new versions of packages; \fBapt-get\fR has a "smart" conflict 
+ resolution system, and it will attempt to upgrade the most important 
+ packages at the expense of less important ones if necessary. 
+-The \fI/etc/apt/sources.list\fR file contains a list of locations 
++The \fI@PREFIX@/etc/apt/sources.list\fR file contains a list of locations 
+ from which to retrieve desired package files.
+ .TP
+ \fBinstall\fR
+@@ -63,7 +63,7 @@
+ filename (for instance, in a Debian GNU/Linux system, libc6 would be the 
+ argument provided, not em(libc6_1.9.6-2.deb)). All packages required 
+ by the package(s) specified for installation will also be retrieved and 
+-installed. The \fI/etc/apt/sources.list\fR file is used to locate 
++installed. The \fI@PREFIX@/etc/apt/sources.list\fR file is used to locate 
+ the desired packages. If a hyphen is appended to the package name (with 
+ no intervening space), the identified package will be removed if it is 
+ installed. Similarly a plus sign can be used to designate a package to 
+@@ -75,7 +75,7 @@
+ to select. This will cause that version to be located and selected for
+ install. Alternatively a specific distribution can be selected by 
+ following the package name with a slash and the version of the 
+-distribution or the Archive name (stable, frozen, unstable).
++distribution or the Archive name (@DIST@/release or @DIST@/current).
+ 
+ Both of the version selection mechanisms can downgrade packages and must
+ be used with care.
+@@ -126,8 +126,8 @@
+ \fBclean\fR
+ clean clears out the local repository of retrieved package 
+ files. It removes everything but the lock file from 
+-\fI/var/cache/apt/archives/\fR and 
+-\fI/var/cache/apt/archive/partial/\fR. When APT is used as a 
++\fI@PREFIX@/var/cache/apt/archives/\fR and 
++\fI@PREFIX@/var/cache/apt/archive/partial/\fR. When APT is used as a 
+ \fBdselect\fR(8) method, clean is run automatically.
+ Those who do not use dselect will likely want to run apt-get clean
+ from time to time to free up disk space.
+@@ -169,6 +169,17 @@
+ error in some situations. 
+ Configuration Item: APT::Get::Fix-Broken.
+ .TP
++\fB--ignore-breakage\fR
++For mode \fBinstall\fR, ignore dependency problems. This option is
++useful if you want to perform actions on just a particular package,
++not its whole dependency tree. It must be used in conjunction with
++\fB--download-only\fR or \fB--print-uris\fR.  Configuration Item:
++APT::Get::Ignore-Breakage.
++
++Note: The \fB--ignore-breakage\fR option was added by The Fink Project
++and hence is only available in the \fBapt-get\fR provided by Fink's
++\fBapt\fR package.
++.TP
+ \fB-m\fR
+ .TP
+ \fB--ignore-missing\fR
+@@ -284,7 +295,7 @@
+ \fB--list-cleanup\fR
+ This option defaults to on, use --no-list-cleanup to turn it 
+ off. When on \fBapt-get\fR will automatically manage the contents of 
+-\fI/var/lib/apt/lists\fR to ensure that obsolete files are erased. 
++\fI@PREFIX@/var/lib/apt/lists\fR to ensure that obsolete files are erased. 
+ The only reason to turn it off is if you frequently change your source 
+ list. 
+ Configuration Item: APT::Get::List-Cleanup.
+@@ -349,36 +360,36 @@
+ option. The syntax is \fB-o Foo::Bar=bar\fR.
+ .SH "FILES"
+ .TP
+-\fB\fI/etc/apt/sources.list\fB\fR
++\fB\fI@PREFIX@/etc/apt/sources.list\fB\fR
+ locations to fetch packages from.
+ Configuration Item: Dir::Etc::SourceList.
+ .TP
+-\fB\fI/etc/apt/apt.conf\fB\fR
++\fB\fI@PREFIX@/etc/apt/apt.conf\fB\fR
+ APT configuration file.
+ Configuration Item: Dir::Etc::Main.
+ .TP
+-\fB\fI/etc/apt/apt.conf.d/\fB\fR
++\fB\fI@PREFIX@/etc/apt/apt.conf.d/\fB\fR
+ APT configuration file fragments
+ Configuration Item: Dir::Etc::Parts.
+ .TP
+-\fB\fI/etc/apt/preferences\fB\fR
++\fB\fI@PREFIX@/etc/apt/preferences\fB\fR
+ version preferences file
+ Configuration Item: Dir::Etc::Preferences.
+ .TP
+-\fB\fI/var/cache/apt/archives/\fB\fR
++\fB\fI@PREFIX@/var/cache/apt/archives/\fB\fR
+ storage area for retrieved package files.
+ Configuration Item: Dir::Cache::Archives.
+ .TP
+-\fB\fI/var/cache/apt/archives/partial/\fB\fR
++\fB\fI@PREFIX@/var/cache/apt/archives/partial/\fB\fR
+ storage area for package files in transit.
+ Configuration Item: Dir::Cache::Archives (implicit partial). 
+ .TP
+-\fB\fI/var/lib/apt/lists/\fB\fR
++\fB\fI@PREFIX@/var/lib/apt/lists/\fB\fR
+ storage area for state information for each package resource specified in
+ \fB\fIsources.list\fB\fR(5)
+ Configuration Item: Dir::State::Lists.
+ .TP
+-\fB\fI/var/lib/apt/lists/partial/\fB\fR
++\fB\fI@PREFIX@/var/lib/apt/lists/partial/\fB\fR
+ storage area for state information in transit.
+ Configuration Item: Dir::State::Lists (implicit partial).
+ .SH "SEE ALSO"
+diff -Naur apt-0.5.4/doc/apt_preferences.5 apt-new/doc/apt_preferences.5
+--- apt-0.5.4/doc/apt_preferences.5	2001-08-18 20:48:28.000000000 -0400
++++ apt-new/doc/apt_preferences.5	2005-05-25 00:08:52.000000000 -0400
+@@ -12,7 +12,7 @@
+ It is meant to be user editable and manipulatable from software. The file
+ consists of a number of records formed like the dpkg status file, space
+ seperated sections of text with at the start of each line tags seperated 
+-by a colon. It is stored in \fI/etc/apt/preferences\fR.
++by a colon. It is stored in \fI@PREFIX@/etc/apt/preferences\fR.
+ .SH "VERSIONING"
+ .PP
+ One purpose of the preferences file is to let the user select which version
+diff -Naur apt-0.5.4/doc/sources.list.5 apt-new/doc/sources.list.5
+--- apt-0.5.4/doc/sources.list.5	2001-08-18 20:48:26.000000000 -0400
++++ apt-new/doc/sources.list.5	2005-05-25 00:08:52.000000000 -0400
+@@ -11,7 +11,7 @@
+ The package resource list is used to locate archives of the package
+ distribution system in use on the system. At this time, this manual page
+ documents only the packaging system used by the Debian GNU/Linux system.
+-This control file is located in \fI/etc/apt/sources.list\fR
++This control file is located in \fI@PREFIX@/etc/apt/sources.list\fR
+ .PP
+ The source list is designed to support any number of active sources and a
+ variety of source media. The file lists one source per line, with the
+@@ -25,9 +25,8 @@
+ .PP
+ The deb type describes a typical two-level Debian archive,
+ \fIdistribution/component\fR. Typically, distribution is 
+-generally one of stable, unstable, or 
+-frozen, while component is one of main, 
+-contrib, non-free, or non-us. The 
++generally one of @DIST@/release or @DIST@/current,
++while component is one of main or crypto. The
+ deb-src type describes a debian distribution's source code in 
+ the same form as the deb type. A deb-src line is 
+ required to fetch source indexes.
+diff -Naur apt-0.5.4/dselect/install apt-new/dselect/install
+--- apt-0.5.4/dselect/install	2001-02-20 02:03:17.000000000 -0500
++++ apt-new/dselect/install	2005-05-25 00:08:52.000000000 -0400
+@@ -3,8 +3,8 @@
+ # Get the configuration from /etc/apt/apt.conf
+ CLEAN="prompt"
+ OPTS="-f"
+-APTGET="/usr/bin/apt-get"
+-DPKG="/usr/bin/dpkg"
++APTGET="@PREFIX@/bin/apt-get"
++DPKG="@PREFIX@/bin/dpkg"
+ DPKG_OPTS="--admindir=$1"
+ APT_OPT0="-oDir::State::status=$1/status"
+ APT_OPT1="-oDPkg::Options::=$DPKG_OPTS"
+diff -Naur apt-0.5.4/dselect/setup apt-new/dselect/setup
+--- apt-0.5.4/dselect/setup	2000-01-26 23:15:10.000000000 -0500
++++ apt-new/dselect/setup	2005-05-25 00:08:52.000000000 -0400
+@@ -23,15 +23,17 @@
+ my $vardir=$ARGV[0];
+ my $method=$ARGV[1];
+ my $option=$ARGV[2];
+-my $config_file = '/etc/apt/sources.list';
++my $config_file = '@PREFIX@/etc/apt/sources.list';
+ 
+-my $boldon=`setterm -bold on`;
+-my $boldoff=`setterm -bold off`;
++my $boldon=`setterm -bold on 2>/dev/null`;
++my $boldoff=`setterm -bold off 2>/dev/null`;
++$boldon = "" unless defined $boldon;
++$boldoff = "" unless defined $boldon;
+ 
+ my @known_types           = ('deb');
+ my @known_access         = ('http', 'ftp', 'file');
+-my @typical_distributions = ('stable', 'unstable', 'frozen', 'non-US');
+-my @typical_components    = ('main', 'contrib', 'non-free');
++my @typical_distributions = ('@DIST@/release', '@DIST@/current');
++my @typical_components    = ('main', 'crypto');
+ 
+ my %known_access           = map {($_,$_)} @known_access;
+ my %typical_distributions  = map {($_,$_)} @typical_distributions;
+@@ -118,9 +120,9 @@
+   }
+ 
+   $type         = 'deb';
+-  $urn          = "http://http.us.debian.org/debian" unless $urn;
+-  $distribution = "stable" unless $distribution;
+-  $components   = "main contrib non-free" unless $components;
++  $urn          = "http://us.dl.sourceforge.net/fink/direct_download" unless $urn;
++  $distribution = "@DIST@/release" unless $distribution;
++  $components   = "main" unless $components;
+ 
+     
+   $rec->{'Type'} = 'deb';
+@@ -222,19 +224,13 @@
+   print "\t$boldon Set up a list of distribution source locations $boldoff \n";
+   print "\n";
+ 
+-  print " Please give the base URL of the debian distribution.\n";
++  print " Please give the base URL of the Fink distribution.\n";
+   print " The access schemes I know about are:$boldon ";
+   print join (' ', @known_access), "$boldoff\n";
+-#  print " The mirror scheme is special  that it does not specify the\n";
+-#  print " location of a debian archive but specifies the location\n";
+-#  print " of a list of mirrors to use to access the archive.\n";
+   print "\n";
+   print " For example:\n";
+-  print "              file:/mnt/debian,\n";
+-  print "              ftp://ftp.debian.org/debian,\n";
+-  print "              http://ftp.de.debian.org/debian,\n";
+-#  print " and the special mirror scheme,\n";
+-#  print "              mirror:http://www.debian.org/archivemirrors \n";
++  print "              file:@PREFIX@/fink,\n";
++  print "              http://us.dl.sourceforge.net/fink/direct_download\n";
+   print "\n";
+ 
+   my $index = 0;
+@@ -269,7 +265,10 @@
+     print "-" x 72, "\n";
+     &print_config('Config' => \@Oldconfig);
+     print "-" x 72, "\n";
+-    print "$boldon Do you wish to change (overwrite) it?[y/N]$boldoff ";
++    print "$boldon In most cases, this file was installed by Fink or by apt,"
++	." and$boldoff\n";
++        print "$boldon should NOT be changed.  " .
++        "Do you wish to change (overwrite) it?[y/N]$boldoff ";
+     my $answer = <STDIN>;
+     chomp ($answer);
+     $answer =~ s/\s+/ /og;
+diff -Naur apt-0.5.4/dselect/update apt-new/dselect/update
+--- apt-0.5.4/dselect/update	2001-03-12 20:45:36.000000000 -0500
++++ apt-new/dselect/update	2005-05-25 00:08:52.000000000 -0400
+@@ -4,13 +4,13 @@
+ # Get the configuration from /etc/apt/apt.conf
+ CLEAN="prompt"
+ OPTS="-f"
+-APTGET="/usr/bin/apt-get"
+-APTCACHE="/usr/bin/apt-cache"
+-DPKG="/usr/bin/dpkg"
++APTGET="@PREFIX@/bin/apt-get"
++APTCACHE="@PREFIX@/bin/apt-cache"
++DPKG="@PREFIX@/bin/dpkg"
+ DPKG_OPTS="--admindir=$1"
+ APT_OPT0="-oDir::State::status=$1/status"
+ APT_OPT1="-oDPkg::Options::=$DPKG_OPTS"
+-CACHEDIR="/var/cache/apt"
++CACHEDIR="@PREFIX@/var/cache/apt"
+ PROMPT="false"
+ RES=`apt-config shell CLEAN DSelect::Clean OPTS DSelect::UpdateOptions \
+ 		      DPKG Dir::Bin::dpkg/f APTGET Dir::Bin::apt-get/f \
+diff -Naur apt-0.5.4/ftparchive/apt-ftparchive.cc apt-new/ftparchive/apt-ftparchive.cc
+--- apt-0.5.4/ftparchive/apt-ftparchive.cc	2001-06-25 22:50:27.000000000 -0400
++++ apt-new/ftparchive/apt-ftparchive.cc	2005-05-25 00:35:23.000000000 -0400
+@@ -1,6 +1,6 @@
+ // -*- mode: cpp; mode: fold -*-
+ // Description								/*{{{*/
+-// $Id: apt-ftparchive.cc,v 1.4 2001/06/26 02:50:27 jgg Exp $
++// $Id: apt-ftparchive.cc,v 1.12 2004/01/02 21:48:13 mdz Exp $
+ /* ######################################################################
+ 
+    apt-scanpackages - Efficient work-alike for dpkg-scanpackages
+@@ -10,7 +10,7 @@
+    ##################################################################### */
+ 									/*}}}*/
+ // Include Files							/*{{{*/
+-#ifdef __GNUG__
++#if defined(__GNUG__) && !defined(__APPLE_CC__)
+ #pragma implementation "apt-ftparchive.h"
+ #endif
+ 
+@@ -19,6 +19,7 @@
+ #include <apt-pkg/error.h>
+ #include <apt-pkg/configuration.h>
+ #include <apt-pkg/cmndline.h>
++#include <apt-pkg/init.h>
+ #include <apt-pkg/strutl.h>
+ #include <config.h>
+ #include <apti18n.h>
+@@ -160,9 +161,9 @@
+ 			   flCombine(OverrideDir,BinOverride),
+ 			   flCombine(OverrideDir,ExtraOverride));
+    if (PkgExt.empty() == false && Packages.SetExts(PkgExt) == false)
+-      return _error->Error("Package extension list is too long");
++      return _error->Error(_("Package extension list is too long"));
+    if (_error->PendingError() == true)
+-      return _error->Error("Error Processing directory %s",BaseDir.c_str());
++      return _error->Error(_("Error Processing directory %s"),BaseDir.c_str());
+    
+    Packages.PathPrefix = PathPrefix;
+    Packages.DirStrip = ArchiveDir;
+@@ -176,9 +177,9 @@
+ 		      PkgCompress,Permissions);
+    Packages.Output = Comp.Input;
+    if (_error->PendingError() == true)
+-      return _error->Error("Error Processing directory %s",BaseDir.c_str());
++      return _error->Error(_("Error Processing directory %s"),BaseDir.c_str());
+    
+-   c0out << ' ' << BaseDir << ":" << flush;
++   c0out << ' ' << BaseDir << ":" << flush, fflush(NULL);
+    
+    // Do recursive directory searching
+    if (FLFile.empty() == true)
+@@ -199,7 +200,7 @@
+    if (Comp.Finalize(Size) == false)
+    {
+       c0out << endl;
+-      return _error->Error("Error Processing directory %s",BaseDir.c_str());
++      return _error->Error(_("Error Processing directory %s"),BaseDir.c_str());
+    }
+    
+    if (Size != 0)
+@@ -223,6 +224,7 @@
+    
+    return !_error->PendingError();
+ }
++
+ 									/*}}}*/
+ // PackageMap::GenSources - Actually generate a Source file		/*{{{*/
+ // ---------------------------------------------------------------------
+@@ -246,9 +248,9 @@
+ 			 flCombine(OverrideDir,SrcOverride),
+ 			 flCombine(OverrideDir,SrcExtraOverride));
+    if (SrcExt.empty() == false && Sources.SetExts(SrcExt) == false)
+-      return _error->Error("Source extension list is too long");
++      return _error->Error(_("Source extension list is too long"));
+    if (_error->PendingError() == true)
+-      return _error->Error("Error Processing directory %s",BaseDir.c_str());
++      return _error->Error(_("Error Processing directory %s"),BaseDir.c_str());
+    
+    Sources.PathPrefix = PathPrefix;
+    Sources.DirStrip = ArchiveDir;
+@@ -262,9 +264,9 @@
+ 		      SrcCompress,Permissions);
+    Sources.Output = Comp.Input;
+    if (_error->PendingError() == true)
+-      return _error->Error("Error Processing directory %s",BaseDir.c_str());
++      return _error->Error(_("Error Processing directory %s"),BaseDir.c_str());
+ 
+-   c0out << ' ' << BaseDir << ":" << flush;
++   c0out << ' ' << BaseDir << ":" << flush, fflush(NULL);
+    
+    // Do recursive directory searching
+    if (FLFile.empty() == true)
+@@ -284,7 +286,7 @@
+    if (Comp.Finalize(Size) == false)
+    {
+       c0out << endl;
+-      return _error->Error("Error Processing directory %s",BaseDir.c_str());
++      return _error->Error(_("Error Processing directory %s"),BaseDir.c_str());
+    }
+       
+    if (Size != 0)
+@@ -333,7 +335,7 @@
+    // Create a package writer object.
+    ContentsWriter Contents("");
+    if (PkgExt.empty() == false && Contents.SetExts(PkgExt) == false)
+-      return _error->Error("Package extension list is too long");
++      return _error->Error(_("Package extension list is too long"));
+    if (_error->PendingError() == true)
+       return false;
+ 
+@@ -363,7 +365,7 @@
+ 	    return false;
+ 	 
+ 	 if (fwrite(Buf,1,ToRead,Comp.Input) != ToRead)
+-	    return _error->Errno("fwrite","Error writing header to contents file");
++	    return _error->Errno("fwrite",_("Error writing header to contents file"));
+ 	 
+ 	 Size -= ToRead;
+       }            
+@@ -372,7 +374,7 @@
+    /* Go over all the package file records and parse all the package
+       files associated with this contents file into one great big honking
+       memory structure, then dump the sorted version */
+-   c0out << ' ' << this->Contents << ":" << flush;
++   c0out << ' ' << this->Contents << ":" << flush, fflush(NULL);
+    for (vector<PackageMap>::iterator I = Begin; I != End; I++)
+    {
+       if (I->Contents != this->Contents)
+@@ -393,7 +395,7 @@
+    if (Comp.Finalize(Size) == false || _error->PendingError() == true)
+    {
+       c0out << endl;
+-      return _error->Error("Error Processing Contents %s",
++      return _error->Error(_("Error Processing Contents %s"),
+ 			   this->Contents.c_str());
+    }
+    
+@@ -547,10 +549,11 @@
+       return true;
+ 
+    cout << 
+-      "Usage: apt-ftparchive [options] command\n"
+-      "Commands: packges binarypath [overridefile [pathprefix]]\n"
++    _("Usage: apt-ftparchive [options] command\n"
++      "Commands: packages binarypath [overridefile [pathprefix]]\n"
+       "          sources srcpath [overridefile [pathprefix]]\n"
+       "          contents path\n"
++      "          release path\n"
+       "          generate config [groups]\n"
+       "          clean config\n"
+       "\n"
+@@ -568,9 +571,9 @@
+       "\n"
+       "The 'packages' and 'sources' command should be run in the root of the\n"
+       "tree. BinaryPath should point to the base of the recursive search and \n"
+-      "override file should contian the override flags. Pathprefix is\n"
++      "override file should contain the override flags. Pathprefix is\n"
+       "appended to the filename fields if present. Example usage from the \n"
+-      "debian archive:\n"
++      "Debian archive:\n"
+       "   apt-ftparchive packages dists/potato/main/binary-i386/ > \\\n"
+       "               dists/potato/main/binary-i386/Packages\n"
+       "\n"
+@@ -583,7 +586,7 @@
+       "  --no-delink Enable delinking debug mode\n"
+       "  --contents  Control contents file generation\n"
+       "  -c=?  Read this configuration file\n"
+-      "  -o=?  Set an arbitary configuration option" << endl;
++      "  -o=?  Set an arbitrary configuration option") << endl;
+    
+    return true;
+ }
+@@ -672,6 +675,30 @@
+    return true;
+ }
+ 									/*}}}*/
++// SimpleGenRelease - Generate a Release file for a directory tree	/*{{{*/
++// ---------------------------------------------------------------------
++bool SimpleGenRelease(CommandLine &CmdL)
++{
++   if (CmdL.FileSize() < 2)
++      return ShowHelp(CmdL);
++
++   string Dir = CmdL.FileList[1];
++
++   ReleaseWriter Release("");
++   Release.DirStrip = Dir;
++
++   if (_error->PendingError() == true)
++      return false;
++
++   if (Release.RecursiveScan(Dir) == false)
++      return false;
++
++   Release.Finish();
++
++   return true;
++}
++
++									/*}}}*/
+ // Generate - Full generate, using a config file			/*{{{*/
+ // ---------------------------------------------------------------------
+ /* */
+@@ -728,7 +755,7 @@
+       if (RegexChoice(List,CmdL.FileList + 2,CmdL.FileList + CmdL.FileSize()) == 0)
+       {
+ 	 delete [] List;
+-	 return _error->Error("No selections matched");
++	 return _error->Error(_("No selections matched"));
+       }
+       _error->DumpErrors();
+       
+@@ -801,7 +828,7 @@
+       {
+ 	 if (MultiCompress::GetStat(flCombine(ArchiveDir,I->PkgFile),I->PkgCompress,B) == false)
+ 	 {
+-	    _error->Warning("Some files are missing in the package file group `%s'",I->PkgFile.c_str());
++	    _error->Warning(_("Some files are missing in the package file group `%s'"),I->PkgFile.c_str());
+ 	    continue;
+ 	 }
+ 	 
+@@ -887,6 +914,7 @@
+    CommandLine::Dispatch Cmds[] = {{"packages",&SimpleGenPackages},
+                                    {"contents",&SimpleGenContents},
+                                    {"sources",&SimpleGenSources},
++                                   {"release",&SimpleGenRelease},
+                                    {"generate",&Generate},
+                                    {"clean",&Clean},
+       				   {"help",&ShowHelp},
+@@ -894,7 +922,7 @@
+ 
+    // Parse the command line and initialize the package library
+    CommandLine CmdL(Args,_config);
+-   if (CmdL.Parse(argc,argv) == false)
++   if (CmdL.Parse(argc,argv) == false || pkgInitConfig(*_config) == false)
+    {
+       _error->DumpErrors();
+       return 100;
+@@ -910,9 +938,9 @@
+    }
+    
+    // Setup the output streams
+-   c0out.rdbuf(cout.rdbuf());
+-   c1out.rdbuf(cout.rdbuf());
+-   c2out.rdbuf(cout.rdbuf());
++   c0out.rdbuf(clog.rdbuf());
++   c1out.rdbuf(clog.rdbuf());
++   c2out.rdbuf(clog.rdbuf());
+    Quiet = _config->FindI("quiet",0);
+    if (Quiet > 0)
+       c0out.rdbuf(devnull.rdbuf());
+diff -Naur apt-0.5.4/ftparchive/apt-ftparchive.h apt-new/ftparchive/apt-ftparchive.h
+--- apt-0.5.4/ftparchive/apt-ftparchive.h	2001-05-28 23:51:37.000000000 -0400
++++ apt-new/ftparchive/apt-ftparchive.h	2005-05-25 00:08:52.000000000 -0400
+@@ -13,7 +13,7 @@
+ #ifndef APT_FTPARCHIVE_H
+ #define APT_FTPARCHIVE_H
+ 
+-#ifdef __GNUG__
++#if defined(__GNUG__) && !defined(__APPLE_CC__)
+ #pragma interface "apt-ftparchive.h"
+ #endif
+ 
+diff -Naur apt-0.5.4/ftparchive/cachedb.cc apt-new/ftparchive/cachedb.cc
+--- apt-0.5.4/ftparchive/cachedb.cc	2001-05-28 23:50:33.000000000 -0400
++++ apt-new/ftparchive/cachedb.cc	2005-05-25 00:08:52.000000000 -0400
+@@ -1,6 +1,6 @@
+ // -*- mode: cpp; mode: fold -*-
+ // Description								/*{{{*/
+-// $Id: cachedb.cc,v 1.3 2001/05/29 03:50:33 jgg Exp $
++// $Id: cachedb.cc,v 1.7 2004/05/08 19:41:01 mdz Exp $
+ /* ######################################################################
+ 
+    CacheDB
+@@ -10,12 +10,13 @@
+    ##################################################################### */
+ 									/*}}}*/
+ // Include Files							/*{{{*/
+-#ifdef __GNUG__
++#if defined(__GNUG__) && !defined(__APPLE_CC__)
+ #pragma implementation "cachedb.h"
+ #endif
+ 
+ #include "cachedb.h"
+ 
++#include <apti18n.h>
+ #include <apt-pkg/error.h>
+ #include <apt-pkg/md5.h>
+ #include <apt-pkg/strutl.h>
+@@ -29,6 +30,8 @@
+ /* This opens the DB2 file for caching package information */
+ bool CacheDB::ReadyDB(string DB)
+ {
++   int err;
++
+    ReadOnly = _config->FindB("APT::FTPArchive::ReadOnlyDB",false);
+    
+    // Close the old DB
+@@ -39,7 +42,7 @@
+       corrupted DB */
+    if (DBFailed() == true)
+    {
+-      _error->Warning("DB was corrupted, file renamed to %s.old",DBFile.c_str());
++      _error->Warning(_("DB was corrupted, file renamed to %s.old"),DBFile.c_str());
+       rename(DBFile.c_str(),(DBFile+".old").c_str());
+    }
+    
+@@ -49,13 +52,26 @@
+    
+    if (DB.empty())
+       return true;
+-   
+-   if ((errno = db_open(DB.c_str(),DB_HASH,
++
++   db_create(&Dbp, NULL, 0);
++   if ((err = Dbp->open(Dbp, NULL, DB.c_str(), NULL, DB_HASH,
+                         (ReadOnly?DB_RDONLY:DB_CREATE),
+-                        0644,0,0,&Dbp)) != 0)
++                        0644)) != 0)
+    {
+-      Dbp = 0;
+-      return _error->Errno("db_open","Unable to open DB2 file %s",DB.c_str());
++      if (err == DB_OLD_VERSION)
++      {
++          _error->Warning(_("DB is old, attempting to upgrade %s"),DBFile.c_str());
++	  err = Dbp->upgrade(Dbp, DB.c_str(), 0);
++	  if (!err)
++	     err = Dbp->open(Dbp, NULL, DB.c_str(), NULL, DB_HASH,
++                            (ReadOnly?DB_RDONLY:DB_CREATE), 0644);
++
++      }
++      if (err)
++      {
++          Dbp = 0;
++          return _error->Error(_("Unable to open DB file %s: %s"),DB.c_str(), db_strerror(err));
++      }
+    }
+    
+    DBFile = DB;
+@@ -91,16 +107,16 @@
+    // Lookup the stat info and confirm the file is unchanged
+    if (Get() == true)
+    {
+-      if (CurStat.st_mtime != htonl(St.st_mtime))
++      if (CurStat.mtime != htonl(St.st_mtime))
+       {
+-	 CurStat.st_mtime = htonl(St.st_mtime);
++	 CurStat.mtime = htonl(St.st_mtime);
+ 	 CurStat.Flags = 0;
+-	 _error->Warning("File date has changed %s",FileName.c_str());
++	 _error->Warning(_("File date has changed %s"),FileName.c_str());
+       }      
+    }      
+    else
+    {
+-      CurStat.st_mtime = htonl(St.st_mtime);
++      CurStat.mtime = htonl(St.st_mtime);
+       CurStat.Flags = 0;
+    }   
+    CurStat.Flags = ntohl(CurStat.Flags);
+@@ -136,7 +152,7 @@
+       return false;
+ 
+    if (Control.Control == 0)
+-      return _error->Error("Archive has no control record");
++      return _error->Error(_("Archive has no control record"));
+    
+    // Write back the control information
+    InitQuery("cl");
+@@ -225,7 +241,7 @@
+ {
+    // Optimize away some writes.
+    if (CurStat.Flags == OldStat.Flags &&
+-       CurStat.st_mtime == OldStat.st_mtime)
++       CurStat.mtime == OldStat.mtime)
+       return true;
+    
+    // Write the stat information
+@@ -246,15 +262,9 @@
+ 
+    /* I'm not sure what VERSION_MINOR should be here.. 2.4.14 certainly
+       needs the lower one and 2.7.7 needs the upper.. */
+-#if DB_VERSION_MAJOR >= 2 && DB_VERSION_MINOR >= 7
+    DBC *Cursor;
+-   if ((errno = Dbp->cursor(Dbp,0,&Cursor,0)) != 0)
+-      return _error->Error("Unable to get a cursor");
+-#else
+-   DBC *Cursor;
+-   if ((errno = Dbp->cursor(Dbp,0,&Cursor)) != 0)
+-      return _error->Error("Unable to get a cursor");
+-#endif
++   if ((errno = Dbp->cursor(Dbp, NULL, &Cursor, 0)) != 0)
++      return _error->Error(_("Unable to get a cursor"));
+    
+    DBT Key;
+    DBT Data;
+diff -Naur apt-0.5.4/ftparchive/cachedb.h apt-new/ftparchive/cachedb.h
+--- apt-0.5.4/ftparchive/cachedb.h	2001-02-20 02:03:18.000000000 -0500
++++ apt-new/ftparchive/cachedb.h	2005-05-25 00:08:52.000000000 -0400
+@@ -1,6 +1,6 @@
+ // -*- mode: cpp; mode: fold -*-
+ // Description								/*{{{*/
+-// $Id: cachedb.h,v 1.2 2001/02/20 07:03:18 jgg Exp $
++// $Id: cachedb.h,v 1.4 2004/05/08 19:41:01 mdz Exp $
+ /* ######################################################################
+ 
+    CacheDB
+@@ -12,11 +12,11 @@
+ #ifndef CACHEDB_H
+ #define CACHEDB_H
+ 
+-#ifdef __GNUG__
++#if defined(__GNUG__) && !defined(__APPLE_CC__)
+ #pragma interface "cachedb.h"
+ #endif 
+ 
+-#include <db2/db.h>
++#include <db.h>
+ #include <string>
+ #include <apt-pkg/debfile.h>
+ #include <inttypes.h>
+@@ -69,7 +69,7 @@
+    enum FlagList {FlControl = (1<<0),FlMD5=(1<<1),FlContents=(1<<2)};
+    struct StatStore
+    {
+-      uint32_t st_mtime;          
++      uint32_t mtime;          
+       uint32_t Flags;
+    } CurStat;
+    struct StatStore OldStat;
+diff -Naur apt-0.5.4/ftparchive/contents.cc apt-new/ftparchive/contents.cc
+--- apt-0.5.4/ftparchive/contents.cc	2001-02-26 23:24:09.000000000 -0500
++++ apt-new/ftparchive/contents.cc	2005-05-25 00:08:52.000000000 -0400
+@@ -1,6 +1,6 @@
+ // -*- mode: cpp; mode: fold -*-
+ // Description								/*{{{*/
+-// $Id: contents.cc,v 1.3 2001/02/27 04:24:09 jgg Exp $
++// $Id: contents.cc,v 1.4 2003/02/10 07:34:41 doogie Exp $
+ /* ######################################################################
+    
+    contents - Archive contents generator
+@@ -35,12 +35,12 @@
+ // Include Files							/*{{{*/
+ #include "contents.h"
+ 
++#include <apti18n.h>
+ #include <apt-pkg/extracttar.h>
+ #include <apt-pkg/error.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+-#include <malloc.h>    
+ 									/*}}}*/
+ 
+ // GenContents::~GenContents - Free allocated memory			/*{{{*/
+@@ -342,7 +342,7 @@
+ 	 MaxSize = 512*1024/2;
+       char *NewData = (char *)realloc(Data,MaxSize*2);
+       if (NewData == 0)
+-	 return _error->Error("realloc - Failed to allocate memory");
++	 return _error->Error(_("realloc - Failed to allocate memory"));
+       Data = NewData;
+       MaxSize *= 2;
+    }
+@@ -373,7 +373,7 @@
+       
+       char *NewData = (char *)realloc(Data,MaxSize*2);
+       if (NewData == 0)
+-	 return _error->Error("realloc - Failed to allocate memory");
++	 return _error->Error(_("realloc - Failed to allocate memory"));
+       Data = NewData;
+       MaxSize *= 2;
+    }
+diff -Naur apt-0.5.4/ftparchive/ftw.c apt-new/ftparchive/ftw.c
+--- apt-0.5.4/ftparchive/ftw.c	1969-12-31 19:00:00.000000000 -0500
++++ apt-new/ftparchive/ftw.c	2005-05-25 00:08:52.000000000 -0400
+@@ -0,0 +1,97 @@
++/*	$OpenBSD: ftw.c,v 1.4 2004/07/07 16:05:23 millert Exp $	*/
++
++/*
++ * Copyright (c) 2003, 2004 Todd C. Miller <Todd.Miller@courtesan.com>
++ *
++ * Permission to use, copy, modify, and distribute this software for any
++ * purpose with or without fee is hereby granted, provided that the above
++ * copyright notice and this permission notice appear in all copies.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
++ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
++ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
++ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
++ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
++ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
++ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
++ *
++ * Sponsored in part by the Defense Advanced Research Projects
++ * Agency (DARPA) and Air Force Research Laboratory, Air Force
++ * Materiel Command, USAF, under agreement number F39502-99-1-0512.
++ */
++
++#if 0
++#if defined(LIBC_SCCS) && !defined(lint)
++static const char rcsid[] = "$OpenBSD: ftw.c,v 1.4 2004/07/07 16:05:23 millert Exp $";
++#endif /* LIBC_SCCS and not lint */
++#endif
++
++#include <sys/cdefs.h>
++
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <errno.h>
++#include <fts.h>
++#include <ftw.h>
++#include <limits.h>
++
++int
++ftw(const char *path, int (*fn)(const char *, const struct stat *, int),
++    int nfds)
++{
++	char * const paths[2] = { (char *)path, NULL };
++	FTSENT *cur;
++	FTS *ftsp;
++	int error = 0, fnflag, sverrno;
++
++	/* XXX - nfds is currently unused */
++	if (nfds < 1 || nfds > OPEN_MAX) {
++		errno = EINVAL;
++		return (-1);
++	}
++
++	ftsp = fts_open(paths, FTS_LOGICAL | FTS_COMFOLLOW | FTS_NOCHDIR, NULL);
++	if (ftsp == NULL)
++		return (-1);
++	while ((cur = fts_read(ftsp)) != NULL) {
++		switch (cur->fts_info) {
++		case FTS_D:
++			fnflag = FTW_D;
++			break;
++		case FTS_DNR:
++			fnflag = FTW_DNR;
++			break;
++		case FTS_DP:
++			/* we only visit in preorder */
++			continue;
++		case FTS_F:
++		case FTS_DEFAULT:
++			fnflag = FTW_F;
++			break;
++		case FTS_NS:
++		case FTS_NSOK:
++		case FTS_SLNONE:
++			fnflag = FTW_NS;
++			break;
++		case FTS_SL:
++			fnflag = FTW_SL;
++			break;
++		case FTS_DC:
++			errno = ELOOP;
++			/* FALLTHROUGH */
++		default:
++			error = -1;
++			goto done;
++		}
++		error = fn(cur->fts_path, cur->fts_statp, fnflag);
++		if (error != 0)
++			break;
++	}
++done:
++	sverrno = errno;
++	if (fts_close(ftsp) != 0 && error == 0)
++		error = -1;
++	else
++		errno = sverrno;
++	return (error);
++}
+diff -Naur apt-0.5.4/ftparchive/ftw.h apt-new/ftparchive/ftw.h
+--- apt-0.5.4/ftparchive/ftw.h	1969-12-31 19:00:00.000000000 -0500
++++ apt-new/ftparchive/ftw.h	2005-05-25 00:08:52.000000000 -0400
+@@ -0,0 +1,62 @@
++/*	$OpenBSD: ftw.h,v 1.1 2003/07/21 21:13:18 millert Exp $	*/
++
++/*
++ * Copyright (c) 2003 Todd C. Miller <Todd.Miller@courtesan.com>
++ *
++ * Permission to use, copy, modify, and distribute this software for any
++ * purpose with or without fee is hereby granted, provided that the above
++ * copyright notice and this permission notice appear in all copies.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
++ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
++ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
++ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
++ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
++ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
++ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
++ *
++ * Sponsored in part by the Defense Advanced Research Projects
++ * Agency (DARPA) and Air Force Research Laboratory, Air Force
++ * Materiel Command, USAF, under agreement number F39502-99-1-0512.
++ *
++ * $FreeBSD: /repoman/r/ncvs/src/include/ftw.h,v 1.1.2.1 2004/08/29 06:10:53 tjr Exp $
++ */
++
++#ifndef	_FTW_H
++#define	_FTW_H
++
++#include <sys/types.h>
++#include <sys/stat.h>
++
++/*
++ * Valid flags for the 3rd argument to the function that is passed as the
++ * second argument to ftw(3) and nftw(3).  Say it three times fast!
++ */
++#define	FTW_F		0	/* File.  */
++#define	FTW_D		1	/* Directory.  */
++#define	FTW_DNR		2	/* Directory without read permission.  */
++#define	FTW_DP		3	/* Directory with subdirectories visited.  */
++#define	FTW_NS		4	/* Unknown type; stat() failed.  */
++#define	FTW_SL		5	/* Symbolic link.  */
++#define	FTW_SLN		6	/* Sym link that names a nonexistent file.  */
++
++/*
++ * Flags for use as the 4th argument to nftw(3).  These may be ORed together.
++ */
++#define	FTW_PHYS	0x01	/* Physical walk, don't follow sym links.  */
++#define	FTW_MOUNT	0x02	/* The walk does not cross a mount point.  */
++#define	FTW_DEPTH	0x04	/* Subdirs visited before the dir itself. */
++#define	FTW_CHDIR	0x08	/* Change to a directory before reading it. */
++
++struct FTW {
++	int base;
++	int level;
++};
++
++__BEGIN_DECLS
++int	ftw(const char *, int (*)(const char *, const struct stat *, int), int);
++int	nftw(const char *, int (*)(const char *, const struct stat *, int,
++	    struct FTW *), int, int);
++__END_DECLS
++
++#endif	/* !_FTW_H */
+diff -Naur apt-0.5.4/ftparchive/makefile apt-new/ftparchive/makefile
+--- apt-0.5.4/ftparchive/makefile	2001-02-20 02:03:18.000000000 -0500
++++ apt-new/ftparchive/makefile	2005-05-25 00:08:52.000000000 -0400
+@@ -6,15 +6,20 @@
+ include ../buildlib/defaults.mak
+ 
+ # The apt-ftparchive program
+-ifdef DB2LIB
++ifdef BDBLIB
++vpath %.c $(SUBDIRS)
++$(OBJ)/%.o: %.c
++	echo Compiling $< to $@
++	$(CC) -c $(INLINEDEPFLAG) $(CPPFLAGS) -o $@ $<
++	$(DoDep)
+ PROGRAM=apt-ftparchive
+-SLIBS = -lapt-pkg -lapt-inst $(DB2LIB)
++SLIBS = -lapt-pkg -lapt-inst $(BDBLIB)
+ LIB_MAKES = apt-pkg/makefile apt-inst/makefile
+ SOURCE = apt-ftparchive.cc cachedb.cc writer.cc contents.cc override.cc \
+-         multicompress.cc
++         multicompress.cc ftw.c
+ include $(PROGRAM_H)
+ else
+ PROGRAM=apt-ftparchive
+ MESSAGE="Must have db2 to build apt-ftparchive"
+ include $(FAIL_H)
+-endif # ifdef DB2LIB
++endif # ifdef BDBLIB
+diff -Naur apt-0.5.4/ftparchive/multicompress.cc apt-new/ftparchive/multicompress.cc
+--- apt-0.5.4/ftparchive/multicompress.cc	2001-05-28 23:48:27.000000000 -0400
++++ apt-new/ftparchive/multicompress.cc	2005-05-25 00:08:52.000000000 -0400
+@@ -1,6 +1,6 @@
+ // -*- mode: cpp; mode: fold -*-
+ // Description								/*{{{*/
+-// $Id: multicompress.cc,v 1.3 2001/05/29 03:48:27 jgg Exp $
++// $Id: multicompress.cc,v 1.4 2003/02/10 07:34:41 doogie Exp $
+ /* ######################################################################
+ 
+    MultiCompressor
+@@ -14,12 +14,13 @@
+    ##################################################################### */
+ 									/*}}}*/
+ // Include Files							/*{{{*/
+-#ifdef __GNUG__
++#if defined(__GNUG__) && !defined(__APPLE_CC__)
+ #pragma implementation "multicompress.h"
+ #endif
+ 
+ #include "multicompress.h"
+     
++#include <apti18n.h>
+ #include <apt-pkg/strutl.h>
+ #include <apt-pkg/error.h>
+ #include <apt-pkg/md5.h>
+@@ -71,7 +72,7 @@
+       // Hmm.. unknown.
+       if (Comp->Name == 0)
+       {
+-	 _error->Warning("Unknown Compresison Algorithm '%s'",string(Start,I).c_str());
++	 _error->Warning(_("Unknown Compresison Algorithm '%s'"),string(Start,I).c_str());
+ 	 continue;
+       }
+       
+@@ -101,7 +102,7 @@
+ 
+    if (Outputs == 0)
+    {
+-      _error->Error("Compressed output %s needs a compression set",Output.c_str());
++      _error->Error(_("Compressed output %s needs a compression set"),Output.c_str());
+       return;
+    }
+ 
+@@ -168,7 +169,7 @@
+    // Create a data pipe
+    int Pipe[2] = {-1,-1};
+    if (pipe(Pipe) != 0)
+-      return _error->Errno("pipe","Failed to create IPC pipe to subprocess");
++      return _error->Errno("pipe",_("Failed to create IPC pipe to subprocess"));
+    for (int I = 0; I != 2; I++)
+       SetCloseExec(Pipe[I],true);
+    
+@@ -194,10 +195,10 @@
+    close(Pipe[0]);
+    Input = fdopen(Pipe[1],"w");
+    if (Input == 0)
+-      return _error->Errno("fdopen","Failed to create FILE*");
++      return _error->Errno("fdopen",_("Failed to create FILE*"));
+    
+    if (Outputter == -1)
+-      return _error->Errno("fork","Failed to fork");   
++      return _error->Errno("fork",_("Failed to fork"));   
+    return true;
+ }
+ 									/*}}}*/
+@@ -211,7 +212,7 @@
+    
+    fclose(Input);
+    Input = 0;
+-   bool Res = ExecWait(Outputter,"Compress Child",false);
++   bool Res = ExecWait(Outputter,_("Compress Child"),false);
+    Outputter = -1;
+    return Res;
+ }
+@@ -234,7 +235,7 @@
+    {
+       struct stat St;
+       if (stat(I->Output.c_str(),&St) != 0)
+-	 return  _error->Error("Internal Error, Failed to create %s",
++	 return  _error->Error(_("Internal Error, Failed to create %s"),
+ 			       I->Output.c_str());
+       
+       if (I->OldMTime != St.st_mtime)
+@@ -285,7 +286,7 @@
+    // Create a data pipe
+    int Pipe[2] = {-1,-1};
+    if (pipe(Pipe) != 0)
+-      return _error->Errno("pipe","Failed to create subprocess IPC");
++      return _error->Errno("pipe",_("Failed to create subprocess IPC"));
+    for (int J = 0; J != 2; J++)
+       SetCloseExec(Pipe[J],true);
+ 
+@@ -320,7 +321,7 @@
+ 	 Args[1] = Prog->UnCompArgs;
+       Args[2] = 0;
+       execvp(Args[0],(char **)Args);
+-      cerr << "Failed to exec compressor " << Args[0] << endl;
++      cerr << _("Failed to exec compressor ") << Args[0] << endl;
+       _exit(100);
+    };      
+    if (Comp == true)
+@@ -359,7 +360,7 @@
+ {
+    close(Fd);
+    if (Proc != -1)
+-      if (ExecWait(Proc,"decompressor",false) == false)
++      if (ExecWait(Proc,_("decompressor"),false) == false)
+ 	 return false;
+    return true;
+ }   
+@@ -402,7 +403,7 @@
+       {
+ 	 if (write(I->Fd,Buffer,Res) != Res)
+ 	 {
+-	    _error->Errno("write","IO to subprocess/file failed");
++	    _error->Errno("write",_("IO to subprocess/file failed"));
+ 	    break;
+ 	 }
+       }      
+@@ -454,7 +455,7 @@
+ 	 if (Res == 0)
+ 	    break;
+ 	 if (Res < 0)
+-	    return _error->Errno("read","Failed to read while computing MD5");
++	    return _error->Errno("read",_("Failed to read while computing MD5"));
+ 	 NewFileSize += Res;
+ 	 OldMD5.Add(Buffer,Res);
+       }
+@@ -471,7 +472,7 @@
+ 	 {
+ 	    I->TmpFile.Close();
+ 	    if (unlink(I->TmpFile.Name().c_str()) != 0)
+-	       _error->Errno("unlink","Problem unlinking %s",
++	       _error->Errno("unlink",_("Problem unlinking %s"),
+ 			     I->TmpFile.Name().c_str());
+ 	 }
+ 	 return !_error->PendingError();
+@@ -486,7 +487,7 @@
+       fchmod(I->TmpFile.Fd(),Permissions);
+       
+       if (rename(I->TmpFile.Name().c_str(),I->Output.c_str()) != 0)
+-	 _error->Errno("rename","Failed to rename %s to %s",
++	 _error->Errno("rename",_("Failed to rename %s to %s"),
+ 		       I->TmpFile.Name().c_str(),I->Output.c_str());
+       I->TmpFile.Close();
+    }
+diff -Naur apt-0.5.4/ftparchive/multicompress.h apt-new/ftparchive/multicompress.h
+--- apt-0.5.4/ftparchive/multicompress.h	2001-02-20 02:03:18.000000000 -0500
++++ apt-new/ftparchive/multicompress.h	2005-05-25 00:08:52.000000000 -0400
+@@ -16,7 +16,7 @@
+ #ifndef MULTICOMPRESS_H
+ #define MULTICOMPRESS_H
+ 
+-#ifdef __GNUG__
++#if defined(__GNUG__) && !defined(__APPLE_CC__)
+ #pragma interface "multicompress.h"
+ #endif 
+ 
+diff -Naur apt-0.5.4/ftparchive/override.cc apt-new/ftparchive/override.cc
+--- apt-0.5.4/ftparchive/override.cc	2001-06-25 22:50:27.000000000 -0400
++++ apt-new/ftparchive/override.cc	2005-05-25 00:08:52.000000000 -0400
+@@ -1,6 +1,6 @@
+ // -*- mode: cpp; mode: fold -*-
+ // Description								/*{{{*/
+-// $Id: override.cc,v 1.3 2001/06/26 02:50:27 jgg Exp $
++// $Id: override.cc,v 1.4 2003/02/10 07:34:41 doogie Exp $
+ /* ######################################################################
+ 
+    Override
+@@ -10,12 +10,13 @@
+    ##################################################################### */
+ 									/*}}}*/
+ // Include Files							/*{{{*/
+-#ifdef __GNUG__
++#if defined(__GNUG__) && !defined(__APPLE_CC__)
+ #pragma implementation "override.h"
+ #endif
+ 
+ #include "override.h"
+     
++#include <apti18n.h>
+ #include <apt-pkg/strutl.h>
+ #include <apt-pkg/error.h>
+ 
+@@ -34,7 +35,7 @@
+    
+    FILE *F = fopen(File.c_str(),"r");
+    if (F == 0)
+-      return _error->Errno("fopen","Unable to open %s",File.c_str());
++      return _error->Errno("fopen",_("Unable to open %s"),File.c_str());
+    
+    char Line[500];
+    unsigned long Counter = 0;
+@@ -60,7 +61,7 @@
+       for (; isspace(*End) == 0 && *End != 0; End++);
+       if (*End == 0)
+       {
+-	 _error->Warning("Malformed override %s line %lu #1",File.c_str(),
++	 _error->Warning(_("Malformed override %s line %lu #1"),File.c_str(),
+ 			 Counter);
+ 	 continue;
+       }      
+@@ -74,7 +75,7 @@
+ 	 for (; isspace(*End) == 0 && *End != 0; End++);
+ 	 if (*End == 0)
+ 	 {
+-	    _error->Warning("Malformed override %s line %lu #2",File.c_str(),
++	    _error->Warning(_("Malformed override %s line %lu #2"),File.c_str(),
+ 			    Counter);
+ 	    continue;
+ 	 }
+@@ -88,7 +89,7 @@
+       for (; isspace(*End) == 0 && *End != 0; End++);
+       if (*End == 0)
+       {
+-	 _error->Warning("Malformed override %s line %lu #3",File.c_str(),
++	 _error->Warning(_("Malformed override %s line %lu #3"),File.c_str(),
+ 			 Counter);
+ 	 continue;
+       }      
+@@ -127,7 +128,7 @@
+    }
+ 
+    if (ferror(F))
+-      _error->Errno("fgets","Failed to read the override file %s",File.c_str());
++      _error->Errno("fgets",_("Failed to read the override file %s"),File.c_str());
+    fclose(F);
+    return true;
+ }
+@@ -142,7 +143,7 @@
+    
+    FILE *F = fopen(File.c_str(),"r");
+    if (F == 0)
+-      return _error->Errno("fopen","Unable to open %s",File.c_str());
++      return _error->Errno("fopen",_("Unable to open %s"),File.c_str());
+   
+    char Line[500];
+    unsigned long Counter = 0;
+@@ -166,7 +167,7 @@
+       for (; isspace(*End) == 0 && *End != 0; End++);
+       if (*End == 0)
+       {
+-	 _error->Warning("Malformed override %s line %lu #1",File.c_str(),
++	 _error->Warning(_("Malformed override %s line %lu #1"),File.c_str(),
+ 			 Counter);
+ 	 continue;
+       }      
+@@ -178,7 +179,7 @@
+       for (; isspace(*End) == 0 && *End != 0; End++);
+       if (*End == 0)
+       {
+-	 _error->Warning("Malformed override %s line %lu #2",File.c_str(),
++	 _error->Warning(_("Malformed override %s line %lu #2"),File.c_str(),
+ 			 Counter);
+ 	 continue;
+       }
+@@ -191,7 +192,7 @@
+       for (; isspace(*(End-1)) && End > Value; End--);
+       if (End == Value)
+       {
+-	 _error->Warning("Malformed override %s line %lu #3",File.c_str(),
++	 _error->Warning(_("Malformed override %s line %lu #3"),File.c_str(),
+ 			 Counter);
+ 	 continue;
+       }      
+@@ -201,7 +202,7 @@
+    }
+ 
+    if (ferror(F))
+-      _error->Errno("fgets","Failed to read the override file %s",File.c_str());
++      _error->Errno("fgets",_("Failed to read the override file %s"),File.c_str());
+    fclose(F);
+    return true;
+ }
+diff -Naur apt-0.5.4/ftparchive/override.h apt-new/ftparchive/override.h
+--- apt-0.5.4/ftparchive/override.h	2001-06-25 22:50:27.000000000 -0400
++++ apt-new/ftparchive/override.h	2005-05-25 00:08:52.000000000 -0400
+@@ -12,7 +12,7 @@
+ #ifndef OVERRIDE_H
+ #define OVERRIDE_H
+ 
+-#ifdef __GNUG__
++#if defined(__GNUG__) && !defined(__APPLE_CC__)
+ #pragma interface "override.h"
+ #endif
+ 
+diff -Naur apt-0.5.4/ftparchive/writer.cc apt-new/ftparchive/writer.cc
+--- apt-0.5.4/ftparchive/writer.cc	2001-06-25 22:50:27.000000000 -0400
++++ apt-new/ftparchive/writer.cc	2005-05-25 00:08:52.000000000 -0400
+@@ -1,6 +1,6 @@
+ // -*- mode: cpp; mode: fold -*-
+ // Description								/*{{{*/
+-// $Id: writer.cc,v 1.4 2001/06/26 02:50:27 jgg Exp $
++// $Id: writer.cc,v 1.14 2004/03/24 01:40:43 mdz Exp $
+ /* ######################################################################
+ 
+    Writer 
+@@ -11,21 +11,25 @@
+    ##################################################################### */
+ 									/*}}}*/
+ // Include Files							/*{{{*/
+-#ifdef __GNUG__
++#if defined(__GNUG__) && !defined(__APPLE_CC__)
+ #pragma implementation "writer.h"
+ #endif
+ 
+ #include "writer.h"
+     
++#include <apti18n.h>
+ #include <apt-pkg/strutl.h>
+ #include <apt-pkg/error.h>
+ #include <apt-pkg/configuration.h>
+ #include <apt-pkg/md5.h>
++#include <apt-pkg/sha1.h>
+ #include <apt-pkg/deblistparser.h>
+ 
+ #include <sys/types.h>
+ #include <unistd.h>
++#include <ctime>
+ #include <ftw.h>
++#include <fnmatch.h>
+ #include <iostream>
+     
+ #include "cachedb.h"
+@@ -57,8 +61,6 @@
+ {
+    ErrorPrinted = false;
+    NoLinkAct = !_config->FindB("APT::FTPArchive::DeLinkAct",true);
+-   TmpExt = 0;
+-   Ext[0] = 0;
+    RealPath = 0;
+    long PMax = pathconf(".",_PC_PATH_MAX);
+    if (PMax > 0)
+@@ -74,26 +76,29 @@
+    if (Flag == FTW_DNR)
+    {
+       Owner->NewLine(1);
+-      c1out << "W: Unable to read directory " << File << endl;
++      ioprintf(c1out, _("W: Unable to read directory %s\n"), File);
+    }   
+    if (Flag == FTW_NS)
+    {
+       Owner->NewLine(1);
+-      c1out << "W: Unable to stat " << File << endl;
++      ioprintf(c1out, _("W: Unable to stat %s\n"), File);
+    }   
+    if (Flag != FTW_F)
+       return 0;
+ 
+-   // See if it is a .deb
+-   if (strlen(File) < 4)
+-      return 0;
+-   
+-   unsigned CurExt = 0;
+-   for (; Owner->Ext[CurExt] != 0; CurExt++)
+-      if (strcmp(File+strlen(File)-strlen(Owner->Ext[CurExt]),
+-		 Owner->Ext[CurExt]) == 0)
+-	 break;
+-   if (Owner->Ext[CurExt] == 0)
++   const char *LastComponent = strrchr(File, '/');
++   if (LastComponent == NULL)
++      LastComponent = File;
++   else
++      LastComponent++;
++
++   vector<string>::iterator I;
++   for(I = Owner->Patterns.begin(); I != Owner->Patterns.end(); ++I)
++   {
++      if (fnmatch((*I).c_str(), LastComponent, 0) == 0)
++         break;
++   }
++   if (I == Owner->Patterns.end())
+       return 0;
+ 
+    /* Process it. If the file is a link then resolve it into an absolute
+@@ -118,16 +123,16 @@
+ 	 
+ 	 bool Type = _error->PopMessage(Err);
+ 	 if (Type == true)
+-	    c1out << "E: " << Err << endl;
++	    cerr << _("E: ") << Err << endl;
+ 	 else
+-	    c1out << "W: " << Err << endl;
++	    cerr << _("W: ") << Err << endl;
+ 	 
+ 	 if (Err.find(File) != string::npos)
+ 	    SeenPath = true;
+       }      
+       
+       if (SeenPath == false)
+-	 cerr << "E: Errors apply to file '" << File << "'" << endl;
++	 cerr << _("E: Errors apply to file ") << "'" << File << "'" << endl;
+       return 0;
+    }
+    
+@@ -144,7 +149,7 @@
+    if (InternalPrefix.empty() == true)
+    {
+       if (realpath(Dir.c_str(),RealPath) == 0)
+-	 return _error->Errno("realpath","Failed to resolve %s",Dir.c_str());
++	 return _error->Errno("realpath",_("Failed to resolve %s"),Dir.c_str());
+       InternalPrefix = RealPath;      
+    }
+    
+@@ -156,7 +161,7 @@
+    if (Res != 0)
+    {
+       if (_error->PendingError() == false)
+-	 _error->Errno("ftw","Tree walking failed");
++	 _error->Errno("ftw",_("Tree walking failed"));
+       return false;
+    }
+    
+@@ -174,14 +179,14 @@
+    if (InternalPrefix.empty() == true)
+    {
+       if (realpath(Dir.c_str(),RealPath) == 0)
+-	 return _error->Errno("realpath","Failed to resolve %s",Dir.c_str());
++	 return _error->Errno("realpath",_("Failed to resolve %s"),Dir.c_str());
+       InternalPrefix = RealPath;      
+    }
+    
+    Owner = this;
+    FILE *List = fopen(File.c_str(),"r");
+    if (List == 0)
+-      return _error->Errno("fopen","Failed to open %s",File.c_str());
++      return _error->Errno("fopen",_("Failed to open %s"),File.c_str());
+    
+    /* We are a tad tricky here.. We prefix the buffer with the directory
+       name, that way if we need a full path with just use line.. Sneaky and
+@@ -238,25 +243,26 @@
+ 	    cout << endl;
+ 	 
+ 	 NewLine(1);
+-	 c1out << " DeLink " << (OriginalPath + InternalPrefix.length())
+-	    << " [" << SizeToStr(St.st_size) << "B]" << endl << flush;
++	 ioprintf(c1out, _(" DeLink %s [%s]\n"), (OriginalPath + InternalPrefix.length()),
++		    SizeToStr(St.st_size).c_str());
++	 c1out << flush, fflush(NULL);
+ 	 
+ 	 if (NoLinkAct == false)
+ 	 {
+ 	    char OldLink[400];
+ 	    if (readlink(OriginalPath,OldLink,sizeof(OldLink)) == -1)
+-	       _error->Errno("readlink","Failed to readlink %s",OriginalPath);
++	       _error->Errno("readlink",_("Failed to readlink %s"),OriginalPath);
+ 	    else
+ 	    {
+ 	       if (unlink(OriginalPath) != 0)
+-		  _error->Errno("unlink","Failed to unlink %s",OriginalPath);
++		  _error->Errno("unlink",_("Failed to unlink %s"),OriginalPath);
+ 	       else
+ 	       {
+ 		  if (link(FileName.c_str(),OriginalPath) != 0)
+ 		  {
+ 		     // Panic! Restore the symlink
+ 		     symlink(OldLink,OriginalPath);
+-		     return _error->Errno("link","*** Failed to link %s to %s",
++		     return _error->Errno("link",_("*** Failed to link %s to %s"),
+ 					  FileName.c_str(),
+ 					  OriginalPath);
+ 		  }	       
+@@ -266,7 +272,7 @@
+ 	 
+ 	 DeLinkBytes += St.st_size;
+ 	 if (DeLinkBytes/1024 >= DeLinkLimit)
+-	    c1out << " DeLink limit of " << SizeToStr(DeLinkBytes) << "B hit." << endl;      
++	    ioprintf(c1out, _(" DeLink limit of %sB hit.\n"), SizeToStr(DeLinkBytes).c_str());      
+       }
+       
+       FileName = OriginalPath;
+@@ -275,17 +281,6 @@
+    return true;
+ }
+ 									/*}}}*/
+-// FTWScanner::SetExts - Set extensions to support			/*{{{*/
+-// ---------------------------------------------------------------------
+-/* */
+-bool FTWScanner::SetExts(string Vals)
+-{
+-   delete [] TmpExt;
+-   TmpExt = new char[Vals.length()+1];
+-   strcpy(TmpExt,Vals.c_str());
+-   return TokSplitString(' ',TmpExt,(char **)Ext,sizeof(Ext)/sizeof(Ext[0]));
+-}
+-									/*}}}*/
+ 
+ // PackagesWriter::PackagesWriter - Constructor				/*{{{*/
+ // ---------------------------------------------------------------------
+@@ -294,8 +289,8 @@
+ 		    Db(DB),Stats(Db.Stats)
+ {
+    Output = stdout;
+-   Ext[0] = ".deb";
+-   Ext[1] = 0;
++   SetExts(".deb .udeb .foo .bar .baz");
++   AddPattern("*.deb");
+    DeLinkLimit = 0;
+    
+    // Process the command line options
+@@ -317,6 +312,33 @@
+ 
+    _error->DumpErrors();
+ }
++                                                                        /*}}}*/
++// FTWScanner::SetExts - Set extensions to support                      /*{{{*/
++// ---------------------------------------------------------------------
++/* */
++bool FTWScanner::SetExts(string Vals)
++{
++   ClearPatterns();
++   string::size_type Start = 0;
++   while (Start <= Vals.length()-1)
++   {
++      string::size_type Space = Vals.find(' ',Start);
++      string::size_type Length;
++      if (Space == string::npos)
++      {
++         Length = Vals.length()-Start;
++      }
++      else
++      {
++         Length = Space-Start;
++      }
++      AddPattern(string("*") + Vals.substr(Start, Length));
++      Start += Length + 1;
++   }
++
++   return true;
++}
++
+ 									/*}}}*/
+ // PackagesWriter::DoPackage - Process a single package			/*{{{*/
+ // ---------------------------------------------------------------------
+@@ -333,7 +355,7 @@
+    // Stat the file for later
+    struct stat St;
+    if (fstat(F.Fd(),&St) != 0)
+-      return _error->Errno("fstat","Failed to stat %s",FileName.c_str());
++      return _error->Errno("fstat",_("Failed to stat %s"),FileName.c_str());
+ 
+    // Pull all the data we need form the DB
+    string MD5Res;
+@@ -353,7 +375,7 @@
+    Override::Item *OverItem = Over.GetItem(Package);
+    
+    if (Package.empty() == true)
+-      return _error->Error("Archive had no package field");
++      return _error->Error(_("Archive had no package field"));
+    
+    // If we need to do any rewriting of the header do it now..
+    if (OverItem == 0)
+@@ -361,7 +383,7 @@
+       if (NoOverride == false)
+       {
+ 	 NewLine(1);
+-	 c1out << "  " << Package << " has no override entry" << endl;
++	 ioprintf(c1out, _("  %s has no override entry\n"), Package.c_str());
+       }
+       
+       OverItem = &Tmp;
+@@ -370,7 +392,7 @@
+    }
+ 
+    char Size[40];
+-   sprintf(Size,"%lu",St.st_size);
++   sprintf(Size,"%llu",St.st_size);
+    
+    // Strip the DirStrip prefix from the FileName and add the PathPrefix
+    string NewFileName;
+@@ -404,9 +426,8 @@
+       if (NoOverride == false)
+       {
+ 	 NewLine(1);
+-	 c1out << "  " << Package << " maintainer is " <<
+-	       Tags.FindS("Maintainer") << " not " <<
+-  	       OverItem->OldMaint << endl;
++	 ioprintf(c1out, _("  %s maintainer is %s not %s\n"),
++	       Package.c_str(), Tags.FindS("Maintainer").c_str(), OverItem->OldMaint.c_str());
+       }      
+    }
+    
+@@ -448,8 +469,7 @@
+ 			     string ExtOverrides)
+ {
+    Output = stdout;
+-   Ext[0] = ".dsc";
+-   Ext[1] = 0;
++   AddPattern("*.dsc");
+    DeLinkLimit = 0;
+    Buffer = 0;
+    BufSize = 0;
+@@ -535,10 +555,10 @@
+       
+    // Lookup the overide information, finding first the best priority.
+    string BestPrio;
+-   char Buffer[1000];
+    string Bins = Tags.FindS("Binary");
++   char Buffer[Bins.length() + 1];
+    Override::Item *OverItem = 0;
+-   if (Bins.empty() == false && Bins.length() < sizeof(Buffer))
++   if (Bins.empty() == false)
+    {
+       strcpy(Buffer,Bins.c_str());
+       
+@@ -572,7 +592,7 @@
+       if (NoOverride == false)
+       {
+ 	 NewLine(1);	 
+-	 c1out << "  " << Tags.FindS("Source") << " has no override entry" << endl;
++	 ioprintf(c1out, _("  %s has no override entry\n"), Tags.FindS("Source").c_str());
+       }
+       
+       OverItem = &Tmp;
+@@ -588,7 +608,7 @@
+    
+    // Add the dsc to the files hash list
+    char Files[1000];
+-   snprintf(Files,sizeof(Files),"\n %s %lu %s\n %s",
++   snprintf(Files,sizeof(Files),"\n %s %llu %s\n %s",
+ 	    string(MD5.Result()).c_str(),St.st_size,
+ 	    flNotDir(FileName).c_str(),
+ 	    Tags.FindS("Files").c_str());
+@@ -603,10 +623,10 @@
+       NewFileName = OriginalPath;
+    if (PathPrefix.empty() == false)
+       NewFileName = flCombine(PathPrefix,NewFileName);
+-    
++
+    string Directory = flNotFile(OriginalPath);
+    string Package = Tags.FindS("Source");
+-   
++
+    // Perform the delinking operation over all of the files
+    string ParseJnk;
+    const char *C = Files;
+@@ -633,7 +653,7 @@
+    Directory = flNotFile(NewFileName);
+    if (Directory.length() > 2)
+       Directory.erase(Directory.end()-1);
+-      
++
+    // This lists all the changes to the fields we are going to make.
+    // (5 hardcoded + maintainer + end marker)
+    TFRewriteData Changes[5+1+SOverItem->FieldOverride.size()+1];
+@@ -641,7 +661,8 @@
+    unsigned int End = 0;
+    SetTFRewriteData(Changes[End++],"Source",Package.c_str(),"Package");
+    SetTFRewriteData(Changes[End++],"Files",Files);
+-   SetTFRewriteData(Changes[End++],"Directory",Directory.c_str());
++   if (Directory != "./")
++      SetTFRewriteData(Changes[End++],"Directory",Directory.c_str());
+    SetTFRewriteData(Changes[End++],"Priority",BestPrio.c_str());
+    SetTFRewriteData(Changes[End++],"Status",0);
+ 
+@@ -653,9 +674,8 @@
+       if (NoOverride == false)
+       {
+ 	 NewLine(1);	 
+-	 c1out << "  " << Package << " maintainer is " <<
+-	       Tags.FindS("Maintainer") << " not " <<
+-  	       OverItem->OldMaint << endl;
++	 ioprintf(c1out, _("  %s maintainer is %s not %s\n"), Package.c_str(),
++	       Tags.FindS("Maintainer").c_str(), OverItem->OldMaint.c_str());
+       }      
+    }
+    if (NewMaint.empty() == false)
+@@ -685,8 +705,7 @@
+ 		    Db(DB), Stats(Db.Stats)
+ 
+ {
+-   Ext[0] = ".deb";
+-   Ext[1] = 0;
++   AddPattern("*.deb");
+    Output = stdout;
+ }
+ 									/*}}}*/
+@@ -776,4 +795,125 @@
+    
+    return true;
+ }
++
++									/*}}}*/
++
++// ReleaseWriter::ReleaseWriter - Constructor				/*{{{*/
++// ---------------------------------------------------------------------
++/* */
++ReleaseWriter::ReleaseWriter(string DB)
++{
++   AddPattern("Packages");
++   AddPattern("Packages.gz");
++   AddPattern("Packages.bz2");
++   AddPattern("Sources");
++   AddPattern("Sources.gz");
++   AddPattern("Sources.bz2");
++   AddPattern("Release");
++   AddPattern("md5sum.txt");
++
++   Output = stdout;
++   time_t now = time(NULL);
++   char datestr[128];
++   if (strftime(datestr, sizeof(datestr), "%a, %d %b %Y %H:%M:%S UTC",
++                gmtime(&now)) == 0)
++   {
++      datestr[0] = '\0';
++   }
++
++   map<string,string> Fields;
++   Fields["Origin"] = "";
++   Fields["Label"] = "";
++   Fields["Suite"] = "";
++   Fields["Version"] = "";
++   Fields["Codename"] = "";
++   Fields["Date"] = datestr;
++   Fields["Architectures"] = "";
++   Fields["Components"] = "";
++   Fields["Description"] = "";
++
++   for(map<string,string>::const_iterator I = Fields.begin();
++       I != Fields.end();
++       ++I)
++   {
++      string Config = string("APT::FTPArchive::Release::") + (*I).first;
++      string Value = _config->Find(Config, (*I).second.c_str());
++      if (Value == "")
++         continue;
++
++      fprintf(Output, "%s: %s\n", (*I).first.c_str(), Value.c_str());
++   }
++}
++									/*}}}*/
++// ReleaseWriter::DoPackage - Process a single package			/*{{{*/
++// ---------------------------------------------------------------------
++bool ReleaseWriter::DoPackage(string FileName)
++{
++   // Strip the DirStrip prefix from the FileName and add the PathPrefix
++   string NewFileName;
++   if (DirStrip.empty() == false &&
++       FileName.length() > DirStrip.length() &&
++       stringcmp(FileName.begin(),FileName.begin() + DirStrip.length(),
++		 DirStrip.begin(),DirStrip.end()) == 0)
++   {
++      NewFileName = string(FileName.begin() + DirStrip.length(),FileName.end());
++      while (NewFileName[0] == '/')
++         NewFileName = string(NewFileName.begin() + 1,NewFileName.end());
++   }
++   else 
++      NewFileName = FileName;
++
++   if (PathPrefix.empty() == false)
++      NewFileName = flCombine(PathPrefix,NewFileName);
++
++   FileFd fd(FileName, FileFd::ReadOnly);
++
++   if (!fd.IsOpen())
++   {
++      return false;
++   }
++
++   CheckSums[NewFileName].size = fd.Size();
++
++   MD5Summation MD5;
++   MD5.AddFD(fd.Fd(), fd.Size());
++   CheckSums[NewFileName].MD5 = MD5.Result();
++
++   fd.Seek(0);
++   SHA1Summation SHA1;
++   SHA1.AddFD(fd.Fd(), fd.Size());
++   CheckSums[NewFileName].SHA1 = SHA1.Result();
++
++   fd.Close();
++   
++   return true;
++}
++
+ 									/*}}}*/
++// ReleaseWriter::Finish - Output the checksums				/*{{{*/
++// ---------------------------------------------------------------------
++void ReleaseWriter::Finish()
++{
++   fprintf(Output, "MD5Sum:\n");
++   for(map<string,struct CheckSum>::iterator I = CheckSums.begin();
++       I != CheckSums.end();
++       ++I)
++   {
++      fprintf(Output, " %s %16ld %s\n",
++              (*I).second.MD5.c_str(),
++              (*I).second.size,
++              (*I).first.c_str());
++   }
++
++   fprintf(Output, "SHA1:\n");
++   for(map<string,struct CheckSum>::iterator I = CheckSums.begin();
++       I != CheckSums.end();
++       ++I)
++   {
++      fprintf(Output, " %s %16ld %s\n",
++              (*I).second.SHA1.c_str(),
++              (*I).second.size,
++              (*I).first.c_str());
++   }
++}
++
+diff -Naur apt-0.5.4/ftparchive/writer.h apt-new/ftparchive/writer.h
+--- apt-0.5.4/ftparchive/writer.h	2001-06-25 22:50:27.000000000 -0400
++++ apt-new/ftparchive/writer.h	2005-05-25 00:08:52.000000000 -0400
+@@ -1,6 +1,6 @@
+ // -*- mode: cpp; mode: fold -*-
+ // Description								/*{{{*/
+-// $Id: writer.h,v 1.4 2001/06/26 02:50:27 jgg Exp $
++// $Id: writer.h,v 1.7 2003/12/26 22:55:13 mdz Exp $
+ /* ######################################################################
+ 
+    Writer 
+@@ -13,7 +13,7 @@
+ #ifndef WRITER_H
+ #define WRITER_H
+ 
+-#ifdef __GNUG__
++#if defined(__GNUG__) && !defined(__APPLE_CC__)
+ #pragma interface "writer.h"
+ #endif 
+ 
+@@ -21,6 +21,7 @@
+ #include <stdio.h>
+ #include <iostream>
+ #include <vector>
++#include <map>
+ 
+ #include "cachedb.h"
+ #include "override.h"
+@@ -29,13 +30,13 @@
+ using std::string;
+ using std::cout;
+ using std::endl;
++using std::vector;
++using std::map;
+     
+ class FTWScanner
+ {
+    protected:
+-
+-   char *TmpExt;
+-   const char *Ext[10];
++   vector<string> Patterns;
+    const char *OriginalPath;
+    char *RealPath;
+    bool ErrorPrinted;
+@@ -66,10 +67,12 @@
+    virtual bool DoPackage(string FileName) = 0;
+    bool RecursiveScan(string Dir);
+    bool LoadFileList(string BaseDir,string File);
++   void ClearPatterns() { Patterns.clear(); };
++   void AddPattern(string Pattern) { Patterns.push_back(Pattern); };
+    bool SetExts(string Vals);
+       
+    FTWScanner();
+-   virtual ~FTWScanner() {delete [] RealPath; delete [] TmpExt;};
++   virtual ~FTWScanner() {delete [] RealPath;};
+ };
+ 
+ class PackagesWriter : public FTWScanner
+@@ -148,5 +151,27 @@
+    virtual ~SourcesWriter() {free(Buffer);};
+ };
+ 
++class ReleaseWriter : public FTWScanner
++{
++public:
++   ReleaseWriter(string DB);
++   virtual bool DoPackage(string FileName);
++   void Finish();
++
++   FILE *Output;
++   // General options
++   string PathPrefix;
++   string DirStrip;
++
++protected:
++   struct CheckSum
++   {
++      string MD5;
++      string SHA1;
++      // Limited by FileFd::Size()
++      unsigned long size;
++   };
++   map<string,struct CheckSum> CheckSums;
++};
+ 
+ #endif
+diff -Naur apt-0.5.4/ftparchive-conf apt-new/ftparchive-conf
+--- apt-0.5.4/ftparchive-conf	1969-12-31 19:00:00.000000000 -0500
++++ apt-new/ftparchive-conf	2005-05-24 23:46:39.000000000 -0400
+@@ -0,0 +1,2 @@
++Dir::Bin::gzip "@PREFIX@/bin/gzip";
++
+diff -Naur apt-0.5.4/methods/connect.cc apt-new/methods/connect.cc
+--- apt-0.5.4/methods/connect.cc	2001-02-20 02:03:18.000000000 -0500
++++ apt-new/methods/connect.cc	2005-05-25 00:08:52.000000000 -0400
+@@ -90,7 +90,7 @@
+ 
+    // Check the socket for an error condition
+    unsigned int Err;
+-   unsigned int Len = sizeof(Err);
++   int Len = sizeof(Err);
+    if (getsockopt(Fd,SOL_SOCKET,SO_ERROR,&Err,&Len) != 0)
+       return _error->Errno("getsockopt","Failed");
+    
+diff -Naur apt-0.5.4/methods/ftp.cc apt-new/methods/ftp.cc
+--- apt-0.5.4/methods/ftp.cc	2001-05-22 00:02:00.000000000 -0400
++++ apt-new/methods/ftp.cc	2005-05-25 00:08:52.000000000 -0400
+@@ -694,7 +694,7 @@
+       if (WaitFd(DataFd,true,TimeOut) == false)
+ 	 return _error->Error("Could not connect data socket, connection timed out");
+       unsigned int Err;
+-      unsigned int Len = sizeof(Err);
++      int Len = sizeof(Err);
+       if (getsockopt(DataFd,SOL_SOCKET,SO_ERROR,&Err,&Len) != 0)
+ 	 return _error->Errno("getsockopt","Failed");
+       if (Err != 0)
+diff -Naur apt-0.5.4/methods/rfc2553emu.h apt-new/methods/rfc2553emu.h
+--- apt-0.5.4/methods/rfc2553emu.h	2000-06-18 02:04:45.000000000 -0400
++++ apt-new/methods/rfc2553emu.h	2005-05-25 00:08:52.000000000 -0400
+@@ -26,6 +26,11 @@
+ #include <sys/types.h>
+ #include <sys/socket.h>
+ 
++// Always use full emulation on Darwin:
++//  netdb.h has the structures and constants, but getnameinfo() is missing
++//  and getaddrinfo() seems to be broken
++#ifndef __APPLE__
++
+ // Autosense getaddrinfo
+ #if defined(AI_PASSIVE) && defined(EAI_NONAME)
+ #define HAVE_GETADDRINFO
+@@ -36,6 +41,8 @@
+ #define HAVE_GETNAMEINFO
+ #endif
+ 
++#endif /* __APPLE__ */
++
+ // getaddrinfo support?
+ #ifndef HAVE_GETADDRINFO
+   // Renamed to advoid type clashing.. (for debugging)
+@@ -101,6 +108,9 @@
+   #define NI_NAMEREQD (1<<3)
+   #define NI_DATAGRAM (1<<4)
+   #endif
++  #ifndef NI_DATAGRAM
++  #define NI_DATAGRAM NI_DGRAM
++  #endif
+ 
+   #define sockaddr_storage sockaddr_in
+ #endif
+diff -Naur apt-0.5.4/patch_flush apt-new/patch_flush
+--- apt-0.5.4/patch_flush	1969-12-31 19:00:00.000000000 -0500
++++ apt-new/patch_flush	2005-05-25 00:08:52.000000000 -0400
+@@ -0,0 +1,11 @@
++#!/bin/sh
++set -e
++
++files=`find . -name '*.cc' -print | xargs grep -l 'flush;'`
++
++for i in $files ; do
++  sed 's/<< flush;/<< flush, fflush(NULL);/g' <$i >$i.tmp
++  mv $i.tmp $i
++done
++
++exit 0

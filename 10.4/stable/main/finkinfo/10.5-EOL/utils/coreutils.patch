@@ -1,0 +1,109 @@
+diff -Naur coreutils-8.10.orig/src/install.c coreutils-8.10/src/install.c
+--- coreutils-8.10.orig/src/install.c	2011-01-31 21:40:38.000000000 +0900
++++ coreutils-8.10/src/install.c	2011-02-11 22:42:35.000000000 +0900
+@@ -189,6 +189,10 @@
+   return !! (input & ~ mask);
+ }
+ 
++#ifdef __APPLE__
++#define NEWFILE_PERMISSION_DEPEND_ON_DIRECTORY
++#define DIRECTORY_IS_ALWAYS_SETGID
++#endif
+ /* Return true if copy of file SRC_NAME to file DEST_NAME is necessary. */
+ static bool
+ need_copy (const char *src_name, const char *dest_name,
+@@ -197,6 +201,8 @@
+   struct stat src_sb, dest_sb;
+   int src_fd, dest_fd;
+   bool content_match;
++  uid_t newfile_uid = getuid ();
++  gid_t newfile_gid = getgid ();
+ 
+   if (extra_mode (mode))
+     return true;
+@@ -212,10 +218,35 @@
+       || extra_mode (src_sb.st_mode) || extra_mode (dest_sb.st_mode))
+     return true;
+ 
++#ifdef NEWFILE_PERMISSION_DEPEND_ON_DIRECTORY
++    {
++      char *dest_dir = NULL;
++      struct stat dest_dir_sb;
++
++      if ((dest_dir = mdir_name (dest_name)) == NULL)
++	goto newfile_permission_end;
++      if (stat (dest_dir, &dest_dir_sb) != 0)
++	goto newfile_permission_end;
++      if (!(dest_dir_sb.st_mode & S_IFDIR))
++	goto newfile_permission_end;
++#ifdef HAVE_DIRECTORY_SETUID
++      if (dest_dir_sb.st_mode & S_ISUID)
++	newfile_uid = dest_dir_sb.st_uid;
++#endif
++#if defined(DIRECTORY_IS_ALWAYS_SETGID)
++      newfile_gid = dest_dir_sb.st_gid;
++#elif defined(HAVE_DIRECTORY_SETGID)
++      if (dest_dir_sb.st_mode & S_ISGID)
++	newfile_gid = dest_dir_sb.st_gid;
++#endif
++newfile_permission_end:
++      free(dest_dir);
++    }
++#endif
+   if (src_sb.st_size != dest_sb.st_size
+       || (dest_sb.st_mode & CHMOD_MODE_BITS) != mode
+-      || dest_sb.st_uid != (owner_id == (uid_t) -1 ? getuid () : owner_id)
+-      || dest_sb.st_gid != (group_id == (gid_t) -1 ? getgid () : group_id))
++      || dest_sb.st_uid != (owner_id == (uid_t) -1 ? newfile_uid : owner_id)
++      || dest_sb.st_gid != (group_id == (gid_t) -1 ? newfile_gid : group_id))
+     return true;
+ 
+   /* compare SELinux context if preserving */
+diff -Naur coreutils-8.10.orig/tests/chgrp/basic coreutils-8.10/tests/chgrp/basic
+--- coreutils-8.10.orig/tests/chgrp/basic	2011-01-31 21:40:38.000000000 +0900
++++ coreutils-8.10/tests/chgrp/basic	2011-02-11 00:02:57.000000000 +0900
+@@ -1,6 +1,12 @@
+ #!/bin/sh
+ # make sure chgrp is reasonable
+ 
++case `uname -sr` in
++  Darwin\ [1-7].*)
++  echo 1>&2 "$0: skipping this test; Darwin <= 7 (MacOS X <= 10.3) lacks lchown(2)"
++  exit 77 ;;
++esac
++
+ # Copyright (C) 2000-2011 Free Software Foundation, Inc.
+ 
+ # This program is free software: you can redistribute it and/or modify
+diff -Naur coreutils-8.10.orig/tests/chown/basic coreutils-8.10/tests/chown/basic
+--- coreutils-8.10.orig/tests/chown/basic	2011-01-31 21:40:38.000000000 +0900
++++ coreutils-8.10/tests/chown/basic	2011-02-11 00:02:57.000000000 +0900
+@@ -1,6 +1,12 @@
+ #!/bin/sh
+ # make sure chown --from=... works
+ 
++case `uname -sr` in
++  Darwin\ [1-7].*)
++  echo 1>&2 "$0: skipping this test; Darwin <= 7 (MacOS X <= 10.3) lacks lchown(2)"
++  exit 77 ;;
++esac
++
+ # Copyright (C) 2001, 2004-2011 Free Software Foundation, Inc.
+ 
+ # This program is free software: you can redistribute it and/or modify
+diff -Naur coreutils-8.10.orig/tests/misc/pwd-long coreutils-8.10/tests/misc/pwd-long
+--- coreutils-8.10.orig/tests/misc/pwd-long	2011-01-31 21:40:38.000000000 +0900
++++ coreutils-8.10/tests/misc/pwd-long	2011-02-11 00:02:57.000000000 +0900
+@@ -2,6 +2,12 @@
+ # -*- perl -*-
+ # Ensure that pwd works even when run from a very deep directory.
+ 
++case `uname -sr` in
++  Darwin\ [1-8].*)
++  echo 1>&2 "$0: skipping this test; Darwin seems to have some bug"
++  exit 77 ;;
++esac
++
+ # Copyright (C) 2006-2011 Free Software Foundation, Inc.
+ 
+ # This program is free software: you can redistribute it and/or modify

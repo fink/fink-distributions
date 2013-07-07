@@ -1,0 +1,117 @@
+diff -ru glchess-0.4.6-orig/Makefile.am glchess-0.4.6/Makefile.am
+--- glchess-0.4.6-orig/Makefile.am	Wed Jan  8 10:28:00 2003
++++ glchess-0.4.6/Makefile.am	Wed Jan  8 10:29:50 2003
+@@ -3,8 +3,9 @@
+ 
+ SUBDIRS 		= src man textures
+ 
+-install:
+-	cp glchessrc /etc/
++install: install-recursive
++	mkdir -p ${sysconfdir}
++	cp glchessrc ${sysconfdir}
+ 
+ uninstall:
+ 	rm /etc/glchessrc
+\ No newline at end of file
+diff -ru glchess-0.4.6-orig/src/engine.c glchess-0.4.6/src/engine.c
+--- glchess-0.4.6-orig/src/engine.c	Wed Jan  8 10:28:00 2003
++++ glchess-0.4.6/src/engine.c	Wed Jan  8 10:29:50 2003
+@@ -25,7 +25,7 @@
+ #include <string.h>
+ #include <unistd.h>
+ #include <stdarg.h>
+-#include <sys/poll.h>
++#include <sys/time.h>
+ #include <sys/types.h>
+ #include <signal.h>
+ 
+@@ -119,22 +119,20 @@
+ int read_char(char *ch)
+ {
+   int ret;
+-  struct pollfd pfd;
++  fd_set			fds;
++  struct timeval	delay;
+ 
+-  pfd.fd = INPUT;
+-  pfd.events = POLLIN | POLLERR | POLLHUP;
+-
+-  /* If time runs out and there's still no char, we guess there won't be
+-   * any more */
+-  if (poll(&pfd, 1, TIME_OUT) < 0)
+-  {
+-    return (-1);
+-  }
+-
+-  if ((pfd.revents & (POLLERR | POLLHUP)) != 0)
+-    return (-1);
+-
+-  if ((pfd.revents & POLLIN) != 0)
++  FD_ZERO(&fds);
++  FD_SET(INPUT, &fds);
++  
++  delay.tv_sec = TIME_OUT / 1000;
++  delay.tv_usec= (TIME_OUT % 1000) * 1000;
++
++  ret = select(INPUT+1, &fds, NULL, NULL, &delay);
++  
++  if (ret == -1)
++	  return -1;
++  else if (ret == 1)
+     ret = read(INPUT, ch, 1);
+   else
+     ret = 0;
+@@ -148,6 +146,7 @@
+   char *bin = NULL;
+   char *args[2];
+   char sd[10];
++  char *argv[2];
+ 
+   switch (engine)
+   {
+diff -ru glchess-0.4.6-orig/src/interface.c glchess-0.4.6/src/interface.c
+--- glchess-0.4.6-orig/src/interface.c	2002-03-25 00:02:08.000000000 -0500
++++ glchess-0.4.6/src/interface.c	2008-07-26 16:10:37.000000000 -0400
+@@ -25,7 +25,7 @@
+ #include <stdlib.h>
+ #include <gtkgl/gtkglarea.h>
+ #include <sys/select.h>
+-
++#include <sys/time.h>
+ #include "global.h"
+ #include "interface.h"
+ #include "menu.h"
+@@ -386,6 +386,10 @@
+     GDK_GL_NONE
+   };
+ 
++  /* The GtkGLArea must be created first to initialize OpenGL */
++  glcwidget->glarea = gtk_gl_area_new(attrlist);
++  gtk_widget_set_usize(GTK_WIDGET(glcwidget->glarea), 400, 400);
++
+   glcwidget->game = game;
+   glcwidget->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+   gtk_window_set_title(GTK_WINDOW(glcwidget->window), "glChess " VERSION);
+@@ -442,10 +446,6 @@
+   gtk_container_add(GTK_CONTAINER(glcwidget->scrolled_window),
+ 		    glcwidget->clist);
+ 
+-  /* The GtkGLArea */
+-  glcwidget->glarea = gtk_gl_area_new(attrlist);
+-  gtk_widget_set_usize(GTK_WIDGET(glcwidget->glarea), 400, 400);
+-
+   /* Signals */
+   gtk_widget_set_events(glcwidget->glarea,
+ 			GDK_EXPOSURE_MASK |
+diff -ru glchess-0.4.6-orig/src/texture.c glchess-0.4.6/src/texture.c
+--- glchess-0.4.6-orig/src/texture.c	2002-03-25 00:02:08.000000000 -0500
++++ glchess-0.4.6/src/texture.c	2008-07-26 16:11:31.000000000 -0400
+@@ -21,6 +21,7 @@
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <string.h>
+ 
+ #include "global.h"
+ #include "texture.h"

@@ -1,0 +1,237 @@
+Package: atlas
+Version: 3.10.1
+Revision: 1
+Description: Portable optimal linear algebra software
+DescDetail: <<
+The current version provides a complete BLAS and LAPACK API.
+For many operations, ATLAS achieves performance on par
+with machine-specific tuned libraries.
+Installs also LAPACK's docs and manpages.
+Headers: cblas.h clapack.h, plus the atlas headers
+Libraries installed:
+lib(pt)lapack.a		: The LAPACK routines provided by ATLAS,
+			plus the rest of LAPACK from netlib.org.
+lib(pt)cblas.a		: The ANSI C interface to the BLAS.
+lib(pt)f77blas.a	: The Fortran77 interface to the BLAS.
+libatlas.a		: The main ATLAS library,
+			providing low-level routines for all interface libs.
+On monoprocessor machines, the "threaded"  versions
+(those with "pt" in parentheses) are just symlinks to the unthreaded ones.
+The main use of the serial interface is for parallel packages
+that handle the parallelism on their own, and need serial blas/lapack.
+  The corresponding dylibs are also installed.
+<<
+DescPort: <<
+The optimized subset of LAPACK provided by ATLAS is merged
+with the full LAPACK from http://www.netlib.org/lapack.
+
+The --dylib configure option is used to build both static and shared libs
+with -fPIC in both cases for ASLR compatibility. The main atlas package
+provides symlinks for libptlapack.dylib, libptf77blas.dylib and 
+libptcblas.dylib to libtatlas.dylib as well as for liblapack.dylib,
+libf77blas.dylib and libcblas.dylib to libsatlas.dylib. This unfortunately
+breaks backward compatibilty with the previous packaging which incorrectly
+blocked compiling against the system lapack and blas libraries without
+completely deinstalling atlas (and anything that depended on it). Packages
+should now BuildDepends on atlas (>= 3.10.1-1) and Depends on atlas-shlibs
+(>= 3.10.1-1). The symlinks in atlas will allow code to build against 
+atlas but result in linkages are to libsatlas rather than liblapack and 
+libcblas, etc.
+<<
+DescUsage: <<
+Order is important when linking! Use:
+-L%p/lib -lptlapack -lptcblas -lptf77blas -latlas
+or
+-L%p/lib -ltatlas
+(or the analogue without "pt" in pkgs that handle parallelism on their own).
+
+Also decide carefully whether you want to link to static or to shared libs.
+<<
+Source: mirror:sourceforge:math-atlas/files/%n%v.tar.bz2
+Source-MD5: 78753e869231cc1417a92eebaa076718
+Source2: http://www.netlib.org/lapack/lapack-3.4.2.tgz
+Source2-MD5: 61bf1a8a4469d4bdb7604f5897179478
+PatchFile: %n.patch
+PatchFile-MD5:06ec47ef569a02980b9f9f5dbaf3c134
+
+SourceDirectory: ATLAS 
+License: BSD
+
+NoSetMAKEFLAGS: true
+SetMAKEFLAGS: -j1
+UseMaxBuildJobs: false
+BuildDependsOnly: true
+BuildDepends: gcc48-compiler, doxygen, graphviz | graphviz-nox
+BuildConflicts: coreutils-default
+Depends: %N-shlibs (=%v-%r)
+
+# The whole previous patchscript is in the srcs for %v 3.9.4
+PatchScript: <<
+#!/bin/sh -ev
+patch -p1 < %{PatchFile} 
+chmod ugo+x ar2
+perl -pi -e "s|XXXXX|%b/ar2|g" CONFIG/src/SpewMakeInc.c
+if [ "%m" = 'powerpc' ]
+  then perl -pi -e 's,cMVFLAGS=\\"%%s,cMVFLAGS=\\"-force_cpusubtype_ALL\ %%s,' include/atlas_mvtesttime.h
+fi
+
+## put srcs in logical dirs, version independent
+
+cd ..
+if [ -e LAPACK ] ; then mv LAPACK LAPACK-strange; fi
+mv lapack-3.4.2 LAPACK
+# first need the tarball of lapack (and no % will give the path to the original;
+# not worth to check the user's fink.conf for a FetchAltDir entry etc)
+tar -czf lapack.tgz LAPACK
+cd -
+
+##
+#        -e '/f77blas\.dylib *:/,/lapack\.dylib *:/s, \$(LIBS),,' \
+sed -i.bak -e 's,libtool -dynamic,\$(LIBTOOL) -dynamic,' -e 's,_version %v,_version \$(VER),g' \
+	-e 's,-compatibility_version \$(VER) ,,' \
+	-e '/^dylib :/,/^ptdylib :/s,[(]LIBS[)],& $(F77SYSLIB),' \
+	-e '/lapack\.dylib *:/,/clapack\.dylib *:/s,\$(LIBS),-lgcc_s.1 &,' makes/Make.lib
+sed -i.bak -e 's,LIBTOOL",LIBTOOL -single_module -dead_strip -x",' configure
+# use correct fink prefix
+sed -i.bak -e 's,/sw,%p,' CONFIG/src/{config,probe_comp}.c
+
+# Link with gcc-fsf-4.8 to obtain correct libgcc related linkages to resolve symbols on ppc
+perl -pi -e 's,\$\(LIBTOOL\) -dynamic,gcc-fsf-4.8 -dynamiclib,g' makes/Make.lib
+# force GOODGCC to gcc-fsf-4.8
+perl -pi -e "s|GOODGCC =.*|GOODGCC = gcc-fsf-4.8\");|" CONFIG/src/SpewMakeInc.c
+
+cd ..
+cd LAPACK
+sed -e 's,\.\./.\./librefblas\.a,%b/../bld/lib/libf77blas.a %b/../bld/lib/libcblas.a %b/../bld/lib/libatlas.a,' \
+    -e 's,lapack\.a,%b/../bld/lib/liblapack.a,' \
+    -e 's, -g$,,' -e '/LOADOPTS/s,=,= $(OPTS),' \
+    -e 's,libtmglib.a,%b/../bld/src/lapack/reference/libtmglib.a,' < make.inc.example > make.inc.proto
+path=`which perl`
+sed -i'' -e "s,/s./bin/perl,$path," DOCS/Doxyfile*
+<<
+
+# -Si omp 2 -Si antthr 2 -Si lapackref ? -Ss flapack %b/../LAPACK/SRC ?
+ConfigureParams: -v 2 -Si archdef 1 -Si latune 1 --with-netlib-lapack-tarfile=../lapack.tgz
+CompileScript: <<
+#!/bin/sh -ev
+
+ cd ..
+ ln -s %p/lib/gcc4.8/bin/gcc-4 gcc
+ ln -s %p/lib/gcc4.8/bin/gfortran gfortran
+ GCCADDR=`pwd`
+ export PATH=$GCCADDR:%p/lib/gcc4.8/bin:$PATH
+
+### BUILDSCRIPT
+BLD () {
+ confflags="-b 32"
+ mflags="$mflags -fomit-frame-pointer -O3"
+ if [ "%m" = 'i386' ]
+	then mflags="$mflags -m32 -mfpmath=sse"
+	else if  [ "%m" = 'x86_64' ]
+		then mflags="$mflags -m64 -mfpmath=sse"; confflags="-b 64"
+		else  mflags="$mflags -maltivec -mabi=altivec -mcpu=7400 -mtune=7400 -force_cpusubtype_ALL"
+		if [ `machine|sed -e 's,ppc,,' -e 's,\([0-9]\).*,\1,'` != 9 ]
+			then confflags='-Si cputhrchk 0 -D c -DATL_AVgcc -b 32'
+		fi
+	     fi
+ fi
+ lflags="$iflags"
+ sed -e "/^OPTS /s;=;= $mflags;" -e "s,ATLAS/../bld,$1,g" < LAPACK/make.inc.proto > LAPACK/make.inc
+
+ cd $1
+ if [ "%m" = 'powerpc' ]
+ then   ../ATLAS/configure %c -C ac $GCCADDR/gcc -C if `which gfortran` -A 4 -F alg "$mflags" $confflags --dylibs
+ else   ../ATLAS/configure %c -C ac $GCCADDR/gcc -C if `which gfortran` -F alg "$mflags" $confflags --dylibs
+ fi
+
+ make
+
+### Static Libs
+ cd lib
+ ranlib *.a
+ # Apparently on some machines (=monoprocessors ?) the threaded libs are not made;
+ # we first make atlas 'look the same' to all other pkgs, independently of the machine
+ for l in atlas cblas f77blas lapack
+	do
+	if [ ! -f libpt$l.a ] ; then ln -s lib$l.a libpt$l.a ; fi
+	done
+ cd ../..
+}
+
+### BUILDING
+ iflags='-fPIC'
+ mflags='-fPIC'
+ mkdir -p darwin_bld
+ BLD darwin_bld
+
+### LAPACK-DOCS
+ cd %b/../LAPACK
+ make man html
+<<
+InfoTest: <<
+TestSuiteSize: large
+TestScript: <<
+#!/bin/sh -ev
+ set +e
+ cd ..
+ export PATH=`pwd`:$PATH
+ cd LAPACK
+ make -k blas_testing || :
+# to get timing uncluttered by compilation times, we'll repeat the tests at the end of the log:
+ rm BLAS/*.out
+ cd ../darwin_bld
+ make -k full_test || :
+ if test -f lib/libptcblas.a
+	then make -k lapack_test_al_pt || :; make -k ptcheck || :
+ fi
+ make -k lapack_test_al_ab || :; make -k check time || :
+ cd ../LAPACK; time { make -k blas_testing || :; cd ../STAT_bld/bin/LAPACK_TEST; make -k all || : ; } ; cd -
+ # here: real 3m10.903s; user 2m55.622s; sys 0m15.570s  (average of 3)
+ # with 3.8.2: real 3m19.518s; user 3m2.366s; sys 0m18.272s
+ egrep "fail|Error" BLAS/*.out
+ cat ../darwin_bld/bin/LAPACK_TEST/SUMMARY_al_*.txt
+<<
+<<
+InstallScript: <<
+#!/bin/sh -ev
+ mkdir -p %i/share/doc/%n/LAPACK
+ cp doc/* INSTALL.txt README %i/share/doc/%n
+ head -n29 bin/atlas_tee.c > %i/share/doc/%n/LICENSE
+ cp -pPR ../LAPACK/DOCS/man %i/share
+ cp -pPR ../LAPACK/DOCS/{org2.ps,lapacke.pdf,lawn81.tex} %i/share/doc/%n/LAPACK
+ cp -pPR ../LAPACK/{LICENSE,README} %i/share/doc/%n/LAPACK
+ cp -pPR ../LAPACK/DOCS/explore-html %i/share/doc/%n/LAPACK/html
+ ln -s html/index.html %i/share/doc/%n/LAPACK/lapack.html
+ cd ../darwin_bld
+ make install DESTDIR=%i
+ # create symlinks to threaded atlas
+ ln -sf %p/lib/libtatlas.dylib %i/lib/libptlapack.dylib
+ ln -sf %p/lib/libtatlas.dylib %i/lib/libptf77blas.dylib
+ ln -sf %p/lib/libtatlas.dylib %i/lib/libptcblas.dylib
+ # create symlinks to serial atlas
+ ln -sf %p/lib/libsatlas.dylib %i/lib/liblapack.dylib
+ ln -sf %p/lib/libsatlas.dylib %i/lib/libf77blas.dylib
+ ln -sf %p/lib/libsatlas.dylib %i/lib/libcblas.dylib
+ # rm empty headers
+ cd %i/include/atlas; ls -1s|grep '^[[:space:]]*0[[:space:]]'|sed -e 's,.* ,,'|xargs rm -f; cd -
+ find %i/lib -type f -name '*.a' -exec ranlib \{\} \;
+ chmod -R a-x %i/lib/*
+ chmod -R a+rX %i/share
+<<
+Splitoff: <<
+	Package: %N-shlibs
+	Depends: gcc48-shlibs
+	Files: lib/libtatlas.dylib lib/libsatlas.dylib
+	InstallScript: mkdir -p %i/share/doc; ln -s %N %i/share/doc/%n
+	Shlibs: <<
+	%p/lib/libtatlas.dylib          0.0.0   %n      (>= 3.11.8-1)
+	%p/lib/libsatlas.dylib          0.0.0   %n      (>= 3.11.8-1)
+	<<
+<<
+SplitOff2: <<
+	Package: %N-doc
+	Files: share/man share/doc/%N/LAPACK
+	InstallScript: mkdir -p %i/share/doc; ln -s %N %i/share/doc/%n
+<<
+Homepage: http://math-atlas.sourceforge.net
+Maintainer: Jack Howarth <howarth@bromo.med.uc.edu>

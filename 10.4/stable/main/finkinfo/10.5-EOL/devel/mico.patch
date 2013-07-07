@@ -1,0 +1,129 @@
+diff -rN -u old-mico/orb/orb.cc new-mico/orb/orb.cc
+--- old-mico/orb/orb.cc	2006-05-27 18:27:32.000000000 +0200
++++ new-mico/orb/orb.cc	2006-07-08 14:57:28.000000000 +0200
+@@ -2474,9 +2474,7 @@
+     // we need to know OA before calling
+     // receive_request_service_context start point
+     // - it's called from init_invoke
+-    ObjectAdapter *oa = NULL;
+-    if (!builtin_invoke (rec, obj, req, pr))
+-	oa = get_oa (obj);
++    ObjectAdapter *oa = get_oa (obj);
+ #ifdef HAVE_THREADS
+ 	if (!cb && response_exp) 
+ 	    cb = new ORBAsyncCallback;
+
+--- mico/ir/Makefile	2005-11-25 12:15:53.000000000 +0100
++++ mico-new/ir/Makefile	2006-10-21 16:38:55.000000000 +0200
+@@ -80,7 +80,7 @@
+ endif
+ 
+ ird: main.o ../idl/libidl.a ../orb/$(LIBMICO) $(LIBMICOIR)
+-	$(CXX) $(CXXFLAGS) $(LDFLAGS) main.o -L. $(LDLIBS) -o ird
++	$(CXX) $(CXXFLAGS) $(LDFLAGS) main.o -L. $(LDLIBS) ../idl/libidl.a -o ird
+ 	$(POSTLD) $@
+ 
+ libmicoir$(VERSION).$(SOEXT): $(SHARED_OBJS)
+
+--- mico/idl/Makefile	2005-11-25 12:15:50.000000000 +0100
++++ mico-new/idl/Makefile	2006-10-21 16:37:18.000000000 +0200
+@@ -72,7 +72,7 @@
+ 	$(RANLIB) $@
+ 
+ idl: libidl.a main.o ../orb/$(LIBMICO) ../ir/$(LIBMICOIR) $(IR_OBJS)
+-	$(CXX) $(CXXFLAGS) $(LDFLAGS) main.o $(IR_OBJS) -lidl $(LDLIBS) -o idl
++	$(CXX) $(CXXFLAGS) $(LDFLAGS) main.o $(IR_OBJS) libidl.a $(LDLIBS) -o idl
+ 	$(POSTLD) $@
+ 
+ main.o:
+
+--- mico/admin/mico-shld.def.in	2005-11-25 12:15:45.000000000 +0100
++++ mico-patched/admin/mico-shld.def.in	2006-10-24 12:26:22.000000000 +0200
+@@ -45,12 +45,21 @@
+ done
+ 
+ test "X$ofiles"  != X || die "no input files"
+-test "X$outfile" != X || die "no output file"
+ 
+-outfile=` echo "$outfile" | sed -e 's/\.\(so\|o\)$//' `'.@SOEXT@'
++version=2.3.12
++basename=$(echo $outfile | sed -e "s|\.$version||")
++minorversion=$(echo "$version" | sed -e "s|\.[0-9]*$||") 
+ 
+-ldcmd="@SHARED_CC@ @PICFLAGS@ @LDSOFLAGS@ @DLFLAGS@ $libdirs @LDFLAGS@ -o $outfile \
+- $args" # @LIBS@
++# leave libshtest.dylib from configure as it is
++outfile="$outfile.@SOEXT@"
++test "X$outfile" == Xlibshtest.@SOEXT@ || outfile=$(echo "$basename.$version.@SOEXT@")
++installname=$(echo "$basename.@SOEXT@")
++test "X$outfile" == Xlibshtest.@SOEXT@ || installname=$(echo "FINKPATH/lib/$basename.@SOEXT@") 
++
++ldcmd="@SHARED_CC@ @PICFLAGS@ @LDSOFLAGS@ @DLFLAGS@ $libdirs @LDFLAGS@ -o $outfile $args @LIBS@  \
++ -install_name $installname \
++ -compatibility_version $minorversion.0    \
++ -current_version $version"
+ 
+ echo "$ldcmd"
+ eval "$ldcmd" || exit
+
+--- mico/configure	2006-01-21 16:12:08.000000000 +0100
++++ mico-patched/configure	2006-10-24 15:17:57.000000000 +0200
+@@ -1073,7 +1073,7 @@
+ 			if test "$CPPFLAGS" = "" ; then
+ 				CPPFLAGS="-I$incdir"
+ 			else
+-				CPPFLAGS="$CPPFLAGS -I$incdir"
++				CPPFLAGS="-I$incdir $CPPFLAGS"
+ 			fi
+ 			echo "   + found $incdir" 1>&6
+ 			;;
+@@ -1093,7 +1093,7 @@
+ 			if test "$LDFLAGS" = "" ; then
+ 				LDFLAGS="-L$libdir"
+ 			else
+-				LDFLAGS="$LDFLAGS -L$libdir"
++				LDFLAGS="-L$libdir $LDFLAGS"
+ 			fi
+ 			echo "   + found $libdir" 1>&6
+ 			;;
+
+--- mico/admin/mico-config.in	2005-11-25 12:15:45.000000000 +0100
++++ mico-patched/admin/mico-config.in	2006-10-24 15:44:03.000000000 +0200
+@@ -52,10 +52,10 @@
+     echo "@PICFLAGS@"
+     ;;
+   --libs)
+-    echo "@DLFLAGS@ -L@prefix@/lib -lmico@MICO_VERSION@ @LDFLAGS@ @BASE_LIBS@"
++    echo "@DLFLAGS@ -L@prefix@/lib -lmico @LDFLAGS@ @BASE_LIBS@"
+     ;;
+   --cosslibs)
+-    echo "@DLFLAGS@ -L@prefix@/lib -lmicocoss@MICO_VERSION@ -lmico@MICO_VERSION@ @LDFLAGS@ @BASE_LIBS@"
++    echo "@DLFLAGS@ -L@prefix@/lib -lmicocoss -lmico @LDFLAGS@ @BASE_LIBS@"
+     ;;
+   --help)
+     usage
+
+--- mico/include/mico/os-math.h	2005-11-25 12:15:52.000000000 +0100
++++ mico-patched/include/mico/os-math.h	2006-11-14 11:24:50.000000000 +0100
+@@ -333,16 +333,21 @@
+ #endif
+ 
+ #if defined(__APPLE__) && defined(__MACH__)
++// it _IS_ defined on 10.4
++#ifndef isinf
+ #define isinf( x ) ( ( sizeof ( x ) == sizeof(double) ) ?           \
+                    __isinfd ( x ) :                                 \
+                    ( sizeof ( x ) == sizeof( float) ) ?             \
+                    __isinff ( x ) :                                 \
+                    __isinf  ( x ) )
++#endif
++#ifndef isnan
+ #define isnan( x ) ( ( sizeof ( x ) == sizeof(double) ) ?           \
+                    __isnand ( x ) :                                 \
+                    ( sizeof ( x ) == sizeof( float) ) ?             \
+                    __isnanf ( x ) :                                 \
+                    __isnan  ( x ) )
++#endif
+ #endif // __APPLE__ && __MACH__
+ 
+ #include <mico/lmath.h>

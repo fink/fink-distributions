@@ -1,0 +1,227 @@
+diff -Naur peep-0.5.0-rc2/conf/peep.conf peep-0.5.0-rc2.new/conf/peep.conf
+--- peep-0.5.0-rc2/conf/peep.conf	Thu Oct 24 10:29:56 2002
++++ peep-0.5.0-rc2.new/conf/peep.conf	Mon Nov 22 21:08:52 2004
+@@ -5,7 +5,7 @@
+ general
+   version 0.5.1
+   # Path where the sounds are stored
+-  sound-path /home/olsonco/peep/sounds
++  sound-path @PREFIX@/share/peep/sounds
+ end general
+ 
+ class main
+@@ -75,7 +75,7 @@
+ end client peck
+ 
+ # Load the wetlands theme
+-theme themes/collin.xml
++theme @PREFIX@/etc/peep/themes/collin.xml
+ 
+ # Additionally load these two events
+ event
+diff -Naur peep-0.5.0-rc2/config.h.in peep-0.5.0-rc2.new/config.h.in
+--- peep-0.5.0-rc2/config.h.in	Thu Oct 24 16:14:29 2002
++++ peep-0.5.0-rc2.new/config.h.in	Mon Nov 22 21:24:36 2004
+@@ -239,3 +239,11 @@
+ 
+ /* Define as `fork' if `vfork' does not work. */
+ #undef vfork
++
++/* For EsounD Port */
++#undef __USING_ESD__
++/* For Mac OS X */
++#ifdef __APPLE__
++#define cfree(a) free((a))
++#define USE_NAMED_SEMAPHORES
++#endif
+diff -Naur peep-0.5.0-rc2/configure peep-0.5.0-rc2.new/configure
+--- peep-0.5.0-rc2/configure	Mon Nov  4 09:51:47 2002
++++ peep-0.5.0-rc2.new/configure	Mon Nov 22 20:14:29 2004
+@@ -2707,7 +2707,7 @@
+ 
+ if test "$snd_driver" = ""; then
+     cat >>confdefs.h <<\_ACEOF
+-#define __USING_OSS__ 1
++#define __USING_ESD__ 1
+ _ACEOF
+ 
+ fi
+diff -Naur peep-0.5.0-rc2/server/Makefile.in peep-0.5.0-rc2.new/server/Makefile.in
+--- peep-0.5.0-rc2/server/Makefile.in	Mon Nov  4 09:52:11 2002
++++ peep-0.5.0-rc2.new/server/Makefile.in	Mon Nov 22 20:14:29 2004
+@@ -85,6 +85,7 @@
+ 	engine.h \
+ 	engine_queue.c \
+ 	engine_queue.h \
++	esd.c \
+ 	main.c \
+ 	main.h \
+ 	mixer.c \
+@@ -126,7 +127,7 @@
+ PROGRAMS = $(bin_PROGRAMS)
+ 
+ am_peepd_OBJECTS = alsa.$(OBJEXT) cmdline.$(OBJEXT) debug.$(OBJEXT) \
+-	engine.$(OBJEXT) engine_queue.$(OBJEXT) main.$(OBJEXT) \
++	engine.$(OBJEXT) engine_queue.$(OBJEXT) esd.$(OBJEXT) main.$(OBJEXT) \
+ 	mixer.$(OBJEXT) mixer_queue.$(OBJEXT) notice.$(OBJEXT) \
+ 	oss.$(OBJEXT) parser.$(OBJEXT) playback.$(OBJEXT) \
+ 	server.$(OBJEXT) ssl_server.$(OBJEXT) tcp_server.$(OBJEXT) \
+diff -Naur peep-0.5.0-rc2/server/cmdline.c peep-0.5.0-rc2.new/server/cmdline.c
+--- peep-0.5.0-rc2/server/cmdline.c	Thu Oct 24 16:14:33 2002
++++ peep-0.5.0-rc2.new/server/cmdline.c	Mon Nov 22 20:14:29 2004
+@@ -316,7 +316,7 @@
+ {
+ 
+ 	printVersion ();
+-	printf ("
++	printf ("\
+ Usage: %s [OPTIONS]...\n\
+    -h         --help                Print help and exit\n\
+    -V         --version             Print version and exit\n\
+diff -Naur peep-0.5.0-rc2/server/esd.c peep-0.5.0-rc2.new/server/esd.c
+--- peep-0.5.0-rc2/server/esd.c	Thu Jan  1 09:00:00 1970
++++ peep-0.5.0-rc2.new/server/esd.c	Mon Nov 22 20:14:29 2004
+@@ -0,0 +1,71 @@
++/*
++PEEP: The Network Auralizer
++Copyright (C) 2000 Michael Gilfix
++
++This file is part of PEEP.
++
++You should have received a file COPYING containing license terms
++along with this program; if not, write to Michael Gilfix
++(mgilfix@eecs.tufts.edu) for a copy.
++
++This version of PEEP is open source; you can redistribute it and/or
++modify it under the terms listed in the file COPYING.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
++*/
++
++#include "config.h"
++
++#ifdef __USING_ESD__
++
++#include "sound.h"
++#include "mixer.h"
++#include "debug.h"
++
++struct esd {
++	int esd;
++	esd_format_t format;
++};
++
++void *soundInit (void *snd_device, int mode) {
++	struct esd *handle = (struct esd*)malloc(sizeof(struct esd));
++	if (handle == NULL) {
++		log (DBG_GEN, "Couldn't allocate enough memory\n");
++		shutDown ();
++		return NULL;
++	}
++	handle->esd = -1;
++	handle->format = ESD_STREAM | mode;
++	return handle;
++}
++
++int soundSetFormat (void *handle, unsigned int format_type,
++					unsigned int rate, unsigned int chans,
++					unsigned int port)
++{
++	((struct esd*)handle)->format |= format_type |
++			((chans == STEREO) ? ESD_STEREO : ESD_MONO);
++	((struct esd*)handle)->esd = esd_play_stream(((struct esd*)handle)->format, rate, NULL, "peep");
++	
++	if( ((struct esd*)handle)->esd < 0 ) {
++		log(DBG_GEN,  "EsounD error: code %d\n", ((struct esd*)handle)->esd );
++		return 0;
++	}
++	/* no error */
++	return 1;
++}
++
++SNDCARD_INFO *soundGetInfo (void *handle) { return NULL; }
++SND_STATUS *soundGetStatus (void *handle) { return NULL; }
++
++ssize_t soundPlayChunk (void *handle, char *buf, unsigned int len) {
++	return write (((struct esd*)handle)->esd, buf, len); 
++}
++void soundClose (void *handle) {
++	esd_close(((struct esd*)handle)->esd);
++	free(handle);
++}
++
++#endif
+diff -Naur peep-0.5.0-rc2/server/sound.h peep-0.5.0-rc2.new/server/sound.h
+--- peep-0.5.0-rc2/server/sound.h	Mon Aug 19 09:10:09 2002
++++ peep-0.5.0-rc2.new/server/sound.h	Mon Nov 22 21:09:45 2004
+@@ -33,6 +33,16 @@
+ #define SOUND_RDWR               SNDRV_PCM_STREAM_DUPLEX
+ #endif /* __USING_ALSA__ */
+ 
++#ifdef __USING_ESD__
++/* Include these headers for EsounD definitions */
++#include <esd.h>
++#define AU_SOUND_FORMAT
++#define SIGNED_16_BIT            ESD_BITS16
++#define SOUND_WRONLY             ESD_PLAY
++#define SOUND_RDONLY             ESD_RECORD
++#define SOUND_RDWR               ESD_PLAY | ESD_RECORD
++#endif /* __USING_ESD__ */
++
+ #ifdef __USING_OSS__
+ #include <stdio.h>
+ #include <fcntl.h>
+diff -Naur peep-0.5.0-rc2/server/thread.c peep-0.5.0-rc2.new/server/thread.c
+--- peep-0.5.0-rc2/server/thread.c	Fri Aug  9 15:47:24 2002
++++ peep-0.5.0-rc2.new/server/thread.c	Mon Nov 22 21:23:49 2004
+@@ -106,6 +106,18 @@
+ 
+ 	sem_t *sem = NULL;
+ 
++#ifdef USE_NAMED_SEMAPHORES
++	static int semnum = 0;
++	char name[20];
++	sprintf(name, "/peepd-%d-%4.4d", getpid(), semnum++);
++	sem = sem_open(name, O_CREAT, 0600, value);
++	if ( sem == (sem_t *)SEM_FAILED ) {
++		log (DBG_GEN, "Error opening a semaphore: %s\n", strerror (errno));
++		return NULL;
++	} else {
++		sem_unlink(name);
++	}
++#else
+ 	if ((sem = (sem_t *)malloc (sizeof (sem_t))) == NULL) {
+ 
+ 		log (DBG_GEN, "Error creating a new semaphore: %s\n", strerror (errno));
+@@ -120,6 +132,7 @@
+ 		return NULL;
+ 
+ 	}
++#endif /* USE_NAMED_SEMAPHORES */
+ 
+ 	return sem;
+ 
+@@ -175,6 +188,14 @@
+ int semaphoreDestroy (sem_t *sem)
+ {
+ 
++#ifdef USE_NAMED_SEMAPHORES
++	if (sem && sem_close(sem) < 0) {
++		log (DBG_GEN, "Error closing a semaphore: %s\n", strerror (errno));
++		return 0;
++	} else {
++		return 1;
++	}
++#else
+ 	if (sem && sem_destroy (sem) < 0) {
+ 
+ 		log (DBG_GEN, "Error destroying a semaphore: %s\n", strerror (errno));
+@@ -188,5 +209,6 @@
+ 		return 1;
+ 
+ 	}
++#endif
+ 
+ }

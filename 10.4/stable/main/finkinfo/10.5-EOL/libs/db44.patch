@@ -1,0 +1,105 @@
+diff -ru db-4.4.20.orig/db/db_cam.c db-4.4.20/db/db_cam.c
+--- db-4.4.20.orig/db/db_cam.c	2006-01-10 11:19:21.000000000 -0500
++++ db-4.4.20/db/db_cam.c	2009-05-08 11:16:24.000000000 -0400
+@@ -579,11 +579,12 @@
+ 	    flags == DB_NEXT || flags == DB_NEXT_DUP || flags == DB_PREV)) {
+ 		if (tmp_rmw && (ret = dbc_arg->c_am_writelock(dbc_arg)) != 0)
+ 			return (ret);
+-		if ((ret = __db_c_idup(cp->opd, &opd, DB_POSITION)) != 0)
++		if (F_ISSET(dbc_arg, DBC_TRANSIENT))
++			opd = cp->opd;
++		else if ((ret = __db_c_idup(cp->opd, &opd, DB_POSITION)) != 0)
+ 			return (ret);
+ 
+-		switch (ret =
+-		    opd->c_am_get(opd, key, data, flags, NULL)) {
++		switch (ret = opd->c_am_get(opd, key, data, flags, NULL)) {
+ 		case 0:
+ 			goto done;
+ 		case DB_NOTFOUND:
+@@ -596,12 +597,18 @@
+ 				if ((ret = __db_c_close(opd)) != 0)
+ 					goto err;
+ 				opd = NULL;
++				if (F_ISSET(dbc_arg, DBC_TRANSIENT))
++					cp->opd = NULL;
+ 				break;
+ 			}
+ 			goto err;
+ 		default:
+ 			goto err;
+ 		}
++	} else if (cp->opd != NULL && F_ISSET(dbc_arg, DBC_TRANSIENT)) {
++		if ((ret = __db_c_close(cp->opd)) != 0)
++			goto err;
++		cp->opd = NULL;
+ 	}
+ 
+ 	/*
+diff -ru db-4.4.20.orig/mp/mp_fget.c db-4.4.20/mp/mp_fget.c
+--- db-4.4.20.orig/mp/mp_fget.c	2005-10-12 13:53:36.000000000 -0400
++++ db-4.4.20/mp/mp_fget.c	2009-05-08 11:16:29.000000000 -0400
+@@ -587,8 +587,11 @@
+ 	 */
+ 	if (state != SECOND_MISS && bhp->ref == 1) {
+ 		bhp->priority = UINT32_MAX;
+-		SH_TAILQ_REMOVE(&hp->hash_bucket, bhp, hq, __bh);
+-		SH_TAILQ_INSERT_TAIL(&hp->hash_bucket, bhp, hq);
++		if (SH_TAILQ_FIRST(&hp->hash_bucket, __bh) !=
++		     SH_TAILQ_LAST(&hp->hash_bucket, hq, __bh)) {
++			SH_TAILQ_REMOVE(&hp->hash_bucket, bhp, hq, __bh);
++			SH_TAILQ_INSERT_TAIL(&hp->hash_bucket, bhp, hq);
++		}
+ 		hp->hash_priority =
+ 		    SH_TAILQ_FIRSTP(&hp->hash_bucket, __bh)->priority;
+ 	}
+diff -ru db-4.4.20.orig/qam/qam_files.c db-4.4.20/qam/qam_files.c
+--- db-4.4.20.orig/qam/qam_files.c	2005-10-20 14:57:12.000000000 -0400
++++ db-4.4.20/qam/qam_files.c	2009-05-08 11:16:13.000000000 -0400
+@@ -411,6 +411,12 @@
+ 	    DB_APP_DATA, buf, 0, NULL, &real_name)) != 0)
+ 		goto err;
+ #endif
++
++	mpf = array->mpfarray[offset].mpf;
++	/* This extent my already be marked for delete and closed. */
++	if (mpf == NULL)
++		goto err;
++
+ 	/*
+ 	 * The log must be flushed before the file is deleted.  We depend on
+ 	 * the log record of the last delete to recreate the file if we crash.
+@@ -418,7 +424,6 @@
+ 	if (LOGGING_ON(dbenv) && (ret = __log_flush(dbenv, NULL)) != 0)
+ 		goto err;
+ 
+-	mpf = array->mpfarray[offset].mpf;
+ 	(void)__memp_set_flags(mpf, DB_MPOOL_UNLINK, 1);
+ 	/* Someone could be real slow, let them close it down. */
+ 	if (array->mpfarray[offset].pinref != 0)
+diff -ru db-4.4.20.orig/txn/txn.c db-4.4.20/txn/txn.c
+--- db-4.4.20.orig/txn/txn.c	2005-11-01 09:50:03.000000000 -0500
++++ db-4.4.20/txn/txn.c	2009-05-08 11:16:20.000000000 -0400
+@@ -1049,12 +1049,14 @@
+ 		return (ret);
+ 	memcpy(txn->name, name, len);
+ 
++	TXN_SYSTEM_LOCK(dbenv);
+ 	if (td->name != INVALID_ROFF) {
+ 		__db_shalloc_free(
+ 		    &mgr->reginfo, R_ADDR(&mgr->reginfo, td->name));
+ 		td->name = INVALID_ROFF;
+ 	}
+ 	if ((ret = __db_shalloc(&mgr->reginfo, len, 0, &p)) != 0) {
++		TXN_SYSTEM_UNLOCK(dbenv);
+ 		__db_err(dbenv,
+ 		    "Unable to allocate memory for transaction name");
+ 
+@@ -1063,6 +1065,7 @@
+ 
+ 		return (ret);
+ 	}
++	TXN_SYSTEM_UNLOCK(dbenv);
+ 	td->name = R_OFFSET(&mgr->reginfo, p);
+ 	memcpy(p, name, len);
+ 

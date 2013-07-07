@@ -1,0 +1,181 @@
+##
+## Initial setup
+##
+Package: privoxy
+Version: 3.0.0
+Revision: 4
+Description: Privacy Enhancing Proxy
+License: GPL
+Maintainer: Nigel Stanger <nstanger@infoscience.otago.ac.nz>
+##
+## Dependencies
+##
+BuildDepends: autoconf (>= 2.60), fink (>= 0.24.12)
+Depends: daemonic, cron-service
+Replaces: junkbuster
+Conflicts: junkbuster
+##
+## Unpack phase
+##
+Source: mirror:sourceforge:ijbswa/%n-%v-stable-src.tar.gz
+Source-MD5: 6790def33b3e5ade2aa576347aa3cd4c
+SourceDirectory: %n-%v-stable
+##
+## Patch phase
+##
+PatchFile: %n.patch
+PatchFile-MD5: d0f37a028243720af5e519cc7b9096a3
+PatchScript: sed -e 's|@PREFIX@|%p|g' -e 's|@PACKAGE@|%n|g' < %{PatchFile} | patch -p1
+##
+## Compile phase
+##
+ConfigureParams: --disable-dynamic-pcre
+CompileScript: <<
+  autoheader
+  autoconf
+  ./configure %c
+  make
+<<
+##
+## Install phase
+##
+InstallScript: <<
+  strip %n
+  /usr/bin/install -d -m 755 %i/sbin
+  /usr/bin/install -c -p -m 755 %n %i/sbin
+
+  /usr/bin/install -d -m 755 %i/etc/%n
+  /usr/bin/install -c -p -m 644 config %i/etc/%n
+  /usr/bin/install -c -p -m 644 *.action %i/etc/%n
+  /usr/bin/install -c -p -m 644 *.filter %i/etc/%n
+  /usr/bin/install -c -p -m 644 trust %i/etc/%n
+  /usr/bin/install -d -m 755 %i/etc/%n/templates
+  /usr/bin/install -c -p -m 644 templates/* %i/etc/%n/templates
+
+  /usr/bin/install -d -m 755 %i/var/run
+  touch %i/var/run/%n.pid
+  /usr/bin/install -d -m 755 %i/var/log/%n
+  touch %i/var/log/%n/%n.log
+  touch %i/var/log/%n/jarfile
+
+  /usr/bin/install -d -m 755 %i/share/doc/%n
+  /usr/bin/install -d -m 755 %i/share/man/man1
+  /usr/bin/install -d -m 755 %i/share/man/man3
+  /usr/bin/install -c -p -m 644 %n.1 %i/share/man/man1
+  /usr/bin/install -c -p -m 644 doc/pcrs.3 %i/share/man/man3
+  cp -R doc/pdf doc/text doc/webserver %i/share/doc/%n
+  
+  /usr/bin/install -d -m 755 %i/etc/cron.weekly
+  /usr/bin/install -c -p -m 755 privoxy.weekly %i/etc/cron.weekly/%n
+  /usr/bin/install -d -m 755 %i/etc/cron.monthly
+  /usr/bin/install -c -p -m 755 privoxy.monthly %i/etc/cron.monthly/%n
+<<
+DocFiles: AUTHORS Changelog LICENSE README doc/gpl.html pcre/licence
+##
+## Build phase
+##
+ConfFiles: <<
+  %p/etc/%n/config
+  %p/etc/%n/user.action
+  %p/etc/%n/default.filter
+  %p/etc/%n/trust
+<<
+PreRmScript: <<
+# Clean up --- remove daemonic entry and trash rotated log files;
+# the package will take care of the rest. (Adapted from junkuster package.)
+# Also kill the process if it's running.
+if [ $1 != "upgrade" ]; then
+  daemonic remove %n
+  rm %p/var/log/%n/*.gz || true
+  if [ -f %p/var/run/%n.pid ]; then
+    kill $(cat %p/var/run/%n.pid | head -n 1) || true
+  fi
+fi
+<<
+DaemonicFile: <<
+<service>
+  <description>Privacy enhancing proxy</description>
+  <message>Privoxy</message>
+  <daemon name="%n">
+    <executable>%p/sbin/%n</executable>
+    <parameters>--pidfile %p/var/run/%n.pid %p/etc/%n/config</parameters>
+    <configfile>%p/etc/%n/config</configfile>
+    <pidfile>%p/var/run/%n.pid</pidfile>
+  </daemon>
+</service>
+<<
+##
+## Additional data
+##
+DescDetail: <<
+  Privoxy is a web proxy with advanced filtering capabilities for
+  protecting privacy, filtering web page content, managing cookies,
+  controlling access, and removing ads, banners, pop-ups and other
+  obnoxious Internet junk. Privoxy has a very flexible configuration and
+  can be customized to suit individual needs and tastes. Privoxy has
+  application for both stand-alone systems and multi-user networks.
+
+  Privoxy is based on Internet Junkbuster (tm).
+  
+  Privoxy is NOT a firewall.
+<<
+DescPort: <<
+  Theoretically this should auto-detect libpcre and link it dynamically,
+  but it seems a little wonky. I don't have time to fool around with
+  this at present, and privoxy supplies its own statically linked copy
+  of libpcre, so I've just gone with that for the time being. I'll add
+  dynamic libpcre in a later revision.
+
+  It would be more worth getting dynamic libpcre working if dynamic
+  libpcrs (Perl compatible regex substitutions) was also available. I
+  briefly played around with trying to port libpcrs, but it rapidly
+  exhausted my knowledge base :) Maybe later when I have more time...
+<<
+DescPackaging: <<
+  This is a full replacement for the old junkbuster package (the
+  JunkBuster proxy no longer appears to be under development).
+
+  This builds fine with both autoconf (2.13-3) and autoconf2.5 (2.54-2),
+  although with autoconf2.5 autoheader complains about deprecated use of
+  acconfig.h. We could force use of the Apple-provided autoconf (v2.52
+  as of Mac OS X 10.2.4 + December 2002 Developer Tools), but there
+  seems little point. If the Privoxy guys don't get their act together
+  before this deprecated stuff disappears, I may at some stage have to
+  add a BuildDepends: (autoconf <= x.xx).
+  
+  The make install target is explicitly stated as being broken in the
+  current release, so I install everything manually (as they recommend)
+  until this gets fixed.
+  
+  Technically this should probably install the pcre man page, but I
+  can't see how to avoid a conflict with the libpcre package. For the
+  time being I've left it out (it'll become moot once I update to
+  dynamic libpcre anyway). I have included the pcrs man page however ---
+  there's no libpcrs package for Fink yet, so it won't conflict with
+  anything.
+  
+  Uses cron-service (anacron) to install scripts to rotate the log files
+  weekly, and download the latest version of the default actions file
+  from SourceForge monthly.
+<<
+DescUsage: <<
+  You will need to configure your browser(s) to use proxy address
+  127.0.0.1:8118. If you already have another service running on port
+  8118, or if you want to serve requests from other machines (e.g. on
+  your local network) as well, you will need to override the default in
+  section 4.1 of the configuration file (<fink
+  prefix>/etc/privoxy/config). Similarly, if you already go through a
+  proxy run by someone else (like an ISP's caching proxy), you will need
+  to configure proxy forwarding in section 5 of the configuration file.
+
+  To start Privoxy manually, use the command 'sudo privoxy --pidfile
+  <fink prefix>/var/run/privoxy.pid <fink prefix>/etc/privoxy/config'
+  and to stop it, use the command 'sudo kill `cat <fink
+  prefix>/var/privoxy/privoxy.pid`'. To create a startup item, run
+  'daemonic enable privoxy' as root. The startup item will be removed
+  automatically if you remove the package.
+<<
+Homepage: http://www.privoxy.org/
+##
+##
+##

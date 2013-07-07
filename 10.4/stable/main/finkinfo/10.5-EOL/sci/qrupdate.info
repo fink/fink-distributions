@@ -1,0 +1,109 @@
+Info2: <<
+Package: qrupdate%type_pkg[-blas]
+Version: 1.1.2
+Revision: 7
+Type: -blas (. -atlas -ref), gcc (4.8), lapack (3.4.2)
+
+Source: mirror:sourceforge:%{Ni}/1.1/%{Ni}-%v.tar.gz
+Source-MD5: 6d073887c6e858c24aeda5b54c57a8c4
+Description: QR and Cholesky decomposition library
+DescDetail: <<
+qrupdate is a Fortran library for fast updates of QR, Cholesky decompositions.
+<<
+DescUsage: <<
+This package contains a static library, header, and unversioned dylib.
+<<
+DescPackaging: <<
+Patch out hardcoded /usr/local.
+
+Revision 7: Change library install location to allow coexistence between
+the variants and thereby avoid dependency deadlocks.
+<<
+DescPort: <<
+Uses GNU 'install -D', so we patch that out and use 'mkdir -p' first to avoid
+BuildDepends: coreutils-default.
+
+Use -ff2c on the base variant to be compatible with Accelerate.
+<<
+Maintainer: Alexander Hansen <alexkhansen@users.sourceforge.net>
+License: GPL
+Homepage: http://qrupdate.sourceforge.net/
+
+BuildDepends: <<
+(%type_raw[-blas] = -atlas) atlas (>= 3.10.1-1),
+(%type_raw[-blas] = -ref) lapack%type_pkg[lapack],
+gcc%type_pkg[gcc]-compiler
+<<
+Depends: %N-shlibs (=%v-%r)
+BuildDependsOnly: true
+Conflicts: %{Ni}, %{Ni}-atlas, %{Ni}-ref
+Replaces: %{Ni}, %{Ni}-atlas, %{Ni}-ref
+
+PatchScript: <<
+	#!/bin/sh -ev
+	if [ `uname -r | cut -f1 -d.` -ge 9 ]
+		then MYLDFLAGS="-Wl,-dead_strip_dylibs"
+		else MYLDFLAGS=""
+	fi
+	# Beat on Makeconf to make this build like we want
+	sed -i.orig -e 's|/usr/local|%p|g' \
+		-e '/FC/s|gfortran|&-fsf-%type_raw[gcc]|' Makeconf
+	if [ "%type_pkg[-blas]" = "-atlas" ]
+	then
+		perl -pi -e "s|^(BLAS=)-lblas|LDFLAGS=$LDFLAGS $MYLDFLAGS\n\1-ltatlas|" Makeconf
+		perl -pi -e "s|^(LAPACK=)-llapack|\1-ltatlas|" Makeconf
+	elif [ "%type_pkg[-blas]" = "-ref" ]
+	then
+		export PKG_CONFIG_PATH="%p/lib/lapack/pkgconfig:$PKG_CONFIG_PATH"
+		MYBLAS=`pkg-config --libs blas`
+		perl -pi -e "	s|^(BLAS=).*|LDFLAGS=$LDFLAGS\n\1$MYBLAS|; \
+						s/(FFLAGS.*)-O3/\1-O2/" Makeconf
+		perl -pi -e "s|^(LAPACK=)-llapack|\1-lreflapack|" Makeconf
+	else
+		sed -i.orig \
+			-e '/FFLAGS/s|-O3|-ff2c -g &|' \
+			-e 's|-llapack||' Makeconf
+		perl -pi -e "s|^(BLAS=).*|LDFLAGS=$LDFLAGS\n\1-Wl,-framework,Accelerate|" Makeconf		
+	fi
+	perl -pi -e 's|(LIBDIR.*)|\1/%N|' Makeconf
+	sed -i.orig -e 's|install -D|install|g' src/Makefile
+	# recursive parallel Makefiles please -- fangism
+	sed -i.orig -e '/make -C/s|make|+&|' Makefile
+	sed -i.orig -e '/FFLAGS.*LIBS/s|(FFLAGS)|& $(LDFLAGS)|' test/Makefile
+<<
+
+CompileScript: <<
+	make solib && make lib
+<<
+
+InfoTest: <<
+	TestScript:  make -j1 test || exit 2
+<<
+
+InstallScript: <<
+	#!/bin/sh -ev
+	install -d %i/lib/%N
+	make install-shlib install-staticlib DESTDIR=%d	
+	cd %i/lib
+	# move static lib up
+	mv %N/lib%{Ni}.a .
+	# convenience symlink
+	ln -s %N/lib%{Ni}.dylib 
+<<
+
+DocFiles: COPYING README
+
+SplitOff: <<
+	Package: %N-shlibs
+	
+	Depends: <<
+		(%type_raw[-blas] = -atlas) atlas-shlibs (>= 3.10.1-1),
+		(%type_raw[-blas] = -ref) lapack%type_pkg[lapack]-shlibs,
+		gcc%type_pkg[gcc]-shlibs
+	<<
+	Files: lib/%N/lib%{Ni}.1*.dylib
+	DocFiles: COPYING README
+	Shlibs:  %p/lib/%N/lib%{Ni}.1.dylib 0.0.0 %n (>= 1.1.2-7)
+	DescUsage: This package contains a shared library.
+<<
+<<

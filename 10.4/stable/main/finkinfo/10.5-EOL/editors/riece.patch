@@ -1,0 +1,160 @@
+diff -Naur riece-2.0.2.orig/fink/riece-install riece-2.0.2/fink/riece-install
+--- riece-2.0.2.orig/fink/riece-install	1970-01-01 09:00:00.000000000 +0900
++++ riece-2.0.2/fink/riece-install	2006-03-30 18:01:04.000000000 +0900
+@@ -0,0 +1,115 @@
++#! /bin/bash -e
++# @PREFIX@/lib/emacsen-common/packages/install/riece
++
++# Written by Jim Van Zandt <jrv@vanzandt.mv.com>, borrowing heavily
++# from the install scripts for gettext by Santiago Vila
++# <sanvila@ctv.es> and octave by Dirk Eddelbuettel <edd@debian.org>.
++#
++# Patched by Roland Mas <lolando@debian.org> to add support for lists
++# of flavor-dependently included/excluded files
++
++FLAVOR=$1
++STAMPFILE=riece.elc
++PACKAGE=riece
++
++# INCLUDED_emacs20=""
++# INCLUDED_emacs21=""
++# INCLUDED_xemacs21=""
++# INCLUDE_emacs_snapshot=""
++
++# EXCLUDED_emacs20=""
++# EXCLUDED_emacs21=""
++# EXCLUDED_xemacs21=""
++# EXCLUDED_emacs_snapshot=""
++
++SOURCEONLY_ALL="COMPILE riece-command-next-channel.xpm riece-command-previous-channel.xpm riece-submit-bug-report.xpm"
++
++eval included_here=\$$(echo INCLUDED_$FLAVOR | tr - _)
++eval excluded_here=\$$(echo EXCLUDED_$FLAVOR | tr - _)
++eval sourceonly_here=\$$(echo SOURCEONLY_$FLAVOR | tr - _)
++
++included_all=$(for i in ${!INCLUDED_*} ; do
++    eval echo \$$i
++    done | sort -u)
++
++excluded_all=$(for i in ${!EXCLUDED_*} ; do
++    eval echo \$$i
++    done | sort -u)
++
++sourceonly_all=$(for i in ${!SOURCEONLY_*} ; do
++    eval echo \$$i
++    done | sort -u)
++
++if [ ${FLAVOR} = emacs ]; then exit 0; fi
++
++LOG=`tempfile -pelc_ -s.log -m644`
++ELDIR=@PREFIX@/share/emacs/site-lisp/${PACKAGE}
++ELCDIR=@PREFIX@/share/${FLAVOR}/site-lisp/${PACKAGE}
++if test -e "${ELCDIR}/${STAMPFILE}"; then
++    echo "${PACKAGE} files already compiled in ${ELCDIR}."
++    rm -f ${LOG}
++    exit
++fi
++echo install/${PACKAGE}: Handling ${FLAVOR}, logged in ${LOG}
++
++if [ -z "$FLAGS" ] ; then
++    FLAGS="-q -no-site-file --no-site-file -batch -l COMPILE -f riece-compile"
++fi
++
++install -m 755 -d ${ELCDIR}
++cd ${ELDIR}
++
++# Now to compute the list of files to install...
++
++FILES=$(ls -1 *.el)
++# Here we have all of them
++
++PATTERN=""
++for i in $included_all $excluded_all $sourceonly_all; do
++    [ ! -z "$PATTERN" ] && PATTERN="${PATTERN}\|"
++    PATTERN="${PATTERN}^$i\$"
++done
++FILES2=$FILES
++if [ ! -z "$PATTERN" ] ; then
++    FILES=$(for i in $FILES2 ; do echo $i | grep -v $PATTERN || true ; done)
++fi
++# Here we only have those not explicitly included or excluded by any flavour
++
++FILES="$FILES $included_here"
++# Here we also have those included for the current flavour
++
++for i in $excluded_all ; do
++    include_i="yes"
++    for j in $excluded_here ; do
++	[ $i = $j ] && include_i="no"
++    done
++    [ $include_i = "yes" ] && FILES="$FILES $i"
++done
++# And now we have those excluded by other flavours but not the current one
++
++FILES=$(for i in $FILES ; do echo $i ; done | sort -u)
++# And now for my last trick...  The list is now uniquified!
++
++# Symlinks instead of copying...
++cd ${ELCDIR}
++for i in $FILES $sourceonly_all; do
++    ln -fs @PREFIX@/share/emacs/site-lisp/${PACKAGE}/$i
++done
++
++cat << EOF > path.el
++(setq load-path (cons "." load-path) byte-compile-warnings nil)
++EOF
++if test "${APPEND_LOAD_PATH}" != ""
++then
++	cat << EOF >> path.el
++(setq load-path (append ${APPEND_LOAD_PATH} load-path))
++EOF
++fi
++
++echo ${FLAVOR} ${FLAGS} >> ${LOG}
++"${FLAVOR}" ${FLAGS} >> ${LOG} 2>&1
++egrep -s -e "While compiling|\*\*" ${LOG} || /usr/bin/true
++echo install/${PACKAGE}: Deleting ${LOG}
++rm -f path.el COMPILE ${LOG}
++
++exit 0
+diff -Naur riece-2.0.2.orig/fink/riece-remove riece-2.0.2/fink/riece-remove
+--- riece-2.0.2.orig/fink/riece-remove	1970-01-01 09:00:00.000000000 +0900
++++ riece-2.0.2/fink/riece-remove	2006-03-30 18:00:50.000000000 +0900
+@@ -0,0 +1,11 @@
++#!/bin/sh -e
++# @PREFIX@/lib/emacsen-common/packages/remove/riece
++
++FLAVOR=$1
++PACKAGE=riece
++
++if [ ${FLAVOR} != emacs ]; then
++
++    echo remove/${PACKAGE}: purging byte-compiled files for ${FLAVOR}
++    rm -rf @PREFIX@/share/${FLAVOR}/site-lisp/${PACKAGE}
++fi
+diff -Naur riece-2.0.2.orig/fink/riece-startup riece-2.0.2/fink/riece-startup
+--- riece-2.0.2.orig/fink/riece-startup	1970-01-01 09:00:00.000000000 +0900
++++ riece-2.0.2/fink/riece-startup	2006-03-30 17:54:41.000000000 +0900
+@@ -0,0 +1,22 @@
++;; -*-emacs-lisp-*-
++;;
++;; Emacs startup file for the Fink riece package
++;;
++;; Originally contributed by Nils Naumann <naumann@unileoben.ac.at>
++;; Modified by Dirk Eddelbuettel <edd@debian.org>
++;; Adapted for dh-make by Jim Van Zandt <jrv@vanzandt.mv.com>
++
++;; The riece package follows the Debian/GNU Linux 'emacsen' policy and
++;; byte-compiles its elisp files for each 'emacs flavor' (emacs19,
++;; xemacs19, emacs20, xemacs20...).  The compiled code is then
++;; installed in a subdirectory of the respective site-lisp directory.
++;; We have to add this to the load-path:
++
++(if (not (file-exists-p "@PREFIX@/share/emacs/site-lisp/riece"))
++    (message "Package riece removed but not purged.  Skipping setup.")
++  (setq load-path (cons
++   (concat "@PREFIX@/share/" (symbol-name fink-emacs-flavor)
++	   "/site-lisp/riece") load-path))
++
++  (autoload 'riece "riece" nil t)
++  (setq riece-data-directory "@PREFIX@/share/emacs/site-lisp/riece"))
