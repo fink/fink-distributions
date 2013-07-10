@@ -1,0 +1,413 @@
+=== modified file 'cmds.py'
+--- cmds.py	2011-03-09 23:19:41 +0000
++++ cmds.py	2012-02-21 10:05:57 +0000
+@@ -22,36 +22,39 @@
+ 
+ import info
+ import bzrlib
++from bzrlib.option import Option
++from bzrlib.commands import (
++    Command,
++    display_command,
++    )
+ from bzrlib.lazy_import import lazy_import
+ lazy_import(globals(), """
+ import sys
+ from bzrlib import (
+     builtins,
+     bzrdir,
+-    commands,
+-    option,
+     log,
+     workingtree,
+     errors
+     )
+ 
+-from bzrlib.option import Option, custom_help
+-from bzrlib.commands import display_command
+-import logxml
+-import service
++from bzrlib.plugins.xmloutput import (
++    logxml,
++    service,
++    )
+ import socket
+-from xml_errors import handle_error_xml
+ """)
+ 
++from bzrlib.plugins.xmloutput.xml_errors import handle_error_xml
+ 
+ version_info = info.bzr_plugin_version
+ plugin_name = info.bzr_plugin_name
+ 
+-null_option = option.Option('null',
+-                            help='Write an ascii NUL (\\0) as the final char.')
+-
+-
+-class cmd_xmlstatus(commands.Command):
++null_option = Option('null',
++                     help='Write an ascii NUL (\\0) as the final char.')
++
++
++class cmd_xmlstatus(Command):
+     """Display status summary.
+ 
+     This reports on versioned and unknown files, reporting them
+@@ -118,7 +121,7 @@
+         self.outf.write('\n')
+ 
+ 
+-class cmd_xmlannotate(commands.Command):
++class cmd_xmlannotate(Command):
+     """Show the origin of each line in a file.
+ 
+     This prints out the given file with an annotation on the left side
+@@ -160,7 +163,7 @@
+             if file_id is None:
+                 raise bzrlib.errors.NotVersionedError(filename)
+ 
+-            file_version = tree.inventory[file_id].revision
++            file_version = tree.get_file_revision(file_id)
+             # always run with --all and --long options
+             # to get the author of each line
+             annotate_file_xml(branch=branch, rev_id=file_version,
+@@ -176,7 +179,7 @@
+                 branch.unlock()
+ 
+ 
+-class cmd_xmlmissing(commands.Command):
++class cmd_xmlmissing(Command):
+     """Show unmerged/unpulled revisions between two branches.
+ 
+     OTHER_BRANCH may be local or remote.
+@@ -212,7 +215,7 @@
+         self.outf.write('\n')
+ 
+ 
+-class cmd_xmlinfo(commands.Command):
++class cmd_xmlinfo(Command):
+     """Show information about a working tree, branch or repository.
+ 
+     This command will show all known locations and formats associated to the
+@@ -247,7 +250,7 @@
+         self.outf.write('\n')
+ 
+ 
+-class cmd_xmlplugins(commands.Command):
++class cmd_xmlplugins(Command):
+     """List the installed plugins.
+ 
+     This command displays the list of installed plugins including
+@@ -284,7 +287,7 @@
+         self.outf.write('\n')
+ 
+ 
+-class cmd_xmlversion(commands.Command):
++class cmd_xmlversion(Command):
+     """Show version of bzr."""
+     hidden = True
+     encoding_type = 'replace'
+@@ -383,7 +386,7 @@
+             self.outf.write('\0')
+         self.outf.write('\n')
+ 
+-class cmd_start_xmlrpc(commands.Command):
++class cmd_start_xmlrpc(Command):
+     """Start the xmlrpc service."""
+ 
+     hidden = True
+@@ -413,7 +416,7 @@
+             self.server.shutdown()
+ 
+ 
+-class cmd_stop_xmlrpc(commands.Command):
++class cmd_stop_xmlrpc(Command):
+     """Stops a xmlrpc service."""
+ 
+     hidden = True
+
+=== modified file 'infoxml.py'
+--- infoxml.py	2009-07-28 03:43:56 +0000
++++ infoxml.py	2012-02-21 10:18:57 +0000
+@@ -27,6 +27,7 @@
+ 
+ __all__ = ['show_bzrdir_info_xml']
+ 
++from bzrlib import info
+ from bzrlib.lazy_import import lazy_import
+ lazy_import(globals(), """
+ import os, sys, time
+@@ -36,7 +37,6 @@
+     errors,
+     osutils,
+     urlutils,
+-    info,
+     missing,
+     )
+ """)
+@@ -102,7 +102,7 @@
+         verbose = 1
+     if verbose is True:
+         verbose = 2
+-    layout = info.describe_layout(repository, branch, working)
++    layout = info.describe_layout(repository, branch, working, control)
+     formats = info.describe_format(control, repository,
+                                    branch, working).split(' or ')
+     outfile.write('<layout>%s</layout>' % layout)
+@@ -216,7 +216,6 @@
+     """Show missing revisions in working tree."""
+     branch = working.branch
+     basis = working.basis_tree()
+-    work_inv = working.inventory
+     branch_revno, branch_last_revision = branch.last_revision_info()
+     try:
+         tree_last_id = working.get_parent_ids()[0]
+@@ -233,7 +232,6 @@
+ def _show_working_stats_xml(working, outfile):
+     """Show statistics about a working tree."""
+     basis = working.basis_tree()
+-    work_inv = working.inventory
+     delta = working.changes_from(basis, want_unchanged=True)
+ 
+     outfile.write('<working_tree_stats>')
+@@ -254,9 +252,8 @@
+     outfile.write('<ignored>%d</ignored>' % ignore_cnt)
+ 
+     dir_cnt = 0
+-    for file_id in work_inv:
+-        if (work_inv.get_file_kind(file_id) == 'directory' and
+-            not work_inv.is_root(file_id)):
++    for path, entry in working.iter_entries_by_dir():
++        if entry.kind == 'directory' and entry.parent_id is not None:
+             dir_cnt += 1
+     outfile.write('<versioned_subdirectories>%d</versioned_subdirectories>' %
+                  (dir_cnt))
+
+=== modified file 'logxml.py'
+--- logxml.py	2010-12-15 18:27:12 +0000
++++ logxml.py	2011-12-12 15:11:38 +0000
+@@ -1,14 +1,12 @@
+ # -*- encoding: utf-8 -*-
+ 
+-import os
+-
++from bzrlib import log
+ from bzrlib.lazy_import import lazy_import
+ lazy_import(globals(), """
+ import bzrlib
+ from bzrlib import (
+     debug,
+     osutils,
+-    log,
+     )
+ """)
+ 
+
+=== modified file 'lsxml.py'
+--- lsxml.py	2011-03-09 23:41:22 +0000
++++ lsxml.py	2011-12-12 15:11:38 +0000
+@@ -19,8 +19,6 @@
+ # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
+ #
+ 
+-import os
+-
+ from bzrlib.lazy_import import lazy_import
+ lazy_import(globals(), """
+ from bzrlib import bzrdir, errors, osutils
+
+=== modified file 'service.py'
+--- service.py	2010-02-23 23:38:02 +0000
++++ service.py	2011-12-12 15:11:38 +0000
+@@ -20,6 +20,8 @@
+ #
+ """ xmlrpc service module """
+ 
++import os
++
+ from bzrlib.lazy_import import lazy_import
+ lazy_import(globals(), """
+ import bzrlib
+@@ -30,14 +32,13 @@
+     osutils
+     )
+ import sys
+-import os
+ import codecs
+ import logging
+ import traceback
+ from cStringIO import StringIO
+ """)
+ 
+-from xml_errors import XMLError
++from bzrlib.plugins.xmloutput.xml_errors import XMLError
+ from xmlrpclib import Fault, Binary
+ from SimpleXMLRPCServer import SimpleXMLRPCServer
+ 
+
+=== modified file 'statusxml.py'
+--- statusxml.py	2010-12-15 18:27:12 +0000
++++ statusxml.py	2011-12-12 15:11:38 +0000
+@@ -33,7 +33,7 @@
+     trace,
+     )
+ 
+-import logxml
++from bzrlib.plugins.xmloutput import logxml
+ """)
+ 
+ from writer import _escape_cdata
+
+=== modified file 'tests/elementtree_builder.py'
+--- tests/elementtree_builder.py	2007-11-26 02:21:31 +0000
++++ tests/elementtree_builder.py	2012-02-21 10:14:16 +0000
+@@ -1,7 +1,7 @@
+ 
+-from bzrlib.xml_serializer import elementtree as elementtree
++from bzrlib.xml_serializer import elementtree
+ 
+-ET = elementtree.ElementTree
++ET = elementtree
+ 
+ class _E(object):
+     """ This is the E factory, taken from http://effbot.org/zone/element-builder.htm """
+
+=== modified file 'tests/test_annotate_xml.py'
+--- tests/test_annotate_xml.py	2009-09-23 03:29:47 +0000
++++ tests/test_annotate_xml.py	2012-02-21 10:14:16 +0000
+@@ -30,7 +30,7 @@
+ 
+ from bzrlib.tests import TestCaseWithTransport
+ from bzrlib.xml_serializer import elementtree as elementtree
+-fromstring = elementtree.ElementTree.fromstring
++fromstring = elementtree.fromstring
+ 
+ class TestXmlAnnotate(TestCaseWithTransport):
+ 
+@@ -91,7 +91,8 @@
+         self.assertEqualDiff(expected_xml, out)
+         expected_elementtree = fromstring(expected_xml)
+         current_elementtree = fromstring(out)
+-        self.assertEquals(elementtree.ElementTree.tostring(expected_elementtree), elementtree.ElementTree.tostring(current_elementtree))
++        self.assertEquals(elementtree.tostring(expected_elementtree),
++                elementtree.tostring(current_elementtree))
+ 
+     def test_xmlannotate_cmd_show_ids(self):
+         out, err = self.run_bzr('xmlannotate hello.txt --show-ids')
+
+=== modified file 'tests/test_info_xml.py'
+--- tests/test_info_xml.py	2011-10-16 23:56:35 +0000
++++ tests/test_info_xml.py	2012-02-21 10:24:51 +0000
+@@ -135,7 +135,7 @@
+         self.assertEqualDiff(expected_xml, out)
+         self.assertEqual('', err)
+         tree1.commit('commit one')
+-        rev = branch1.repository.get_revision(branch1.revision_history()[0])
++        rev = branch1.repository.get_revision(branch1.last_revision())
+         datestring_first = osutils.format_date(rev.timestamp, rev.timezone)
+ 
+         # Branch standalone with push location
+@@ -670,7 +670,7 @@
+         self.build_tree(['tree/lightcheckout/a'])
+         tree2.add('a')
+         tree2.commit('commit one')
+-        rev = repo.get_revision(branch2.revision_history()[0])
++        rev = repo.get_revision(branch2.last_revision())
+         datestring_first = osutils.format_date(rev.timestamp, rev.timezone)
+         out, err = self.run_bzr('xmlinfo tree/lightcheckout --verbose')
+         expected_xml = '''<?xml version="1.0"?>
+@@ -1010,7 +1010,7 @@
+         tree1 = branch1.bzrdir.open_workingtree()
+         tree1.add('a')
+         tree1.commit('commit one')
+-        rev = repo.get_revision(branch1.revision_history()[0])
++        rev = repo.get_revision(branch1.last_revision())
+         datestring_first = osutils.format_date(rev.timestamp, rev.timezone)
+         out, err = self.run_bzr('xmlinfo -v repo/branch1')
+         expected_xml = '''<?xml version="1.0"?>
+
+=== modified file 'tests/test_log_xml.py'
+--- tests/test_log_xml.py	2009-09-23 03:29:47 +0000
++++ tests/test_log_xml.py	2012-02-21 10:14:16 +0000
+@@ -26,8 +26,8 @@
+ from bzrlib.tests.blackbox import ExternalBase
+ from bzrlib.tests import TestCaseInTempDir, TestCaseWithTransport
+ from bzrlib.xml_serializer import elementtree as elementtree
+-fromstring = elementtree.ElementTree.fromstring
+-elementtree_tostring = elementtree.ElementTree.tostring
++fromstring = elementtree.fromstring
++elementtree_tostring = elementtree.tostring
+ 
+ class TestLog(ExternalBase):
+ 
+
+=== modified file 'tests/test_ls_xml.py'
+--- tests/test_ls_xml.py	2011-10-16 23:56:35 +0000
++++ tests/test_ls_xml.py	2012-02-21 10:14:16 +0000
+@@ -21,7 +21,7 @@
+ from bzrlib import ignores
+ from bzrlib.tests import TestCaseWithTransport
+ from bzrlib.xml_serializer import elementtree as elementtree
+-fromstring = elementtree.ElementTree.fromstring
++fromstring = elementtree.fromstring
+ 
+ 
+ class TestLSXML(TestCaseWithTransport):
+
+=== modified file 'tests/test_status_xml.py'
+--- tests/test_status_xml.py	2010-03-26 03:38:04 +0000
++++ tests/test_status_xml.py	2012-02-21 10:14:16 +0000
+@@ -38,13 +38,11 @@
+ from bzrlib.osutils import pathjoin
+ from bzrlib.revisionspec import RevisionSpec
+ from bzrlib.tests import TestCaseWithTransport, TestSkipped
+-from bzrlib.workingtree import WorkingTree
+ from bzrlib.xml_serializer import elementtree as elementtree
+ 
+ import bzrlib.plugin
+-from bzrlib.status import show_tree_status
+-fromstring = elementtree.ElementTree.fromstring
+-from elementtree_builder import (ET, _E)
++fromstring = elementtree.fromstring
++from elementtree_builder import _E
+ 
+ ## little hack to load functions from parent module
+ show_tree_status_xml = None
+@@ -322,8 +320,9 @@
+         self.assertEquals(result.findall('unknown/file')[0].text, "world.txt")
+ 
+         result2 = fromstring(self.run_bzr("xmlstatus -r 0..")[0])
+-        self.assertEquals(elementtree.ElementTree.tostring(result2),
+-            elementtree.ElementTree.tostring(result))
++        self.assertEquals(
++            elementtree.tostring(result2),
++            elementtree.tostring(result))
+ 
+     def test_statusxml_versioned(self):
+         tree = self.make_branch_and_tree('.')
+@@ -346,8 +345,9 @@
+         self.assert_(len(result.findall('unknown/*')) == 0)
+ 
+         result2 = fromstring(self.run_bzr("xmlstatus --versioned -r 0..")[0])
+-        self.assertEquals(elementtree.ElementTree.tostring(result2),
+-            elementtree.ElementTree.tostring(result))
++        self.assertEquals(
++            elementtree.tostring(result2),
++            elementtree.tostring(result))
+ 
+     # Not yet implemneted
+     #def assertStatusContains(self, xpath):
+
+=== modified file 'tests/test_version_xml.py'
+--- tests/test_version_xml.py	2011-03-09 22:58:39 +0000
++++ tests/test_version_xml.py	2012-02-21 10:14:16 +0000
+@@ -27,7 +27,7 @@
+     )
+ 
+ from bzrlib.xml_serializer import elementtree as elementtree
+-fromstring = elementtree.ElementTree.fromstring
++fromstring = elementtree.fromstring
+ 
+ from bzrlib.plugins.xmloutput import versionxml
+ 
+
