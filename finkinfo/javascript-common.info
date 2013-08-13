@@ -1,0 +1,225 @@
+Package: javascript-common
+Version: 11
+Revision: 1
+###
+BuildDepends: <<
+	debhelper (>= 9),
+	dh-apache2
+<<
+Depends: coreutils
+Suggests: apache2 (>= 2.4.6) | lighttpd | httpd
+###
+Source: mirror:debian:pool/main/j/%n/%n_%v.tar.gz
+Source-MD5: f559d9189af212e29628eb6730cbc05b
+SourceDirectory: %n
+###
+PatchScript: <<
+  perl -pi -e 's,\/usr,%p,g' javascript-common.conf 90-javascript-alias.conf
+  perl -pi -e 's,\/etc,%p\/etc,g' debian/javascript-common.maintscript
+<<
+CompileScript: echo
+InstallScript: <<
+#dh install --with apache2
+
+install -d -m755 %i/share/javascript
+install -d -m755 %i/etc/apache2/conf-available
+install -m644 javascript-common.conf %i/etc/apache2/conf-available
+install -d -m755 %i/etc/lighthttpd/conf-available
+install -m644 90-javascript-alias.conf %i/etc/lighthttpd/conf-available
+<<
+###
+DocFiles: debian/javascript-common.README.Debian debian/README.lighttpd_removal debian/copyright
+###
+PostInstScript: <<
+set -e
+
+# summary of how this script can be called:
+#        * <postinst> `configure' <most-recently-configured-version>
+#        * <old-postinst> `abort-upgrade' <new version>
+#        * <conflictor's-postinst> `abort-remove' `in-favour' <package>
+#          <new-version>
+#        * <postinst> `abort-remove'
+#        * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
+#          <failed-install-package> <version> `removing'
+#          <conflicting-package> <version>
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+lighttpd_setup() {
+	mkdir -p %p/etc/lighttpd/conf-enabled
+	if [ ! -e %p/etc/lighttpd/conf-enabled/90-javascript-alias.conf ]
+	then
+		ln -s ../conf-available/90-javascript-alias.conf %p/etc/lighttpd/conf-enabled/90-javascript-alias.conf
+		if which invoke-rc.d > /dev/null && [ -x %p/etc/init.d/lighttpd ]
+		then
+			invoke-rc.d lighttpd reload || true
+		fi
+	fi
+}
+
+
+case "${1}" in
+	configure)
+		if dpkg --compare-versions "$2" lt 9
+		then
+			# Fresh install or most-recently-configured-version < 9
+			lighttpd_setup
+		else
+			if [ -e  %p/etc/javascript-common/lighttpd_disabled_by_user ]
+			then
+				rm %p/etc/javascript-common/lighttpd_disabled_by_user
+				grmdir --ignore-fail-on-non-empty %p/etc/javascript-common
+				# Do not reenable javascript/ in lighttpd
+				echo javascript-alias was disabled in lighttpd. >&2
+				echo Hint: Use \"lighttpd-enable-mod javascript-alias\" to re-enable. >&2
+			else
+				lighttpd_setup
+			fi
+		fi
+		;;
+
+	abort-upgrade|abort-remove|abort-deconfigure)
+		;;
+
+	*)
+		echo "postinst called with unknown argument \`${1}'" >&2
+		exit 1
+		;;
+esac
+
+# Will make piupart more happy on upgrades
+if [ "$1" = "configure" ] && dpkg --compare-versions "$2" lt-nl "9"
+then
+	# Remove old %p/etc/apache2/conf.d if empty and not already removed by user:
+        if [ -d %p/etc/apache2/conf.d ]
+        then
+		grmdir --ignore-fail-on-non-empty %p/etc/apache2/conf.d
+	fi
+	 # This is a work around bug #584185:
+	if [ -d %p/etc/javascript-common ]
+	then
+		grmdir --ignore-fail-on-non-empty %p/etc/javascript-common
+	fi
+fi
+
+exit 0
+<<
+###
+PostRmScript: <<
+set -e
+
+# summary of how this script can be called:
+#        * <postrm> `remove'
+#        * <postrm> `purge'
+#        * <old-postrm> `upgrade' <new-version>
+#        * <new-postrm> `failed-upgrade' <old-version>
+#        * <new-postrm> `abort-install'
+#        * <new-postrm> `abort-install' <old-version>
+#        * <new-postrm> `abort-upgrade' <old-version>
+#        * <disappearer's-postrm> `disappear' <overwriter>
+#          <overwriter-version>
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+case "${1}" in
+	purge)
+		if [ -d %p/etc/lighttpd/conf-enabled/ ]
+		then
+			grmdir --ignore-fail-on-non-empty %p/etc/lighttpd/conf-enabled/
+		fi
+		# %p/etc/javascript-common/lighttpd_disabled_by_user is NOT a conffile:
+		if [ -e %p/etc/javascript-common/lighttpd_disabled_by_user ]
+		then
+			rm %p/etc/javascript-common/lighttpd_disabled_by_user
+		fi
+		if [ -d %p/etc/javascript-common/ ]
+		then
+			grmdir --ignore-fail-on-non-empty %p/etc/javascript-common/
+		fi
+		;;
+
+	remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+		;;
+
+	*)
+		echo "postinst called with unknown argument \`${1}'" >&2
+		exit 1
+		;;
+esac
+
+exit 0
+<<
+PreRmScript: <<
+set -e
+
+# summary of how this script can be called:
+#        * <prerm> `remove'
+#        * <old-prerm> `upgrade' <new-version>
+#        * <new-prerm> `failed-upgrade' <old-version>
+#        * <conflictor's-prerm> `remove' `in-favour' <package> <new-version>
+#        * <deconfigured's-prerm> `deconfigure' `in-favour'
+#          <package-being-installed> <version> `removing'
+#          <conflicting-package> <version>
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+disabled_file_content() {
+	echo << EOS
+This file has been automatically generated by javascript-common during its
+uninstallation in order to keep track that you choose to disabled
+javascript-alias from lighttpd.
+It will disappear if you reinstall javascript-common or if you purge it.
+EOS
+}
+
+
+case "${1}" in
+	remove)
+		# disable our lighttpd conf as soon as possible, hence in prerm
+		if [ -L %p/etc/lighttpd/conf-enabled/90-javascript-alias.conf ]
+		then
+			rm -f %p/etc/lighttpd/conf-enabled/90-javascript-alias.conf
+			if which invoke-rc.d > /dev/null && [ -x %p/etc/init.d/lighttpd ]
+			then
+				invoke-rc.d lighttpd reload || true
+			fi
+		else
+			# Already disabled!
+			# Keep track of conf disabled by user
+			mkdir -p /etc/javascript-common
+			disabled_file_content > %p/etc/javascript-common/lighttpd_disabled_by_user
+		fi
+		;;
+	upgrade)
+		if [ ! -L %p/etc/lighttpd/conf-enabled/90-javascript-alias.conf ]
+		then
+			# Keep track of conf disabled by user
+			mkdir -p %p/etc/javascript-common
+			disabled_file_content > %p/etc/javascript-common/lighttpd_disabled_by_user
+		fi
+		;;
+	failed-upgrade|deconfigure)
+		;;
+	*)
+		echo "prerm called with unknown argument \`${1}'" >&2
+		exit 1
+		;;
+esac
+
+
+exit 0
+<<
+###
+Description: Base support for JavaScript library packages
+DescDetail: <<
+Web applications that use JavaScript need to distribute it through HTTP. Using
+a common path for every script avoids the need to enable this path in the HTTP
+server for every package.
+.
+This is a helper package that creates %p/share/javascript and enables it in
+the Apache and Lighttpd webserver.:
+<<
+###
+License: GPL
+Homepage: http://packages.qa.debian.org/j/javascript-common.html
+Maintainer: Justin F. Hallett <thesin@users.sourceforge.net>
