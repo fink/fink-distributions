@@ -1,0 +1,1790 @@
+Package: apache2
+Version: 2.4.6
+Revision: 2.1
+###
+Provides: httpd
+BuildDepends: <<
+	dpkg-dev (>= 1.16.1),
+	fink (>= 0.32),
+	libaprutil.0-dev (>= 1.5.2),
+	libapr.0-dev,
+	libpcap1,
+	libpcre1,
+	pkgconfig,
+	openssl,
+	openssl100-dev,
+	openldap24-dev
+<<
+Depends: <<
+	mime-support,
+	%N-data (= %v-%r),
+	%N-bin (= %v-%r)
+<<
+RuntimeDepends: <<
+	debianutils,
+	bash-completion,
+	file,
+	lynx,
+	daemonic,
+	logrotate,
+	anacron
+<<
+Replaces: apache2.2-common
+Conflicts: apache2.2-common
+Recommends: ssl-cert
+###
+Source: mirror:apache:httpd/httpd-%v.tar.gz
+Source-MD5: 6c17dafd009ef8ffb5ccc9481d1e6441
+###
+PatchFile: %n.patch
+PatchFile-MD5: a580e350929025b79441cd4eda5b964a
+PatchScript: <<
+BASE=$(echo %p | perl -pi -e 's,/,,'); \
+sed -e 's,@FINKPREFIX@,%p,g' -e "s,@FINKBASE@,${BASE},g" %{PatchFile} | patch -p1
+
+### Include more patches, mostly from debian build
+#patch -p1 < fink/patches/make_include_safe.patch # Probably to be droped in 2.4
+patch -p1 < fink/patches/fhs_compliance.patch
+#patch -p1 < fink/patches/suexec_is_shared.patch # Probably not needed in 2.4
+patch -p1 < fink/patches/dbm_read_hash_or_btree.patch
+patch -p1 < fink/patches/no_LD_LIBRARY_PATH.patch
+patch -p1 < fink/patches/suexec-CVE-2007-1742.patch
+patch -p1 < fink/patches/customize_apxs.patch
+patch -p1 < fink/patches/build_suexec-custom.patch
+# The patch below must not be applied by quilt at extraction time.  It depends
+# on some script-fu to be executed before. Have a look
+# to debian/rules' prepare-custom-suexec target.
+# If you're aware of that you can uncomment it at any time later and work on it
+# as you wish. However, it must be shipped commented out in the final package.
+#  patch -p1 < fink/patches/suexec-custom.patch
+# some changes to the core needed for itk:
+patch -p1 < fink/patches/add-itk-to-build-system.patch
+patch -p1 < fink/patches/itk-fix-htaccess-reads-for-persistent-connections.patch
+patch -p1 < fink/patches/itk-rerun-configure.patch
+patch -p1 < fink/patches/fix_CHANGES
+
+### Fink changes
+patch -p1 < fink/patches/fink_layout.patch
+
+## prebuild-checks:
+ERRS=""; \
+for a in $(find fink/config-dir/ -type f); do \
+	t="$a.$$$$"; \
+	unexpand < "$a" > "$t"; \
+	cmp -s "$a" "$t" || ERRS="$ERRS $a"; \
+	rm "$t"; \
+done ;\
+if [ -n "$ERRS" ] ; then \
+	echo 'ERROR: The following files contain spaces instead of tabs. Run through unexpand!'; \
+	ls -1 $ERRS; \
+	false; \
+fi
+
+## support/suexec-custom.c: support/suexec.c debian/patches/suexec-custom.patch
+cp support/suexec.c support/suexec-custom.c
+patch -p1 -i fink/patches/suexec-custom.patch
+
+## server/mpm/itk/.stamp:
+mkdir server/mpm/itk/
+cp server/mpm/prefork/* server/mpm/itk/
+mv server/mpm/itk/prefork.c server/mpm/itk/itk.c
+for p in $(grep -v '^#' fink/patches/itk/series) ; do \
+	echo Applying $p ... ;\
+	patch -p1 -i fink/patches/itk/$p ;\
+done
+
+## decode new icons
+for i in %b/fink/icons/*.txt; do \
+	cd %b/fink/icons; \
+	uudecode < $i; \
+done
+
+### Force use of awk over gawk
+perl -pi -e 's,gawk mawk nawk awk,awk mawk nawk gawk,g' configure
+
+### Fix userdir example to use defult OS X Setup
+perl -pi -e 's,\/home\/,\/Users\/,g' docs/conf/extra/httpd-userdir.conf.in
+perl -pi -e 's,public_html,Sites,g' docs/conf/extra/httpd-userdir.conf.in
+<<
+###
+DocFiles: ABOUT_APACHE LICENSE CHANGES INSTALL LAYOUT README* VERSIONING
+###
+ConfigureParams: <<
+--enable-layout=Fink \
+--enable-so \
+--with-program-name=apache2 \
+--enable-suexec \
+--with-suexec-caller=www \
+--with-suexec-bin=%p/lib/apache2/suexec \
+--with-suexec-docroot=%p/var/www \
+--with-suexec-userdir=Sites \
+--with-suexec-logfile=%p/var/log/apache2/suexec.log \
+--with-suexec-uidmin=100 \
+--enable-suexec=shared \
+--enable-log-config=static \
+--without-included-apr \
+--with-apr=%p/bin/apr-1-config \
+--with-apr-util=%p/bin/apu-1-config \
+--with-pcre=yes \
+--enable-pie \
+--enable-mpms-shared=all \
+--enable-mods-shared="all cgi" \
+--enable-mods-static="unixd logio watchdog version" \
+LTFLAGS="--no-silent"
+<<
+CompileScript: <<
+./configure %c
+
+# XXX Hack to make mod_mpm_itk.so link against libcap until we
+# XXX move itk to a separate package
+#echo "adding -lcap"
+#perl -p -i -e 's/(-avoid-version)/$1 -lcap/' server/mpm/itk/modules.mk
+
+make
+<<
+InstallScript: <<
+#!/bin/sh -ex
+
+make install DESTDIR=%d
+
+rm %i/bin/dbmmanage
+rm %i/share/man/man1/dbmmanage.1
+rm %i/sbin/envvars
+
+install -d -m755 %b/etc
+mv %i/etc/apache2 %b/etc
+
+SERVER_VERSION=%v
+MODULE_DIR=$(echo %p | perl -pi -e 's,/,,')/lib/apache2/modules/
+API=$(perl -ne 'print $1 if m/define\s+MODULE_MAGIC_NUMBER_MAJOR\s+?(.*)$/' < include/ap_mmn.h)
+
+## override_dh_installman:
+mv %i/share/man/man8/suexec.8 %i/share/man/man8/suexec-pristine.8
+pod2man fink/debhelper/dh_apache2.in > fink/manpages/dh_apache2.1
+pod2man fink/a2query.in > fink/manpages/a2query.8
+
+## %: %.in
+for i in fink/a2query fink/debhelper/dh_apache2; do \
+        sed "s#__SERVER_VERSION__#${SERVER_VERSION}#; s#__MODULE_DIR__#${MODULE_DIR}#; s#__API__#${API}#;" $i.in > $i; \
+        chmod 755 $i; \
+done
+
+#### NEW INSTALL
+### dirs
+install -d -m755 %i/etc/apache2/mods-enabled
+install -d -m755 %i/etc/apache2/conf-enabled
+install -d -m755 %i/etc/apache2/sites-enabled
+install -d -m755 %i/etc/logrotate.d
+install -d -m755 %i/lib/cgi-bin
+install -d -m755 %i/var/lib/apache2
+install -d -m755 %i/var/cache/apache2
+install -d -m755 %i/var/cache/apache2/mod_cache_disk
+install -d -m755 %i/var/log/apache2
+install -d -m755 %i/var/lock/apache2
+install -d -m755 %i/var/www
+
+### install
+install -d -m755 %i/etc/bash_completion.d
+install -m644 fink/bash_completion/apache2 %i/etc/bash_completion.d/
+cp -r fink/config-dir/* %i/etc/apache2
+install -m755 fink/a2enmod %i/sbin
+install -m755 fink/apache2ctl %i/sbin
+install -m755 fink/a2query %i/sbin
+install -m644 fink/debhelper/apache2-maintscript-helper %i/share/apache2/
+
+install -d -m755 %i/etc/cron.daily
+install -m644 fink/cron.daily %i/etc/cron.daily/apache2
+
+install -d -m755 %i/etc/default
+install -m644 fink/default %i/etc/default/apache2
+
+install -d -m755 %i/etc/logrotate.d
+install -m644 fink/logrotate %i/etc/logrotate.d/apache2
+
+### manpages
+install -d -m755 %i/share/man/man8
+install -m644 fink/manpages/apache2ctl.8 %i/share/man/man8
+install -m644 fink/manpages/apachectl.8 %i/share/man/man8
+install -m644 fink/manpages/a2enmod.8 %i/share/man/man8
+install -m644 fink/manpages/a2dissite.8 %i/share/man/man8
+install -m644 fink/manpages/a2dismod.8 %i/share/man/man8
+install -m644 fink/manpages/a2ensite.8 %i/share/man/man8
+install -m644 fink/manpages/a2enconf.8 %i/share/man/man8
+install -m644 fink/manpages/a2disconf.8 %i/share/man/man8
+install -m644 fink/manpages/a2query.8 %i/share/man/man8
+
+### links
+ln -s %p/sbin/a2enmod %i/sbin/a2dismod
+ln -s %p/sbin/a2enmod %i/sbin/a2ensite
+ln -s %p/sbin/a2enmod %i/sbin/a2dissite
+ln -s %p/sbin/a2enmod %i/sbin/a2enconf
+ln -s %p/sbin/a2enmod %i/sbin/a2disconf
+rm %i/sbin/apachectl
+ln -s %p/sbin/apache2ctl %i/sbin/apachectl
+
+### examples
+install -d -m755 %i/share/doc/%N/examples
+install -m644 fink/setup-instance %i/share/doc/%N/examples
+install -m644 fink/secondary-daemonic-script %i/share/doc/%N/examples
+install -m644 fink/apache2.monit %i/share/doc/%N/examples
+<<
+### No test in makefile
+#InfoTest: <<
+#  TestScript: <<
+#    make check || exit 2
+#  <<
+#<<
+###
+SplitOff: <<
+  Package: %N-suexec
+  Depends: %N-suexec-pristine (= %v-%r)
+  Description: Transitional package for apache2-suexec-pristine
+  DescDetail: <<
+This is a transitional package for apache2-suexec-pristine, and can be safely
+removed after the installation is complete.
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+set -e
+
+
+# summary of how this script can be called:
+#       * <postinst> `configure' <most-recently-configured-version>
+#       * <old-postinst> `abort-upgrade' <new version>
+#       * <conflictor's-postinst> `abort-remove' `in-favour' <package>
+#         <new-version>
+#       * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
+#         <failed-install-package> <version> `removing'
+#         <conflicting-package> <version>
+#
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+case "$1" in
+    configure)
+        if [ -n "$2" ] && dpkg --compare-versions "$2" lt "2.4.3" ; then
+                if [ -d %p/share/doc/apache2-suexec/ ] ; then
+                        RET=0
+                        rmdir %p/share/doc/apache2-suexec/ > /dev/null 2>&1|| RET=$?
+                        if [ $RET = 0 ] ; then
+                                ln -s %p/share/doc/apache2-suexec-pristine %p/share/doc/apache2-suexec
+                        fi
+                fi
+        fi
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0
+  <<
+<<
+SplitOff2: <<
+  Package: %N-suexec-pristine
+  Depends: %N-bin
+  Replaces: apache2-suexec (<< 2.3)
+  Provides: apache2-suexec
+  InstallScript: <<
+install -d -m755 %i/lib/apache2
+mv %I/sbin/suexec-pristine %i/lib/apache2/
+
+install -d -m755 %i/share/man/man8
+mv %I/share/man/man8/suexec-pristine.8 %i/share/man/man8
+  <<
+  DocFiles: LICENSE
+  Description: Apache HTTP Server standard suexec program for mod_suexec
+  DescDetail: <<
+Provides the standard suexec helper program for mod_suexec. This version is
+compiled with document root %p/var/www and userdir suffix public_html. If you
+need different settings, use the package apache2-suexec-custom.
+  <<
+  PostInstScript: <<
+set -e
+
+case "$1" in
+
+configure)
+	update-alternatives --install %p/lib/apache2/suexec suexec %p/lib/apache2/suexec-pristine 10 \
+		--slave %p/share/man/man8/suexec.8 suexec.8 %p/share/man/man8/suexec-pristine.8
+	;;
+abort-upgrade|abort-remove|abort-deconfigure)
+	;;
+
+*)
+	echo "postinst called with unknown argument \`$1'" >&2
+	exit 0
+	;;
+esac
+
+chmod 4754 %p/lib/apache2/suexec-pristine
+chgrp www %p/lib/apache2/suexec-pristine
+
+exit 0
+  <<
+  PreRmScript: <<
+set -e
+
+case "$1" in
+    remove)
+	update-alternatives --remove suexec %p/lib/apache2/suexec-pristine
+    ;;
+
+    upgrade|deconfigure|failed-upgrade)
+    ;;
+
+    *)
+	echo "prerm called with unknown argument \`$1'" >&2
+	exit 1
+    ;;
+esac
+
+exit 0
+  <<
+<<
+SplitOff3: <<
+  Package: %N-suexec-custom
+  Depends: %N-bin
+  Replaces: apache2-suexec (<< 2.3)
+  Provides: apache2-suexec
+  InstallScript: <<
+install -d -m755 %i/lib/apache2
+mv %I/sbin/suexec-custom %i/lib/apache2/
+
+install -d -m755 %i/etc/apache2/suexec
+install -m644 fink/suexec-config-dir/* %i/etc/apache2/suexec/
+
+install -d -m755 %i/share/man/man8
+install -m644 fink/manpages/suexec-custom.8 %i/share/man/man8
+  <<
+  DocFiles: LICENSE
+  Description: Apache HTTP Server configurable suexec program for mod_suexec
+  DescDetail: <<
+Provides a customizable version of the suexec helper program for mod_suexec.
+This is not the version from upstream, but can be configured with a
+configuration file.
+.
+If you do not need non-standard document root or userdir settings, it is
+recommended that you use the standard suexec helper program from the
+apache2-suexec-pristine package instead.
+  <<
+  PostInstScript: <<
+set -e
+
+case "$1" in
+
+configure)
+	update-alternatives --install %p/lib/apache2/suexec suexec %p/lib/apache2/suexec-custom 10 \
+		--slave %p/share/man/man8/suexec.8 suexec.8 /usr/share/man/man8/suexec-custom.8
+	;;
+abort-upgrade|abort-remove|abort-deconfigure)
+	;;
+
+*)
+	echo "postinst called with unknown argument \`$1'" >&2
+	exit 0
+	;;
+esac
+
+chmod 4754 %p/lib/apache2/suexec-custom
+chgrp www %p/lib/apache2/suexec-custom
+
+exit 0
+  <<
+  PreRmScript: <<
+set -e
+
+case "$1" in
+    remove)
+	update-alternatives --remove suexec %p/lib/apache2/suexec-custom
+    ;;
+
+    upgrade|deconfigure|failed-upgrade)
+    ;;
+
+    *)
+	echo "prerm called with unknown argument \`$1'" >&2
+	exit 1
+    ;;
+esac
+
+exit 0
+  <<
+<<
+SplitOff4: <<
+  Package: %N-doc
+  Recommends: %N
+  Description: Apache HTTP Server (on-site documentation)
+  DescDetail: <<
+The Apache Software Foundation's goal is to build a secure, efficient and
+extensible HTTP server as standards-compliant open source software. The
+result has long been the number one web server on the Internet.
+.
+This package provides the documentation for the Apache 2 HTTP server. The
+documentation is shipped in HTML format and can be accessed from a local
+running Apache HTTP server instance or by browsing the file system directly.
+  <<
+  InstallScript: <<
+install -d -m755 %i/share/doc/apache2-doc
+mv %I/share/apache2/default-site/htdocs/manual %i/share/doc/apache2-doc
+
+perl fink/convert_docs %i/share/doc/apache2-doc/manual
+
+install -d -m755 %i/share/doc/apache2-doc/cgi-examples
+mv %I/lib/cgi-bin/printenv %i/share/doc/apache2-doc/cgi-examples
+mv %I/lib/cgi-bin/test-cgi %i/share/doc/apache2-doc/cgi-examples
+rm %I/lib/cgi-bin/*
+
+install -d -m755 %i/etc/apache2/conf-available
+install -m644 fink/apache2-doc.conf %i/etc/apache2/conf-available/
+
+install -d -m755 %i/share/doc/apache2-doc/examples
+mv etc/apache2 %i/share/doc/apache2-doc/examples
+  <<
+  ConfFiles: %p/etc/apache2/conf-available/apache2-doc.conf
+  DocFiles: LICENSE
+  PostInstScript: <<
+set -e
+
+# This code should use dh_apache2 once it is available as build dependency
+
+if [ "$1" = "configure" ] ; then
+	if [ -e %p/share/apache2/apache2-maintscript-helper ] ; then
+		. %p/share/apache2/apache2-maintscript-helper
+		apache2_invoke enconf apache2-doc || true
+	fi
+fi
+
+exit
+  <<
+  PostRmScript: <<
+set -e
+
+# This code should use dh_apache2 once it is available as build dependency
+
+if [ "$1" = "purge" ] ; then
+	if [ -e %p/share/apache2/apache2-maintscript-helper ] ; then
+		. %p/share/apache2/apache2-maintscript-helper
+		apache2_invoke disconf apache2-doc || true
+
+	fi
+fi
+
+
+exit 0
+  <<
+<<
+SplitOff5: <<
+  Package: %N-dev
+  BuildDependsOnly: true
+  Depends: <<
+	debhelper
+  <<
+# can't provide this yet apache2-threaded-dev,
+  Provides: <<
+	apache2-prefork-dev,
+	dh-apache2
+  <<
+  Replaces: <<
+	apache2-prefork-dev,
+	apache2-threaded-dev
+  <<
+  Conflicts: <<
+	apache2-prefork-dev,
+	apache2-threaded-dev
+  <<
+  Description: Apache HTTP Server (development headers)
+  DescDetail: <<
+The Apache Software Foundation's goal is to build a secure, efficient and
+extensible HTTP server as standards-compliant open source software. The
+result has long been the number one web server on the Internet.
+.
+This package provides development headers and the apxs2 binary for the Apache 2
+HTTP server useful to develop and link third party additions to the Fink
+Apache HTTP server package.
+.
+It also provides dh_apache2 and dh sequence addons useful to install various
+Debian Apache2 extensions with debhelper. It supports
+ - Apache 2 module configurations and shared objects
+ - Site configuration files
+ - Global configuration files
+  <<
+  InstallScript: <<
+install -d -m755 %i/bin
+install -m755 fink/debhelper/dh_apache2 %i/bin
+
+install -d -m755 %i/lib/perl5/Debian/Debhelper/Sequence
+install -m644 fink/debhelper/apache2.pm %i/lib/perl5/Debian/Debhelper/Sequence/
+
+install -d -m755 %i/share/debhelper/autoscripts
+install -m644 fink/debhelper/postinst-apache2 %i/share/debhelper/autoscripts/
+install -m644 fink/debhelper/prerm-apache2 %i/share/debhelper/autoscripts/
+install -m644 fink/debhelper/postrm-apache2 %i/share/debhelper/autoscripts/
+
+install -d -m755 %i/share/man/man1
+install -m644 fink/manpages/apxs2.1 %i/share/man/man1
+install -m644 fink/manpages/dh_apache2.1 %i/share/man/man1
+
+ln -s %p/bin/apxs %i/bin/apxs2
+  <<
+  Files: <<
+    include
+    bin/apxs
+    share/man/man1/apxs.1
+    share/apache2/build
+  <<
+  DocFiles: LICENSE
+<<
+SplitOff6: <<
+  Package: %N-data
+  Replaces: apache2.2-common
+  Conflicts: apache2.2-common
+  InstallScript: <<
+install -d -m755 %i/share
+mv %I/share/apache2 %i/share
+## Easier to just move one file back
+install -d -m755 %I/share/apache2
+mv %i/share/apache2/apache2-maintscript-helper %I/share/apache2
+
+install -d -m755 %i/share/apache2/icons
+install -m644 fink/icons/*.png %i/share/apache2/icons
+
+rm -rf %i/share/apache2/default-site
+install -d -m755 %i/share/apache2/default-site
+install -m644 fink/index.html %i/share/apache2/default-site/
+
+install -d -m755 %i/share/apache2/build
+mv %I/sbin/envvars-std %i/share/apache2/build
+  <<
+  DocFiles: LICENSE
+  Description: Apache HTTP Server (common files)
+  DescDetail: <<
+The Apache Software Foundation's goal is to build a secure, efficient and
+extensible HTTP server as standards-compliant open source software. The
+result has long been the number one web server on the Internet.
+.
+This package contains architecture-independent common files such as icons,
+error pages and static index files.
+  <<
+<<
+###
+SplitOff7: <<
+  Package: %N-bin
+  Depends: <<
+	libapr.0-shlibs,
+	libaprutil.0-shlibs,
+	libaprutil.0-sqlite3 | libaprutil.0-postgresql | libaprutil.0-mysql | libaprutil.0-odbc,
+	libpcre1-shlibs,
+	openldap24-shlibs,
+	openssl100-shlibs
+  <<
+  Provides: <<
+	apache2-mpm-event,
+	apache2-mpm-itk,
+	apache2-mpm-prefork,
+	apache2-mpm-worker,
+	httpd,
+	httpd-cgi
+  <<
+  Replaces: <<
+	apache2.2-bin (<< 2.3),
+	apache2.2-common,
+	apache2-mpm-prefork (<< 2.3),
+	apache2-mpm-itk (<< 2.3),
+	apache2-mpm-worker (<< 2.3),
+	apache2-mpm-event (<< 2.3)
+  <<
+  Conflicts: <<
+	apache2.2-bin (<< 2.3),
+	apache2.2-common
+  <<
+  InstallScript: <<
+install -d -m755 %i/share/man/man8
+install -m644 fink/manpages/apache2.8 %i/share/man/man8
+  <<
+  Files: <<
+    lib/apache2
+    sbin/apache2
+  <<
+  DocFiles: LICENSE
+  Description: Apache HTTP Server (binary files and modules)
+  DescDetail: <<
+ The Apache Software Foundation's goal is to build a secure, efficient and
+ extensible HTTP server as standards-compliant open source software. The
+ result has long been the number one web server on the Internet.
+ .
+ This package contains the binaries only and does not set up a working
+ web-server instance. Install the "apache2" package to get a fully working
+ instance. Do not install this package unless you want to set-up the Apache
+ HTTP server entirely on your own.
+  <<
+<<
+###
+SplitOff8: <<
+  Package: %N-utils
+  Depends: <<
+	libapr.0-shlibs,
+	libaprutil.0-shlibs,
+	openssl100-shlibs
+  <<
+  InstallScript: <<
+install -d -m755 %i/bin
+install -d -m755 %i/sbin
+mv %I/bin/ab %i/bin
+mv %I/sbin/checkgid %i/bin
+mv %I/sbin/fcgistarter %i/bin
+mv %I/sbin/htcacheclean %i/bin
+mv %I/bin/htdbm %i/bin
+mv %I/bin/htdigest %i/bin
+mv %I/bin/htpasswd %i/bin
+mv %I/bin/logresolve %i/bin
+mv %I/sbin/rotatelogs %i/bin
+install -m755 support/check_forensic %i/sbin
+mv %I/bin/httxt2dbm %i/sbin
+install -m755 support/split-logfile %i/sbin
+
+rm -rf %I/bin
+
+install -d -m755 %i/share/man/man1
+mv %I/share/man/man1/logresolve.1 %i/share/man/man1
+mv %I/share/man/man1/ab.1 %i/share/man/man1
+mv %I/share/man/man1/htdigest.1 %i/share/man/man1
+mv %I/share/man/man1/htdbm.1 %i/share/man/man1
+mv %I/share/man/man1/htpasswd.1 %i/share/man/man1
+mv %I/share/man/man1/httxt2dbm.1 %i/share/man/man1
+
+install -d -m755 %i/share/man/man8
+mv %I/share/man/man8/htcacheclean.8 %i/share/man/man8
+mv %I/share/man/man8/fcgistarter.8 %i/share/man/man8
+mv %I/share/man/man8/rotatelogs.8 %i/share/man/man8
+install -m644 fink/manpages/check_forensic.8 %i/share/man/man8
+install -m644 fink/manpages/checkgid.8 %i/share/man/man8
+install -m644 fink/manpages/split-logfile.8 %i/share/man/man8
+  <<
+  DocFiles: LICENSE
+  Description: Apache2 (utility programs for webservers)
+  DescDetail: <<
+ Provides some add-on programs useful for any web server.  These include:
+  - ab (Apache benchmark tool)
+  - fcgistarter (Start a FastCGI program)
+  - logresolve (Resolve IP addresses to hostname in logfiles)
+  - htpasswd (Manipulate basic authentication files)
+  - htdigest (Manipulate digest authentication files)
+  - htdbm (Manipulate basic authentication files in DBM format, using APR)
+  - htcacheclean (Clean up the disk cache)
+  - rotatelogs (Periodically stop writing to a logfile and open a new one)
+  - split-logfile (Split a single log including multiple vhosts)
+  - checkgid (Checks whether the caller can setgid to the specified group)
+  - check_forensic (Extract mod_log_forensic output from Apache log files)
+  - httxt2dbm (Generate dbm files for use with RewriteMap)
+  <<
+<<
+###
+SplitOff9: <<
+  Package: %N.2-bin
+  Depends: %N-bin (= %v-%r)
+  Description: Transitional package for apache2-bin
+  DescDetail: <<
+This is a transitional package for apache2-bin, and can be safely removed
+after the installation is complete.
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+set -e
+
+# summary of how this script can be called:
+#       * <postinst> `configure' <most-recently-configured-version>
+#       * <old-postinst> `abort-upgrade' <new version>
+#       * <conflictor's-postinst> `abort-remove' `in-favour' <package>
+#         <new-version>
+#       * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
+#         <failed-install-package> <version> `removing'
+#         <conflicting-package> <version>
+#
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+case "$1" in
+    configure)
+        if [ -n "$2" ] && dpkg --compare-versions "$2" lt "2.4.4-5" ; then
+                if [ -d %p/share/doc/apache2.2-bin ] ; then
+                        RET=0
+                        rmdir %p/share/doc/apache2.2-bin > /dev/null 2>&1|| RET=$?
+                        if [ $RET = 0 ] ; then
+                                ln -s %p/share/doc/apache2-bin %p/share/doc/apache2.2-bin
+                        fi
+                fi
+        fi
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0
+  <<
+<<
+###
+SplitOff10: <<
+  Package: %N-mpm-prefork
+  Depends: %N-bin (= %v-%r)
+  Description: Transitional worker MPM package for apache2
+  DescDetail: <<
+ This is a transitional package to apache2 for users of apache2-mpm-prefork and
+ can be safely removed after the installation is complete.
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+set -e
+
+
+# summary of how this script can be called:
+#       * <postinst> `configure' <most-recently-configured-version>
+#       * <old-postinst> `abort-upgrade' <new version>
+#       * <conflictor's-postinst> `abort-remove' `in-favour' <package>
+#         <new-version>
+#       * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
+#         <failed-install-package> <version> `removing'
+#         <conflicting-package> <version>
+#
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+case "$1" in
+    configure)
+        if [ -n "$2" ] && dpkg --compare-versions "$2" lt "2.4.4-4" ; then
+                if [ -d %p/share/doc/apache2-mpm-prefork ] ; then
+                        RET=0
+                        rmdir %p/share/doc/apache2-mpm-prefork > /dev/null 2>&1|| RET=$?
+                        if [ $RET = 0 ] ; then
+                                ln -s %p/share/doc/apache2 %p/share/doc/apache2-mpm-prefork
+                        fi
+                fi
+        fi
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0
+  <<
+<<
+###
+SplitOff11: <<
+  Package: %N-mpm-worker
+  Depends: %N-bin (= %v-%r)
+  Description: Transitional worker MPM package for apache2
+  DescDetail: <<
+ This is a transitional package to apache2 for users of apache2-mpm-worker and
+ can be safely removed after the installation is complete.
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+set -e
+
+
+# summary of how this script can be called:
+#       * <postinst> `configure' <most-recently-configured-version>
+#       * <old-postinst> `abort-upgrade' <new version>
+#       * <conflictor's-postinst> `abort-remove' `in-favour' <package>
+#         <new-version>
+#       * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
+#         <failed-install-package> <version> `removing'
+#         <conflicting-package> <version>
+#
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+case "$1" in
+    configure)
+        if [ -n "$2" ] && dpkg --compare-versions "$2" lt "2.4.4-4" ; then
+                if [ -d %p/share/doc/apache2-mpm-worker ] ; then
+                        RET=0
+                        rmdir %p/share/doc/apache2-mpm-worker > /dev/null 2>&1|| RET=$?
+                        if [ $RET = 0 ] ; then
+                                ln -s %p/share/doc/apache2 %p/share/doc/apache2-mpm-worker
+                        fi
+                fi
+        fi
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0
+  <<
+<<
+###
+SplitOff12: <<
+  Package: %N-mpm-event
+  Depends: %N-bin (= %v-%r)
+  Description: Transitional worker MPM package for apache2
+  DescDetail: <<
+ This is a transitional package to apache2 for users of apache2-mpm-event and
+ can be safely removed after the installation is complete.
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+set -e
+
+
+# summary of how this script can be called:
+#       * <postinst> `configure' <most-recently-configured-version>
+#       * <old-postinst> `abort-upgrade' <new version>
+#       * <conflictor's-postinst> `abort-remove' `in-favour' <package>
+#         <new-version>
+#       * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
+#         <failed-install-package> <version> `removing'
+#         <conflicting-package> <version>
+#
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+case "$1" in
+    configure)
+        if [ -n "$2" ] && dpkg --compare-versions "$2" lt "2.4.4-4" ; then
+                if [ -d %p/share/doc/apache2-mpm-event ] ; then
+                        RET=0
+                        rmdir %p/share/doc/apache2-mpm-event > /dev/null 2>&1|| RET=$?
+                        if [ $RET = 0 ] ; then
+                                ln -s %p/share/doc/apache2 %p/share/doc/apache2-mpm-event
+                        fi
+                fi
+        fi
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0
+  <<
+<<
+###
+SplitOff13: <<
+  Package: %N-mpm-itk
+  Depends: %N-bin (= %v-%r)
+  Description: Transitional worker MPM package for apache2
+  DescDetail: <<
+ This is a transitional package to apache2 for users of apache2-mpm-itk and
+ can be safely removed after the installation is complete.
+  <<
+  DocFiles: LICENSE
+  PostInstScript: <<
+set -e
+
+
+# summary of how this script can be called:
+#       * <postinst> `configure' <most-recently-configured-version>
+#       * <old-postinst> `abort-upgrade' <new version>
+#       * <conflictor's-postinst> `abort-remove' `in-favour' <package>
+#         <new-version>
+#       * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
+#         <failed-install-package> <version> `removing'
+#         <conflicting-package> <version>
+#
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+case "$1" in
+    configure)
+        if [ -n "$2" ] && dpkg --compare-versions "$2" lt "2.4.4-4" ; then
+                if [ -d %p/share/doc/apache2-mpm-itk ] ; then
+                        RET=0
+                        rmdir %p/share/doc/apache2-mpm-itk > /dev/null 2>&1|| RET=$?
+                        if [ $RET = 0 ] ; then
+                                ln -s %p/share/doc/apache2 %p/share/doc/apache2-mpm-itk
+                        fi
+                fi
+        fi
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0
+  <<
+<<
+###
+ConfFiles: <<
+  %p/etc/apache2/mods-available/access_compat.load
+  %p/etc/apache2/mods-available/actions.conf
+  %p/etc/apache2/mods-available/actions.load
+  %p/etc/apache2/mods-available/alias.conf
+  %p/etc/apache2/mods-available/alias.load
+  %p/etc/apache2/mods-available/allowmethods.load
+  %p/etc/apache2/mods-available/asis.load
+  %p/etc/apache2/mods-available/auth_basic.load
+  %p/etc/apache2/mods-available/auth_digest.load
+  %p/etc/apache2/mods-available/auth_form.load
+  %p/etc/apache2/mods-available/authn_anon.load
+  %p/etc/apache2/mods-available/authn_core.load
+  %p/etc/apache2/mods-available/authn_dbd.load
+  %p/etc/apache2/mods-available/authn_dbm.load
+  %p/etc/apache2/mods-available/authn_file.load
+  %p/etc/apache2/mods-available/authn_socache.load
+  %p/etc/apache2/mods-available/authnz_ldap.load
+  %p/etc/apache2/mods-available/authz_core.load
+  %p/etc/apache2/mods-available/authz_dbd.load
+  %p/etc/apache2/mods-available/authz_dbm.load
+  %p/etc/apache2/mods-available/authz_groupfile.load
+  %p/etc/apache2/mods-available/authz_host.load
+  %p/etc/apache2/mods-available/authz_owner.load
+  %p/etc/apache2/mods-available/authz_user.load
+  %p/etc/apache2/mods-available/autoindex.conf
+  %p/etc/apache2/mods-available/autoindex.load
+  %p/etc/apache2/mods-available/buffer.load
+  %p/etc/apache2/mods-available/cache.load
+  %p/etc/apache2/mods-available/cache_disk.conf
+  %p/etc/apache2/mods-available/cache_disk.load
+  %p/etc/apache2/mods-available/cache_socache.load
+  %p/etc/apache2/mods-available/cgi.load
+  %p/etc/apache2/mods-available/cgid.conf
+  %p/etc/apache2/mods-available/cgid.load
+  %p/etc/apache2/mods-available/charset_lite.load
+  %p/etc/apache2/mods-available/data.load
+  %p/etc/apache2/mods-available/dav.load
+  %p/etc/apache2/mods-available/dav_fs.conf
+  %p/etc/apache2/mods-available/dav_fs.load
+  %p/etc/apache2/mods-available/dav_lock.load
+  %p/etc/apache2/mods-available/dbd.load
+  %p/etc/apache2/mods-available/deflate.conf
+  %p/etc/apache2/mods-available/deflate.load
+  %p/etc/apache2/mods-available/dialup.load
+  %p/etc/apache2/mods-available/dir.conf
+  %p/etc/apache2/mods-available/dir.load
+  %p/etc/apache2/mods-available/dump_io.load
+  %p/etc/apache2/mods-available/echo.load
+  %p/etc/apache2/mods-available/env.load
+  %p/etc/apache2/mods-available/expires.load
+  %p/etc/apache2/mods-available/ext_filter.load
+  %p/etc/apache2/mods-available/file_cache.load
+  %p/etc/apache2/mods-available/filter.load
+  %p/etc/apache2/mods-available/headers.load
+  %p/etc/apache2/mods-available/heartbeat.load
+  %p/etc/apache2/mods-available/heartmonitor.load
+  %p/etc/apache2/mods-available/include.load
+  %p/etc/apache2/mods-available/info.conf
+  %p/etc/apache2/mods-available/info.load
+  %p/etc/apache2/mods-available/lbmethod_bybusyness.load
+  %p/etc/apache2/mods-available/lbmethod_byrequests.load
+  %p/etc/apache2/mods-available/lbmethod_bytraffic.load
+  %p/etc/apache2/mods-available/lbmethod_heartbeat.load
+  %p/etc/apache2/mods-available/ldap.conf
+  %p/etc/apache2/mods-available/ldap.load
+  %p/etc/apache2/mods-available/log_debug.load
+  %p/etc/apache2/mods-available/log_forensic.load
+  %p/etc/apache2/mods-available/lua.load
+  %p/etc/apache2/mods-available/macro.load
+  %p/etc/apache2/mods-available/mime.conf
+  %p/etc/apache2/mods-available/mime.load
+  %p/etc/apache2/mods-available/mime_magic.conf
+  %p/etc/apache2/mods-available/mime_magic.load
+  %p/etc/apache2/mods-available/mpm_event.conf
+  %p/etc/apache2/mods-available/mpm_event.load
+  %p/etc/apache2/mods-available/mpm_itk.conf
+  %p/etc/apache2/mods-available/mpm_itk.load
+  %p/etc/apache2/mods-available/mpm_prefork.conf
+  %p/etc/apache2/mods-available/mpm_prefork.load
+  %p/etc/apache2/mods-available/mpm_worker.conf
+  %p/etc/apache2/mods-available/mpm_worker.load
+  %p/etc/apache2/mods-available/negotiation.conf
+  %p/etc/apache2/mods-available/negotiation.load
+  %p/etc/apache2/mods-available/proxy.conf
+  %p/etc/apache2/mods-available/proxy.load
+  %p/etc/apache2/mods-available/proxy_ajp.load
+  %p/etc/apache2/mods-available/proxy_balancer.conf
+  %p/etc/apache2/mods-available/proxy_balancer.load
+  %p/etc/apache2/mods-available/proxy_connect.load
+  %p/etc/apache2/mods-available/proxy_express.load
+  %p/etc/apache2/mods-available/proxy_fcgi.load
+  %p/etc/apache2/mods-available/proxy_fdpass.load
+  %p/etc/apache2/mods-available/proxy_ftp.conf
+  %p/etc/apache2/mods-available/proxy_ftp.load
+  %p/etc/apache2/mods-available/proxy_html.load
+  %p/etc/apache2/mods-available/proxy_http.load
+  %p/etc/apache2/mods-available/proxy_scgi.load
+  %p/etc/apache2/mods-available/proxy_wstunnel.load
+  %p/etc/apache2/mods-available/ratelimit.load
+  %p/etc/apache2/mods-available/reflector.load
+  %p/etc/apache2/mods-available/remoteip.load
+  %p/etc/apache2/mods-available/reqtimeout.conf
+  %p/etc/apache2/mods-available/reqtimeout.load
+  %p/etc/apache2/mods-available/request.load
+  %p/etc/apache2/mods-available/rewrite.load
+  %p/etc/apache2/mods-available/sed.load
+  %p/etc/apache2/mods-available/session.load
+  %p/etc/apache2/mods-available/session_cookie.load
+  %p/etc/apache2/mods-available/session_crypto.load
+  %p/etc/apache2/mods-available/session_dbd.load
+  %p/etc/apache2/mods-available/setenvif.conf
+  %p/etc/apache2/mods-available/setenvif.load
+  %p/etc/apache2/mods-available/slotmem_plain.load
+  %p/etc/apache2/mods-available/slotmem_shm.load
+  %p/etc/apache2/mods-available/socache_dbm.load
+  %p/etc/apache2/mods-available/socache_memcache.load
+  %p/etc/apache2/mods-available/socache_shmcb.load
+  %p/etc/apache2/mods-available/speling.load
+  %p/etc/apache2/mods-available/ssl.conf
+  %p/etc/apache2/mods-available/ssl.load
+  %p/etc/apache2/mods-available/status.conf
+  %p/etc/apache2/mods-available/status.load
+  %p/etc/apache2/mods-available/substitute.load
+  %p/etc/apache2/mods-available/suexec.load
+  %p/etc/apache2/mods-available/unique_id.load
+  %p/etc/apache2/mods-available/userdir.conf
+  %p/etc/apache2/mods-available/userdir.load
+  %p/etc/apache2/mods-available/usertrack.load
+  %p/etc/apache2/mods-available/vhost_alias.load
+  %p/etc/apache2/mods-available/xml2enc.load
+
+  %p/etc/apache2/sites-available/000-default.conf
+  %p/etc/apache2/sites-available/default-ssl.conf
+
+  %p/etc/apache2/conf-available/charset.conf
+  %p/etc/apache2/conf-available/localized-error-pages.conf
+  %p/etc/apache2/conf-available/other-vhosts-access-log.conf
+  %p/etc/apache2/conf-available/security.conf
+  %p/etc/apache2/conf-available/serve-cgi-bin.conf
+
+  %p/etc/apache2/apache2.conf
+  %p/etc/apache2/envvars
+  %p/etc/apache2/magic
+  %p/etc/apache2/ports.conf
+
+  %p/etc/bash_completion.d/apache2
+  %p/etc/logrotate.d/apache2
+<<
+###
+DaemonicName: apache2
+DaemonicFile: <<
+ <service>
+  <description>Apache2 web server</description>
+  <message>Apache2 web server</message>
+
+  <daemon name="apache2">
+    <executable background="yes">%p/sbin/apache2ctl</executable>
+    <parameters> -k start</parameters>
+  </daemon>
+ </service>
+<<
+###
+PreInstScript: <<
+set -e
+
+# summary of how this script can be called:
+#        * <new-preinst> `install'
+#        * <new-preinst> `install' <old-version>
+#        * <new-preinst> `upgrade' <old-version>
+#        * <old-preinst> `abort-upgrade' <new-version>
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+# XXX remove
+# echo apache2.preinst $@ running
+
+# XXX: Whichever file you add in one of the sections below, make sure you copy
+# the same file arrays to apache2.postinst and apache2.postrm, too!
+
+OBSOLETE_CONFFILES="%p/etc/apache2/mods-available/authz_default.load
+%p/etc/apache2/mods-available/authn_default.load
+%p/etc/apache2/mods-available/mem_cache.load
+%p/etc/apache2/mods-available/mem_cache.conf
+%p/etc/apache2/mods-available/authn_alias.load
+%p/etc/apache2/mods-available/cern_meta.load
+%p/etc/apache2/mods-available/disk_cache.load
+%p/etc/apache2/mods-available/disk_cache.conf
+%p/etc/apache2/mods-available/ident.load
+%p/etc/apache2/mods-available/imagemap.load
+%p/etc/apache2/mods-available/version.load"
+
+# conffiles which moved from one random location to another, separate source and
+# destination by a colon
+MOVED_CONFFILES="%p/etc/bash_completion.d/apache2.2-common:%p/etc/bash_completion.d/apache2
+%p/etc/apache2/sites-available/default:%p/etc/apache2/sites-available/000-default.conf
+%p/etc/apache2/sites-available/default-ssl:%p/etc/apache2/sites-available/default-ssl.conf
+%p/etc/apache2/conf.d/charset:%p/etc/apache2/conf-available/charset.conf
+%p/etc/apache2/conf.d/localized-error-pages:%p/etc/apache2/conf-available/localized-error-pages.conf
+%p/etc/apache2/conf.d/other-vhosts-access-log:%p/etc/apache2/conf-available/other-vhosts-access-log.conf
+%p/etc/apache2/conf.d/security:%p/etc/apache2/conf-available/security.conf"
+
+
+obsolete_conffile_exists()
+{
+	for CONFFILE in $OBSOLETE_CONFFILES ; do
+		if [ -e "$CONFFILE" ] ; then
+			return 0
+		fi
+	done
+
+	for CONFFILE in $MOVED_CONFFILES_IN ; do
+		if [ -e "%p/etc/apache2/conf.d/$CONFFILE" ] ; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+# The two functions below are licensed GPL-2+ and was written by dpkg maintainers
+# See the dpkg-maintscript-helper script for details
+prepare_rm_conffile()
+{
+	for CONFFILE in $OBSOLETE_CONFFILES ; do
+		[ -e "$CONFFILE" ] || continue
+
+		local md5sum="$(md5sum $CONFFILE | sed -e 's/ .*//')"
+		local old_md5sum="$(dpkg-query -W -f='${Conffiles}' apache2.2-common apache2 | \
+			sed -n -e "\' $CONFFILE ' { s/ obsolete$//; s/.* //; p }")"
+		if [ "$md5sum" != "$old_md5sum" ]; then
+			echo "Obsolete conffile $CONFFILE has been modified by you."
+			echo "Saving as $CONFFILE.dpkg-bak ..."
+			mv -f "$CONFFILE" "$CONFFILE.dpkg-backup"
+		else
+			echo "Moving obsolete conffile $CONFFILE out of the way..."
+			mv -f "$CONFFILE" "$CONFFILE.dpkg-remove"
+		fi
+	done
+}
+
+prepare_mv_conffile()
+{
+	for CONFFILE in $MOVED_CONFFILES ; do
+
+		CONFFILE=$( echo "$CONFFILE" | cut -d: -f1 )
+
+		[ -e "$CONFFILE" ] || continue
+
+		local md5sum="$(md5sum $CONFFILE | sed -e 's/ .*//')"
+		local old_md5sum="$(dpkg-query -W -f='${Conffiles}' apache2.2-common apache2 | \
+			sed -n -e "\' $CONFFILE ' { s/ obsolete$//; s/.* //; p }")"
+
+		if [ "$md5sum" = "$old_md5sum" ]; then
+			mv -f "$CONFFILE" "$CONFFILE.dpkg-remove"
+		fi
+	done
+}
+
+case "$1" in
+    install|upgrade)
+
+	# black magic follows below. we're upgrading from Squeeze if
+
+	# 1) an apache2-mpm package exists
+	if [ -d "%p/etc/apache2/" ] ; then
+		mpm=$(dpkg-query -f '${Package}\t${Status}\n'  -W 'apache2-mpm-*' 2>/dev/null) || true
+		if [ $? -eq 0 ] ; then
+			mpm=$(echo "$mpm" | grep "install ok" | cut -f1)
+			if [ ! -f %p/etc/apache2/.apache2_mpm_selected ] ; then
+				echo "# automatically created during upgrade" >> %p/etc/apache2/.apache2_mpm_selected
+				echo "# it can be safely removed anytime" >> %p/etc/apache2/.apache2_mpm_selected
+				echo "$mpm" >> %p/etc/apache2/.apache2_mpm_selected
+			fi
+		fi
+	fi
+
+	# 2) an apache2.2-common conffiles exists or the 2.2 apache2 package is
+	# installed
+	if [ -n "$2" ] || obsolete_conffile_exists ; then
+		prepare_rm_conffile
+		prepare_mv_conffile
+	fi
+
+    ;;
+
+    abort-upgrade)
+    ;;
+
+    *)
+	echo "preinst called with unknown argument \`$1'" >&2
+	exit 1
+    ;;
+esac
+
+exit 0
+<<
+PostInstScript: <<
+set -e
+
+# summary of how this script can be called:
+#       * <postinst> `configure' <most-recently-configured-version>
+#       * <old-postinst> `abort-upgrade' <new version>
+#       * <conflictor's-postinst> `abort-remove' `in-favour' <package>
+#         <new-version>
+#       * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
+#         <failed-install-package> <version> `removing'
+#         <conflicting-package> <version>
+#
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+#
+
+# XXX remove
+# echo apache2.postinst $@ running
+
+OBSOLETE_CONFFILES="%p/etc/apache2/mods-available/authz_default.load
+%p/etc/apache2/mods-available/authn_default.load
+%p/etc/apache2/mods-available/mem_cache.load
+%p/etc/apache2/mods-available/mem_cache.conf
+%p/etc/apache2/mods-available/authn_alias.load
+%p/etc/apache2/mods-available/cern_meta.load
+%p/etc/apache2/mods-available/disk_cache.load
+%p/etc/apache2/mods-available/disk_cache.conf
+%p/etc/apache2/mods-available/ident.load
+%p/etc/apache2/mods-available/imagemap.load
+%p/etc/apache2/mods-available/version.load"
+
+
+MOVED_CONFFILES="%p/etc/bash_completion.d/apache2.2-common:%p/etc/bash_completion.d/apache2
+%p/etc/apache2/sites-available/default:%p/etc/apache2/sites-available/000-default.conf
+%p/etc/apache2/sites-available/default-ssl:%p/etc/apache2/sites-available/default-ssl.conf
+%p/etc/apache2/conf.d/charset:%p/etc/apache2/conf-available/charset.conf
+%p/etc/apache2/conf.d/localized-error-pages:%p/etc/apache2/conf-available/localized-error-pages.conf
+%p/etc/apache2/conf.d/other-vhosts-access-log:%p/etc/apache2/conf-available/other-vhosts-access-log.conf
+%p/etc/apache2/conf.d/security:%p/etc/apache2/conf-available/security.conf"
+
+
+# the functions below need to be idempotent, however we guess the upgrade based
+# on obsolete conffiles which might be removed anytime. Thus, remember we were
+# already in there once.
+WHEEZY_UPGRADE=0
+
+#      n.b you can't rely on $2 (the last installed version)  for upgrades, as
+#      the user might have been using apache2.2-common only. Let's pretend we're
+#      upgrading if there is either a /etc/apache2/.apache2_mpm_selected file
+#      around or an /etc/apache2/.apache2_upgrade file exists.
+we_are_upgrading_from_wheezy()
+{
+	if [ -n "$2" ] && dpkg --compare-versions "$2" le-nl "2.3"; then
+		WHEEZY_UPGRADE=1
+		return 0
+	fi
+
+	# this check is a probably tautology but makes it easier to understand
+	# the logic
+	if [ -n "$2" ] && dpkg --compare-versions "$2" ge-nl "2.3"; then
+		return 1
+	fi
+
+	if [ -e %p/etc/apache2/.apache2_mpm_selected ] ; then
+		WHEEZY_UPGRADE=1
+		return 0
+	fi
+
+	if [ "$WHEEZY_UPGRADE" -eq 1 ] ; then
+		return 0
+	fi
+
+	for CONFFILE in $OBSOLETE_CONFFILES ; do
+		if [ -e "$CONFFILE.dpkg-backup" ] || [ -e "$CONFFILE.dpkg-remove" ] ; then
+			WHEEZY_UPGRADE=1
+			return 0
+		fi
+	done
+
+	for CONFFILE in $MOVED_CONFFILES ; do
+		OLDCONFFILE=$( echo "$CONFFILE" | cut -d: -f1 )
+		if [ -e "$OLDCONFFILE.dpkg-remove" ] ; then
+			WHEEZY_UPGRADE=1
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+is_fresh_install()
+{
+	if [ -z "$2" ] ; then
+		return 0
+	fi
+	return 1
+}
+
+
+# The two functions below are licensed GPL-2+ and was written by dpkg maintainers
+# See the dpkg-maintscript-helper script for details
+
+remove_conffiles()
+{
+	# we can't use dpkg-maintscript-helper as we shifted conffiles from the
+	# apache2.2-common package to apache2, too. The tool can cope with
+	# that, but additionally we didn't require apache2 to be installed. This
+	# yields the wrong result when upgrading such an installation
+	if we_are_upgrading_from_wheezy $@ ; then
+		for CONFFILE in $OBSOLETE_CONFFILES ; do
+			if [ -e "$CONFFILE.dpkg-backup" ]; then
+				mv -f "$CONFFILE.dpkg-backup" "$CONFFILE.dpkg-bak"
+			fi
+			if [ -e "$CONFFILE.dpkg-remove" ]; then
+				echo "Removing obsolete conffile $CONFFILE ..."
+				rm -f "$CONFFILE.dpkg-remove"
+			fi
+		done
+	fi
+}
+
+mv_conffiles()
+{
+	# same rationale as above
+	if we_are_upgrading_from_wheezy $@ ; then
+		for CONFFILE in $MOVED_CONFFILES ; do
+			OLDCONFFILE=$( echo "$CONFFILE" | cut -d: -f1 )
+			NEWCONFFILE=$( echo "$CONFFILE" | cut -d: -f2 )
+
+			rm -f $OLDCONFFILE.dpkg-remove
+			[ -e "$OLDCONFFILE" ] || continue
+
+			echo "Preserving user changes to $NEWCONFFILE (renamed from $OLDCONFFILE)..."
+			mv -f "$NEWCONFFILE" "$NEWCONFFILE.dpkg-new"
+			mv -f "$OLDCONFFILE" "$NEWCONFFILE"
+		done
+
+		if [ -d %p/etc/apache2/conf.d ] && [ ! "$(ls -A %p/etc/apache2/conf.d)" ] ; then
+			echo "Removing obsolete directory %p/etc/apache2/conf.d"
+			rmdir %p/etc/apache2/conf.d
+		fi
+
+		if [ -d %p/etc/apache2/conf.d ] && [ "$(ls -A %p/etc/apache2/conf.d)" ]	; then
+			echo "Directory %p/etc/apache2/conf.d is not empty - leaving as is"
+			echo "Please note, that directory is considered obsolete and not read anymore by default"
+			# XXX order of processing??? this may become empty later on (after upgrade of apache2-doc)
+			ls -A %p/etc/apache2/conf.d
+		fi
+	fi
+}
+
+
+enable_default_mpm()
+{
+	mpm="mpm_event"
+	if we_are_upgrading_from_wheezy $@ && [ -e %p/etc/apache2/.apache2_mpm_selected  ]; then
+		tmpmpm=$(grep -v "^#" %p/etc/apache2/.apache2_mpm_selected | head -n1)
+		case "$tmpmpm" in
+			apache2-mpm-worker)
+				mpm="mpm_worker"
+			;;
+
+			apache2-mpm-event)
+				mpm="mpm_event"
+			;;
+
+			apache2-mpm-prefork)
+				mpm="mpm_prefork"
+			;;
+
+			apache2-mpm-itk)
+				mpm="mpm_itk"
+			;;
+
+			*)
+				# default MPM for upgrading in case we got an unrecognized
+				# hint file
+				mpm="mpm_event"
+			;;
+		esac
+
+		# No -m here, we pretend the user picked the MPM as this choice comes
+		# from a 2.2 package relation
+		a2enmod -q $mpm
+		return 0
+	fi
+
+	if is_fresh_install $@ ; then
+		a2enmod -m -q $mpm
+	fi
+
+}
+
+enable_default_modules()
+{
+	if is_fresh_install $@; then
+		for module in authz_host auth_basic access_compat authn_file authz_user \
+				alias dir autoindex \
+				env mime negotiation setenvif \
+				filter deflate \
+				status ; do
+			a2enmod -m -q $module
+		done
+	elif we_are_upgrading_from_wheezy $@; then
+		for module in authn_core authz_core filter access_compat ; do
+			a2enmod -m -q $module
+		done
+	elif dpkg --compare-versions "$2" "le" "2.4.6-1~" ; then
+		# These modules had dependencies missing in the initial 2.4 upload
+		for module in auth_basic auth_digest auth_form cache_disk include ratelimit mpm_event
+		do
+			if [ -e %p/etc/apache2/mods-enabled/$module.load ] ; then
+				# If module is enabled, enable again to
+				# enable new dependencies
+				a2enmod -m -q $module
+			fi
+		done
+	fi
+}
+
+enable_default_conf()
+{
+	if is_fresh_install $@ || we_are_upgrading_from_wheezy $@ ; then
+		for conf in charset localized-error-pages other-vhosts-access-log security ; do
+			a2enconf -m -q $conf
+		done
+	fi
+	# This line must catch upgrades, upgrades from Wheezy und fresh
+	# installs
+	if dpkg --compare-versions "$2" "le" "2.4.1-4" ; then
+		a2enconf -m -q serve-cgi-bin
+	fi
+}
+
+install_default_site()
+{
+	if we_are_upgrading_from_wheezy $@ ; then
+		# by here, the old default sites were already renamed. Thus, the links
+		# are dangling
+		for SITE in %p/etc/apache2/sites-enabled/000-default %p/etc/apache2/sites-enabled/default-ssl ; do
+			if [ -L $SITE ] ; then
+				target=$(greadlink -e "$SITE") || true
+				sitename=$(basename "$SITE")
+				if [ -z "$target" ] ; then
+					rm -f $SITE
+					a2ensite -q "$sitename"
+				fi
+			fi
+		done
+	elif is_fresh_install $@ ; then
+		if [ ! -L %p/etc/apache2/sites-enabled/000-default.conf -a \
+			! -f %p/etc/apache2/sites-enabled/000-default.conf ]; then
+				a2ensite -q 000-default
+		fi
+
+		touch %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+		chown root:admin %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+		chmod 0640 %p/var/log/apache2/error.log %p/var/log/apache2/access.log
+
+		touch %p/var/log/apache2/other_vhosts_access.log
+		chown root:admin %p/var/log/apache2/other_vhosts_access.log
+		chmod 0640 %p/var/log/apache2/other_vhosts_access.log
+	fi
+}
+
+# XXX: This site is installed in the apache2-data package. Should the postinst
+# scriptlet move there too?
+install_default_files()
+{
+	if is_fresh_install $@ || we_are_upgrading_from_wheezy $@ ; then
+		if [ ! -e %p/var/www/index.html  -a \
+			! -h %p/var/www/index.html  -a \
+			! -e %p/var/www/index.cgi   -a \
+			! -e %p/var/www/index.pl    -a \
+			! -e %p/var/www/index.php   -a \
+			! -e %p/var/www/index.xhtml -a \
+			! -e %p/var/www/index.htm ] ; then
+				cp %p/share/apache2/default-site/index.html %p/var/www/index.html
+		fi
+	fi
+}
+
+# XXX: Find out whether I am on crack removing stale modules that way
+refresh_modules()
+{
+	if we_are_upgrading_from_wheezy $@ && [ -d %p/etc/apache2/mods-enabled/ ] ; then
+		shopt -s nullglob
+		for link in %p/etc/apache2/mods-enabled/*.load ; do
+			target=$(greadlink "$link") || true
+			if [ -z "$target" ] ; then
+				continue
+			fi
+
+			module=$(basename "$link" | sed 's/\.load//') || true
+
+			if [ ! -e "%p/etc/apache2/mods-enabled/$target" ] ; then
+				echo "disable obsolete module $module"
+				a2dismod -m -q "$module"
+
+				if [ "$module" = "disk_cache" ] ; then
+					echo "Enable cache_disk as disk_cache was enabled in Apache 2.2"
+					# ditto, we pretend it was the user's
+					# choice not to use -m here
+					a2enmod -q cache_disk
+				fi
+			fi
+			# the module is already enabled, however
+			# dependencies could have changed hence re-call
+			# a2enmod again.
+			# Example: the deflate module when upgraded from
+			# Wheezy
+			if [ -e "%p/etc/apache2/mods-enabled/$target" ] ; then
+				a2enmod -m -q "$module"
+			fi
+		done
+	fi
+}
+
+move_httpd_conf()
+{
+	if we_are_upgrading_from_wheezy $@ ; then
+		if [ -e %p/etc/apache2/httpd.conf ] && [ -f %p/etc/apache2/httpd.conf ] ; then
+			local md5sum="$(md5sum %p/etc/apache2/httpd.conf | sed -e 's/ .*//')"
+			if [ $md5sum = "d41d8cd98f00b204e9800998ecf8427e" ] ||
+			   [ $md5sum = "a20c3e53dd07836481a5e64bc71e1a33" ]
+			then
+				echo "Remove obsolete configuration file %p/etc/apache2/httpd.conf"
+				rm -f %p/etc/apache2/httpd.conf
+			else
+				if [ -d %p/etc/apache2/conf-available/ ] && [ ! -f %p/etc/apache2/conf-available/httpd.conf ] ; then
+					echo "Detected legacy httpd.conf - moving file to %p/etc/apache2/conf-available/httpd.conf"
+					mv %p/etc/apache2/httpd.conf %p/etc/apache2/conf-available/httpd.conf
+					a2enconf -q httpd
+				fi
+			fi
+		fi
+	fi
+}
+
+migrate_data()
+{
+	#XXX: jimjag recommends purging the cache albeit it is probably not
+	#     technically required.
+	#if we_are_upgrading_from_wheezy $@ ; then
+	#	# %p/var/cache/apache2/mod_disk_cache -> %p/var/cache/apache2/mod_cache_disk
+	#	if [ -d %p/var/cache/apache2/mod_disk_cache ] && [ "$(ls -A %p/var/cache/apache2/mod_disk_cache)" ] ; then
+	#		echo "Migrate mod_disk_cache cache data to %p/var/cache/apache2/mod_cache_disk/"
+	#		mv %p/var/cache/apache2/mod_disk_cache/* %p/var/cache/apache2/mod_cache_disk/
+	#		rmdir %p/var/cache/apache2/mod_disk_cache
+	#	fi
+	#fi
+	if we_are_upgrading_from_wheezy $@ ; then
+		if [ -d %p/var/cache/apache2/mod_disk_cache ] ; then
+			echo "Purge obsolete mod_disk_cache cache data in %p/var/cache/apache2/mod_cache_disk/"
+			rm -rf %p/var/cache/apache2/mod_disk_cache
+		fi
+	fi
+}
+
+#XXX: Deal with the sites-available/sites-enabled *.conf transition, e.g. rename
+#     all files which look like site configuration?
+
+case "$1" in
+	configure)
+
+		remove_conffiles $@
+		mv_conffiles $@
+		enable_default_mpm $@
+		refresh_modules $@
+		install_default_files $@
+		enable_default_modules $@
+		enable_default_conf $@
+		install_default_site $@
+		move_httpd_conf $@
+		migrate_data $@
+
+		# post installation cleanup
+		if [ -e %p/etc/apache2/.apache2_mpm_selected ] ; then
+			rm -f %p/etc/apache2/.apache2_mpm_selected
+		fi
+
+		daemonic enable apache2;
+
+	;;
+
+	abort-upgrade|abort-remove|abort-deconfigure)
+
+	;;
+
+	*)
+		echo "postinst called with unknown argument \`$1'" >&2
+		exit 1
+	;;
+esac
+
+#DEBHELPER#
+
+# And now the traditional insanity of apache2 upgrades (see #390823):
+# If everything went well, we need to purge apache2.2-common's postrm, or
+# purging that package will remove our logs, caches, ...
+if [ "$1" = configure ] && we_are_upgrading_from_wheezy $@ ; then
+	oldpostrm=$(dpkg-query -c apache2.2-common postrm  2>/dev/null || true)
+	if [ -n "$oldpostrm" ] ; then
+		rm -f "$oldpostrm"
+	fi
+fi
+
+chown -R www:www %p/var/cache/apache2/mod_cache_disk
+chown root:admin %p/var/log/apache2
+chown www:www %p/var/lock/apache2
+chmod o-rx %p/var/log/apache2
+
+exit 0
+<<
+PostRmScript: <<
+set -e
+
+# summary of how this script can be called:
+#        * <postrm> `remove'
+#        * <postrm> `purge'
+#        * <old-postrm> `upgrade' <new-version>
+#        * <new-postrm> `failed-upgrade' <old-version>
+#        * <new-postrm> `abort-install'
+#        * <new-postrm> `abort-install' <old-version>
+#        * <new-postrm> `abort-upgrade' <old-version>
+#        * <disappearer's-postrm> `disappear' <overwriter>
+#          <overwriter-version>
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+
+OBSOLETE_CONFFILES="%p/etc/apache2/mods-available/authz_default.load
+%p/etc/apache2/mods-available/authn_default.load
+%p/etc/apache2/mods-available/mem_cache.load
+%p/etc/apache2/mods-available/mem_cache.conf
+%p/etc/apache2/mods-available/authn_alias.load
+%p/etc/apache2/mods-available/cern_meta.load
+%p/etc/apache2/mods-available/disk_cache.load
+%p/etc/apache2/mods-available/disk_cache.conf
+%p/etc/apache2/mods-available/ident.load
+%p/etc/apache2/mods-available/imagemap.load
+%p/etc/apache2/mods-available/version.load"
+
+MOVED_CONFFILES="%p/etc/bash_completion.d/apache2.2-common:%p/etc/bash_completion.d/apache2
+%p/etc/apache2/sites-available/default:%p/etc/apache2/sites-available/000-default.conf
+%p/etc/apache2/sites-available/default-ssl:%p/etc/apache2/sites-available/default-ssl.conf
+%p/etc/apache2/conf.d/charset:%p/etc/apache2/conf-available/charset.conf
+%p/etc/apache2/conf.d/localized-error-pages:%p/etc/apache2/conf-available/localized-error-pages.conf
+%p/etc/apache2/conf.d/other-vhosts-access-log:%p/etc/apache2/conf-available/other-vhosts-access-log.conf
+%p/etc/apache2/conf.d/security:%p/etc/apache2/conf-available/security.conf"
+
+case "$1" in
+    purge)
+	daemonic disable apache2;
+
+	for CONFFILE in $OBSOLETE_CONFFILES ; do
+		rm -f "$CONFFILE.dpkg-bak" "$CONFFILE.dpkg-remove" "$CONFFILE.dpkg-backup"
+	done
+
+	for d in %p/var/cache/apache2 \
+		 %p/var/cache/apache2/mod_cache_disk \
+		 %p/var/log/apache2 \
+		 %p/var/lib/apache2 ; do
+		[ -d $d ] && rm -rf $d
+	done
+
+
+	for f in %p/etc/apache2/sites-enabled/* \
+		%p/etc/apache2/conf-enabled/* \
+		%p/etc/apache2/mods-enabled/* ; do
+		[ -L "$f" ] && rm -f "$f"
+	done
+
+	for d in %p/etc/apache2/sites-enabled/ \
+		%p/etc/apache2/mods-enabled/ \
+		%p/etc/apache2/conf-enabled/ \
+		%p/etc/apache2 \
+		%p/var/cache/apache2 \
+		%p/var/run/apache2 \
+		%p/var/lock/apache2 ; do
+		rmdir $d 2> /dev/null || true
+	done
+
+	#XXX: index.html is intentionally(?) left back
+    ;;
+
+    abort-install|abort-upgrade)
+
+
+	for CONFFILE in $OBSOLETE_CONFFILES ; do
+
+		if [ -e "$CONFFILE.dpkg-remove" ]; then
+			echo "Reinstalling $CONFFILE that was moved away"
+			mv "$CONFFILE.dpkg-remove" "$CONFFILE"
+		fi
+		if [ -e "$CONFFILE.dpkg-backup" ]; then
+			echo "Reinstalling $CONFFILE that was backupped"
+			mv "$CONFFILE.dpkg-backup" "$CONFFILE"
+		fi
+	done
+
+	for CONFFILE in $MOVED_CONFFILES ; do
+
+		CONFFILE=$( echo "$CONFFILE" | cut -d: -f1 )
+
+		if [ -e "$CONFFILE.dpkg-remove" ]; then
+			echo "Reinstalling $CONFFILE that was moved away"
+			mv "$CONFFILE.dpkg-remove" "$CONFFILE"
+		fi
+		if [ -e "$CONFFILE.dpkg-backup" ]; then
+			echo "Reinstalling $CONFFILE that was backupped"
+			mv "$CONFFILE.dpkg-backup" "$CONFFILE"
+		fi
+	done
+
+	# post installation cleanup
+	if [ -e %p/etc/apache2/.apache2_mpm_selected ] ; then
+		rm -f %p/etc/apache2/.apache2_mpm_selected
+	fi
+
+    ;;
+
+    remove|upgrade|failed-upgrade|disappear)
+    ;;
+
+    *)
+	echo "postrm called with unknown argument \`$1'" >&2
+	exit 1
+    ;;
+esac
+
+exit 0
+<<
+###
+Description: Apache HTTP Server
+DescDetail: <<
+The Apache Software Foundation's goal is to build a secure, efficient and
+extensible HTTP server as standards-compliant open source software. The
+result has long been the number one web server on the Internet.
+.
+This package contains the configuration files, init scripts and support
+scripts. It does not install the actual apache2 binaries.
+<<
+License: BSD
+Homepage: http://www.apache.org
+Maintainer: Justin F. Hallett <thesin@users.sourceforge.net>
