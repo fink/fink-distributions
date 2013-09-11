@@ -12,7 +12,7 @@ diff -Nurd -x'*~' eog-2.28.2.orig/bindings/python/Makefile.am eog-2.28.2/binding
  	-I$(top_srcdir)/src				\
 diff -Nurd -x'*~' eog-2.28.2.orig/configure.ac eog-2.28.2/configure.ac
 --- eog-2.28.2.orig/configure.ac	2009-12-16 15:53:29.000000000 -0500
-+++ eog-2.28.2/configure.ac	2010-03-02 01:18:40.000000000 -0500
++++ eog-2.28.2/configure.ac	2013-09-10 23:33:13.000000000 -0400
 @@ -96,6 +96,7 @@
  EOG_MODULES="gtk+-2.0 >= $GTK_REQUIRED \
               glib-2.0 >= $GLIB_REQUIRED \
@@ -21,8 +21,17 @@ diff -Nurd -x'*~' eog-2.28.2.orig/configure.ac eog-2.28.2/configure.ac
               gnome-desktop-2.0 >= $GNOME_DESKTOP_REQUIRED \
               gdk-pixbuf-2.0 >= $GDKPIXBUF_REQUIRED \
               gconf-2.0 >= $GCONF_REQUIRED \
-@@ -153,6 +154,7 @@
-   EOG_MODULES="$EOG_MODULES lcms"
+@@ -146,13 +147,14 @@
+ AC_ARG_WITH([cms], AC_HELP_STRING([--without-cms], [disable colour management support]))
+ have_lcms=no
+ if test x$with_cms != xno; then
+-    PKG_CHECK_MODULES(LCMS, lcms, have_lcms=yes, have_lcms=no)
++    PKG_CHECK_MODULES(LCMS, lcms2, have_lcms=yes, have_lcms=no)
+ fi
+ if test "x$have_lcms" = "xyes"; then
+   AC_DEFINE(HAVE_LCMS, 1, [Little CMS Support.])
+-  EOG_MODULES="$EOG_MODULES lcms"
++  EOG_MODULES="$EOG_MODULES lcms2"
  fi
  
 +AM_CONDITIONAL([HAVE_LCMS], [test "x$have_lcms" = "xyes"])
@@ -127,3 +136,169 @@ diff -Nurd -x'*~' eog-2.28.2.orig/src/Makefile.am eog-2.28.2/src/Makefile.am
  	$(LIBJPEG)			\
  	$(toolbar_LIB)			\
  	$(screensaver_LIB)		\
+diff -Nurd -x'*~' eog-2.28.2.orig/src/eog-image.c eog-2.28.2/src/eog-image.c
+--- eog-2.28.2.orig/src/eog-image.c	2009-12-16 15:53:29.000000000 -0500
++++ eog-2.28.2/src/eog-image.c	2013-09-10 23:33:13.000000000 -0400
+@@ -58,7 +58,7 @@
+ #endif
+ 
+ #ifdef HAVE_LCMS
+-#include <lcms.h>
++#include <lcms2.h>
+ #ifndef EXIF_TAG_GAMMA
+ #define EXIF_TAG_GAMMA 0xa500
+ #endif
+@@ -629,8 +629,8 @@
+ 	if (screen == NULL || priv->profile == NULL) return;
+ 
+ 	/* TODO: support other colorspaces than RGB */
+-	if (cmsGetColorSpace (priv->profile) != icSigRgbData ||
+-	    cmsGetColorSpace (screen) != icSigRgbData) {
++	if (cmsGetColorSpace (priv->profile) != cmsSigRgbData ||
++	    cmsGetColorSpace (screen) != cmsSigRgbData) {
+ 		eog_debug_message (DEBUG_LCMS, "One or both ICC profiles not in RGB colorspace; not correcting");
+ 		return;
+ 	}
+diff -Nurd -x'*~' eog-2.28.2.orig/src/eog-image.h eog-2.28.2/src/eog-image.h
+--- eog-2.28.2.orig/src/eog-image.h	2009-12-16 15:53:29.000000000 -0500
++++ eog-2.28.2/src/eog-image.h	2013-09-10 23:33:13.000000000 -0400
+@@ -37,7 +37,7 @@
+ #endif
+ 
+ #ifdef HAVE_LCMS
+-#include <lcms.h>
++#include <lcms2.h>
+ #endif
+ 
+ #ifdef HAVE_EXEMPI
+diff -Nurd -x'*~' eog-2.28.2.orig/src/eog-metadata-reader-jpg.c eog-2.28.2/src/eog-metadata-reader-jpg.c
+--- eog-2.28.2.orig/src/eog-metadata-reader-jpg.c	2009-08-11 06:49:55.000000000 -0400
++++ eog-2.28.2/src/eog-metadata-reader-jpg.c	2013-09-10 23:33:13.000000000 -0400
+@@ -513,8 +513,6 @@
+ 	priv = emr->priv;
+ 
+ 	if (priv->icc_chunk) {
+-		cmsErrorAction (LCMS_ERROR_SHOW);
+-
+ 		profile = cmsOpenProfileFromMem(priv->icc_chunk + 14, priv->icc_len - 14);
+ 
+ 		if (profile) {
+@@ -562,7 +560,7 @@
+ 		  	{
+ 			cmsCIExyY whitepoint;
+ 			cmsCIExyYTRIPLE primaries;
+-			LPGAMMATABLE gamma[3];
++			cmsToneCurve *gamma[3];
+ 			double gammaValue;
+ 			ExifRational r;
+ 
+@@ -619,11 +617,11 @@
+ 				gammaValue = 2.2;
+ 			}
+ 
+-			gamma[0] = gamma[1] = gamma[2] = cmsBuildGamma (256, gammaValue);
++			gamma[0] = gamma[1] = gamma[2] = cmsBuildGamma (NULL, gammaValue);
+ 
+ 			profile = cmsCreateRGBProfile (&whitepoint, &primaries, gamma);
+ 
+-			cmsFreeGamma(gamma[0]);
++			cmsFreeToneCurve(gamma[0]);
+ 
+ 			eog_debug_message (DEBUG_LCMS, "JPEG is calibrated");
+ 
+diff -Nurd -x'*~' eog-2.28.2.orig/src/eog-metadata-reader-png.c eog-2.28.2/src/eog-metadata-reader-png.c
+--- eog-2.28.2.orig/src/eog-metadata-reader-png.c	2009-12-16 15:53:29.000000000 -0500
++++ eog-2.28.2/src/eog-metadata-reader-png.c	2013-09-10 23:33:13.000000000 -0400
+@@ -569,8 +569,6 @@
+ 			return NULL;
+ 		}
+ 
+-		cmsErrorAction (LCMS_ERROR_SHOW);
+-
+ 		profile = cmsOpenProfileFromMem(outbuf, zstr.total_out);
+ 		inflateEnd (&zstr);
+ 		g_free (outbuf);
+@@ -589,7 +587,7 @@
+ 	if (!profile && priv->cHRM_chunk) {
+ 		cmsCIExyY whitepoint;
+ 		cmsCIExyYTRIPLE primaries;
+-		LPGAMMATABLE gamma[3];
++		cmsToneCurve *gamma[3];
+ 		double gammaValue = 2.2; // 2.2 should be a sane default gamma
+ 
+ 		/* This uglyness extracts the chromacity and whitepoint values
+@@ -617,11 +615,11 @@
+ 		if (priv->gAMA_chunk)
+ 			gammaValue = (double) 1.0/EXTRACT_DOUBLE_UINT_BLOCK_OFFSET (priv->gAMA_chunk, 0, 100000);
+ 
+-		gamma[0] = gamma[1] = gamma[2] = cmsBuildGamma (256, gammaValue);
++		gamma[0] = gamma[1] = gamma[2] = cmsBuildGamma (NULL, gammaValue);
+ 
+ 		profile = cmsCreateRGBProfile (&whitepoint, &primaries, gamma);
+ 
+-		cmsFreeGamma(gamma[0]);
++		cmsFreeToneCurve(gamma[0]);
+ 	}
+ 
+ 	return profile;
+diff -Nurd -x'*~' eog-2.28.2.orig/src/eog-metadata-reader.h eog-2.28.2/src/eog-metadata-reader.h
+--- eog-2.28.2.orig/src/eog-metadata-reader.h	2009-08-11 06:49:55.000000000 -0400
++++ eog-2.28.2/src/eog-metadata-reader.h	2013-09-10 23:33:13.000000000 -0400
+@@ -30,7 +30,7 @@
+ #include <exempi/xmp.h>
+ #endif
+ #if HAVE_LCMS
+-#include <lcms.h>
++#include <lcms2.h>
+ #endif
+ 
+ G_BEGIN_DECLS
+diff -Nurd -x'*~' eog-2.28.2.orig/src/eog-scroll-view.c eog-2.28.2/src/eog-scroll-view.c
+--- eog-2.28.2.orig/src/eog-scroll-view.c	2009-12-16 15:53:29.000000000 -0500
++++ eog-2.28.2/src/eog-scroll-view.c	2013-09-10 23:55:41.000000000 -0400
+@@ -2,6 +2,7 @@
+ #include <config.h>
+ #endif
+ 
++#include <stdlib.h>
+ #include <math.h>
+ #include <gdk-pixbuf/gdk-pixbuf.h>
+ #include <gdk/gdkkeysyms.h>
+diff -Nurd -x'*~' eog-2.28.2.orig/src/eog-window.c eog-2.28.2/src/eog-window.c
+--- eog-2.28.2.orig/src/eog-window.c	2009-12-16 15:53:29.000000000 -0500
++++ eog-2.28.2/src/eog-window.c	2013-09-10 23:33:13.000000000 -0400
+@@ -71,7 +71,7 @@
+ #ifdef GDK_WINDOWING_X11
+ #include <gdk/gdkx.h>
+ #endif
+-#include <lcms.h>
++#include <lcms2.h>
+ #endif
+ 
+ #define EOG_WINDOW_GET_PRIVATE(object) \
+@@ -638,7 +638,6 @@
+ 	int result;
+ 	cmsHPROFILE *profile;
+ 	char *atom_name;
+-	int lcms_error_action;
+ 
+ 	dpy = GDK_DISPLAY_XDISPLAY (gdk_screen_get_display (screen));
+ 
+@@ -685,17 +684,8 @@
+ 				return NULL;
+ 		}
+ 
+-		/* Make lcms errors non-fatal here, as it is possible
+-		 * to load invalid profiles with XICC.
+-		 * We don't want lcms to abort EOG in that case.
+-		 */
+-		lcms_error_action = cmsErrorAction (LCMS_ERROR_IGNORE);
+-
+ 		profile = cmsOpenProfileFromMem (str, length);
+ 
+-		// Restore the previous error setting
+-		cmsErrorAction (lcms_error_action);
+-
+ 		if (G_UNLIKELY (profile == NULL)) {
+ 			eog_debug_message (DEBUG_LCMS,
+ 					   "Invalid display profile, "
