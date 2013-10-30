@@ -1,0 +1,329 @@
+Package: man-db
+Version: 2.6.5
+Revision: 2.1
+###
+BuildDepends: <<
+	fink (>= 0.34.99.git),
+	po-debconf,
+	libpipeline-dev
+<<
+Depends: <<
+	debconf (>= 1.2.0) | debconf-2.0,
+	libpipeline1
+<<
+Suggests: <<
+	anacron,
+	groff,
+	less,
+	www-browser
+<<
+Provides: <<
+	man,
+	man-browser
+<<
+Conflicts: <<
+	man,
+	suidmanager (<< 0.50)
+<<
+Replaces: <<
+	man,
+	nlsutils,
+	manpages-de (<< 0.5-4),
+	manpages-zh (<< 1.5.2-1.1)
+<<
+###
+Source: http://download.savannah.gnu.org/releases/%n/%n-%v.tar.xz
+Source-MD5: 36f59d9314b45a266ba350584b4d7cc1
+Source2: mirror:debian/pool/m/%n/%n_%v-2.debian.tar.gz
+Source2-MD5: f09baea9b351bf7e096e0f2fa542e553
+Source2ExtractDir: %n-%v
+###
+PatchScript: <<
+#!/bin/sh -ev
+BASE=$(echo %p | perl -pi -e 's,/,,'); \
+for i in `find debian -type f`; do perl -pi -e "s,usr,${BASE},g" $i; done
+
+### This is till we add the man user
+perl -pi -e 's,man:root,root:wheel,g' debian/cron.*
+
+patch -p1 < debian/patches/fallback-locales.patch
+<<
+###
+ConfigureParams: <<
+	--build=%m-darwin \
+	--host=%m-darwin \
+	--target=%m-darwin \
+	--prefix=%p \
+	--includedir=%p/include \
+	--mandir=%p/share/man \
+	--infodir=%p/share/info \
+	--sysconfdir=%p/etc \
+	--localstatedir=%p/var \
+	--libdir=%p/lib \
+	--libexecdir=%p/lib \
+	--disable-maintainer-mode \
+	--disable-dependency-tracking \
+	--disable-setuid \
+	--enable-undoc=man 7 undocumented \
+	--with-device=latin1 \
+	--enable-mb-groff \
+	--with-config-file=%p/etc/manpath.config \
+	--with-browser=www-browser \
+	--with-pager=pager \
+	--with-col=col \
+	--with-vgrind=vgrind \
+	--with-grap=grap \
+	--with-compress=compress \
+	--with-bzip2=bzip2 \
+	--with-xz=xz \
+	--with-lzip=lzip \
+	--with-lzma=lzma \
+	--with-sections=1 n l 8 3 2 3posix 3pm 3perl 5 4 9 6 7
+<<
+InfoTest: <<
+	TestScript: <<
+make check || exit 2
+	<<
+<<
+InstallScript: <<
+#!/bin/sh -ev
+make install DESTDIR=%d
+rm -f %i/lib/man-db/*.la
+
+install -d -m 0755 %i/etc/cron.daily
+install -d -m 0755 %i/etc/cron.weekly
+install -d -m 0755 %i/bin
+install -d -m 0755 %i/sbin
+install -d -m 0755 %i/share/man-db
+install -d -m 0755 %i/var/cache/man
+
+install -m 0644 debian/cron.daily %i/etc/cron.daily/man-db
+install -m 0644 debian/cron.weekly %i/etc/cron.weekly/man-db
+
+install -m 0755 tools/chconfig %i/share/man-db
+
+install -d -m 0755 %i/share/doc/%n/examples
+install -m 0644 docs/manpage.example* %i/share/doc/%n/examples
+
+### Fix Config And teach it about fink paths
+perl -pi -e 's,\/var,%p\/var,g' %i/etc/manpath.config
+
+cat << EOF >> %i/etc/manpath.config
+
+### START FINK MAN-DB INFO
+MANDATORY_MANPATH				%p/share/man
+MANPATH_MAP		%p/bin			%p/share/man
+MANPATH_MAP		%p/sbin		%p/share/man
+MANPATH_MAP		%p/local/bin		%p/local/man
+MANPATH_MAP		%p/local/bin		%p/local/share/man
+MANPATH_MAP		%p/local/sbin		%p/local/man
+MANPATH_MAP		%p/local/sbin		%p/local/share/man
+MANPATH_MAP		%p/X11R6/bin		%p/X11R6/man
+MANPATH_MAP		%p/bin/X11		%p/X11R6/man
+MANPATH_MAP		%p/games		%p/share/man
+MANPATH_MAP		%p/opt/bin		%p/opt/man
+MANPATH_MAP		%p/opt/sbin		%p/opt/man
+MANDB_MAP		%p/share/man		%p/var/cache/man/fink
+### END FINK MAN-DB INFO
+EOF
+install -m 0644 %i/etc/manpath.config %i/share/doc/%n/examples
+
+ln -s %p/bin/man %i/lib/man-db/man
+ln -s %p/bin/mandb %i/lib/man-db/mandb
+<<
+###
+Triggers: <<
+	Interest-noawait: <<
+		%p/man
+		%p/share/man
+	<<
+<<
+###
+Debconf: <<
+	ConfigScript: <<
+db_version 2.0
+
+db_input medium man-db/install-setuid || true
+db_go
+	<<
+	TemplatesFile: %b/debian/templates
+	PODirectory: %b/debian/po
+<<
+###
+PreInstScript: <<
+#MAN_ID=`id -u man 2>/dev/null || true`
+#if [ -z "$MAN_ID" ]; then
+#	echo "Whoa there!  You must have a man user to install this package."
+#	echo "Please do a 'fink reinstall passwd-man' and make sure you hit"
+#	echo "'y' when it asks if you want to update your users."
+#	exit 1
+#fi
+
+# Clean up a cron job that the old man package apparently left around.
+if [ -e %p/etc/cron.daily/man ]; then
+    echo "  Removing %p/etc/cron.daily/man cron job from obsolete man package."
+    mv %p/etc/cron.daily/man %p/etc/cron.daily/man.moved-by-preinst
+fi
+
+# Clean up a cron job left around by man-db from some time ago.
+if [ -e %p/etc/cron.weekly/catman ]; then
+    echo "  Removing obsolete %p/etc/cron.weekly/catman cron job."
+    mv %p/etc/cron.weekly/catman %p/etc/cron.weekly/catman.moved-by-preinst
+fi
+
+# Migrate old statoverrides to new paths.
+if dpkg --compare-versions "$2" lt 2.5.5-4; then
+    for x in $maybesetuid; do
+	overrides="$(dpkg-statoverride --list %p/lib/man-db/$x || true)"
+	[ "$overrides" ] || continue
+	echo "$overrides" | while read owner group mode file; do
+	    dpkg-statoverride --remove "$file" || true
+	    dpkg-statoverride --add "$owner" "$group" "$mode" %p/bin/$x || true
+	done
+    done
+fi
+<<
+PostInstScript: <<
+. %p/share/debconf/confmodule
+db_version 2.0
+
+run_mandb () {
+    db_get man-db/auto-update
+    if [ "$RET" != true ]; then
+	echo "Not building database; man-db/auto-update is not 'true'." >&2
+	return 0
+    fi
+    local message="$1"
+    shift
+    [ "$message" ] && echo "$message" >&2
+    # start-stop-daemon isn't available when running from debootstrap.
+    perl -e '@pwd = getpwnam("man"); $( = $) = $pwd[3]; $< = $> = $pwd[2];
+	     exec "%p/bin/mandb", @ARGV' -- "$@" || true
+}
+
+if [ "$1" = triggered ]; then
+    # We don't print a status message here, as dpkg already said
+    # "Processing triggers for man-db ...".
+    run_mandb "" -pq
+    exit 0
+fi
+
+[ "$1" = configure ] || exit 0
+
+oldcatdir=%p/var/catman
+catdir=%p/var/cache/man
+maybesetuid='man mandb'
+conffile=%p/etc/manpath.config
+
+db_get man-db/install-setuid
+
+if [ "$RET" = true ]; then
+    # man and mandb are to be installed setuid man.
+    owner=man:wheel
+    mode=4755
+    if [ ! -d $catdir ]; then
+        # Make sure the cat directory exists.
+        install -d -o man -g wheel -m 02755 $catdir
+    fi
+else
+    # man and mandb are not to be installed setuid.
+    owner=root:wheel
+    mode=0755
+    if [ ! -d $catdir ]; then
+        # Make sure the cat directory exists.
+        install -d -o root -g wheel -m 02755 $catdir
+    fi
+fi
+
+for x in $maybesetuid; do
+    # No statoverrides available or none exist for us ...
+    if [ ! -x %p/sbin/dpkg-statoverride ] || \
+	    ! dpkg-statoverride --list %p/bin/$x >/dev/null; then
+	chown $owner %p/bin/$x || true
+	chmod $mode  %p/bin/$x
+    fi
+done
+
+if [ -e %p/etc/cron.daily/man.moved-by-preinst ]; then
+    rm %p/etc/cron.daily/man.moved-by-preinst
+fi
+if [ -e %p/etc/cron.weekly/catman.moved-by-preinst ]; then
+    rm %p/etc/cron.weekly/catman.moved-by-preinst
+fi
+
+build_db=0
+
+if [ ! -f $catdir/index.db ]; then
+    # Build the database from scratch on fresh installs.
+    build_db=1
+fi
+
+if [ $build_db -eq 1 ]; then
+    # Chances are we're being run from debootstrap, which will have problems
+    # if mandb runs backgrounded for too long (bug #100616).
+    run_mandb "Building database of manual pages ..." -cq
+else
+    # Otherwise, just update the database in the foreground. It's unlikely
+    # to take very long, and configuration needs to cover everything that
+    # happens when we're triggered.
+    run_mandb "Updating database of manual pages ..." -pq
+fi
+<<
+PreRmScript: <<
+case $1 in
+    remove)
+	# Kill symlinks created in postinst
+	rm -f %p/bin/man %p/bin/mandb
+	;;
+esac
+<<
+PostRmScript: <<
+oldcatdir="%p/var/catman"
+catdir="%p/var/cache/man"
+
+case $1 in
+    purge)
+	# removing all catpage hierarchies
+	if [ -d $oldcatdir ]; then
+	    echo "  Removing catpages as well as $oldcatdir hierarchy."
+	    rm -rf $oldcatdir 2>/dev/null || true
+	fi
+	if [ -d $catdir ]; then
+	    echo "  Removing catpages as well as $catdir hierarchy."
+	    rm -rf $catdir 2>/dev/null || true
+	fi
+	;;
+
+    abort-install|abort-upgrade)
+	if [ -e %p/etc/cron.daily/man.moved-by-preinst ] && \
+	   [ ! -e %p/etc/cron.daily/man ]; then
+	    mv %p/etc/cron.daily/man.moved-by-preinst %p/etc/cron.daily/man
+	fi
+	if [ -e %p/etc/cron.weekly/catman.moved-by-preinst ] && \
+	   [ ! -e %p/etc/cron.weekly/catman ]; then
+	    mv %p/etc/cron.weekly/catman.moved-by-preinst %p/etc/cron.weekly/catman
+	fi
+	;;
+esac
+<<
+###
+ConfFiles: <<
+	%p/etc/cron.weekly/man-db
+	%p/etc/cron.daily/man-db
+	%p/etc/manpath.config
+<<
+DocFiles: ChangeLog FAQ NEWS README docs/TODO man/THANKS docs/COPYING docs/COPYING.LIB
+###
+Description: On-line manual pager
+DescDetail: <<
+This package provides the man command, the primary way of examining the
+on-line help files (manual pages). Other utilities provided include the
+whatis and apropos commands for searching the manual page database, the
+manpath utility for determining the manual page search path, and the
+maintenance utilities mandb, catman and zsoelim. man-db uses the groff
+suite of programs to format and display the manual pages.
+<<
+###
+License: GPL
+Maintainer: Justin F. Halett <thesin@lists.sourceforge.net>
+Homepage: http://www.nongnu.org/man-db/
