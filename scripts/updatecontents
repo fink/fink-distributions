@@ -1,0 +1,79 @@
+#!/bin/bash
+
+USERHOME_DIR="/var/www/clients/client1/web5/home/finkadminbinsync";
+BINDIST_DIR="/var/www/bindist.finkproject.org/web";
+ARCHS="darwin-powerpc darwin-i386 darwin-x86_64";
+
+if [[ -f ${USERHOME_DIR}/updatecontents.lock ]]; then
+	OLDPID=$(cat ${USERHOME_DIR}/updatecontents.lock);
+
+	if [ -e /proc/${OLDPID} -a /proc/${OLDPID}/exe ]; then
+		if [[ "$(basename $(cat /proc/${OLDPID}/cmdline))" = "$(basename $0)" ]]; then
+			echo "$0 currently running as PID ${OLDPID} ($(cat /proc/${OLDPID}/cmdline))";
+
+			exit 1;
+		fi
+	fi;
+fi;
+
+echo $$ > ${USERHOME_DIR}/updatecontents.lock;
+
+#sudo apt-file -N purge;
+rm -f ${USERHOME_DIR}/sources.list;
+
+cd ${BINDIST_DIR};
+cd finkweb;
+cvs -q up -d -P;
+
+cd ${BINDIST_DIR};
+for i in *; do
+	if [[ -d ${i}/dists ]]; then
+		if [[ -f ${BINDIST_DIR}/${i}/dists/VERSION.selfupdate ]]; then
+			NEW_VERSION_FILE="${BINDIST_DIR}/${i}/dists/VERSION.selfupdate";
+		elif [[ -f ${BINDIST_DIR}/${i}/dists/VERSION ]]; then
+			NEW_VERSION_FILE="${BINDIST_DIR}/${i}/dists/VERSION";
+		else
+			continue;
+		fi;
+
+		if [[ -f ${USERHOME_DIR}/versions.d/VERSION-${i} ]]; then
+			CUR_VERSION=$(cat ${USERHOME_DIR}/versions.d/VERSION-${i}  | cut -d"@" -f2);
+			NEW_VERSION=$(cat ${NEW_VERSION_FILE} | cut -d"@" -f2);
+
+			if [ "$CUR_VERSION" != "$NEW_VERSION" ]; then
+				cp ${NEW_VERSION_FILE} ${USERHOME_DIR}/versions.d/VERSION-${i};
+			else
+				continue;
+			fi;
+		else
+			cp ${NEW_VERSION_FILE} ${USERHOME_DIR}/versions.d/VERSION-${i};
+		fi;
+
+		cd ${BINDIST_DIR}/${i}/dists;
+
+		for j in *; do
+			cd ${BINDIST_DIR}/${i}/dists;
+			if [ -d ${j} -o -L ${j} ]; then
+				cd ${BINDIST_DIR}/${i}/dists/${j};
+				for h in *; do
+					cd ${BINDIST_DIR}/${i}/dists/${j};
+					if [[ -d ${h} ]]; then
+						cd ${BINDIST_DIR}/${i}/dists/${j}/${h};
+						for g in binary-*; do
+							arch=${g/binary-};
+							nice -n20 apt-ftparchive contents -d=${USERHOME_DIR}/contents.d/contents-${i}-${j}-${h}-${arch}.db . -a=${arch} | gzip > ${USERHOME_DIR}/Contents.gz;
+							mv ${USERHOME_DIR}/Contents.gz ${BINDIST_DIR}/${i}/dists/${j}/${h}/Contents-${arch}.gz;
+							if [[ -f ${USERHOME_DIR}/sources.d/${i}-${j} ]]; then
+								sudo apt-file -N -s ${USERHOME_DIR}/sources.d/${i}-${j} -a ${arch} update;
+							fi;
+						done;
+					fi;
+				done;
+			fi;
+		done;
+	fi;
+
+	cd ${BINDIST_DIR};
+done
+
+rm ${USERHOME_DIR}/updatecontents.lock
