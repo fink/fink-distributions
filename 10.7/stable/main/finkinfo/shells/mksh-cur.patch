@@ -1,2675 +1,2424 @@
 Index: src/bin/mksh/Build.sh
-diff -u src/bin/mksh/Build.sh:1.590.2.1 src/bin/mksh/Build.sh:1.612
---- src/bin/mksh/Build.sh:1.590.2.1	Fri Nov 30 20:49:10 2012
-+++ src/bin/mksh/Build.sh	Tue Jan  1 21:19:36 2013
+diff -u src/bin/mksh/Build.sh:1.645 src/bin/mksh/Build.sh:1.651
+--- src/bin/mksh/Build.sh:1.645	Sat Aug 10 13:44:25 2013
++++ src/bin/mksh/Build.sh	Wed Nov 20 21:14:49 2013
 @@ -1,5 +1,5 @@
  #!/bin/sh
--srcversion='$MirOS: src/bin/mksh/Build.sh,v 1.590.2.1 2012/11/30 20:49:10 tg Exp $'
-+srcversion='$MirOS: src/bin/mksh/Build.sh,v 1.612 2013/01/01 21:19:36 tg Exp $'
+-srcversion='$MirOS: src/bin/mksh/Build.sh,v 1.645 2013/08/10 13:44:25 tg Exp $'
++srcversion='$MirOS: src/bin/mksh/Build.sh,v 1.651 2013/11/20 21:14:49 tg Exp $'
  #-
  # Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
- #		2011, 2012
-@@ -270,7 +270,21 @@
- 	echo "/* NeXTstep bug workaround */" >x
- 	for i
- 	do
--		echo "#include <$i>" >>x
-+		case $i in
-+		_time)
-+			echo '#if HAVE_BOTH_TIME_H' >>x
-+			echo '#include <sys/time.h>' >>x
-+			echo '#include <time.h>' >>x
-+			echo '#elif HAVE_SYS_TIME_H' >>x
-+			echo '#include <sys/time.h>' >>x
-+			echo '#elif HAVE_TIME_H' >>x
-+			echo '#include <time.h>' >>x
-+			echo '#endif' >>x
-+			;;
-+		*)
-+			echo "#include <$i>" >>x
-+			;;
-+		esac
+ #		2011, 2012, 2013
+@@ -66,7 +66,7 @@
+ rmf() {
+ 	for _f in "$@"; do
+ 		case $_f in
+-		Build.sh|check.pl|check.t|dot.mkshrc|*.c|*.h|*.ico|*.1) ;;
++		Build.sh|check.pl|check.t|dot.mkshrc|genopt.sh|*.1|*.c|*.h|*.ico|*.opt) ;;
+ 		*) rm -f "$_f" ;;
+ 		esac
  	done
- 	echo "#include <$hf>" >>x
- 	echo 'int main(void) { return (0); }' >>x
-@@ -594,7 +608,6 @@
- Linux)
- 	case $CC in
- 	*tendracc*) ;;
--	*/musl-gcc*) add_cppflags -D_GNU_SOURCE -D_BSD_SOURCE ;;
- 	*) add_cppflags -D_GNU_SOURCE ;;
- 	esac
- 	add_cppflags -DSETUID_CAN_FAIL_WITH_EAGAIN
-@@ -605,6 +618,14 @@
- 	;;
- MidnightBSD)
- 	;;
-+Minix-vmd)
-+	add_cppflags -DMKSH__NO_SETEUGID
-+	add_cppflags -DMKSH_UNEMPLOYED
-+	add_cppflags -DMKSH_CONSERVATIVE_FDS
-+	add_cppflags -D_MINIX_SOURCE
-+	oldish_ed=no-stderr-ed		# no /bin/ed, maybe see below
-+	: ${HAVE_SETLOCALE_CTYPE=0}
+@@ -325,9 +325,21 @@
+ }
+ 
+ 
+-curdir=`pwd` srcdir=`dirname "$0" 2>/dev/null` check_categories=
+-test -n "$srcdir" || srcdir=. # in case dirname does not exist
+-dstversion=`sed -n '/define MKSH_VERSION/s/^.*"\([^"]*\)".*$/\1/p' $srcdir/sh.h`
++curdir=`pwd` srcdir=`dirname "$0" 2>/dev/null`
++case x$srcdir in
++x)
++	srcdir=.
 +	;;
- Minix3)
- 	add_cppflags -DMKSH_UNEMPLOYED
- 	add_cppflags -DMKSH_CONSERVATIVE_FDS
-@@ -675,6 +696,7 @@
- 	;;
- QNX)
- 	add_cppflags -D__NO_EXT_QNX
-+	add_cppflags -D__EXT_UNIX_MISC
- 	case $TARGET_OSREV in
- 	[012345].*|6.[0123].*|6.4.[01])
- 		oldish_ed=no-stderr-ed		# oldish /bin/ed is broken
-@@ -869,7 +891,7 @@
- ct=untested
- et=untested
- vv ']' "$CPP $CFLAGS $CPPFLAGS $NOWARN conftest.c | \
--    sed -n '/^[ce]t *= */s/\([ce]t\) *= */\1=/p' | tr -d \\\\015 >x"
-+    sed -n '/^ *[ce]t *= */s/^ *\([ce]t\) *= */\1=/p' | tr -d \\\\015 >x"
- sed 's/^/[ /' x
- eval `cat x`
- rmf x vv.out
-@@ -1003,9 +1025,7 @@
- 	vv '|' "$CC $CFLAGS $CPPFLAGS $LDFLAGS $NOWARN -V conftest.c $LIBS"
- 	;;
- watcom)
--	echo >&2 'Warning: Watcom C Compiler detected. This compiler has not yet
--    been tested for compatibility with mksh. Continue at your
--    own risk, please report success/failure to the developers.'
-+	vv '|' "$CC $CFLAGS $CPPFLAGS $LDFLAGS $NOWARN -v conftest.c $LIBS"
- 	;;
- xlc)
- 	vv '|' "$CC $CFLAGS $CPPFLAGS $LDFLAGS $NOWARN $LIBS -qversion"
-@@ -1110,6 +1130,9 @@
- elif test $ct = ucode; then
- 	save_NOWARN=
- 	DOWARN=-w2
-+elif test $ct = watcom; then
-+	save_NOWARN=
-+	DOWARN=-Wc,-we
- else
- 	test x"$save_NOWARN" = x"" && save_NOWARN=-Wno-error
- 	ac_flags 0 wnoerror "$save_NOWARN"
-@@ -1155,6 +1178,8 @@
- 	# The following tests run with -Werror (gcc only) if possible
- 	NOWARN=$DOWARN; phase=u
- 	ac_flags 0 wnooverflow -Wno-overflow
-+	# mksh is not written in CFrustFrust!
-+	ac_flags 1 no_eh_frame -fno-asynchronous-unwind-tables
- 	ac_flags 1 fnostrictaliasing -fno-strict-aliasing
- 	ac_flags 1 fstackprotectorall -fstack-protector-all
- 	test $cm = dragonegg && case " $CC $CFLAGS $LDFLAGS " in
-@@ -1276,6 +1301,10 @@
- 	    __attribute__((__bounded__ (__buffer__, 2, 3)));
++*\ *|*"	"*|*"$nl"*)
++	echo >&2 Source directory should not contain space or tab or newline.
++	echo >&2 Errors may occur.
++	;;
++*"'"*)
++	echo Source directory must not contain single quotes.
++	exit 1
++	;;
++esac
++dstversion=`sed -n '/define MKSH_VERSION/s/^.*"\([^"]*\)".*$/\1/p' "$srcdir/sh.h"`
+ add_cppflags -DMKSH_BUILDSH
+ 
+ e=echo
+@@ -336,6 +348,7 @@
+ pm=0
+ cm=normal
+ optflags=-std-compile-opts
++check_categories=
+ last=
+ tfn=
+ legacy=0
+@@ -423,7 +436,7 @@
+ 	echo "$me: Error: ./$tfn is a directory!" >&2
+ 	exit 1
+ fi
+-rmf a.exe* a.out* conftest.c *core core.* lft ${tfn}* no *.bc *.ll *.o \
++rmf a.exe* a.out* conftest.c *core core.* lft ${tfn}* no *.bc *.ll *.o *.gen \
+     Rebuild.sh signames.inc test.sh x vv.out
+ 
+ SRCS="lalloc.c eval.c exec.c expr.c funcs.c histrap.c jobs.c"
+@@ -462,7 +475,7 @@
+ ccpc=-Wc,
+ ccpl=-Wl,
+ tsts=
+-ccpr='|| for _f in ${tcfn}*; do case $_f in Build.sh|check.pl|check.t|dot.mkshrc|*.c|*.h|*.ico|*.1) ;; *) rm -f "$_f" ;; esac; done'
++ccpr='|| for _f in ${tcfn}*; do case $_f in Build.sh|check.pl|check.t|dot.mkshrc|genopt.sh|*.1|*.c|*.h|*.ico|*.opt) ;; *) rm -f "$_f" ;; esac; done'
+ 
+ # Evil hack
+ if test x"$TARGET_OS" = x"Android"; then
+@@ -1356,8 +1369,8 @@
+ 	#include <string.h>
+ 	#undef __attribute__
+ 	int xcopy(const void *, void *, size_t)
+-	    __attribute__((__bounded__ (__buffer__, 1, 3)))
+-	    __attribute__((__bounded__ (__buffer__, 2, 3)));
++	    __attribute__((__bounded__(__buffer__, 1, 3)))
++	    __attribute__((__bounded__(__buffer__, 2, 3)));
  	int main(int ac, char *av[]) { return (xcopy(av[0], av[--ac], 1)); }
  	int xcopy(const void *s, void *d, size_t n) {
-+		/*
-+		 * if memmove does not exist, we are not on a system
-+		 * with GCC with __bounded__ attribute either so poo
-+		 */
- 		memmove(d, s, n); return ((int)n);
- 	}
- 	#endif
-@@ -1294,20 +1323,6 @@
+ 		/*
+@@ -1379,7 +1392,7 @@
+ 	#undef __attribute__
+ 	#undef fprintf
+ 	extern int fprintf(FILE *, const char *format, ...)
+-	    __attribute__((__format__ (__printf__, 2, 3)));
++	    __attribute__((__format__(__printf__, 2, 3)));
  	int main(int ac, char **av) { return (fprintf(stderr, "%s%d", *av, ac)); }
  	#endif
  EOF
--ac_test attribute_nonnull '' 'for __attribute__((__nonnull__))' <<-'EOF'
--	#if defined(__TenDRA__) || (defined(__GNUC__) && (__GNUC__ < 2))
--	/* force a failure: TenDRA and gcc 1.42 have false positive here */
--	int main(void) { return (thiswillneverbedefinedIhope()); }
--	#else
--	int foo(char *s1, char *s2) __attribute__((__nonnull__));
--	int bar(char *s1, char *s2) __attribute__((__nonnull__ (1, 2)));
--	int baz(char *s) __attribute__((__nonnull__ (1)));
--	int foo(char *s1, char *s2) { return (bar(s2, s1)); }
--	int bar(char *s1, char *s2) { return (baz(s1) - baz(s2)); }
--	int baz(char *s) { return (*s); }
--	int main(int ac, char **av) { return (ac == foo(av[0], av[ac-1])); }
--	#endif
--EOF
- ac_test attribute_noreturn '' 'for __attribute__((__noreturn__))' <<-'EOF'
- 	#if defined(__TenDRA__) || (defined(__GNUC__) && (__GNUC__ < 2))
- 	/* force a failure: TenDRA and gcc 1.42 have false positive here */
-@@ -1370,18 +1385,28 @@
- #ac_ifcpp 'ifdef MKSH_DISABLE_DEPRECATED' isset_MKSH_DISABLE_DEPRECATED '' \
- #    "if deprecated features are to be omitted" && \
- #    check_categories="$check_categories nodeprecated"
--ac_ifcpp 'ifdef MKSH_DISABLE_EXPERIMENTAL' isset_MKSH_DISABLE_EXPERIMENTAL '' \
--    "if experimental features are to be omitted" && \
--    check_categories="$check_categories noexperimental"
-+#ac_ifcpp 'ifdef MKSH_DISABLE_EXPERIMENTAL' isset_MKSH_DISABLE_EXPERIMENTAL '' \
-+#    "if experimental features are to be omitted" && \
-+#    check_categories="$check_categories noexperimental"
- 
- #
- # Environment: headers
- #
-+ac_header sys/time.h sys/types.h
-+ac_header time.h sys/types.h
-+test "11" = "$HAVE_SYS_TIME_H$HAVE_TIME_H" || HAVE_BOTH_TIME_H=0
-+ac_test both_time_h '' 'whether <sys/time.h> and <time.h> can both be included' <<-'EOF'
-+	#include <sys/types.h>
-+	#include <sys/time.h>
-+	#include <time.h>
-+	int main(void) { struct tm tm; return ((int)sizeof(tm)); }
-+EOF
- ac_header sys/bsdtypes.h
- ac_header sys/file.h sys/types.h
- ac_header sys/mkdev.h sys/types.h
- ac_header sys/mman.h sys/types.h
- ac_header sys/param.h
-+ac_header sys/resource.h sys/types.h _time
- ac_header sys/select.h sys/types.h
- ac_header sys/sysmacros.h
- ac_header bstring.h
-@@ -1443,8 +1468,17 @@
- 
- ac_test rlim_t <<-'EOF'
- 	#include <sys/types.h>
-+	#if HAVE_BOTH_TIME_H
- 	#include <sys/time.h>
-+	#include <time.h>
-+	#elif HAVE_SYS_TIME_H
-+	#include <sys/time.h>
-+	#elif HAVE_TIME_H
-+	#include <time.h>
-+	#endif
-+	#if HAVE_SYS_RESOURCE_H
- 	#include <sys/resource.h>
-+	#endif
- 	#include <unistd.h>
- 	int main(void) { return ((int)(rlim_t)0); }
- EOF
-@@ -1495,7 +1529,7 @@
+@@ -1598,7 +1611,7 @@
  		#define EXTERN
  		#define MKSH_INCLUDES_ONLY
  		#include "sh.h"
--		__RCSID("$MirOS: src/bin/mksh/Build.sh,v 1.590.2.1 2012/11/30 20:49:10 tg Exp $");
-+		__RCSID("$MirOS: src/bin/mksh/Build.sh,v 1.612 2013/01/01 21:19:36 tg Exp $");
+-		__RCSID("$MirOS: src/bin/mksh/Build.sh,v 1.645 2013/08/10 13:44:25 tg Exp $");
++		__RCSID("$MirOS: src/bin/mksh/Build.sh,v 1.651 2013/11/20 21:14:49 tg Exp $");
  		int main(void) { printf("Hello, World!\n"); return (0); }
  EOF
  	case $cm in
-@@ -1528,18 +1562,35 @@
- fi
- 
- #
--# Environment: signals
-+# Environment: errors and signals
- #
- test x"NetBSD" = x"$TARGET_OS" && $e Ignore the compatibility warning.
- 
-+ac_testn sys_errlist '' "the sys_errlist[] array and sys_nerr" <<-'EOF'
-+	extern const int sys_nerr;
-+	extern const char * const sys_errlist[];
-+	int main(void) { return (*sys_errlist[sys_nerr - 1]); }
-+EOF
-+ac_testn _sys_errlist '!' sys_errlist 0 "the _sys_errlist[] array and _sys_nerr" <<-'EOF'
-+	extern const int _sys_nerr;
-+	extern const char * const _sys_errlist[];
-+	int main(void) { return (*_sys_errlist[_sys_nerr - 1]); }
-+EOF
-+if test 1 = "$HAVE__SYS_ERRLIST"; then
-+	add_cppflags -Dsys_nerr=_sys_nerr
-+	add_cppflags -Dsys_errlist=_sys_errlist
-+	HAVE_SYS_ERRLIST=1
-+fi
-+ac_cppflags SYS_ERRLIST
-+
- for what in name list; do
- 	uwhat=`upper $what`
- 	ac_testn sys_sig$what '' "the sys_sig${what}[] array" <<-EOF
--		extern const char *const sys_sig${what}[];
-+		extern const char * const sys_sig${what}[];
- 		int main(void) { return (sys_sig${what}[0][0]); }
- 	EOF
- 	ac_testn _sys_sig$what '!' sys_sig$what 0 "the _sys_sig${what}[] array" <<-EOF
--		extern const char *const _sys_sig${what}[];
-+		extern const char * const _sys_sig${what}[];
- 		int main(void) { return (_sys_sig${what}[0][0]); }
- 	EOF
- 	eval uwhat_v=\$HAVE__SYS_SIG$uwhat
-@@ -1550,12 +1601,6 @@
- 	ac_cppflags SYS_SIG$uwhat
- done
- 
--ac_test strsignal '!' sys_siglist 0 <<-'EOF'
--	#include <string.h>
--	#include <signal.h>
--	int main(void) { return (strsignal(1)[0]); }
--EOF
--
- #
- # Environment: library functions
- #
-@@ -1592,7 +1637,7 @@
- ac_test gettimeofday <<-'EOF'
- 	#define MKSH_INCLUDES_ONLY
- 	#include "sh.h"
--	int main(void) { return (gettimeofday(NULL, NULL)); }
-+	int main(void) { struct timeval tv; return (gettimeofday(&tv, NULL)); }
- EOF
- 
- ac_test killpg <<-'EOF'
-@@ -1600,6 +1645,18 @@
- 	int main(int ac, char *av[]) { return (av[0][killpg(123, ac)]); }
- EOF
- 
-+ac_test memmove <<-'EOF'
-+	#include <sys/types.h>
-+	#include <stddef.h>
-+	#include <string.h>
-+	#if HAVE_STRINGS_H
-+	#include <strings.h>
-+	#endif
-+	int main(int ac, char *av[]) {
-+		return (*(int *)(void *)memmove(av[0], av[1], ac));
-+	}
-+EOF
-+
- ac_test mknod '' 'if to use mknod(), makedev() and friends' <<-'EOF'
- 	#define MKSH_INCLUDES_ONLY
- 	#include "sh.h"
-@@ -1654,7 +1711,14 @@
- 
- ac_test select <<-'EOF'
- 	#include <sys/types.h>
-+	#if HAVE_BOTH_TIME_H
- 	#include <sys/time.h>
-+	#include <time.h>
-+	#elif HAVE_SYS_TIME_H
-+	#include <sys/time.h>
-+	#elif HAVE_TIME_H
-+	#include <time.h>
-+	#endif
- 	#if HAVE_SYS_BSDTYPES_H
- 	#include <sys/bsdtypes.h>
- 	#endif
-@@ -1725,6 +1789,17 @@
- 	fi
- fi
- 
-+ac_test strerror '!' sys_errlist 0 <<-'EOF'
-+	extern char *strerror(int);
-+	int main(int ac, char *av[]) { return (*strerror(*av[ac])); }
-+EOF
-+
-+ac_test strsignal '!' sys_siglist 0 <<-'EOF'
-+	#include <string.h>
-+	#include <signal.h>
-+	int main(void) { return (strsignal(1)[0]); }
-+EOF
-+
- ac_test strlcpy <<-'EOF'
- 	#include <string.h>
- 	int main(int ac, char *av[]) { return (strlcpy(*av, av[1],
-@@ -1734,8 +1809,8 @@
- #
- # check headers for declarations
- #
--save_CC=$CC; save_LDFLAGS=$LDFLAGS; save_LIBS=$LIBS
--CC="$CC -c -o $tcfn"; LDFLAGS=; LIBS=
-+save_tcfn=$tcfn; save_CC=$CC; save_LDFLAGS=$LDFLAGS; save_LIBS=$LIBS
-+tcfn=conftest.o; CC="$CC -c -o $tcfn"; LDFLAGS=; LIBS=
- ac_test '!' flock_decl flock 1 'if flock() does not need to be declared' <<-'EOF'
- 	#define MKSH_INCLUDES_ONLY
- 	#include "sh.h"
-@@ -1751,13 +1826,17 @@
- 	long revoke(void);		/* this clashes if defined before */
- 	int main(void) { return ((int)revoke()); }
- EOF
--ac_test '!' sys_siglist_decl sys_siglist 1 'if sys_siglist[] does not need to be declared' <<-'EOF'
-+ac_test sys_errlist_decl sys_errlist 0 "for declaration of sys_errlist[] and sys_nerr" <<-'EOF'
-+	#define MKSH_INCLUDES_ONLY
-+	#include "sh.h"
-+	int main(void) { return (*sys_errlist[sys_nerr - 1]); }
-+EOF
-+ac_test sys_siglist_decl sys_siglist 0 'for declaration of sys_siglist[]' <<-'EOF'
- 	#define MKSH_INCLUDES_ONLY
- 	#include "sh.h"
--	extern int sys_siglist[5][5][5][5][5];	/* this clashes happily */
--	int main(void) { return (sys_siglist[0][0][0][0][0]); }
-+	int main(void) { return (sys_siglist[0][0]); }
- EOF
--CC=$save_CC; LDFLAGS=$save_LDFLAGS; LIBS=$save_LIBS
-+tcfn=$save_tcfn; CC=$save_CC; LDFLAGS=$save_LDFLAGS; LIBS=$save_LIBS
- 
- #
- # other checks
-@@ -1982,6 +2061,8 @@
- #define NSIG _NSIG
- #elif defined(SIGMAX)
- #define NSIG (SIGMAX+1)
-+#elif defined(_SIGMAX)
-+#define NSIG (_SIGMAX+1)
- #endif
- #endif
- int
-@@ -1989,14 +2070,15 @@
- ;' >conftest.c
- 	# GNU sed 2.03 segfaults when optimising this to sed -n
- 	NSIG=`vq "$CPP $CFLAGS $CPPFLAGS $NOWARN conftest.c" | \
--	    grep '^mksh_cfg *=' | \
--	    sed 's/^mksh_cfg *=[	 ]*\([()0-9x+-][()0-9x+	 -]*\).*$/\1/'`
-+	    grep '^ *mksh_cfg *=' | \
-+	    sed 's/^ *mksh_cfg *=[	 ]*\([()0-9x+-][()0-9x+	 -]*\).*$/\1/'`
- 	case $NSIG in
- 	*mksh_cfg*) $e "Error: NSIG='$NSIG'"; NSIG=0 ;;
- 	*[\ \(\)+-]*) NSIG=`"$AWK" "BEGIN { print $NSIG }" </dev/null` ;;
- 	esac
- 	printf=printf
- 	(printf hallo) >/dev/null 2>&1 || printf=echo
-+	test $printf = echo || test "`printf %d 42`" = 42 || printf=echo
- 	test $printf = echo || NSIG=`printf %d "$NSIG" 2>/dev/null`
- 	$printf "NSIG=$NSIG ... "
- 	sigs="INT SEGV ABRT KILL ALRM BUS CHLD CLD CONT DIL EMT FPE HUP ILL"
-@@ -2018,8 +2100,8 @@
- 		echo ';' >>conftest.c
- 		# GNU sed 2.03 croaks on optimising this, too
- 		vq "$CPP $CFLAGS $CPPFLAGS $NOWARN conftest.c" | \
--		    grep '^mksh_cfg *=' | \
--		    sed 's/^mksh_cfg *=[	 ]*\([0-9][0-9x]*\).*$/:\1 '$name/
-+		    grep '^ *mksh_cfg *=' | \
-+		    sed 's/^ *mksh_cfg *=[	 ]*\([0-9][0-9x]*\).*$/:\1 '$name/
- 	done | sed -n '/^:[^ ]/s/^://p' | while read nr name; do
- 		test $printf = echo || nr=`printf %d "$nr" 2>/dev/null`
- 		test $nr -gt 0 && test $nr -le $NSIG || continue
-@@ -2040,7 +2122,7 @@
+@@ -2113,7 +2126,7 @@
  test 1 = "$USE_PRINTF_BUILTIN" && add_cppflags -DMKSH_PRINTF_BUILTIN
  test 1 = "$HAVE_CAN_VERB" && CFLAGS="$CFLAGS -verbose"
  test -n "$LDSTATIC" && add_cppflags -DMKSH_OPTSTATIC
--add_cppflags -DMKSH_BUILD_R=411
-+add_cppflags -DMKSH_BUILD_R=419
+-add_cppflags -DMKSH_BUILD_R=481
++add_cppflags -DMKSH_BUILD_R=489
  
  $e $bi$me: Finished configuration testing, now producing output.$ao
  
-@@ -2312,6 +2394,7 @@
- MKSH_DISABLE_EXPERIMENTAL	disable code not yet comfy for (LTS) snapshots
- MKSH_DISABLE_TTY_WARNING	shut up warning about ctty if OS cant be fixed
- MKSH_DONT_EMIT_IDSTRING		omit RCS IDs from binary
-+MKSH_GCC55009			DANGER! see http://www.mirbsd.org/mksh.htm#p41
- MKSH_MIDNIGHTBSD01ASH_COMPAT	set -o sh: additional compatibility quirk
- MKSH_NOPROSPECTOFWORK		disable jobs, co-processes, etc. (do not use)
- MKSH_NOPWNAM			skip PAM calls, for -static on eglibc, Solaris
+@@ -2224,6 +2237,10 @@
+ 	;;
+ esac
+ echo ": # work around NeXTstep bug" >Rebuild.sh
++for file in "$srcdir"/*.opt; do
++	echo "echo + Running \\\$srcdir/genopt.sh on '$file'..."
++	echo "(srcfile='$file'; . '$srcdir/genopt.sh')"
++done >>Rebuild.sh
+ echo set -x >>Rebuild.sh
+ for file in $SRCS; do
+ 	op=`echo x"$file" | sed 's/^x\(.*\)\.c$/\1./'`
+@@ -2253,8 +2270,15 @@
+ echo "$CC $CFLAGS $LDFLAGS -o \$tcfn $lobjs $LIBS $ccpr" >>Rebuild.sh
+ echo "test -f \$tcfn || exit 1; $SIZE \$tcfn" >>Rebuild.sh
+ if test $cm = makefile; then
+-	extras='emacsfn.h sh.h sh_flags.h var_spec.h'
++	extras='emacsfn.h genopt.sh rlimits.opt sh.h sh_flags.opt var_spec.h'
+ 	test 0 = $HAVE_SYS_SIGNAME && extras="$extras signames.inc"
++	gens= genq=
++	for file in "$srcdir"/*.opt; do
++		genf=`basename "$file" | sed 's/.opt$/.gen/'`
++		gens="$gens $genf"
++		genq="$genq$nl$genf: $srcdir/genopt.sh $file
++			srcfile=$file; . $srcdir/genopt.sh"
++	done
+ 	cat >Makefrag.inc <<EOF
+ # Makefile fragment for building mksh $dstversion
+ 
+@@ -2272,6 +2296,8 @@
+ LDFLAGS=	$LDFLAGS
+ LIBS=		$LIBS
+ 
++.depend \$(OBJS_BP):$gens$genq
++
+ # not BSD make only:
+ #VPATH=		$srcdir
+ #all: \$(PROG)
+@@ -2295,6 +2321,9 @@
+ 	$e Generated Makefrag.inc successfully.
+ 	exit 0
+ fi
++for file in "$srcdir"/*.opt; do
++	v "(srcfile='$file'; . '$srcdir/genopt.sh')" || exit 1
++done
+ if test $cm = combine; then
+ 	objs="-o $mkshexe"
+ 	for file in $SRCS; do
 Index: src/bin/mksh/check.t
-diff -u src/bin/mksh/check.t:1.569 src/bin/mksh/check.t:1.586
---- src/bin/mksh/check.t:1.569	Fri Nov 30 19:25:01 2012
-+++ src/bin/mksh/check.t	Sun Jan  6 18:51:39 2013
-@@ -1,10 +1,10 @@
--# $MirOS: src/bin/mksh/check.t,v 1.569 2012/11/30 19:25:01 tg Exp $
-+# $MirOS: src/bin/mksh/check.t,v 1.586 2013/01/06 18:51:39 tg Exp $
+diff -u src/bin/mksh/check.t:1.630 src/bin/mksh/check.t:1.635
+--- src/bin/mksh/check.t:1.630	Fri Aug 16 10:58:59 2013
++++ src/bin/mksh/check.t	Sun Nov 17 22:28:49 2013
+@@ -1,8 +1,8 @@
+-# $MirOS: src/bin/mksh/check.t,v 1.630 2013/08/16 10:58:59 tg Exp $
++# $MirOS: src/bin/mksh/check.t,v 1.635 2013/11/17 22:28:49 tg Exp $
  # $OpenBSD: bksl-nl.t,v 1.2 2001/01/28 23:04:56 niklas Exp $
  # $OpenBSD: history.t,v 1.5 2001/01/28 23:04:56 niklas Exp $
  # $OpenBSD: read.t,v 1.3 2003/03/10 03:48:16 david Exp $
+-# $OpenBSD: regress.t,v 1.15 2013/07/01 17:25:27 jca Exp $
++# $OpenBSD: regress.t,v 1.16 2013/09/14 20:09:30 millert Exp $
+ # $OpenBSD: obsd-regress.t,v 1.5 2013/07/01 17:25:27 jca Exp $
  #-
  # Copyright © 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
--#	      2011, 2012
-+#	      2011, 2012, 2013
- #	Thorsten Glaser <tg@mirbsd.org>
- #
- # Provided that these terms and disclaimer and all copyright notices
-@@ -29,7 +29,7 @@
+@@ -31,7 +31,7 @@
  # http://www.freebsd.org/cgi/cvsweb.cgi/src/tools/regression/bin/test/regress.sh?rev=HEAD
  
  expected-stdout:
--	@(#)MIRBSD KSH R41 2012/11/30
-+	@(#)MIRBSD KSH R41 2013/01/06
+-	@(#)MIRBSD KSH R48 2013/08/16
++	@(#)MIRBSD KSH R48 2013/11/17
  description:
  	Check version of shell.
  stdin:
-@@ -38,7 +38,7 @@
+@@ -40,7 +40,7 @@
  category: shell:legacy-no
  ---
  expected-stdout:
--	@(#)LEGACY KSH R41 2012/11/30
-+	@(#)LEGACY KSH R41 2013/01/06
+-	@(#)LEGACY KSH R48 2013/08/16
++	@(#)LEGACY KSH R48 2013/11/17
  description:
  	Check version of legacy shell.
  stdin:
-@@ -217,14 +217,21 @@
- 	the time-limit clause (e.g. to 7) if this occurs.
- time-limit: 3
+@@ -3674,6 +3674,8 @@
+ 	x=" A :  B::D"
+ 	echo -n '12:'; for i in $x ; do echo -n " [$i]" ; done ; echo
+ 	showargs 13 $x
++	x="X 1 2"
++	showargs 14 shift ${x#X}
+ expected-stdout:
+ 	1: [] [b] []
+ 	2: [:b::]
+@@ -3688,6 +3690,7 @@
+ 	 <11> <h:ith:ere>
+ 	12: [A] [B] [] [D]
+ 	 <13> <A> <B> <> <D>
++	 <14> <shift> <1> <2>
+ ---
+ name: integer-base-err-1
+ description:
+@@ -4806,11 +4809,12 @@
+ 	them exit 0. The POSIX behaviour is needed by BSD make.
  stdin:
--	echo -n >tf
--	alias ls=ls
--	ls
--	echo $(ls)
-+	print '#!'"$__progname"'\necho tf' >lq
-+	chmod +x lq
-+	PATH=$PWD:$PATH
-+	alias lq=lq
-+	lq
-+	echo = now
-+	i=`lq`
-+	print -r -- $i
-+	echo = out
- 	exit 0
+ 	set -e
+-	echo `false; echo hi`
++	echo `false; echo hi` $(<this-file-does-not-exist)
+ 	echo $?
  expected-stdout:
- 	tf
-+	= now
- 	tf
-+	= out
+ 	
+ 	0
++expected-stderr-pattern: /this-file-does-not-exist/
  ---
- name: alias-10
+ name: regression-40
  description:
-@@ -1141,7 +1148,8 @@
- need-pass: no
- # the mv command fails on Cygwin
- # Hurd aborts the testsuite (permission denied)
--category: !os:cygwin,!os:gnu,!os:msys,!nosymlink
-+# QNX does not find subdir to cd into
-+category: !os:cygwin,!os:gnu,!os:msys,!os:nto,!nosymlink
- file-setup: file 644 "x"
- 	mkdir noread noread/target noread/target/subdir
- 	ln -s noread link
-@@ -2060,7 +2068,9 @@
- 	Check that globbing matches the right things...
- # breaks on Mac OSX (HFS+ non-standard Unicode canonical decomposition)
- # breaks on Cygwin 1.7 (files are now UTF-16 or something)
--category: !os:cygwin,!os:darwin,!os:msys
-+# breaks on QNX 6.4.1 (says RT)
-+category: !os:cygwin,!os:darwin,!os:msys,!os:nto
-+need-pass: no
- file-setup: file 644 "a�c"
- stdin:
- 	echo a[�-�]*
-@@ -5811,6 +5821,140 @@
- 	hi
- expected-exit: 9
+@@ -6733,7 +6737,6 @@
+ 	r='fc -e -'
+ 	source='PATH=$PATH:. command .'
+ 	stop='kill -STOP'
+-	suspend='kill -STOP $$'
+ 	type='whence -v'
  ---
-+name: exit-trap-2
-+description:
-+	Check that ERR and EXIT traps are run just like ksh93 does.
-+	GNU bash does not run ERtrap in ±e eval-undef but runs it
-+	twice (bug?) in +e eval-false, so does ksh93 (bug?), which
-+	also has a bug to continue execution (echoing "and out" and
-+	returning 0) in +e eval-undef.
-+file-setup: file 644 "x"
-+	v=; unset v
-+	trap 'echo EXtrap' EXIT
-+	trap 'echo ERtrap' ERR
-+	set $1
-+	echo "and run $2"
-+	eval $2
-+	echo and out
-+file-setup: file 644 "xt"
-+	v=; unset v
-+	trap 'echo EXtrap' EXIT
-+	trap 'echo ERtrap' ERR
-+	set $1
-+	echo 'and run true'
-+	true
-+	echo and out
-+file-setup: file 644 "xf"
-+	v=; unset v
-+	trap 'echo EXtrap' EXIT
-+	trap 'echo ERtrap' ERR
-+	set $1
-+	echo 'and run false'
-+	false
-+	echo and out
-+file-setup: file 644 "xu"
-+	v=; unset v
-+	trap 'echo EXtrap' EXIT
-+	trap 'echo ERtrap' ERR
-+	set $1
-+	echo 'and run ${v?}'
-+	${v?}
-+	echo and out
-+stdin:
-+	runtest() {
-+		rm -f rc
-+		(
-+			"$__progname" "$@"
-+			echo $? >rc
-+		) 2>&1 | sed \
-+		    -e 's/parameter not set/parameter null or not set/' \
-+		    -e 's/[[]6]//' -e 's/: eval: line 1//' -e 's/: line 6//' \
-+		    -e "s^${__progname%.exe}\.*e*x*e*: <stdin>\[[0-9]*]PROG"
-+	}
-+	xe=-e
-+	echo : $xe
-+	runtest x $xe true
-+	echo = eval-true $(<rc) .
-+	runtest x $xe false
-+	echo = eval-false $(<rc) .
-+	runtest x $xe '${v?}'
-+	echo = eval-undef $(<rc) .
-+	runtest xt $xe
-+	echo = noeval-true $(<rc) .
-+	runtest xf $xe
-+	echo = noeval-false $(<rc) .
-+	runtest xu $xe
-+	echo = noeval-undef $(<rc) .
-+	xe=+e
-+	echo : $xe
-+	runtest x $xe true
-+	echo = eval-true $(<rc) .
-+	runtest x $xe false
-+	echo = eval-false $(<rc) .
-+	runtest x $xe '${v?}'
-+	echo = eval-undef $(<rc) .
-+	runtest xt $xe
-+	echo = noeval-true $(<rc) .
-+	runtest xf $xe
-+	echo = noeval-false $(<rc) .
-+	runtest xu $xe
-+	echo = noeval-undef $(<rc) .
-+expected-stdout:
-+	: -e
-+	and run true
-+	and out
-+	EXtrap
-+	= eval-true 0 .
-+	and run false
-+	ERtrap
-+	EXtrap
-+	= eval-false 1 .
-+	and run ${v?}
-+	x: v: parameter null or not set
-+	ERtrap
-+	EXtrap
-+	= eval-undef 1 .
-+	and run true
-+	and out
-+	EXtrap
-+	= noeval-true 0 .
-+	and run false
-+	ERtrap
-+	EXtrap
-+	= noeval-false 1 .
-+	and run ${v?}
-+	xu: v: parameter null or not set
-+	EXtrap
-+	= noeval-undef 1 .
-+	: +e
-+	and run true
-+	and out
-+	EXtrap
-+	= eval-true 0 .
-+	and run false
-+	ERtrap
-+	and out
-+	EXtrap
-+	= eval-false 0 .
-+	and run ${v?}
-+	x: v: parameter null or not set
-+	ERtrap
-+	EXtrap
-+	= eval-undef 1 .
-+	and run true
-+	and out
-+	EXtrap
-+	= noeval-true 0 .
-+	and run false
-+	ERtrap
-+	and out
-+	EXtrap
-+	= noeval-false 0 .
-+	and run ${v?}
-+	xu: v: parameter null or not set
-+	EXtrap
-+	= noeval-undef 1 .
-+---
- name: test-stlt-1
- description:
- 	Check that test also can handle string1 < string2 etc.
-@@ -7593,11 +7737,13 @@
- 	mk 'foo ()' >f-dash
- 	mk 'function foo ()' >f-bash
- 	mk 'function stop ()' stop >f-stop
-+	print '#!'"$__progname"'\nprint -r -- "${0%/f-argh}"' >f-argh
- 	chmod +x f-*
--	echo "korn: $(./f-korn)"
--	echo "dash: $(./f-dash)"
--	echo "bash: $(./f-bash)"
--	echo "stop: $(./f-stop)"
-+	u=$(./f-argh)
-+	x="korn: $(./f-korn)"; echo "${x/@("$u")/.}"
-+	x="dash: $(./f-dash)"; echo "${x/@("$u")/.}"
-+	x="bash: $(./f-bash)"; echo "${x/@("$u")/.}"
-+	x="stop: $(./f-stop)"; echo "${x/@("$u")/.}"
- expected-stdout:
- 	korn: bar='foo'
- 	dash: bar='./f-dash'
-@@ -8134,6 +8280,36 @@
- expected-stdout:
- 	okay
+ name: aliases-1-hartz4
+@@ -6802,7 +6805,6 @@
+ 	r='fc -e -'
+ 	source='PATH=$PATH:. command .'
+ 	stop='kill -STOP'
+-	suspend='kill -STOP $$'
+ 	type='whence -v'
  ---
-+name: redir-1
-+description:
-+	Check some of the most basic invariants of I/O redirection
-+stdin:
-+	i=0
-+	function d {
-+		print o$i.
-+		print -u2 e$((i++)).
-+	}
-+	d >a 2>b
-+	echo =1=
-+	cat a
-+	echo =2=
-+	cat b
-+	echo =3=
-+	d 2>&1 >c
-+	echo =4=
-+	cat c
-+	echo =5=
-+expected-stdout:
-+	=1=
-+	o0.
-+	=2=
-+	e0.
-+	=3=
-+	e1.
-+	=4=
-+	o1.
-+	=5=
-+---
- name: bashiop-1
- description:
- 	Check if GNU bash-like I/O redirection works
-@@ -10390,6 +10566,34 @@
- 	5(esac)bourne no
- 	6(esac)korn esac
+ name: aliases-3b
+@@ -6826,7 +6828,6 @@
+ 	r='fc -e -'
+ 	source='PATH=$PATH:. command .'
+ 	stop='kill -STOP'
+-	suspend='kill -STOP $$'
+ 	type='whence -v'
  ---
-+name: command-shift
-+description:
-+	Check that 'command shift' works
-+stdin:
-+	function snc {
-+		echo "before	0='$0' 1='$1' 2='$2'"
-+		shift
-+		echo "after	0='$0' 1='$1' 2='$2'"
-+	}
-+	function swc {
-+		echo "before	0='$0' 1='$1' 2='$2'"
-+		command shift
-+		echo "after	0='$0' 1='$1' 2='$2'"
-+	}
-+	echo = without command
-+	snc 一 二
-+	echo = with command
-+	swc 一 二
-+	echo = done
-+expected-stdout:
-+	= without command
-+	before	0='snc' 1='一' 2='二'
-+	after	0='snc' 1='二' 2=''
-+	= with command
-+	before	0='swc' 1='一' 2='二'
-+	after	0='swc' 1='二' 2=''
-+	= done
-+---
- name: stateptr-underflow
- description:
- 	This check overflows an Xrestpos stored in a short in R40
+ name: aliases-2b-hartz4
 Index: src/bin/mksh/dot.mkshrc
-diff -u src/bin/mksh/dot.mkshrc:1.72 src/bin/mksh/dot.mkshrc:1.73
---- src/bin/mksh/dot.mkshrc:1.72	Tue Oct 30 21:04:56 2012
-+++ src/bin/mksh/dot.mkshrc	Fri Nov 30 20:19:10 2012
+diff -u src/bin/mksh/dot.mkshrc:1.84 src/bin/mksh/dot.mkshrc:1.85
+--- src/bin/mksh/dot.mkshrc:1.84	Sat Aug 10 13:43:50 2013
++++ src/bin/mksh/dot.mkshrc	Thu Aug 22 13:46:46 2013
 @@ -1,5 +1,5 @@
  # $Id$
--# $MirOS: src/bin/mksh/dot.mkshrc,v 1.72 2012/10/30 21:04:56 tg Exp $
-+# $MirOS: src/bin/mksh/dot.mkshrc,v 1.73 2012/11/30 20:19:10 tg Exp $
+-# $MirOS: src/bin/mksh/dot.mkshrc,v 1.84 2013/08/10 13:43:50 tg Exp $
++# $MirOS: src/bin/mksh/dot.mkshrc,v 1.85 2013/08/22 13:46:46 tg Exp $
  #-
  # Copyright (c) 2002, 2003, 2004, 2006, 2007, 2008, 2009, 2010,
- #		2011, 2012
-@@ -30,7 +30,7 @@
- 
- 	(( e )) && print -n "$e|"
+ #		2011, 2012, 2013
+@@ -105,14 +105,14 @@
  }
--PS1=$'\001\r''$(precmd)${USER:=$(ulimit -c 0; id -un 2>/dev/null || echo \?
-+PS1=$'\001\r''${ precmd;}${USER:=$(ulimit -c 0; id -un 2>/dev/null || echo \?
- 	)}@${HOSTNAME%%.*}:$(local d=${PWD:-?} p=~; [[ $p = ?(*/) ]] || \
- 	d=${d/#$p/~}; local m=${%d} n p=...; (( m > 0 )) || m=${#d}
- 	(( m > (n = (COLUMNS/3 < 7 ? 7 : COLUMNS/3)) )) && d=${d:(-n)} || \
+ chpwd .
+ function cd {
+-	builtin cd "$@"
++	builtin cd "$@" || return $?
+ 	chpwd "$@"
+ }
+ function cd_csh {
+ 	local d t=${1/#~/$DIRSTACKBASE}
+ 
+ 	if ! d=$(builtin cd "$t" 2>&1); then
+-		print -u2 "${1}: ${d##*$t - }."
++		print -u2 "${1}: ${d##*cd: $t: }."
+ 		return 1
+ 	fi
+ 	cd "$t"
 Index: src/bin/mksh/edit.c
-diff -u src/bin/mksh/edit.c:1.256 src/bin/mksh/edit.c:1.260
---- src/bin/mksh/edit.c:1.256	Mon Nov 26 22:39:14 2012
-+++ src/bin/mksh/edit.c	Fri Dec 28 02:28:33 2012
+diff -u src/bin/mksh/edit.c:1.271 src/bin/mksh/edit.c:1.272
+--- src/bin/mksh/edit.c:1.271	Fri Aug 16 10:59:01 2013
++++ src/bin/mksh/edit.c	Tue Sep 24 20:19:42 2013
+@@ -1,4 +1,4 @@
+-;/*	$OpenBSD: edit.c,v 1.38 2013/06/03 15:41:59 tedu Exp $	*/
++/*	$OpenBSD: edit.c,v 1.38 2013/06/03 15:41:59 tedu Exp $	*/
+ /*	$OpenBSD: edit.h,v 1.9 2011/05/30 17:14:35 martynas Exp $	*/
+ /*	$OpenBSD: emacs.c,v 1.44 2011/09/05 04:50:33 marco Exp $	*/
+ /*	$OpenBSD: vi.c,v 1.26 2009/06/29 22:50:19 martynas Exp $	*/
 @@ -28,7 +28,7 @@
  
  #ifndef MKSH_NO_CMDLINE_EDITING
  
--__RCSID("$MirOS: src/bin/mksh/edit.c,v 1.256 2012/11/26 22:39:14 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/edit.c,v 1.260 2012/12/28 02:28:33 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/edit.c,v 1.271 2013/08/16 10:59:01 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/edit.c,v 1.272 2013/09/24 20:19:42 tg Exp $");
  
  /*
   * in later versions we might use libtermcap for this, but since external
-@@ -73,9 +73,9 @@
- static void x_modified(void);
- static void x_mode(bool);
- static int x_do_comment(char *, ssize_t, ssize_t *);
--static void x_print_expansions(int, char *const *, bool);
-+static void x_print_expansions(int, char * const *, bool);
- static int x_cf_glob(int *, const char *, int, int, int *, int *, char ***);
--static size_t x_longest_prefix(int, char *const *);
-+static size_t x_longest_prefix(int, char * const *);
- static void x_glob_hlp_add_qchar(char *);
- static char *x_glob_hlp_tilde_and_rem_qchar(char *, bool);
- static int x_basename(const char *, const char *);
-@@ -607,6 +607,8 @@
- 	char **words = NULL;
- 	bool is_command;
- 
-+	mkssert(buf != NULL);
-+
- 	len = x_locate_word(buf, buflen, pos, startp, &is_command);
- 	if (!((*flagsp) & XCF_COMMAND))
- 		is_command = false;
-@@ -990,8 +992,7 @@
- static int x_match(char *, char *);
- static void x_redraw(int);
- static void x_push(int);
--static char *x_mapin(const char *, Area *)
--    MKSH_A_NONNULL((__nonnull__ (1)));
-+static char *x_mapin(const char *, Area *);
- static char *x_mapout(int);
- static void x_mapout2(int, char **);
- static void x_print(int, int);
-@@ -2274,6 +2275,7 @@
+@@ -966,7 +966,6 @@
+ static int x_size_str(char *);
+ static int x_size2(char *, char **);
+ static void x_zots(char *);
+-static void x_zotc2(int);
+ static void x_zotc3(char **);
+ static void x_load_hist(char **);
+ static int x_search(char *, int, int);
+@@ -1608,7 +1607,7 @@
+ static int
+ x_size2(char *cp, char **dcp)
  {
- 	char *cp;
+-	int c = *(unsigned char *)cp;
++	uint8_t c = *(unsigned char *)cp;
  
-+	mkssert(xcp != NULL);
- 	strndupx(cp, xcp, nchars, AEDIT);
- 	if (killstack[killsp])
- 		afree(killstack[killsp], AEDIT);
-@@ -2395,9 +2397,6 @@
- {
- 	char *news, *op;
+ 	if (UTFMODE && (c > 0x7F))
+ 		return (utf_widthadj(cp, (const char **)dcp));
+@@ -1617,7 +1616,7 @@
+ 	if (c == '\t')
+ 		/* Kludge, tabs are always four spaces. */
+ 		return (4);
+-	if (c < ' ' || c == 0x7f)
++	if (ISCTRL(c) && /* but not C1 */ c < 0x80)
+ 		/* control unsigned char */
+ 		return (2);
+ 	return (1);
+@@ -1634,19 +1633,6 @@
+ }
  
--	/* for clang's static analyser, the nonnull attribute isn't enough */
--	mkssert(cp != NULL);
+ static void
+-x_zotc2(int c)
+-{
+-	if (c == '\t') {
+-		/* Kludge, tabs are always four spaces. */
+-		x_e_puts("    ");
+-	} else if (c < ' ' || c == 0x7f) {
+-		x_e_putc2('^');
+-		x_e_putc2(UNCTRL(c));
+-	} else
+-		x_e_putc2(c);
+-}
 -
- 	strdupx(news, cp, ap);
- 	op = news;
- 	while (*cp) {
-Index: src/bin/mksh/eval.c
-diff -u src/bin/mksh/eval.c:1.129 src/bin/mksh/eval.c:1.132
---- src/bin/mksh/eval.c:1.129	Mon Oct 22 20:19:12 2012
-+++ src/bin/mksh/eval.c	Mon Dec 17 23:18:03 2012
-@@ -23,7 +23,7 @@
+-static void
+ x_zotc3(char **cp)
+ {
+ 	unsigned char c = **(unsigned char **)cp;
+@@ -1655,7 +1641,7 @@
+ 		/* Kludge, tabs are always four spaces. */
+ 		x_e_puts("    ");
+ 		(*cp)++;
+-	} else if (c < ' ' || c == 0x7f) {
++	} else if (ISCTRL(c) && /* but not C1 */ c < 0x80) {
+ 		x_e_putc2('^');
+ 		x_e_putc2(UNCTRL(c));
+ 		(*cp)++;
+@@ -1767,7 +1753,10 @@
+ static int
+ x_end_of_text(int c MKSH_A_UNUSED)
+ {
+-	x_zotc2(edchars.eof);
++	char tmp = edchars.eof;
++	char *cp = &tmp;
++
++	x_zotc3(&cp);
+ 	x_putc('\r');
+ 	x_putc('\n');
+ 	x_flush();
+@@ -2379,6 +2368,7 @@
+ 		/* XXX -- should handle \^ escape? */
+ 		if (*cp == '^') {
+ 			cp++;
++			/*XXX or ^^ escape? this is ugly. */
+ 			if (*cp >= '?')
+ 				/* includes '?'; ASCII */
+ 				*op++ = CTRL(*cp);
+@@ -2400,7 +2390,7 @@
+ {
+ 	char *p = *buf;
  
- #include "sh.h"
+-	if (c < ' ' || c == 0x7f) {
++	if (ISCTRL(c)) {
+ 		*p++ = '^';
+ 		*p++ = UNCTRL(c);
+ 	} else
+@@ -3343,8 +3333,6 @@
+ #if !MKSH_S_NOVI
+ /* +++ vi editing mode +++ */
  
--__RCSID("$MirOS: src/bin/mksh/eval.c,v 1.129 2012/10/22 20:19:12 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/eval.c,v 1.132 2012/12/17 23:18:03 tg Exp $");
+-#define Ctrl(c)		(c&0x1f)
+-
+ struct edstate {
+ 	char *cbuf;
+ 	ssize_t winleft;
+@@ -3378,13 +3366,14 @@
+ static void refresh(int);
+ static int outofwin(void);
+ static void rewindow(void);
+-static int newcol(int, int);
++static int newcol(unsigned char, int);
+ static void display(char *, char *, int);
+ static void ed_mov_opt(int, char *);
+ static int expand_word(int);
+ static int complete_word(int, int);
+ static int print_expansions(struct edstate *, int);
+-#define char_len(c)	((c) < ' ' || (c) == 0x7F ? 2 : 1)
++#define char_len(c)	((ISCTRL((unsigned char)c) && \
++			/* but not C1 */ (unsigned char)c < 0x80) ? 2 : 1)
+ static void x_vi_zotc(int);
+ static void vi_error(void);
+ static void vi_macro_reset(void);
+@@ -3620,7 +3609,7 @@
  
- /*
-  * string expansion
-@@ -277,30 +277,24 @@
- 				quote = st->quotew;
- 				continue;
- 			case COMSUB:
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- 			case FUNSUB:
--#endif
- 				tilde_ok = 0;
- 				if (f & DONTRUNCOMMAND) {
- 					word = IFS_WORD;
- 					*dp++ = '$';
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- 					if (c == FUNSUB) {
- 						*dp++ = '{';
- 						*dp++ = ' ';
- 					} else
--#endif
- 						*dp++ = '(';
- 					while (*sp != '\0') {
- 						Xcheck(ds, dp);
- 						*dp++ = *sp++;
- 					}
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- 					if (c == FUNSUB) {
- 						*dp++ = ';';
- 						*dp++ = '}';
- 					} else
--#endif
- 						*dp++ = ')';
+ 	case VNORMAL:
+ 		if (insert != 0) {
+-			if (ch == Ctrl('v')) {
++			if (ch == CTRL('v')) {
+ 				state = VLIT;
+ 				ch = '^';
+ 			}
+@@ -3732,7 +3721,7 @@
+ 		break;
+ 
+ 	case VXCH:
+-		if (ch == Ctrl('['))
++		if (ch == CTRL('['))
+ 			state = VNORMAL;
+ 		else {
+ 			curcmd[cmdlen++] = ch;
+@@ -3741,7 +3730,7 @@
+ 		break;
+ 
+ 	case VSEARCH:
+-		if (ch == '\r' || ch == '\n' /*|| ch == Ctrl('[')*/ ) {
++		if (ch == '\r' || ch == '\n' /*|| ch == CTRL('[')*/ ) {
+ 			restore_cbuf();
+ 			/* Repeat last search? */
+ 			if (srchlen == 0) {
+@@ -3756,10 +3745,10 @@
+ 				memcpy(srchpat, locpat, srchlen + 1);
+ 			}
+ 			state = VCMD;
+-		} else if (ch == edchars.erase || ch == Ctrl('h')) {
++		} else if (ch == edchars.erase || ch == CTRL('h')) {
+ 			if (srchlen != 0) {
+ 				srchlen--;
+-				es->linelen -= char_len((unsigned char)locpat[srchlen]);
++				es->linelen -= char_len(locpat[srchlen]);
+ 				es->cursor = es->linelen;
+ 				refresh(0);
+ 				return (0);
+@@ -3786,7 +3775,7 @@
+ 			es = save_es;
+ 
+ 			for (i = srchlen; --i >= n; )
+-				es->linelen -= char_len((unsigned char)locpat[i]);
++				es->linelen -= char_len(locpat[i]);
+ 			srchlen = n;
+ 			es->cursor = es->linelen;
+ 			refresh(0);
+@@ -3796,12 +3785,12 @@
+ 				vi_error();
+ 			else {
+ 				locpat[srchlen++] = ch;
+-				if (ch < ' ' || ch == 0x7f) {
++				if (ISCTRL(ch) && /* but not C1 */ ch < 0x80) {
+ 					if ((size_t)es->linelen + 2 >
+ 					    (size_t)es->cbufsize)
+ 						vi_error();
+ 					es->cbuf[es->linelen++] = '^';
+-					es->cbuf[es->linelen++] = ch ^ '@';
++					es->cbuf[es->linelen++] = UNCTRL(ch);
  				} else {
- 					type = comsub(&x, sp, c);
-@@ -522,6 +516,7 @@
+ 					if (es->linelen >= es->cbufsize)
+ 						vi_error();
+@@ -3912,7 +3901,7 @@
+ 		return (VXCH);
+ 	else if (ch == '.')
+ 		return (VREDO);
+-	else if (ch == Ctrl('v'))
++	else if (ch == CTRL('v'))
+ 		return (VVERSION);
+ 	else if (is_cmd(ch))
+ 		return (VCMD);
+@@ -3925,7 +3914,7 @@
+ {
+ 	int tcursor;
  
- 						/* check for special cases */
- 						d = str_val(st->var);
-+						mkssert(d != NULL);
- 						switch (*pat) {
- 						case '#':
- 							/* anchor at begin */
-@@ -1322,7 +1317,6 @@
- 			SHF_MAPHI|SHF_CLEXEC);
- 		if (shf == NULL)
- 			errorf("%s: %s %s", name, "can't open", "$() input");
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- 	} else if (fn == FUNSUB) {
- 		int ofd1;
- 		struct temp *tf = NULL;
-@@ -1331,7 +1325,7 @@
- 		maketemp(ATEMP, TT_FUNSUB, &tf);
- 		if (!tf->shf) {
- 			errorf("can't %s temporary file %s: %s",
--			    "create", tf->tffn, strerror(errno));
-+			    "create", tf->tffn, cstrerror(errno));
+-	if (ch == edchars.erase || ch == Ctrl('h')) {
++	if (ch == edchars.erase || ch == CTRL('h')) {
+ 		if (insert == REPLACE) {
+ 			if (es->cursor == undo->cursor) {
+ 				vi_error();
+@@ -3982,7 +3971,7 @@
+ 	 * buffer (if user inserts & deletes char, ibuf gets trashed and
+ 	 * we don't want to use it)
+ 	 */
+-	if (first_insert && ch != Ctrl('['))
++	if (first_insert && ch != CTRL('['))
+ 		saved_inslen = 0;
+ 	switch (ch) {
+ 	case '\0':
+@@ -3992,7 +3981,7 @@
+ 	case '\n':
+ 		return (1);
+ 
+-	case Ctrl('['):
++	case CTRL('['):
+ 		expanded = NONE;
+ 		if (first_insert) {
+ 			first_insert = false;
+@@ -4010,19 +3999,19 @@
+ 			return (redo_insert(lastac - 1));
+ 
+ 	/* { Begin nonstandard vi commands */
+-	case Ctrl('x'):
++	case CTRL('x'):
+ 		expand_word(0);
+ 		break;
+ 
+-	case Ctrl('f'):
++	case CTRL('f'):
+ 		complete_word(0, 0);
+ 		break;
+ 
+-	case Ctrl('e'):
++	case CTRL('e'):
+ 		print_expansions(es, 0);
+ 		break;
+ 
+-	case Ctrl('i'):
++	case CTRL('i'):
+ 		if (Flag(FVITABCOMPLETE)) {
+ 			complete_word(0, 0);
+ 			break;
+@@ -4077,8 +4066,8 @@
  		}
- 		/* save stdout and make the temporary file it */
- 		ofd1 = savefd(1);
-@@ -1345,7 +1339,6 @@
- 		shf = shf_open(tf->tffn, O_RDONLY, 0, SHF_MAPHI | SHF_CLEXEC);
- 		unlink(tf->tffn);
- 		afree(tf, ATEMP);
--#endif
- 	} else {
- 		int ofd1, pv[2];
+ 		switch (*cmd) {
  
-Index: src/bin/mksh/exec.c
-diff -u src/bin/mksh/exec.c:1.106 src/bin/mksh/exec.c:1.112
---- src/bin/mksh/exec.c:1.106	Fri Nov 30 19:02:06 2012
-+++ src/bin/mksh/exec.c	Sun Jan  6 18:51:42 2013
-@@ -2,7 +2,7 @@
+-		case Ctrl('l'):
+-		case Ctrl('r'):
++		case CTRL('l'):
++		case CTRL('r'):
+ 			redraw_line(true);
+ 			break;
+ 
+@@ -4265,7 +4254,7 @@
+ 
+ 		case 'j':
+ 		case '+':
+-		case Ctrl('n'):
++		case CTRL('n'):
+ 			if (grabhist(modified, hnum + argcnt) < 0)
+ 				return (-1);
+ 			else {
+@@ -4276,7 +4265,7 @@
+ 
+ 		case 'k':
+ 		case '-':
+-		case Ctrl('p'):
++		case CTRL('p'):
+ 			if (grabhist(modified, hnum - argcnt) < 0)
+ 				return (-1);
+ 			else {
+@@ -4508,26 +4497,26 @@
+ 		/* AT&T ksh */
+ 		case '=':
+ 		/* Nonstandard vi/ksh */
+-		case Ctrl('e'):
++		case CTRL('e'):
+ 			print_expansions(es, 1);
+ 			break;
+ 
+ 
+ 		/* Nonstandard vi/ksh */
+-		case Ctrl('i'):
++		case CTRL('i'):
+ 			if (!Flag(FVITABCOMPLETE))
+ 				return (-1);
+ 			complete_word(1, argcnt);
+ 			break;
+ 
+ 		/* some annoying AT&T kshs */
+-		case Ctrl('['):
++		case CTRL('['):
+ 			if (!Flag(FVIESCCOMPLETE))
+ 				return (-1);
+ 		/* AT&T ksh */
+ 		case '\\':
+ 		/* Nonstandard vi/ksh */
+-		case Ctrl('f'):
++		case CTRL('f'):
+ 			complete_word(1, argcnt);
+ 			break;
+ 
+@@ -4535,7 +4524,7 @@
+ 		/* AT&T ksh */
+ 		case '*':
+ 		/* Nonstandard vi/ksh */
+-		case Ctrl('x'):
++		case CTRL('x'):
+ 			expand_word(1);
+ 			break;
+ 
+@@ -4614,7 +4603,7 @@
+ 		break;
+ 
+ 	case 'h':
+-	case Ctrl('h'):
++	case CTRL('h'):
+ 		if (!sub && es->cursor == 0)
+ 			return (-1);
+ 		ncursor = es->cursor - argcnt;
+@@ -5030,7 +5019,7 @@
+ {
+ 	char *hptr;
+ 	int hist;
+-	int anchored;
++	bool anchored;
+ 
+ 	if ((start == 0 && fwd == 0) || (start >= hlast - 1 && fwd == 1))
+ 		return (-1);
+@@ -5038,7 +5027,7 @@
+ 		start++;
+ 	else
+ 		start--;
+-	anchored = *pat == '^' ? (++pat, 1) : 0;
++	anchored = *pat == '^' ? (++pat, true) : false;
+ 	if ((hist = findhist(start, fwd, pat, anchored)) < 0) {
+ 		/* (start != 0 && fwd && match(holdbufp, pat) >= 0) */
+ 		if (start != 0 && fwd && strcmp(holdbufp, pat) >= 0) {
+@@ -5127,7 +5116,7 @@
+ }
+ 
+ static int
+-newcol(int ch, int col)
++newcol(unsigned char ch, int col)
+ {
+ 	if (ch == '\t')
+ 		return ((col | 7) + 1);
+@@ -5155,10 +5144,10 @@
+ 				*twb1++ = ' ';
+ 			} while (++col < winwidth && (col & 7) != 0);
+ 		else if (col < winwidth) {
+-			if (ch < ' ' || ch == 0x7f) {
++			if (ISCTRL(ch) && /* but not C1 */ ch < 0x80) {
+ 				*twb1++ = '^';
+ 				if (++col < winwidth) {
+-					*twb1++ = ch ^ '@';
++					*twb1++ = UNCTRL(ch);
+ 					col++;
+ 				}
+ 			} else {
+@@ -5435,9 +5424,9 @@
+ static void
+ x_vi_zotc(int c)
+ {
+-	if (c < ' ' || c == 0x7f) {
++	if (ISCTRL(c)) {
+ 		x_putc('^');
+-		c ^= '@';
++		c = UNCTRL(c);
+ 	}
+ 	x_putc(c);
+ }
+Index: src/bin/mksh/eval.c
+diff -u src/bin/mksh/eval.c:1.142 src/bin/mksh/eval.c:1.144
+--- src/bin/mksh/eval.c:1.142	Wed Jul 24 18:03:57 2013
++++ src/bin/mksh/eval.c	Sun Nov 17 22:28:51 2013
+@@ -1,4 +1,4 @@
+-/*	$OpenBSD: eval.c,v 1.39 2013/07/01 17:25:27 jca Exp $	*/
++/*	$OpenBSD: eval.c,v 1.40 2013/09/14 20:09:30 millert Exp $	*/
  
  /*-
   * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
-- *		 2011, 2012
-+ *		 2011, 2012, 2013
-  *	Thorsten Glaser <tg@mirbsd.org>
-  *
-  * Provided that these terms and disclaimer and all copyright notices
 @@ -23,7 +23,7 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/exec.c,v 1.106 2012/11/30 19:02:06 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/exec.c,v 1.112 2013/01/06 18:51:42 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/eval.c,v 1.142 2013/07/24 18:03:57 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/eval.c,v 1.144 2013/11/17 22:28:51 tg Exp $");
+ 
+ /*
+  * string expansion
+@@ -719,7 +719,8 @@
+ 					 */
+ 					x.str = trimsub(str_val(st->var),
+ 						dp, st->stype);
+-					if (x.str[0] != '\0' || st->quotep)
++					word = quote ? IFS_WORD : IFS_WS;
++					if (quote || x.str[0] != '\0')
+ 						type = XSUB;
+ 					else
+ 						type = XNULLSUB;
+Index: src/bin/mksh/exec.c
+diff -u src/bin/mksh/exec.c:1.125 src/bin/mksh/exec.c:1.127
+--- src/bin/mksh/exec.c:1.125	Sun Jul 21 20:44:44 2013
++++ src/bin/mksh/exec.c	Wed Oct  9 11:59:27 2013
+@@ -23,7 +23,7 @@
+ 
+ #include "sh.h"
+ 
+-__RCSID("$MirOS: src/bin/mksh/exec.c,v 1.125 2013/07/21 20:44:44 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/exec.c,v 1.127 2013/10/09 11:59:27 tg Exp $");
  
  #ifndef MKSH_DEFAULT_EXECSHELL
  #define MKSH_DEFAULT_EXECSHELL	"/bin/sh"
-@@ -32,7 +32,7 @@
- static int comexec(struct op *, struct tbl * volatile, const char **,
-     int volatile, volatile int *);
- static void scriptexec(struct op *, const char **) MKSH_A_NORETURN;
--static int call_builtin(struct tbl *, const char **);
-+static int call_builtin(struct tbl *, const char **, const char *);
- static int iosetup(struct ioword *, struct tbl *);
- static int herein(const char *, int, char **);
- static const char *do_selectargs(const char **, bool);
-@@ -461,7 +461,7 @@
- 		if (rv == ENOEXEC)
- 			scriptexec(t, (const char **)up);
- 		else
--			errorf("%s: %s", s, strerror(rv));
-+			errorf("%s: %s", s, cstrerror(rv));
- 	}
-  Break:
- 	exstat = rv & 0xFF;
-@@ -479,9 +479,14 @@
- 		unwind(LEXIT);
- 	if (rv != 0 && !(flags & XERROK) &&
- 	    (xerrok == NULL || !*xerrok)) {
--		trapsig(ksh_SIGERR);
--		if (Flag(FERREXIT))
--			unwind(LERROR);
-+		if (Flag(FERREXIT) & 0x80) {
-+			/* inside eval */
-+			Flag(FERREXIT) = 0;
-+		} else {
-+			trapsig(ksh_SIGERR);
-+			if (Flag(FERREXIT))
-+				unwind(LERROR);
-+		}
- 	}
- 	return (rv);
- }
-@@ -501,7 +506,7 @@
- 	/* Must be static (XXX but why?) */
- 	static struct op texec;
- 	int type_flags;
--	int keepasn_ok;
-+	bool keepasn_ok;
- 	int fcflags = FC_BI|FC_FUNC|FC_PATH;
- 	bool bourne_function_call = false;
- 	struct block *l_expand, *l_assign;
-@@ -533,7 +538,7 @@
- 	 *	FOO=bar command			FOO is neither kept nor exported
- 	 *	PATH=... foobar			use new PATH in foobar search
- 	 */
--	keepasn_ok = 1;
-+	keepasn_ok = true;
- 	while (tp && tp->type == CSHELL) {
- 		/* undo effects of command */
- 		fcflags = FC_BI|FC_FUNC|FC_PATH;
-@@ -580,7 +585,7 @@
- 			 * POSIX says special builtins lose their status
- 			 * if accessed using command.
- 			 */
--			keepasn_ok = 0;
-+			keepasn_ok = false;
- 			if (!ap[0]) {
- 				/* ensure command with no args exits with 0 */
- 				subst_exstat = 0;
-@@ -605,7 +610,7 @@
- 				/* go on, use the builtin */
- 				break;
- #endif
--#if !defined(MKSH_SMALL) && !defined(MKSH_DISABLE_EXPERIMENTAL)
-+#if !defined(MKSH_SMALL)
- 		} else if (tp->val.f == c_trap) {
- 			t->u.evalflags &= ~DOTCOMEXEC;
- 			break;
-@@ -614,7 +619,7 @@
- 			break;
- 		tp = findcom(ap[0], fcflags & (FC_BI|FC_FUNC));
- 	}
--#if !defined(MKSH_SMALL) && !defined(MKSH_DISABLE_EXPERIMENTAL)
-+#if !defined(MKSH_SMALL)
- 	if (t->u.evalflags & DOTCOMEXEC)
- 		flags |= XEXEC;
- #endif
-@@ -672,7 +677,11 @@
+@@ -869,7 +869,7 @@
+ 	*tp->args-- = tp->str;
  
- 	/* shell built-in */
- 	case CSHELL:
--		rv = call_builtin(tp, (const char **)ap);
-+		rv = call_builtin(tp, (const char **)ap, null);
-+		if (!keepasn_ok && tp->val.f == c_shift) {
-+			l_expand->argc = l_assign->argc;
-+			l_expand->argv = l_assign->argv;
-+		}
- 		break;
- 
- 	/* function call */
-@@ -688,14 +697,14 @@
- 				rv = (tp->u2.errnov == ENOENT) ? 127 : 126;
- 				warningf(true, "%s: %s %s: %s", cp,
- 				    "can't find", "function definition file",
--				    strerror(tp->u2.errnov));
-+				    cstrerror(tp->u2.errnov));
- 				break;
- 			}
- 			if (include(tp->u.fpath, 0, NULL, false) < 0) {
- 				rv = errno;
- 				warningf(true, "%s: %s %s %s: %s", cp,
- 				    "can't open", "function definition file",
--				    tp->u.fpath, strerror(rv));
-+				    tp->u.fpath, cstrerror(rv));
- 				rv = 127;
- 				break;
- 			}
-@@ -789,7 +798,7 @@
- 			} else {
- 				rv = 126;
- 				warningf(true, "%s: %s: %s", cp, "can't execute",
--				    strerror(tp->u2.errnov));
-+				    cstrerror(tp->u2.errnov));
- 			}
- 			break;
- 		}
-@@ -924,7 +933,7 @@
- 	execve(args.rw[0], args.rw, cap.rw);
- 
- 	/* report both the programme that was run and the bogus interpreter */
--	errorf("%s: %s: %s", tp->str, sh, strerror(errno));
-+	errorf("%s: %s: %s", tp->str, sh, cstrerror(errno));
- }
- 
- int
-@@ -933,9 +942,7 @@
- 	struct tbl *tp;
- 
- 	tp = ktsearch(&builtins, *wp, hash(*wp));
--	if (tp == NULL)
--		internal_errorf("%s: %s", "shcomexec", *wp);
--	return (call_builtin(tp, wp));
-+	return (call_builtin(tp, wp, "shcomexec"));
- }
- 
- /*
-@@ -984,6 +991,8 @@
- 
- 	while (/* CONSTCOND */ 1) {
- 		tp = findfunc(name, nhash, true);
-+		/* because findfunc:create=true */
-+		mkssert(tp != NULL);
- 
- 		if (tp->flag & ISSET)
- 			was_set = true;
-@@ -1250,10 +1259,12 @@
- }
- 
- static int
--call_builtin(struct tbl *tp, const char **wp)
-+call_builtin(struct tbl *tp, const char **wp, const char *where)
- {
- 	int rv;
- 
-+	if (!tp)
-+		internal_errorf("%s: %s", where, wp[0]);
- 	builtin_argv0 = wp[0];
- 	builtin_flag = tp->flag;
- 	shf_reopen(1, SHF_WR, shl_stdout);
-@@ -1361,7 +1372,7 @@
- 			warningf(true, "can't %s %s: %s",
- 			    iotype == IODUP ? "dup" :
- 			    (iotype == IOREAD || iotype == IOHERE) ?
--			    "open" : "create", cp, strerror(u));
-+			    "open" : "create", cp, cstrerror(u));
- 		}
- 		return (-1);
- 	}
-@@ -1391,7 +1402,7 @@
- 			warningf(true, "%s %s %s",
- 			    "can't finish (dup) redirection",
- 			    snptreef(NULL, 32, "%R", &iotmp),
--			    strerror(eno));
-+			    cstrerror(eno));
- 			if (iotype != IODUP)
- 				close(u);
+ #ifndef MKSH_SMALL
+-	if ((fd = open(tp->str, O_RDONLY)) >= 0) {
++	if ((fd = open(tp->str, O_RDONLY | O_BINARY)) >= 0) {
+ 		/* read first MAXINTERP octets from file */
+ 		if (read(fd, buf, sizeof(buf)) <= 0)
+ 			/* read error -> no good */
+@@ -1374,7 +1374,7 @@
+ 			warningf(true, "%s: %s", cp, "restricted");
  			return (-1);
-@@ -1425,7 +1436,7 @@
- static int
- hereinval(const char *content, int sub, char **resbuf, struct shf *shf)
- {
--	const char *ccp;
-+	const char * volatile ccp = content;
- 	struct source *s, *osource;
- 
- 	osource = source;
-@@ -1439,14 +1450,13 @@
- 	if (sub) {
- 		/* do substitutions on the content of heredoc */
- 		s = pushs(SSTRING, ATEMP);
--		s->start = s->str = content;
-+		s->start = s->str = ccp;
- 		source = s;
- 		if (yylex(ONEWORD|HEREDOC) != LWORD)
- 			internal_errorf("%s: %s", "herein", "yylex");
- 		source = osource;
- 		ccp = evalstr(yylval.cp, 0);
--	} else
--		ccp = content;
-+	}
- 
- 	if (resbuf == NULL)
- 		shf_puts(ccp, shf);
-@@ -1484,7 +1494,7 @@
- 	if (!(shf = h->shf) || (fd = open(h->tffn, O_RDONLY, 0)) < 0) {
- 		i = errno;
- 		warningf(true, "can't %s temporary file %s: %s",
--		    !shf ? "create" : "open", h->tffn, strerror(i));
-+		    !shf ? "create" : "open", h->tffn, cstrerror(i));
- 		if (shf)
- 			shf_close(shf);
- 		/* special to iosetup(): don't print error */
-@@ -1501,7 +1511,7 @@
- 		i = errno;
- 		close(fd);
- 		warningf(true, "can't %s temporary file %s: %s",
--		    "write", h->tffn, strerror(i));
-+		    "write", h->tffn, cstrerror(i));
- 		/* special to iosetup(): don't print error */
- 		return (-2);
+ 		}
+-		u = open(cp, flags, 0666);
++		u = open(cp, flags | O_BINARY, 0666);
  	}
-@@ -1534,7 +1544,7 @@
- 		if (print_menu || !*str_val(global("REPLY")))
- 			pr_menu(ap);
- 		shellf("%s", str_val(global("PS3")));
--		if (call_builtin(findcom("read", FC_BI), read_args))
-+		if (call_builtin(findcom("read", FC_BI), read_args, Tselect))
- 			return (NULL);
- 		s = str_val(global("REPLY"));
- 		if (*s) {
+ 	if (u < 0) {
+ 		/* herein() may already have printed message */
+@@ -1507,7 +1507,7 @@
+ 	 * so temp doesn't get removed too soon).
+ 	 */
+ 	h = maketemp(ATEMP, TT_HEREDOC_EXP, &e->temps);
+-	if (!(shf = h->shf) || (fd = open(h->tffn, O_RDONLY, 0)) < 0) {
++	if (!(shf = h->shf) || (fd = open(h->tffn, O_RDONLY | O_BINARY, 0)) < 0) {
+ 		i = errno;
+ 		warningf(true, "can't %s temporary file %s: %s",
+ 		    !shf ? "create" : "open", h->tffn, cstrerror(i));
+@@ -1669,7 +1669,7 @@
+ dbteste_isa(Test_env *te, Test_meta meta)
+ {
+ 	Test_op ret = TO_NONOP;
+-	int uqword;
++	bool uqword;
+ 	const char *p;
+ 
+ 	if (!*te->pos.wp)
 Index: src/bin/mksh/funcs.c
-diff -u src/bin/mksh/funcs.c:1.230 src/bin/mksh/funcs.c:1.237
---- src/bin/mksh/funcs.c:1.230	Tue Oct 30 20:13:18 2012
-+++ src/bin/mksh/funcs.c	Tue Jan  1 20:45:02 2013
-@@ -5,7 +5,7 @@
+diff -u src/bin/mksh/funcs.c:1.244 src/bin/mksh/funcs.c:1.250
+--- src/bin/mksh/funcs.c:1.244	Mon Jun  3 22:28:32 2013
++++ src/bin/mksh/funcs.c	Sun Nov 17 22:21:17 2013
+@@ -1,7 +1,7 @@
+ /*	$OpenBSD: c_ksh.c,v 1.33 2009/02/07 14:03:24 kili Exp $	*/
+-/*	$OpenBSD: c_sh.c,v 1.43 2013/04/19 17:39:45 deraadt Exp $	*/
++/*	$OpenBSD: c_sh.c,v 1.44 2013/09/04 15:49:18 millert Exp $	*/
+ /*	$OpenBSD: c_test.c,v 1.18 2009/03/01 20:11:06 otto Exp $	*/
+-/*	$OpenBSD: c_ulimit.c,v 1.17 2008/03/21 12:51:19 millert Exp $	*/
++/*	$OpenBSD: c_ulimit.c,v 1.18 2013/11/14 15:23:30 espie Exp $	*/
  
  /*-
   * Copyright (c) 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
-- *		 2010, 2011, 2012
-+ *		 2010, 2011, 2012, 2013
-  *	Thorsten Glaser <tg@mirbsd.org>
-  *
-  * Provided that these terms and disclaimer and all copyright notices
 @@ -38,7 +38,7 @@
  #endif
  #endif
  
--__RCSID("$MirOS: src/bin/mksh/funcs.c,v 1.230 2012/10/30 20:13:18 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/funcs.c,v 1.237 2013/01/01 20:45:02 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/funcs.c,v 1.244 2013/06/03 22:28:32 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/funcs.c,v 1.250 2013/11/17 22:21:17 tg Exp $");
  
  #if HAVE_KILLPG
  /*
-@@ -220,8 +220,7 @@
- static void ptest_error(Test_env *, int, const char *);
- static char *kill_fmt_entry(char *, size_t, unsigned int, const void *);
- static void p_time(struct shf *, bool, long, int, int,
--    const char *, const char *)
--    MKSH_A_NONNULL((__nonnull__ (6, 7)));
-+    const char *, const char *);
+@@ -60,6 +60,10 @@
+ #define c_ulimit	c_true
+ #endif
  
- int
- c_pwd(const char **wp)
-@@ -254,7 +253,7 @@
- 		p = NULL;
- 	if (!p && !(p = allocd = ksh_get_wd())) {
- 		bi_errorf("%s: %s", "can't determine current directory",
--		    strerror(errno));
-+		    cstrerror(errno));
- 		return (1);
- 	}
- 	shprintf("%s\n", p);
-@@ -853,8 +852,6 @@
- 	} else if (wp[builtin_opt.optind]) {
- 		for (i = builtin_opt.optind; wp[i]; i++) {
- 			varsearch(e->loc, &vp, wp[i], hash(wp[i]));
--			if (!vp)
--				continue;
- 			c_typeset_vardump(vp, flag, thing, pflag, istset);
- 		}
- 	} else
-@@ -884,6 +881,9 @@
- 	int any_set = 0;
- 	char *s;
- 
-+	if (!vp)
-+		return;
-+
- 	/*
- 	 * See if the parameter is set (for arrays, if any
- 	 * element is set).
-@@ -1379,7 +1379,7 @@
- 			rv = 1;
- 		} else {
- 			if (mksh_kill(n, sig) < 0) {
--				bi_errorf("%s: %s", p, strerror(errno));
-+				bi_errorf("%s: %s", p, cstrerror(errno));
- 				rv = 1;
- 			}
- 		}
-@@ -1726,7 +1726,7 @@
- 		return (1);
- 	}
- 	if ((file = search_path(cp, path, R_OK, &errcode)) == NULL) {
--		bi_errorf("%s: %s", cp, strerror(errcode));
-+		bi_errorf("%s: %s", cp, cstrerror(errcode));
- 		return (1);
- 	}
- 
-@@ -1743,7 +1743,7 @@
- 	}
- 	if ((i = include(file, argc, argv, false)) < 0) {
- 		/* should not happen */
--		bi_errorf("%s: %s", cp, strerror(errno));
-+		bi_errorf("%s: %s", cp, cstrerror(errno));
- 		return (1);
- 	}
- 	return (i);
-@@ -1834,7 +1834,7 @@
- #if HAVE_SELECT
- 	case 't':
- 		if (parse_usec(builtin_opt.optarg, &tv)) {
--			bi_errorf("%s: %s '%s'", Tsynerr, strerror(errno),
-+			bi_errorf("%s: %s '%s'", Tsynerr, cstrerror(errno),
- 			    builtin_opt.optarg);
- 			return (2);
- 		}
-@@ -1916,7 +1916,7 @@
- 			rv = 1;
- 			goto c_read_out;
- 		default:
--			bi_errorf("%s: %s", Tselect, strerror(errno));
-+			bi_errorf("%s: %s", Tselect, cstrerror(errno));
- 			rv = 2;
- 			goto c_read_out;
- 		}
-@@ -2216,7 +2216,7 @@
- 	exstat |= 0x4000;
- 
- 	savef = Flag(FERREXIT);
--	Flag(FERREXIT) = 0;
-+	Flag(FERREXIT) |= 0x80;
- 	rv = shell(s, false);
- 	Flag(FERREXIT) = savef;
- 	source = saves;
-@@ -2710,7 +2710,7 @@
- 			goto c_mknod_failed;
- 	} else if (mkfifo(argv[0], mode)) {
-  c_mknod_failed:
--		bi_errorf("%s: %s", argv[0], strerror(errno));
-+		bi_errorf("%s: %s", argv[0], cstrerror(errno));
-  c_mknod_err:
- 		rv = 1;
- 	}
-@@ -2766,6 +2766,8 @@
- 
- 	for (argc = 0; wp[argc]; argc++)
- 		;
-+	mkssert(argc > 0);
-+	mkssert(wp[0] != NULL);
- 
- 	if (strcmp(wp[0], "[") == 0) {
- 		if (strcmp(wp[--argc], "]") != 0) {
-@@ -2895,6 +2897,34 @@
- 	if (!do_eval)
- 		return (0);
- 
-+#ifdef DEBUG
-+	switch (op) {
-+	/* Binary operators */
-+	case TO_STEQL:
-+	case TO_STNEQ:
-+	case TO_STLT:
-+	case TO_STGT:
-+	case TO_INTEQ:
-+	case TO_INTNE:
-+	case TO_INTGT:
-+	case TO_INTGE:
-+	case TO_INTLT:
-+	case TO_INTLE:
-+	case TO_FILEQ:
-+	case TO_FILNT:
-+	case TO_FILOT:
-+		/* consistency check, but does not happen in practice */
-+		if (!opnd2) {
-+			te->flags |= TEF_ERROR;
-+			return (1);
-+		}
-+		break;
-+	default:
-+		/* for completeness of switch */
-+		break;
-+	}
++#ifndef MKSH_UNEMPLOYED
++static int c_suspend(const char **);
 +#endif
 +
- 	switch (op) {
+ /* getn() that prints error */
+ static int
+ bi_getn(const char *as, int *ai)
+@@ -123,6 +127,9 @@
+ 	{"*=return", c_exitreturn},
+ 	{Tsgset, c_set},
+ 	{"*=shift", c_shift},
++#ifndef MKSH_UNEMPLOYED
++	{"suspend", c_suspend},
++#endif
+ 	{"test", c_test},
+ 	{"*=times", c_times},
+ 	{"*=trap", c_trap},
+@@ -3243,6 +3250,7 @@
+ 	 * so that something like test \( -f = -f \) is accepted
+ 	 */
+ 	if ((te->flags & TEF_DBRACKET) || (&te->pos.wp[1] < te->wp_end &&
++/*XXX TODO: !test_opin(b_ops_xsi, … */
+ 	    !test_isop(TM_BINOP, te->pos.wp[1]))) {
+ 		if ((op = (*te->isa)(te, TM_UNOP))) {
+ 			/* unary expression */
+@@ -3333,16 +3341,6 @@
+ #define SOFT	0x1
+ #define HARD	0x2
  
- 	/*
-@@ -3242,7 +3272,7 @@
- ptest_isa(Test_env *te, Test_meta meta)
+-struct limits {
+-	const char *name;
+-	int resource;		/* resource to get/set */
+-	unsigned int factor;	/* multiply by to get rlim_{cur,max} values */
+-	char option;
+-};
+-
+-static void print_ulimit(const struct limits *, int);
+-static int set_ulimit(const struct limits *, const char *, int);
+-
+ /* Magic to divine the 'm' and 'v' limits */
+ 
+ #ifdef RLIMIT_AS
+@@ -3385,165 +3383,38 @@
+ #undef ULIMIT_M_IS_VMEM
+ #endif
+ 
++#if defined(ULIMIT_M_IS_RSS) && defined(ULIMIT_M_IS_VMEM)
++# error nonsensical m ulimit
++#endif
++
++#if defined(ULIMIT_V_IS_VMEM) && defined(ULIMIT_V_IS_AS)
++# error nonsensical v ulimit
++#endif
++
++#define RLIMITS_DEFNS
++#include "rlimits.gen"
++
++static void print_ulimit(const struct limits *, int);
++static int set_ulimit(const struct limits *, const char *, int);
++
++static const struct limits * const rlimits[] = {
++#define RLIMITS_ITEMS
++#include "rlimits.gen"
++};
++
++static const char rlimits_opts[] =
++#define RLIMITS_OPTCS
++#include "rlimits.gen"
++    ;
+ 
+ int
+ c_ulimit(const char **wp)
  {
- 	/* Order important - indexed by Test_meta values */
--	static const char *const tokens[] = {
-+	static const char * const tokens[] = {
- 		"-o", "-a", "!", "(", ")"
- 	};
- 	Test_op rv;
-@@ -3580,7 +3610,7 @@
- 	if (errno == EPERM)
- 		bi_errorf("%s exceeds allowable %s limit", v, l->name);
- 	else
--		bi_errorf("bad %s limit: %s", l->name, strerror(errno));
-+		bi_errorf("bad %s limit: %s", l->name, cstrerror(errno));
- 	return (1);
- }
+-	static const struct limits limits[] = {
+-		/* do not use options -H, -S or -a or change the order */
+-#ifdef RLIMIT_CPU
+-		{ "time(cpu-seconds)", RLIMIT_CPU, 1, 't' },
+-#endif
+-#ifdef RLIMIT_FSIZE
+-		{ "file(blocks)", RLIMIT_FSIZE, 512, 'f' },
+-#endif
+-#ifdef RLIMIT_CORE
+-		{ "coredump(blocks)", RLIMIT_CORE, 512, 'c' },
+-#endif
+-#ifdef RLIMIT_DATA
+-		{ "data(KiB)", RLIMIT_DATA, 1024, 'd' },
+-#endif
+-#ifdef RLIMIT_STACK
+-		{ "stack(KiB)", RLIMIT_STACK, 1024, 's' },
+-#endif
+-#ifdef RLIMIT_MEMLOCK
+-		{ "lockedmem(KiB)", RLIMIT_MEMLOCK, 1024, 'l' },
+-#endif
+-#ifdef RLIMIT_NOFILE
+-		{ "nofiles(descriptors)", RLIMIT_NOFILE, 1, 'n' },
+-#endif
+-#ifdef RLIMIT_NPROC
+-		{ "processes", RLIMIT_NPROC, 1, 'p' },
+-#endif
+-#ifdef RLIMIT_SWAP
+-		{ "swap(KiB)", RLIMIT_SWAP, 1024, 'w' },
+-#endif
+-#ifdef RLIMIT_LOCKS
+-		{ "flocks", RLIMIT_LOCKS, -1, 'L' },
+-#endif
+-#ifdef RLIMIT_TIME
+-		{ "humantime(seconds)", RLIMIT_TIME, 1, 'T' },
+-#endif
+-#ifdef RLIMIT_NOVMON
+-		{ "vnodemonitors", RLIMIT_NOVMON, 1, 'V' },
+-#endif
+-#ifdef RLIMIT_SIGPENDING
+-		{ "sigpending", RLIMIT_SIGPENDING, 1, 'i' },
+-#endif
+-#ifdef RLIMIT_MSGQUEUE
+-		{ "msgqueue(bytes)", RLIMIT_MSGQUEUE, 1, 'q' },
+-#endif
+-#ifdef RLIMIT_AIO_MEM
+-		{ "AIOlockedmem(KiB)", RLIMIT_AIO_MEM, 1024, 'M' },
+-#endif
+-#ifdef RLIMIT_AIO_OPS
+-		{ "AIOoperations", RLIMIT_AIO_OPS, 1, 'O' },
+-#endif
+-#ifdef RLIMIT_TCACHE
+-		{ "cachedthreads", RLIMIT_TCACHE, 1, 'C' },
+-#endif
+-#ifdef RLIMIT_SBSIZE
+-		{ "sockbufsiz(KiB)", RLIMIT_SBSIZE, 1024, 'B' },
+-#endif
+-#ifdef RLIMIT_PTHREAD
+-		{ "threadsperprocess", RLIMIT_PTHREAD, 1, 'P' },
+-#endif
+-#ifdef RLIMIT_NICE
+-		{ "maxnice", RLIMIT_NICE, 1, 'e' },
+-#endif
+-#ifdef RLIMIT_RTPRIO
+-		{ "maxrtprio", RLIMIT_RTPRIO, 1, 'r' },
+-#endif
+-#if defined(ULIMIT_M_IS_RSS)
+-		{ "resident-set(KiB)", RLIMIT_RSS, 1024, 'm' },
+-#elif defined(ULIMIT_M_IS_VMEM)
+-		{ "memory(KiB)", RLIMIT_VMEM, 1024, 'm' },
+-#endif
+-#if defined(ULIMIT_V_IS_VMEM)
+-		{ "virtual-memory(KiB)", RLIMIT_VMEM, 1024, 'v' },
+-#elif defined(ULIMIT_V_IS_AS)
+-		{ "address-space(KiB)", RLIMIT_AS, 1024, 'v' },
+-#endif
+-		{ NULL, 0, 0, 0 }
+-	};
+-	static const char opts[] = "a"
+-#ifdef RLIMIT_SBSIZE
+-	    "B"
+-#endif
+-#ifdef RLIMIT_TCACHE
+-	    "C"
+-#endif
+-#ifdef RLIMIT_CORE
+-	    "c"
+-#endif
+-#ifdef RLIMIT_DATA
+-	    "d"
+-#endif
+-#ifdef RLIMIT_NICE
+-	    "e"
+-#endif
+-#ifdef RLIMIT_FSIZE
+-	    "f"
+-#endif
+-	    "H"
+-#ifdef RLIMIT_SIGPENDING
+-	    "i"
+-#endif
+-#ifdef RLIMIT_LOCKS
+-	    "L"
+-#endif
+-#ifdef RLIMIT_MEMLOCK
+-	    "l"
+-#endif
+-#ifdef RLIMIT_AIO_MEM
+-	    "M"
+-#endif
+-#if defined(ULIMIT_M_IS_RSS) || defined(ULIMIT_M_IS_VMEM)
+-	    "m"
+-#endif
+-#ifdef RLIMIT_NOFILE
+-	    "n"
+-#endif
+-#ifdef RLIMIT_AIO_OPS
+-	    "O"
+-#endif
+-#ifdef RLIMIT_PTHREAD
+-	    "P"
+-#endif
+-#ifdef RLIMIT_NPROC
+-	    "p"
+-#endif
+-#ifdef RLIMIT_MSGQUEUE
+-	    "q"
+-#endif
+-#ifdef RLIMIT_RTPRIO
+-	    "r"
+-#endif
+-	    "S"
+-#ifdef RLIMIT_STACK
+-	    "s"
+-#endif
+-#ifdef RLIMIT_TIME
+-	    "T"
+-#endif
+-#ifdef RLIMIT_CPU
+-	    "t"
+-#endif
+-#ifdef RLIMIT_NOVMON
+-	    "V"
+-#endif
+-#if defined(ULIMIT_V_IS_VMEM) || defined(ULIMIT_V_IS_AS)
+-	    "v"
+-#endif
+-#ifdef RLIMIT_SWAP
+-	    "w"
+-#endif
+-	    ;
++	size_t i = 0;
+ 	int how = SOFT | HARD, optc, what = 'f';
+ 	bool all = false;
+-	const struct limits *l;
  
-@@ -3623,7 +3653,7 @@
- 		bi_errorf(Tsynerr);
- 	else if ((rv = rename(wp[0], wp[1])) != 0) {
- 		rv = errno;
--		bi_errorf("%s: %s", "failed", strerror(rv));
-+		bi_errorf("%s: %s", "failed", cstrerror(rv));
+-	while ((optc = ksh_getopt(wp, &builtin_opt, opts)) != -1)
++	while ((optc = ksh_getopt(wp, &builtin_opt, rlimits_opts)) != -1)
+ 		switch (optc) {
+ 		case 'H':
+ 			how = HARD;
+@@ -3555,31 +3426,32 @@
+ 			all = true;
+ 			break;
+ 		case '?':
+-			bi_errorf("usage: ulimit [-%s] [value]", opts);
++			bi_errorf("usage: ulimit [-%s] [value]", rlimits_opts);
+ 			return (1);
+ 		default:
+ 			what = optc;
+ 		}
+ 
+-	for (l = limits; l->name && l->option != what; l++)
+-		;
+-	if (!l->name) {
+-		internal_warningf("ulimit: %c", what);
+-		return (1);
++	while (i < NELEM(rlimits)) {
++		if (rlimits[i]->optchar == what)
++			goto found;
++		++i;
+ 	}
+-
++	internal_warningf("ulimit: %c", what);
++	return (1);
++ found:
+ 	if (wp[builtin_opt.optind]) {
+ 		if (all || wp[builtin_opt.optind + 1]) {
+ 			bi_errorf("too many arguments");
+ 			return (1);
+ 		}
+-		return (set_ulimit(l, wp[builtin_opt.optind], how));
++		return (set_ulimit(rlimits[i], wp[builtin_opt.optind], how));
+ 	}
+ 	if (!all)
+-		print_ulimit(l, how);
+-	else for (l = limits; l->name; l++) {
+-		shprintf("%-20s ", l->name);
+-		print_ulimit(l, how);
++		print_ulimit(rlimits[i], how);
++	else for (i = 0; i < NELEM(rlimits); ++i) {
++		shprintf("%-20s ", rlimits[i]->name);
++		print_ulimit(rlimits[i], how);
+ 	}
+ 	return (0);
+ }
+@@ -3611,7 +3483,11 @@
  	}
  
- 	return (rv);
-@@ -3646,7 +3676,7 @@
- 		bi_errorf(Tsynerr);
- 	else if ((buf = do_realpath(wp[0])) == NULL) {
- 		rv = errno;
--		bi_errorf("%s: %s", wp[0], strerror(rv));
-+		bi_errorf("%s: %s", wp[0], cstrerror(rv));
- 		if ((unsigned int)rv > 255)
- 			rv = 255;
- 	} else {
-@@ -3693,7 +3723,7 @@
+ 	if (getrlimit(l->resource, &limit) < 0) {
+-		/* some can't be read, e.g. Linux RLIMIT_LOCKS */
++#ifndef MKSH_SMALL
++		bi_errorf("limit %s could not be read, contact the mksh developers: %s",
++		    l->name, cstrerror(errno));
++#endif
++		/* some can't be read */
+ 		limit.rlim_cur = RLIM_INFINITY;
+ 		limit.rlim_max = RLIM_INFINITY;
+ 	}
+@@ -3735,7 +3611,7 @@
+ 			fn = *wp++;
+ 			if (fn[0] == '-' && fn[1] == '\0')
  				fd = STDIN_FILENO;
- 			else if ((fd = open(fn, O_RDONLY)) < 0) {
+-			else if ((fd = open(fn, O_RDONLY)) < 0) {
++			else if ((fd = open(fn, O_RDONLY | O_BINARY)) < 0) {
  				eno = errno;
--				bi_errorf("%s: %s", fn, strerror(eno));
-+				bi_errorf("%s: %s", fn, cstrerror(eno));
+ 				bi_errorf("%s: %s", fn, cstrerror(eno));
  				rv = 1;
- 				continue;
- 			}
-@@ -3709,7 +3739,7 @@
- 					continue;
- 				}
- 				/* an error occured during reading */
--				bi_errorf("%s: %s", fn, strerror(eno));
-+				bi_errorf("%s: %s", fn, cstrerror(eno));
- 				rv = 1;
- 				break;
- 			} else if (n == 0)
-@@ -3724,7 +3754,7 @@
- 					/* an error occured during writing */
- 					eno = errno;
- 					bi_errorf("%s: %s", "<stdout>",
--					    strerror(eno));
-+					    cstrerror(eno));
- 					rv = 1;
- 					if (fd != STDIN_FILENO)
- 						close(fd);
-@@ -3759,7 +3789,7 @@
- 	if (!wp[0] || wp[1])
- 		bi_errorf(Tsynerr);
- 	else if (parse_usec(wp[0], &tv))
--		bi_errorf("%s: %s '%s'", Tsynerr, strerror(errno), wp[0]);
-+		bi_errorf("%s: %s '%s'", Tsynerr, cstrerror(errno), wp[0]);
- 	else {
- #ifndef MKSH_NOPROSPECTOFWORK
- 		sigset_t omask, bmask;
-@@ -3789,7 +3819,7 @@
- 			 */
- 			rv = 0;
- 		else
--			bi_errorf("%s: %s", Tselect, strerror(errno));
-+			bi_errorf("%s: %s", Tselect, cstrerror(errno));
- #ifndef MKSH_NOPROSPECTOFWORK
- 		/* this will re-schedule signal delivery */
- 		sigprocmask(SIG_SETMASK, &omask, NULL);
+@@ -3842,3 +3718,24 @@
+ 	return (rv);
+ }
+ #endif
++
++#ifndef MKSH_UNEMPLOYED
++static int
++c_suspend(const char **wp)
++{
++	if (wp[1] != NULL) {
++		bi_errorf("too many arguments");
++		return (1);
++	}
++	if (Flag(FLOGIN)) {
++		/* Can't suspend an orphaned process group. */
++		if (getpgid(kshppid) == getpgid(0) ||
++		    getsid(kshppid) != getsid(0)) {
++			bi_errorf("can't suspend a login shell");
++			return (1);
++		}
++	}
++	j_suspend();
++	return (0);
++}
++#endif
+Index: src/bin/mksh/genopt.sh
+diff -u /dev/null src/bin/mksh/genopt.sh:1.4
+--- /dev/null	Fri Nov 29 15:15:17 2013
++++ src/bin/mksh/genopt.sh	Wed Nov 20 21:14:50 2013
+@@ -0,0 +1,171 @@
++#!/bin/sh
++# $MirOS: src/bin/mksh/genopt.sh,v 1.4 2013/11/20 21:14:50 tg Exp $
++#-
++# Copyright (c) 2013
++#	Thorsten Glaser <tg@mirbsd.org>
++#
++# Provided that these terms and disclaimer and all copyright notices
++# are retained or reproduced in an accompanying document, permission
++# is granted to deal in this work without restriction, including un-
++# limited rights to use, publicly perform, distribute, sell, modify,
++# merge, give away, or sublicence.
++#
++# This work is provided "AS IS" and WITHOUT WARRANTY of any kind, to
++# the utmost extent permitted by applicable law, neither express nor
++# implied; without malicious intent or gross negligence. In no event
++# may a licensor, author or contributor be held liable for indirect,
++# direct, other damage, loss, or other issues arising in any way out
++# of dealing in the work, even if advised of the possibility of such
++# damage or existence of a defect, except proven that it results out
++# of said person's immediate fault when using the work as intended.
++#-
++# Compile *.opt files to *.gen (F0, FN, getopt string) files.
++
++LC_ALL=C
++export LC_ALL
++
++case $ZSH_VERSION:$VERSION in
++:zsh*) ZSH_VERSION=2 ;;
++esac
++
++if test -n "${ZSH_VERSION+x}" && (emulate sh) >/dev/null 2>&1; then
++	emulate sh
++	NULLCMD=:
++fi
++
++if test -d /usr/xpg4/bin/. >/dev/null 2>&1; then
++	# Solaris: some of the tools have weird behaviour, use portable ones
++	PATH=/usr/xpg4/bin:$PATH
++	export PATH
++fi
++
++allu=QWERTYUIOPASDFGHJKLZXCVBNM
++alll=qwertyuiopasdfghjklzxcvbnm
++nl='
++'
++
++die() {
++	if test -n "$1"; then
++		echo >&2 "E: $*"
++		echo >&2 "E: in '$srcfile': '$line'"
++	else
++		echo >&2 "E: invalid input in '$srcfile': '$line'"
++	fi
++	rm -f "$bn.gen"
++	exit 1
++}
++
++soptc() {
++	optc=`echo "$line" | sed 's/^[<>]\(.\).*$/\1/'`
++	test x"$optc" = x'|' && return
++	optclo=`echo "$optc" | tr $allu $alll`
++	if test x"$optc" = x"$optclo"; then
++		islo=1
++	else
++		islo=0
++	fi
++	sym=`echo "$line" | sed 's/^[<>]/|/'`
++	o_str=$o_str$nl"<$optclo$islo$sym"
++}
++
++scond() {
++	case x$cond in
++	x)
++		cond=
++		;;
++	x*' '*)
++		cond=`echo "$cond" | sed 's/^ //'`
++		cond="#if $cond"
++		;;
++	x'!'*)
++		cond=`echo "$cond" | sed 's/^!//'`
++		cond="#ifndef $cond"
++		;;
++	x*)
++		cond="#ifdef $cond"
++		;;
++	esac
++}
++
++test -f "$srcfile" || die Source file \$srcfile not set.
++bn=`basename "$srcfile" | sed 's/.opt$//'`
++o_gen=
++o_str=
++o_sym=
++ddefs=
++state=0
++exec <"$srcfile"
++while IFS= read -r line; do
++	case $state:$line in
++	2:'|'*)
++		# end of input
++		o_sym=`echo "$line" | sed 's/^.//'`
++		o_gen=$o_gen$nl"#undef F0"
++		o_gen=$o_gen$nl"#undef FN"
++		o_gen=$o_gen$ddefs
++		state=3
++		;;
++	1:@@)
++		# begin of data block
++		o_gen=$o_gen$nl"#endif"
++		o_gen=$o_gen$nl"#ifndef F0"
++		o_gen=$o_gen$nl"#define F0 FN"
++		o_gen=$o_gen$nl"#endif"
++		state=2
++		;;
++	*:@@*)
++		die ;;
++	0:@*|1:@*)
++		# begin of a definition block
++		sym=`echo "$line" | sed 's/^@//'`
++		if test $state = 0; then
++			o_gen=$o_gen$nl"#if defined($sym)"
++		else
++			o_gen=$o_gen$nl"#elif defined($sym)"
++		fi
++		ddefs="$ddefs$nl#undef $sym"
++		state=1
++		;;
++	0:*|3:*)
++		die ;;
++	1:*)
++		# definition line
++		o_gen=$o_gen$nl$line
++		;;
++	2:'<'*'|'*)
++		soptc
++		;;
++	2:'>'*'|'*)
++		soptc
++		cond=`echo "$line" | sed 's/^[^|]*|//'`
++		scond
++		case $optc in
++		'|') optc=0 ;;
++		*) optc=\'$optc\' ;;
++		esac
++		IFS= read -r line || die Unexpected EOF
++		test -n "$cond" && o_gen=$o_gen$nl"$cond"
++		o_gen=$o_gen$nl"$line, $optc)"
++		test -n "$cond" && o_gen=$o_gen$nl"#endif"
++		;;
++	esac
++done
++case $state:$o_sym in
++3:) die Expected optc sym at EOF ;;
++3:*) ;;
++*) die Missing EOF marker ;;
++esac
++echo "$o_str" | sort | while IFS='|' read -r x opts cond; do
++	test -n "$x" || continue
++	scond
++	test -n "$cond" && echo "$cond"
++	echo "\"$opts\""
++	test -n "$cond" && echo "#endif"
++done | {
++	echo "#ifndef $o_sym$o_gen"
++	echo "#else"
++	cat
++	echo "#undef $o_sym"
++	echo "#endif"
++} >"$bn.gen"
++exit 0
 Index: src/bin/mksh/histrap.c
-diff -u src/bin/mksh/histrap.c:1.128 src/bin/mksh/histrap.c:1.131
---- src/bin/mksh/histrap.c:1.128	Fri Nov 30 19:02:07 2012
-+++ src/bin/mksh/histrap.c	Fri Dec 28 02:28:35 2012
+diff -u src/bin/mksh/histrap.c:1.131 src/bin/mksh/histrap.c:1.133
+--- src/bin/mksh/histrap.c:1.131	Fri Dec 28 02:28:35 2012
++++ src/bin/mksh/histrap.c	Wed Oct  9 11:59:28 2013
 @@ -27,7 +27,7 @@
  #include <sys/file.h>
  #endif
  
--__RCSID("$MirOS: src/bin/mksh/histrap.c,v 1.128 2012/11/30 19:02:07 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/histrap.c,v 1.131 2012/12/28 02:28:35 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/histrap.c,v 1.131 2012/12/28 02:28:35 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/histrap.c,v 1.133 2013/10/09 11:59:28 tg Exp $");
  
  Trap sigtraps[NSIG + 1];
  static struct sigaction Sigact_ign;
-@@ -297,7 +297,7 @@
- 	tf = maketemp(ATEMP, TT_HIST_EDIT, &e->temps);
- 	if (!(shf = tf->shf)) {
- 		bi_errorf("can't %s temporary file %s: %s",
--		    "create", tf->tffn, strerror(errno));
-+		    "create", tf->tffn, cstrerror(errno));
- 		return (1);
- 	}
- 	for (hp = rflag ? hlast : hfirst;
-@@ -305,7 +305,7 @@
- 		shf_fprintf(shf, "%s\n", *hp);
- 	if (shf_close(shf) == EOF) {
- 		bi_errorf("can't %s temporary file %s: %s",
--		    "write", tf->tffn, strerror(errno));
-+		    "write", tf->tffn, cstrerror(errno));
- 		return (1);
- 	}
- 
-@@ -331,7 +331,7 @@
- 
- 		if (!(shf = shf_open(tf->tffn, O_RDONLY, 0, 0))) {
- 			bi_errorf("can't %s temporary file %s: %s",
--			    "open", tf->tffn, strerror(errno));
-+			    "open", tf->tffn, cstrerror(errno));
- 			return (1);
+@@ -442,7 +442,7 @@
+ 			hp = NULL;
  		}
+ 	} else {
+-		int anchored = *str == '?' ? (++str, 0) : 1;
++		bool anchored = *str == '?' ? (++str, false) : true;
  
-@@ -351,7 +351,7 @@
- 		}
- 		if (n < 0) {
- 			bi_errorf("can't %s temporary file %s: %s",
--			    "read", tf->tffn, strerror(shf_errno(shf)));
-+			    "read", tf->tffn, cstrerror(shf_errno(shf)));
-  errout:
- 			shf_close(shf);
- 			return (1);
-@@ -634,6 +634,7 @@
+ 		/* the -1 is to avoid the current fc command */
+ 		if ((n = findhist(histptr - history - 1, 0, str, anchored)) < 0)
+@@ -509,7 +509,7 @@
+  * direction.
+  */
+ int
+-findhist(int start, int fwd, const char *str, int anchored)
++findhist(int start, int fwd, const char *str, bool anchored)
+ {
  	char **hp;
- 	char *c, *cp;
+ 	int maxhist = histptr - history;
+@@ -720,7 +720,8 @@
  
-+	mkssert(cmd != NULL);
- 	strdupx(c, cmd, APERM);
- 	if ((cp = strchr(c, '\n')) != NULL)
- 		*cp = '\0';
-@@ -806,7 +807,7 @@
- 		}
- 		if (hs != hist_init_retry)
- 			bi_errorf("can't %s %s: %s",
--			    "unlink HISTFILE", hname, strerror(errno));
-+			    "unlink HISTFILE", hname, cstrerror(errno));
- 		histfsize = 0;
+  retry:
+ 	/* we have a file and are interactive */
+-	if ((fd = open(hname, O_RDWR | O_CREAT | O_APPEND, 0600)) < 0)
++	if ((fd = open(hname, O_RDWR | O_CREAT | O_APPEND | O_BINARY,
++	    0600)) < 0)
  		return;
- 	} else {
-@@ -952,7 +953,7 @@
  
- #if !HAVE_SYS_SIGNAME
- static const struct mksh_sigpair {
--	const char *const name;
-+	const char * const name;
- 	int nr;
- } mksh_sigpairs[] = {
- #include "signames.inc"
-@@ -960,6 +961,12 @@
- };
- #endif
- 
-+#if HAVE_SYS_SIGLIST
-+#if !HAVE_SYS_SIGLIST_DECL
-+extern const char * const sys_siglist[];
-+#endif
-+#endif
-+
- void
- inittraps(void)
- {
-Index: src/bin/mksh/jobs.c
-diff -u src/bin/mksh/jobs.c:1.91 src/bin/mksh/jobs.c:1.94
---- src/bin/mksh/jobs.c:1.91	Fri Nov 30 19:25:03 2012
-+++ src/bin/mksh/jobs.c	Fri Dec 28 02:28:36 2012
-@@ -22,7 +22,7 @@
- 
- #include "sh.h"
- 
--__RCSID("$MirOS: src/bin/mksh/jobs.c,v 1.91 2012/11/30 19:25:03 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/jobs.c,v 1.94 2012/12/28 02:28:36 tg Exp $");
- 
- #if HAVE_KILLPG
- #define mksh_killpg		killpg
-@@ -107,7 +107,7 @@
- #define JL_AMBIG	2	/* %foo or %?foo is ambiguous */
- #define JL_INVALID	3	/* non-pid, non-% job id */
- 
--static const char *const lookup_msgs[] = {
-+static const char * const lookup_msgs[] = {
- 	null,
- 	"no such job",
- 	"ambiguous",
-@@ -306,7 +306,7 @@
- 				if ((ttypgrp = tcgetpgrp(tty_fd)) < 0) {
- 					warningf(false, "%s: %s %s: %s",
- 					    "j_init", "tcgetpgrp", "failed",
--					    strerror(errno));
-+					    cstrerror(errno));
- 					ttypgrp_ok = false;
- 					break;
- 				}
-@@ -321,13 +321,13 @@
- 		if (ttypgrp_ok && kshpgrp != kshpid) {
- 			if (setpgid(0, kshpid) < 0) {
- 				warningf(false, "%s: %s %s: %s", "j_init",
--				    "setpgid", "failed", strerror(errno));
-+				    "setpgid", "failed", cstrerror(errno));
- 				ttypgrp_ok = false;
- 			} else {
- 				if (tcsetpgrp(tty_fd, kshpid) < 0) {
- 					warningf(false, "%s: %s %s: %s",
- 					    "j_init", "tcsetpgrp", "failed",
--					    strerror(errno));
-+					    cstrerror(errno));
- 					ttypgrp_ok = false;
- 				} else
- 					restore_ttypgrp = kshpgrp;
-@@ -370,7 +370,7 @@
- 	errno = 0;
- 	/* this is gonna annoy users; complain to your distro, people! */
- 	if (nice(ness) == -1 && (eno = errno) != 0)
--		warningf(false, "%s: %s", "bgnice", strerror(eno));
-+		warningf(false, "%s: %s", "bgnice", cstrerror(eno));
- #else
- 	(void)nice(ness);
- #endif
-@@ -735,7 +735,7 @@
- 	if (j->pgrp == 0) {
- 		/* started when !Flag(FMONITOR) */
- 		if (kill_job(j, sig) < 0) {
--			bi_errorf("%s: %s", cp, strerror(errno));
-+			bi_errorf("%s: %s", cp, cstrerror(errno));
- 			rv = 1;
- 		}
- 	} else {
-@@ -744,7 +744,7 @@
- 			mksh_killpg(j->pgrp, SIGCONT);
- #endif
- 		if (mksh_killpg(j->pgrp, sig) < 0) {
--			bi_errorf("%s: %s", cp, strerror(errno));
-+			bi_errorf("%s: %s", cp, cstrerror(errno));
- 			rv = 1;
- 		}
- 	}
-@@ -820,7 +820,7 @@
- 				    "1st", "tcsetpgrp", tty_fd,
- 				    (long)((j->flags & JF_SAVEDTTYPGRP) ?
- 				    j->saved_ttypgrp : j->pgrp), "failed",
--				    strerror(rv));
-+				    cstrerror(rv));
- 				return (1);
+ 	histfd = savefd(fd);
+@@ -756,7 +757,7 @@
+ 			/* create temporary file */
+ 			nhname = shf_smprintf("%s.%d", hname, (int)procpid);
+ 			if ((fd = open(nhname, O_RDWR | O_CREAT | O_TRUNC |
+-			    O_EXCL, 0600)) < 0) {
++			    O_EXCL | O_BINARY, 0600)) < 0) {
+ 				/* just don't truncate then, meh. */
+ 				goto hist_trunc_dont;
  			}
- 		}
-@@ -840,11 +840,11 @@
- 			if (ttypgrp_ok && tcsetpgrp(tty_fd, kshpgrp) < 0)
- 				warningf(true, "%s %s(%d, %ld) %s: %s",
- 				    "fg: 2nd", "tcsetpgrp", tty_fd,
--				    (long)kshpgrp, "failed", strerror(errno));
-+				    (long)kshpgrp, "failed", cstrerror(errno));
- 		}
- 		sigprocmask(SIG_SETMASK, &omask, NULL);
- 		bi_errorf("%s %s %s", "can't continue job",
--		    cp, strerror(eno));
-+		    cp, cstrerror(eno));
- 		return (1);
- 	}
- 	if (!bg) {
-@@ -1131,7 +1131,7 @@
- 			if (tcsetpgrp(tty_fd, kshpgrp) < 0)
- 				warningf(true, "%s %s(%d, %ld) %s: %s",
- 				    "j_waitj:", "tcsetpgrp", tty_fd,
--				    (long)kshpgrp, "failed", strerror(errno));
-+				    (long)kshpgrp, "failed", cstrerror(errno));
- 			if (j->state == PSTOPPED) {
- 				j->flags |= JF_SAVEDTTY;
- 				mksh_tcget(tty_fd, &j->ttystat);
-@@ -1722,10 +1722,13 @@
- 	Proc	*p, *tmp;
- 	Job	**prev, *curr;
+Index: src/bin/mksh/jobs.c
+diff -u src/bin/mksh/jobs.c:1.100 src/bin/mksh/jobs.c:1.102
+--- src/bin/mksh/jobs.c:1.100	Fri Jul 26 20:33:23 2013
++++ src/bin/mksh/jobs.c	Tue Sep 10 17:33:01 2013
+@@ -1,4 +1,4 @@
+-/*	$OpenBSD: jobs.c,v 1.39 2009/12/13 04:36:48 deraadt Exp $	*/
++/*	$OpenBSD: jobs.c,v 1.40 2013/09/04 15:49:18 millert Exp $	*/
  
-+	mkssert(j != NULL);
- 	prev = &job_list;
--	curr = *prev;
--	for (; curr != NULL && curr != j; prev = &curr->next, curr = *prev)
--		;
-+	curr = job_list;
-+	while (curr && curr != j) {
-+		prev = &curr->next;
-+		curr = *prev;
-+	}
- 	if (curr != j) {
- 		internal_warningf("remove_job: job %s (%s)", "not found", where);
- 		return;
-@@ -1762,11 +1765,14 @@
- {
- 	Job	**prev, *curr;
- 
-+	mkssert(j != NULL);
- 	/* Remove job from list (if there) */
- 	prev = &job_list;
- 	curr = job_list;
--	for (; curr && curr != j; prev = &curr->next, curr = *prev)
--		;
-+	while (curr && curr != j) {
-+		prev = &curr->next;
-+		curr = *prev;
-+	}
- 	if (curr == j)
- 		*prev = curr->next;
- 
-@@ -1816,21 +1822,21 @@
- #ifndef MKSH_DISABLE_TTY_WARNING
- 		warningf(false, "%s: %s %s: %s",
- 		    "No controlling tty", "open", "/dev/tty",
--		    strerror(errno));
-+		    cstrerror(errno));
- #endif
- 		break;
- 	case 2:
- #ifndef MKSH_DISABLE_TTY_WARNING
--		warningf(false, "%s: %s", "can't find tty fd", strerror(errno));
-+		warningf(false, "%s: %s", "can't find tty fd", cstrerror(errno));
- #endif
- 		break;
- 	case 3:
- 		warningf(false, "%s: %s %s: %s", "j_ttyinit",
--		    "dup of tty fd", "failed", strerror(errno));
-+		    "dup of tty fd", "failed", cstrerror(errno));
- 		break;
- 	case 4:
- 		warningf(false, "%s: %s: %s", "j_ttyinit",
--		    "can't set close-on-exec flag", strerror(errno));
-+		    "can't set close-on-exec flag", cstrerror(errno));
- 		break;
- 	}
- }
-Index: src/bin/mksh/lex.c
-diff -u src/bin/mksh/lex.c:1.171 src/bin/mksh/lex.c:1.174
---- src/bin/mksh/lex.c:1.171	Fri Nov 30 19:02:08 2012
-+++ src/bin/mksh/lex.c	Wed Dec  5 19:38:20 2012
+ /*-
+  * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2011,
 @@ -23,7 +23,7 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/lex.c,v 1.171 2012/11/30 19:02:08 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/lex.c,v 1.174 2012/12/05 19:38:20 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/jobs.c,v 1.100 2013/07/26 20:33:23 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/jobs.c,v 1.102 2013/09/10 17:33:01 tg Exp $");
  
- /*
-  * states while lexing word
-@@ -104,12 +104,9 @@
- static Lex_state *pop_state_i(State_info *, Lex_state *);
+ #if HAVE_KILLPG
+ #define mksh_killpg		killpg
+@@ -225,6 +225,54 @@
+ 	}
+ }
  
- static int dopprompt(const char *, int, bool);
--void yyskiputf8bom(void);
- 
- static int backslash_skip;
- static int ignore_backslash_newline;
--struct sretrace_info *retrace_info = NULL;
--int subshell_nesting_type = 0;
- 
- /* optimised getsc_bn() */
- #define o_getsc()	(*source->str != '\0' && *source->str != '\\' && \
-@@ -262,13 +259,11 @@
- 	while (!((c = getsc()) == 0 ||
- 	    ((state == SBASE || state == SHEREDELIM || state == SHERESTRING) &&
- 	    ctype(c, C_LEX1)))) {
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- 		if (state == SBASE &&
- 		    subshell_nesting_type == /*{*/ '}' &&
- 		    c == /*{*/ '}')
- 			/* possibly end ${ :;} */
- 			break;
--#endif
-  accept_nonword:
- 		Xcheck(ws, wp);
- 		switch (state) {
-@@ -277,8 +272,8 @@
- 				statep->nparen++;
- 			else if (c == ')')
- 				statep->nparen--;
--			else if (statep->nparen == 0 &&
--			    (c == /*{*/ '}' || c == statep->ls_adelim.delimiter)) {
-+			else if (statep->nparen == 0 && (c == /*{*/ '}' ||
-+			    c == (int)statep->ls_adelim.delimiter)) {
- 				*wp++ = ADELIM;
- 				*wp++ = c;
- 				if (c == /*{*/ '}' || --statep->ls_adelim.num == 0)
-@@ -403,9 +398,7 @@
- 						ungetsc(c);
-  subst_command:
- 						c = COMSUB;
--#ifndef MKSH_DISABLE_EXPERIMENTAL
-  subst_command2:
--#endif
- 						sp = yyrecursive(c);
- 						cz = strlen(sp) + 1;
- 						XcheckN(ws, wp, cz);
-@@ -414,7 +407,6 @@
- 						wp += cz;
- 					}
- 				} else if (c == '{') /*}*/ {
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- 					c = getsc();
- 					if (ctype(c, C_IFSWS)) {
- 						/*
-@@ -425,7 +417,6 @@
- 						goto subst_command2;
- 					}
- 					ungetsc(c);
--#endif
- 					*wp++ = OSUBST;
- 					*wp++ = '{'; /*}*/
- 					wp = get_brace_var(&ws, wp);
-Index: src/bin/mksh/main.c
-diff -u src/bin/mksh/main.c:1.245 src/bin/mksh/main.c:1.252
---- src/bin/mksh/main.c:1.245	Fri Nov 30 19:58:47 2012
-+++ src/bin/mksh/main.c	Sun Jan  6 18:44:07 2013
-@@ -5,7 +5,7 @@
++#ifndef MKSH_UNEMPLOYED
++/* suspend the shell */
++void
++j_suspend(void)
++{
++	struct sigaction sa, osa;
++
++	/* Restore tty and pgrp. */
++	if (ttypgrp_ok) {
++		if (tty_hasstate)
++			mksh_tcset(tty_fd, &tty_state);
++		if (restore_ttypgrp >= 0) {
++			if (tcsetpgrp(tty_fd, restore_ttypgrp) < 0) {
++				warningf(false, "%s: %s %s: %s", "j_suspend",
++				    "tcsetpgrp", "failed", cstrerror(errno));
++			} else if (setpgid(0, restore_ttypgrp) < 0) {
++				warningf(false, "%s: %s %s: %s", "j_suspend",
++				    "setpgid", "failed", cstrerror(errno));
++			}
++		}
++	}
++
++	/* Suspend the shell. */
++	memset(&sa, 0, sizeof(sa));
++	sigemptyset(&sa.sa_mask);
++	sa.sa_handler = SIG_DFL;
++	sigaction(SIGTSTP, &sa, &osa);
++	kill(0, SIGTSTP);
++
++	/* Back from suspend, reset signals, pgrp and tty. */
++	sigaction(SIGTSTP, &osa, NULL);
++	if (ttypgrp_ok) {
++		if (restore_ttypgrp >= 0) {
++			if (setpgid(0, kshpid) < 0) {
++				warningf(false, "%s: %s %s: %s", "j_suspend",
++				    "setpgid", "failed", cstrerror(errno));
++				ttypgrp_ok = false;
++			} else if (tcsetpgrp(tty_fd, kshpid) < 0) {
++				warningf(false, "%s: %s %s: %s", "j_suspend",
++				    "tcsetpgrp", "failed", cstrerror(errno));
++				ttypgrp_ok = false;
++			}
++		}
++		tty_init_state();
++	}
++}
++#endif
++
+ /* job cleanup before shell exit */
+ void
+ j_exit(void)
+@@ -1281,7 +1329,11 @@
+ 	getrusage(RUSAGE_CHILDREN, &ru0);
+ 	do {
+ #ifndef MKSH_NOPROSPECTOFWORK
+-		pid = waitpid(-1, &status, (WNOHANG|WUNTRACED));
++		pid = waitpid(-1, &status, (WNOHANG |
++#ifdef WCONTINUED
++		    WCONTINUED |
++#endif
++		    WUNTRACED));
+ #else
+ 		pid = wait(&status);
+ #endif
+@@ -1320,6 +1372,13 @@
+ 		if (WIFSTOPPED(status))
+ 			p->state = PSTOPPED;
+ 		else
++#ifdef WIFCONTINUED
++		  if (WIFCONTINUED(status)) {
++			p->state = j->state = PRUNNING;
++			/* skip check_job(), no-op in this case */
++			continue;
++		} else
++#endif
+ #endif
+ 		  if (WIFSIGNALED(status))
+ 			p->state = PSIGNALLED;
+Index: src/bin/mksh/lex.c
+diff -u src/bin/mksh/lex.c:1.189 src/bin/mksh/lex.c:1.190
+--- src/bin/mksh/lex.c:1.189	Fri Aug 16 10:59:03 2013
++++ src/bin/mksh/lex.c	Sun Nov 17 22:19:42 2013
+@@ -1,4 +1,4 @@
+-/*	$OpenBSD: lex.c,v 1.47 2013/03/03 19:11:34 guenther Exp $	*/
++/*	$OpenBSD: lex.c,v 1.48 2013/11/12 04:36:02 deraadt Exp $	*/
  
  /*-
   * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
-- *		 2011, 2012
-+ *		 2011, 2012, 2013
-  *	Thorsten Glaser <tg@mirbsd.org>
-  *
-  * Provided that these terms and disclaimer and all copyright notices
+@@ -23,7 +23,7 @@
+ 
+ #include "sh.h"
+ 
+-__RCSID("$MirOS: src/bin/mksh/lex.c,v 1.189 2013/08/16 10:59:03 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/lex.c,v 1.190 2013/11/17 22:19:42 tg Exp $");
+ 
+ /*
+  * states while lexing word
+Index: src/bin/mksh/main.c
+diff -u src/bin/mksh/main.c:1.269 src/bin/mksh/main.c:1.272
+--- src/bin/mksh/main.c:1.269	Thu Jul 25 18:07:46 2013
++++ src/bin/mksh/main.c	Sun Nov 17 22:23:28 2013
+@@ -1,4 +1,4 @@
+-/*	$OpenBSD: main.c,v 1.52 2013/06/15 17:25:19 millert Exp $	*/
++/*	$OpenBSD: main.c,v 1.53 2013/09/04 15:49:19 millert Exp $	*/
+ /*	$OpenBSD: tty.c,v 1.9 2006/03/14 22:08:01 deraadt Exp $	*/
+ /*	$OpenBSD: io.c,v 1.22 2006/03/17 16:30:13 millert Exp $	*/
+ /*	$OpenBSD: table.c,v 1.15 2012/02/19 07:52:30 otto Exp $	*/
 @@ -34,7 +34,7 @@
  #include <locale.h>
  #endif
  
--__RCSID("$MirOS: src/bin/mksh/main.c,v 1.245 2012/11/30 19:58:47 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/main.c,v 1.252 2013/01/06 18:44:07 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/main.c,v 1.269 2013/07/25 18:07:46 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/main.c,v 1.272 2013/11/17 22:23:28 tg Exp $");
  
  extern char **environ;
  
-@@ -254,7 +254,7 @@
- #ifdef MKSH_BINSHREDUCED
- 		/* set FSH if we're called as -sh or /bin/sh or so */
- 		if (!strcmp(ccp, "sh"))
--			change_flag(FSH, OF_FIRSTTIME, 1);
-+			change_flag(FSH, OF_FIRSTTIME, true);
+@@ -76,7 +76,6 @@
+ 	/* not in Android for political reasons */
+ 	/* not in ARGE mksh due to no job control */
+ 	"stop=kill -STOP",
+-	"suspend=kill -STOP $$",
  #endif
+ 	"autoload=typeset -fu",
+ 	"functions=typeset -f",
+@@ -1659,7 +1658,8 @@
+ 	} while (len < 5);
+ 
+ 	/* cyclically attempt to open a temporary file */
+-	while ((i = open(tp->tffn, O_CREAT | O_EXCL | O_RDWR, 0600)) < 0) {
++	while ((i = open(tp->tffn, O_CREAT | O_EXCL | O_RDWR | O_BINARY,
++	    0600)) < 0) {
+ 		if (errno != EEXIST)
+ 			goto maketemp_out;
+ 		/* count down from z to a then from 9 to 0 */
+@@ -1921,9 +1921,10 @@
+ 
+ 	cb = *ocb;
+ 	if (forread) {
++		cb.c_iflag &= ~(ISTRIP);
+ 		cb.c_lflag &= ~(ICANON) | ECHO;
+ 	} else {
+-		cb.c_iflag &= ~(INLCR | ICRNL);
++		cb.c_iflag &= ~(INLCR | ICRNL | ISTRIP);
+ 		cb.c_lflag &= ~(ISIG | ICANON | ECHO);
  	}
- 
-@@ -329,7 +329,7 @@
- 	 * by the environment or the user. Also, we want tab completion
- 	 * on in vi by default.
- 	 */
--	change_flag(FEMACS, OF_SPECIAL, 1);
-+	change_flag(FEMACS, OF_SPECIAL, true);
- #if !MKSH_S_NOVI
- 	Flag(FVITABCOMPLETE) = 1;
- #endif
-@@ -460,7 +460,7 @@
- 		s = pushs(SSTRINGCMDLINE, ATEMP);
- 		if (!(s->start = s->str = argv[argi++]))
- 			errorf("%s %s", "-c", "requires an argument");
--#if !defined(MKSH_SMALL) && !defined(MKSH_DISABLE_EXPERIMENTAL)
-+#if !defined(MKSH_SMALL)
- 		while (*s->str) {
- 			if (*s->str != ' ' && ctype(*s->str, C_QUOTE))
- 				break;
-@@ -484,7 +484,7 @@
- 		    SHF_MAPHI | SHF_CLEXEC);
- 		if (s->u.shf == NULL) {
- 			shl_stdout_ok = false;
--			warningf(true, "%s: %s", s->file, strerror(errno));
-+			warningf(true, "%s: %s", s->file, cstrerror(errno));
- 			/* mandated by SUSv4 */
- 			exstat = 127;
- 			unwind(LERROR);
-@@ -849,7 +849,7 @@
- 				break;
- 			}
- 		}
--#if !defined(MKSH_SMALL) && !defined(MKSH_DISABLE_EXPERIMENTAL)
-+#if !defined(MKSH_SMALL)
- 		  else if ((s->flags & SF_MAYEXEC) && t->type == TCOM)
- 			t->u.evalflags |= DOTCOMEXEC;
- #endif
-@@ -872,19 +872,36 @@
- void
- unwind(int i)
- {
-+	/*
-+	 * This is a kludge. We need to restore everything that was
-+	 * changed in the new environment, see cid 1005090337C7A669439
-+	 * and 10050903386452ACBF1, but fail to even save things most of
-+	 * the time. funcs.c:c_eval() changes FERREXIT temporarily to 0,
-+	 * which needs to be restored thus (related to Debian #696823).
-+	 * We did not save the shell flags, so we use a special or'd
-+	 * value here... this is mostly to clean up behind *other*
-+	 * callers of unwind(LERROR) here; exec.c has the regular case.
-+	 */
-+	if (Flag(FERREXIT) & 0x80) {
-+		/* GNU bash does not run this trapsig */
-+		trapsig(ksh_SIGERR);
-+		Flag(FERREXIT) &= ~0x80;
-+	}
-+
- 	/* ordering for EXIT vs ERR is a bit odd (this is what AT&T ksh does) */
--	if (i == LEXIT || (Flag(FERREXIT) && (i == LERROR || i == LINTR) &&
--	    sigtraps[ksh_SIGEXIT].trap)) {
-+	if (i == LEXIT ||
-+	    ((i == LERROR || i == LINTR) && sigtraps[ksh_SIGEXIT].trap)) {
- 		++trap_nested;
- 		runtrap(&sigtraps[ksh_SIGEXIT], trap_nested == 1);
- 		--trap_nested;
- 		i = LLEAVE;
--	} else if (Flag(FERREXIT) && (i == LERROR || i == LINTR)) {
-+	} else if (Flag(FERREXIT) == 1 && (i == LERROR || i == LINTR)) {
- 		++trap_nested;
- 		runtrap(&sigtraps[ksh_SIGERR], trap_nested == 1);
- 		--trap_nested;
- 		i = LLEAVE;
- 	}
-+
- 	while (/* CONSTCOND */ 1) {
- 		switch (e->type) {
- 		case E_PARSE:
-@@ -1319,8 +1336,11 @@
- 	shf_fdopen(2, SHF_WR, shl_out);
- 	shf_fdopen(2, SHF_WR, shl_spare);
- #ifdef DF
--	if ((lfp = getenv("SDMKSH_PATH")) == NULL)
--		lfp = "/tmp/mksh-dbg.txt";
-+	if ((lfp = getenv("SDMKSH_PATH")) == NULL) {
-+		if ((lfp = getenv("HOME")) == NULL || *lfp != '/')
-+			errorf("cannot get home directory");
-+		lfp = shf_smprintf("%s/mksh-dbg.txt", lfp);
-+	}
- 
- 	if ((shl_dbg_fd = open(lfp, O_WRONLY | O_APPEND | O_CREAT, 0600)) < 0)
- 		errorf("cannot open debug output file %s", lfp);
-@@ -1593,7 +1613,6 @@
- 		/* do another cycle */
- 	}
- 
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- 	if (type == TT_FUNSUB) {
- 		int nfd;
- 
-@@ -1603,7 +1622,6 @@
- 			i = nfd;
- 		}
- 	}
--#endif
- 
- 	/* shf_fdopen cannot fail, so no fd leak */
- 	tp->shf = shf_fdopen(i, SHF_WR, NULL);
-@@ -1656,7 +1674,7 @@
- 		if ((tblp = otblp[i]) != NULL) {
- 			if ((tblp->flag & DEFINED)) {
- 				/* search for free hash table slot */
--				j = (perturb = tblp->ua.hval) & mask;
-+				j = perturb = tblp->ua.hval;
- 				goto find_first_empty_slot;
-  find_next_empty_slot:
- 				j = (j << 2) + j + perturb + 1;
-@@ -1694,7 +1712,7 @@
- 
- 	mask = ((size_t)1 << (tp->tshift)) - 1;
- 	/* search for hash table slot matching name */
--	j = (perturb = h) & mask;
-+	j = perturb = h;
- 	goto find_first_slot;
-  find_next_slot:
- 	j = (j << 2) + j + perturb + 1;
+ #if defined(VLNEXT) && defined(_POSIX_VDISABLE)
 Index: src/bin/mksh/misc.c
-diff -u src/bin/mksh/misc.c:1.201 src/bin/mksh/misc.c:1.205
---- src/bin/mksh/misc.c:1.201	Fri Nov 30 17:34:46 2012
-+++ src/bin/mksh/misc.c	Mon Dec 17 23:18:08 2012
+diff -u src/bin/mksh/misc.c:1.214 src/bin/mksh/misc.c:1.217
+--- src/bin/mksh/misc.c:1.214	Sun Aug 11 14:57:09 2013
++++ src/bin/mksh/misc.c	Sun Nov 17 22:22:53 2013
 @@ -30,7 +30,7 @@
  #include <grp.h>
  #endif
  
--__RCSID("$MirOS: src/bin/mksh/misc.c,v 1.201 2012/11/30 17:34:46 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/misc.c,v 1.205 2012/12/17 23:18:08 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/misc.c,v 1.214 2013/08/11 14:57:09 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/misc.c,v 1.217 2013/11/17 22:22:53 tg Exp $");
  
  #define KSH_CHVT_FLAG
  #ifdef MKSH_SMALL
-@@ -52,7 +52,7 @@
-     const unsigned char *, bool);
- static int do_gmatch(const unsigned char *, const unsigned char *,
-     const unsigned char *, const unsigned char *);
--static const unsigned char *cclass(const unsigned char *, int);
-+static const unsigned char *cclass(const unsigned char *, unsigned char);
- #ifdef KSH_CHVT_CODE
- static void chvt(const char *);
- #endif
-@@ -226,13 +226,13 @@
+@@ -125,7 +125,7 @@
  
- /* change a Flag(*) value; takes care of special actions */
- void
--change_flag(enum sh_flag f, int what, unsigned int newval)
-+change_flag(enum sh_flag f, int what, bool newset)
- {
- 	unsigned char oldval;
-+	unsigned char newval;
  
- 	oldval = Flag(f);
--	/* needed for tristates */
--	Flag(f) = newval ? 1 : 0;
-+	Flag(f) = newval = (newset ? 1 : 0);
- #ifndef MKSH_UNEMPLOYED
- 	if (f == FMONITOR) {
- 		if (what != OF_CMDLINE && newval != oldval)
-@@ -249,7 +249,7 @@
- 		Flag(FVI) =
+ #define SHFLAGS_DEFNS
+-#include "sh_flags.h"
++#include "sh_flags.gen"
+ 
+ #define OFC(i) (options[i][-2])
+ #define OFF(i) (((const unsigned char *)options[i])[-1])
+@@ -133,7 +133,7 @@
+ 
+ const char * const options[] = {
+ #define SHFLAGS_ITEMS
+-#include "sh_flags.h"
++#include "sh_flags.gen"
+ };
+ 
+ /*
+@@ -271,6 +271,7 @@
+ 
+ 		/*XXX this can probably be optimised */
+ 		kshegid = kshgid = getgid();
++		ksheuid = kshuid = getuid();
+ #if HAVE_SETRESUGID
+ 		DO_SETUID(setresgid, (kshegid, kshegid, kshegid));
+ #if HAVE_SETGROUPS
+@@ -278,9 +279,8 @@
+ 		setgroups(1, &kshegid);
  #endif
- 		    Flag(FEMACS) = Flag(FGMACS) = 0;
--		Flag(f) = (unsigned char)newval;
-+		Flag(f) = newval;
- 	} else
+ 		DO_SETUID(setresuid, (ksheuid, ksheuid, ksheuid));
+-#else
++#else /* !HAVE_SETRESUGID */
+ 		/* seteuid, setegid, setgid don't EAGAIN on Linux */
+-		ksheuid = kshuid = getuid();
+ #ifndef MKSH__NO_SETEUGID
+ 		seteuid(ksheuid);
  #endif
- 	  if (f == FPRIVILEGED && oldval && !newval) {
-@@ -278,12 +278,12 @@
+@@ -289,7 +289,7 @@
+ 		setegid(kshegid);
  #endif
+ 		setgid(kshegid);
+-#endif
++#endif /* !HAVE_SETRESUGID */
  	} else if ((f == FPOSIX || f == FSH) && newval) {
- 		Flag(FPOSIX) = Flag(FSH) = Flag(FBRACEEXPAND) = 0;
--		Flag(f) = (unsigned char)newval;
-+		Flag(f) = newval;
- 	}
- 	/* Changing interactive flag? */
- 	if (f == FTALKING) {
- 		if ((what == OF_CMDLINE || what == OF_SET) && procpid == kshpid)
--			Flag(FTALKING_I) = (unsigned char)newval;
-+			Flag(FTALKING_I) = newval;
- 	}
- }
- 
-@@ -299,7 +299,8 @@
+ 		/* Turning on -o posix or -o sh? */
+ 		Flag(FBRACEEXPAND) = 0;
+@@ -341,10 +341,20 @@
+     int what,
+     bool *setargsp)
  {
- 	static char cmd_opts[NELEM(options) + 5]; /* o:T:\0 */
- 	static char set_opts[NELEM(options) + 6]; /* A:o;s\0 */
--	char set, *opts;
-+	bool set;
-+	char *opts;
+-	static char cmd_opts[NELEM(options) + 5]; /* o:T:\0 */
+-	static char set_opts[NELEM(options) + 6]; /* A:o;s\0 */
++	static const char cmd_opts[] =
++#define SHFLAGS_NOT_SET
++#define SHFLAGS_OPTCS
++#include "sh_flags.gen"
++#undef SHFLAGS_NOT_SET
++	    ;
++	static const char set_opts[] =
++#define SHFLAGS_NOT_CMD
++#define SHFLAGS_OPTCS
++#include "sh_flags.gen"
++#undef SHFLAGS_NOT_CMD
++	    ;
+ 	bool set;
+-	char *opts;
++	const char *opts;
  	const char *array = NULL;
  	Getopt go;
  	size_t i;
-@@ -354,7 +355,7 @@
- 		opts = set_opts;
- 	ksh_getopt_reset(&go, GF_ERROR|GF_PLUSOPT);
- 	while ((optc = ksh_getopt(argv, &go, opts)) != -1) {
--		set = (go.info & GI_PLUS) ? 0 : 1;
-+		set = tobool(!(go.info & GI_PLUS));
- 		switch (optc) {
- 		case 'A':
- 			if (what == OF_FIRSTTIME)
-@@ -378,7 +379,7 @@
- 				break;
- 			}
- 			i = option(go.optarg);
--			if ((i != (size_t)-1) && set == Flag(i))
-+			if ((i != (size_t)-1) && (set ? 1U : 0U) == Flag(i))
- 				/*
- 				 * Don't check the context if the flag
- 				 * isn't changing - makes "set -o interactive"
-@@ -401,7 +402,7 @@
- #ifndef KSH_CHVT_CODE
- 			errorf("no TIOCSCTTY ioctl");
- #else
--			change_flag(FTALKING, OF_CMDLINE, 1);
-+			change_flag(FTALKING, OF_CMDLINE, true);
- 			chvt(go.optarg);
- 			break;
+@@ -352,36 +362,6 @@
+ 	bool sortargs = false;
+ 	bool fcompatseen = false;
+ 
+-	/* First call? Build option strings... */
+-	if (cmd_opts[0] == '\0') {
+-		char ch, *p = cmd_opts, *q = set_opts;
+-
+-		/* see cmd_opts[] declaration */
+-		*p++ = 'o';
+-		*p++ = ':';
+-#ifdef KSH_CHVT_FLAG
+-		*p++ = 'T';
+-		*p++ = ':';
+-#endif
+-		/* see set_opts[] declaration */
+-		*q++ = 'A';
+-		*q++ = ':';
+-		*q++ = 'o';
+-		*q++ = ';';
+-		*q++ = 's';
+-
+-		for (i = 0; i < NELEM(options); i++) {
+-			if ((ch = OFC(i))) {
+-				if (OFF(i) & OF_CMDLINE)
+-					*p++ = ch;
+-				if (OFF(i) & OF_SET)
+-					*q++ = ch;
+-			}
+-		}
+-		*p = '\0';
+-		*q = '\0';
+-	}
+-
+ 	if (what == OF_CMDLINE) {
+ 		const char *p = argv[0], *q;
+ 		/*
+@@ -2016,9 +1996,9 @@
  #endif
-@@ -445,6 +446,7 @@
- 	if (arrayset) {
- 		const char *ccp = NULL;
- 
-+		mkssert(array != NULL);
- 		if (*array)
- 			ccp = skip_varname(array, false);
- 		if (!ccp || !(!ccp[0] || (ccp[0] == '+' && !ccp[1]))) {
-@@ -469,33 +471,40 @@
- int
- getn(const char *s, int *ai)
- {
--	int c;
--	unsigned int i, j, k;
-+	char c;
-+	unsigned int i = 0;
- 	bool neg = false;
--	int rv = 0;
- 
- 	do {
- 		c = *s++;
- 	} while (ksh_isspace(c));
--	if (c == '-') {
+ 	    }
+ 	}
+-	if ((fd = open(dv, O_RDWR)) < 0) {
++	if ((fd = open(dv, O_RDWR | O_BINARY)) < 0) {
+ 		sleep(1);
+-		if ((fd = open(dv, O_RDWR)) < 0) {
++		if ((fd = open(dv, O_RDWR | O_BINARY)) < 0) {
+ 			errorf("%s: %s %s", "chvt", "can't open", dv);
+ 		}
+ 	}
+Index: src/bin/mksh/mksh.1
+diff -u src/bin/mksh/mksh.1:1.320 src/bin/mksh/mksh.1:1.324
+--- src/bin/mksh/mksh.1:1.320	Sat Aug 10 14:11:39 2013
++++ src/bin/mksh/mksh.1	Sun Nov 17 22:24:06 2013
+@@ -1,5 +1,5 @@
+-.\" $MirOS: src/bin/mksh/mksh.1,v 1.320 2013/08/10 14:11:39 tg Exp $
+-.\" $OpenBSD: ksh.1,v 1.147 2013/06/13 19:43:09 millert Exp $
++.\" $MirOS: src/bin/mksh/mksh.1,v 1.324 2013/11/17 22:24:06 tg Exp $
++.\" $OpenBSD: ksh.1,v 1.148 2013/09/04 15:49:18 millert Exp $
+ .\"-
+ .\" Copyright © 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
+ .\"		2010, 2011, 2012, 2013
+@@ -74,7 +74,7 @@
+ .\" with -mandoc, it might implement .Mx itself, but we want to
+ .\" use our own definition. And .Dd must come *first*, always.
+ .\"
+-.Dd $Mdocdate: August 10 2013 $
++.Dd $Mdocdate: November 17 2013 $
+ .\"
+ .\" Check which macro package we use, and do other -mdoc setup.
+ .\"
+@@ -366,6 +366,13 @@
+ substitution; if unset or empty, the user mkshrc profile is processed;
+ otherwise, if a file whose name is the substitution result exists,
+ it is processed; non-existence is silently ignored.
++.Pp
++The suid profile probably should run
++.Ic set +p
++unless the shell was explicitly started with
++.Fl p .
++This isn't easily implemented but a stopgap measure for:
++.Pa http://blog.cmpxchg8b.com/2013/08/security\-debianisms.html
+ .Ss Command syntax
+ The shell begins parsing its input by removing any backslash-newline
+ combinations, then breaking it into
+@@ -1123,7 +1130,6 @@
+ nohup=\*(aqnohup \*(aq
+ r=\*(aqfc \-e \-\*(aq
+ stop=\*(aqkill \-STOP\*(aq
+-suspend=\*(aqkill \-STOP $$\*(aq
+ type=\*(aqwhence \-v\*(aq
+ .Ed
+ .Pp
+@@ -2953,8 +2959,9 @@
+ .Ic false , fc , fg , getopts ,
+ .Ic jobs , kill , let , mknod ,
+ .Ic print , pwd , read , realpath ,
+-.Ic rename , sleep , test , true ,
+-.Ic ulimit , umask , unalias , whence
++.Ic rename , sleep , suspend , test ,
++.Ic true , ulimit , umask , unalias ,
++.Ic whence
+ .Pp
+ Once the type of command has been determined, any command-line parameter
+ assignments are performed and exported for the duration of the command.
+@@ -3411,6 +3418,7 @@
+ .Ar last
+ select commands from the history.
+ Commands can be selected by history number
++(negative numbers go backwards from the current, most recent, line)
+ or a string specifying the most recent command starting with that string.
+ The
+ .Fl l
+@@ -4315,6 +4323,16 @@
+ .Nm mksh ,
+ this is implemented as a shell alias instead of a builtin.
+ .Pp
++.It Ic suspend
++Stops the shell as if it had received the suspend character from
++the terminal.
++It is not possible to suspend a login shell unless the parent process
++is a member of the same terminal session but is a member of a different
++process group.
++As a general rule, if the shell was started by another shell or via
++.Xr su 1 ,
++it can be suspended.
++.Pp
+ .It Ic test Ar expression
+ .It Ic \&[ Ar expression Ic \&]
+ .Ic test
+@@ -4878,7 +4896,7 @@
+ .Pp
+ .It Xo
+ .Ic ulimit
+-.Op Fl aBCcdefHiLlMmnOPpqrSsTtVvw
++.Op Fl aBCcdefHilMmnOPpqrSsTtVvw
+ .Op Ar value
+ .Xc
+ Display or set process limits.
+@@ -4929,8 +4947,6 @@
+ .It Fl i Ar n
+ Set the number of pending signals to
+ .Ar n .
+-.It Fl L Ar n
+-Control flocks; documentation is missing.
+ .It Fl l Ar n
+ Impose a limit of
+ .Ar n
+@@ -6425,7 +6441,7 @@
+ .Ed
+ .Pp
+ This document attempts to describe
+-.Nm mksh\ R48
++.Nm mksh\ R48+CVS
+ and up,
+ compiled without any options impacting functionality, such as
+ .Dv MKSH_SMALL ,
+Index: src/bin/mksh/rlimits.opt
+diff -u /dev/null src/bin/mksh/rlimits.opt:1.1
+--- /dev/null	Fri Nov 29 15:15:17 2013
++++ src/bin/mksh/rlimits.opt	Sun Nov 17 22:21:18 2013
+@@ -0,0 +1,105 @@
++@RLIMITS_DEFNS
++__RCSID("$MirOS: src/bin/mksh/rlimits.opt,v 1.1 2013/11/17 22:21:18 tg Exp $");
++struct limits {
++	/* limit resource */
++	int resource;
++	/* multiply by to get rlim_{cur,max} values */
++	unsigned int factor;
++	/* getopts char */
++	char optchar;
++	/* limit name */
++	char name[1];
++};
++#define FN(lname,lid,lfac,lopt)				\
++	static const struct {				\
++		int resource;				\
++		unsigned int factor;			\
++		char optchar;				\
++		char name[sizeof(lname)];		\
++	} rlimits_ ## lid = {				\
++		lid, lfac, lopt, lname			\
++	};
++@RLIMITS_ITEMS
++#define FN(lname,lid,lfac,lopt)				\
++	(const struct limits *)(&rlimits_ ## lid),
++@@
 +
-+	switch (c) {
-+	case '-':
- 		neg = true;
-+		/* FALLTHROUGH */
-+	case '+':
- 		c = *s++;
--	} else if (c == '+')
--		c = *s++;
--	k = neg ? 2147483648U : 2147483647U;
--	j = i = 0;
-+		break;
-+	}
++/* generic options for the ulimit builtin */
 +
- 	do {
- 		if (!ksh_isdigit(c))
--			goto getn_out;
--		if ((j = i * 10 + c - '0') > k)
--			goto getn_out;
--		i = j;
-+			/* not numeric */
-+			return (0);
-+		if (i > 214748364U)
-+			/* overflow on multiplication */
-+			return (0);
-+		i = i * 10U + (unsigned int)(c - '0');
-+		/* now: i <= 2147483649U */
- 	} while ((c = *s++));
--	rv = 1;
- 
-- getn_out:
--	*ai = i == 2147483648U ? (int)i : neg ? -(int)i : (int)i;
--	return (rv);
-+	if (i > (neg ? 2147483648U : 2147483647U))
-+		/* overflow for signed 32-bit int */
-+		return (0);
++<a|
++<H|
++<S|
 +
-+	*ai = neg ? -(int)i : (int)i;
-+	return (1);
- }
- 
- /**
-@@ -698,7 +707,7 @@
- do_gmatch(const unsigned char *s, const unsigned char *se,
-     const unsigned char *p, const unsigned char *pe)
- {
--	int sc, pc;
-+	unsigned char sc, pc;
- 	const unsigned char *prest, *psub, *pnext;
- 	const unsigned char *srest;
- 
-@@ -828,12 +837,13 @@
- }
- 
- static const unsigned char *
--cclass(const unsigned char *p, int sub)
-+cclass(const unsigned char *p, unsigned char sub)
- {
--	int c, d, notp, found = 0;
-+	unsigned char c, d;
-+	bool notp, found = false;
- 	const unsigned char *orig_p = p;
- 
--	if ((notp = (ISMAGIC(*p) && *++p == '!')))
-+	if ((notp = tobool(ISMAGIC(*p) && *++p == '!')))
- 		p++;
- 	do {
- 		c = *p++;
-@@ -867,7 +877,7 @@
- 		} else
- 			d = c;
- 		if (c == sub || (c <= sub && sub <= d))
--			found = 1;
-+			found = true;
- 	} while (!(ISMAGIC(p[0]) && p[1] == ']'));
- 
- 	return ((found != notp) ? p+2 : NULL);
-@@ -1843,7 +1853,7 @@
- 		if (cdnode)
- 			bi_errorf("%s: %s", dir, "bad directory");
- 		else
--			bi_errorf("%s: %s", tryp, strerror(errno));
-+			bi_errorf("%s: %s", tryp, cstrerror(errno));
- 		afree(allocd, ATEMP);
- 		Xfree(xs, xp);
- 		return (2);
++/* do not use options -H, -S or -a or change the order */
++
++>t|RLIMIT_CPU
++FN("time(cpu-seconds)", RLIMIT_CPU, 1
++
++>f|RLIMIT_FSIZE
++FN("file(blocks)", RLIMIT_FSIZE, 512
++
++>c|RLIMIT_CORE
++FN("coredump(blocks)", RLIMIT_CORE, 512
++
++>d|RLIMIT_DATA
++FN("data(KiB)", RLIMIT_DATA, 1024
++
++>s|RLIMIT_STACK
++FN("stack(KiB)", RLIMIT_STACK, 1024
++
++>l|RLIMIT_MEMLOCK
++FN("lockedmem(KiB)", RLIMIT_MEMLOCK, 1024
++
++>n|RLIMIT_NOFILE
++FN("nofiles(descriptors)", RLIMIT_NOFILE, 1
++
++>p|RLIMIT_NPROC
++FN("processes", RLIMIT_NPROC, 1
++
++>w|RLIMIT_SWAP
++FN("swap(KiB)", RLIMIT_SWAP, 1024
++
++>T|RLIMIT_TIME
++FN("humantime(seconds)", RLIMIT_TIME, 1
++
++>V|RLIMIT_NOVMON
++FN("vnodemonitors", RLIMIT_NOVMON, 1
++
++>i|RLIMIT_SIGPENDING
++FN("sigpending", RLIMIT_SIGPENDING, 1
++
++>q|RLIMIT_MSGQUEUE
++FN("msgqueue(bytes)", RLIMIT_MSGQUEUE, 1
++
++>M|RLIMIT_AIO_MEM
++FN("AIOlockedmem(KiB)", RLIMIT_AIO_MEM, 1024
++
++>O|RLIMIT_AIO_OPS
++FN("AIOoperations", RLIMIT_AIO_OPS, 1
++
++>C|RLIMIT_TCACHE
++FN("cachedthreads", RLIMIT_TCACHE, 1
++
++>B|RLIMIT_SBSIZE
++FN("sockbufsiz(KiB)", RLIMIT_SBSIZE, 1024
++
++>P|RLIMIT_PTHREAD
++FN("threadsperprocess", RLIMIT_PTHREAD, 1
++
++>e|RLIMIT_NICE
++FN("maxnice", RLIMIT_NICE, 1
++
++>r|RLIMIT_RTPRIO
++FN("maxrtprio", RLIMIT_RTPRIO, 1
++
++>m|ULIMIT_M_IS_RSS
++FN("resident-set(KiB)", RLIMIT_RSS, 1024
++>m|ULIMIT_M_IS_VMEM
++FN("memory(KiB)", RLIMIT_VMEM, 1024
++
++>v|ULIMIT_V_IS_VMEM
++FN("virtual-memory(KiB)", RLIMIT_VMEM, 1024
++>v|ULIMIT_V_IS_AS
++FN("address-space(KiB)", RLIMIT_AS, 1024
++
++|RLIMITS_OPTCS
 Index: src/bin/mksh/sh.h
-diff -u src/bin/mksh/sh.h:1.608.2.1 src/bin/mksh/sh.h:1.627
---- src/bin/mksh/sh.h:1.608.2.1	Fri Nov 30 20:49:13 2012
-+++ src/bin/mksh/sh.h	Sun Jan  6 18:51:43 2013
-@@ -10,7 +10,7 @@
+diff -u src/bin/mksh/sh.h:1.668 src/bin/mksh/sh.h:1.676
+--- src/bin/mksh/sh.h:1.668	Fri Aug 16 10:59:03 2013
++++ src/bin/mksh/sh.h	Sun Nov 17 22:28:51 2013
+@@ -4,7 +4,7 @@
+ /*	$OpenBSD: tree.h,v 1.10 2005/03/28 21:28:22 deraadt Exp $	*/
+ /*	$OpenBSD: expand.h,v 1.6 2005/03/30 17:16:37 deraadt Exp $	*/
+ /*	$OpenBSD: lex.h,v 1.13 2013/03/03 19:11:34 guenther Exp $	*/
+-/*	$OpenBSD: proto.h,v 1.34 2012/06/27 07:17:19 otto Exp $	*/
++/*	$OpenBSD: proto.h,v 1.35 2013/09/04 15:49:19 millert Exp $	*/
+ /*	$OpenBSD: c_test.h,v 1.4 2004/12/20 11:34:26 otto Exp $	*/
+ /*	$OpenBSD: tty.h,v 1.5 2004/12/20 11:34:26 otto Exp $	*/
  
- /*-
-  * Copyright © 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
-- *	       2011, 2012
-+ *	       2011, 2012, 2013
-  *	Thorsten Glaser <tg@mirbsd.org>
-  *
-  * Provided that these terms and disclaimer and all copyright notices
-@@ -38,7 +38,14 @@
- #include <sys/param.h>
+@@ -108,12 +108,12 @@
+ 
+ #undef __attribute__
+ #if HAVE_ATTRIBUTE_BOUNDED
+-#define MKSH_A_BOUNDED(x,y,z)	__attribute__((__bounded__ (x, y, z)))
++#define MKSH_A_BOUNDED(x,y,z)	__attribute__((__bounded__(x, y, z)))
+ #else
+ #define MKSH_A_BOUNDED(x,y,z)	/* nothing */
  #endif
- #include <sys/types.h>
-+#if HAVE_BOTH_TIME_H
- #include <sys/time.h>
-+#include <time.h>
-+#elif HAVE_SYS_TIME_H
-+#include <sys/time.h>
-+#elif HAVE_TIME_H
-+#include <time.h>
-+#endif
- #include <sys/ioctl.h>
- #if HAVE_SYS_SYSMACROS_H
- #include <sys/sysmacros.h>
-@@ -49,7 +56,9 @@
- #if HAVE_SYS_MMAN_H
- #include <sys/mman.h>
- #endif
-+#if HAVE_SYS_RESOURCE_H
- #include <sys/resource.h>
-+#endif
- #include <sys/stat.h>
- #include <sys/wait.h>
- #include <dirent.h>
-@@ -85,7 +94,10 @@
- /* shudder… */
- #include <termio.h>
- #endif
--#include <time.h>
-+#ifdef _ISC_UNIX
-+/* XXX imake style */
-+#include <sys/sioctl.h>
-+#endif
- #if HAVE_ULIMIT_H
- #include <ulimit.h>
- #endif
-@@ -105,11 +117,6 @@
+ #if HAVE_ATTRIBUTE_FORMAT
+-#define MKSH_A_FORMAT(x,y,z)	__attribute__((__format__ (x, y, z)))
++#define MKSH_A_FORMAT(x,y,z)	__attribute__((__format__(x, y, z)))
  #else
  #define MKSH_A_FORMAT(x,y,z)	/* nothing */
  #endif
--#if HAVE_ATTRIBUTE_NONNULL
--#define MKSH_A_NONNULL(a)	__attribute__(a)
--#else
--#define MKSH_A_NONNULL(a)	/* nothing */
--#endif
- #if HAVE_ATTRIBUTE_NORETURN
- #define MKSH_A_NORETURN		__attribute__((__noreturn__))
- #else
-@@ -157,9 +164,9 @@
+@@ -164,9 +164,9 @@
  #endif
  
  #ifdef EXTERN
--__RCSID("$MirOS: src/bin/mksh/sh.h,v 1.608.2.1 2012/11/30 20:49:13 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/sh.h,v 1.627 2013/01/06 18:51:43 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/sh.h,v 1.668 2013/08/16 10:59:03 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/sh.h,v 1.676 2013/11/17 22:28:51 tg Exp $");
  #endif
--#define MKSH_VERSION "R41 2012/11/30"
-+#define MKSH_VERSION "R41 2013/01/06"
+-#define MKSH_VERSION "R48 2013/08/16"
++#define MKSH_VERSION "R48 2013/11/17"
  
  /* arithmetic types: C implementation */
  #if !HAVE_CAN_INTTYPES
-@@ -328,6 +335,8 @@
- #define NSIG		_NSIG
- #elif defined(SIGMAX)
- #define NSIG		(SIGMAX+1)
-+#elif defined(_SIGMAX)
-+#define NSIG		(_SIGMAX+1)
+@@ -396,6 +396,10 @@
  #endif
  #endif
  
-@@ -351,16 +360,25 @@
- extern int getrusage(int, struct rusage *);
- #endif
- 
-+#if !HAVE_MEMMOVE
-+/* we assume either memmove or bcopy exist, at the moment */
-+#define memmove(dst, src, len)	bcopy((src), (dst), (len))
++#ifndef O_BINARY
++#define O_BINARY	0
 +#endif
 +
- #if !HAVE_REVOKE_DECL
- extern int revoke(const char *);
+ #ifdef MKSH__NO_SYMLINK
+ #undef S_ISLNK
+ #define S_ISLNK(m)	(/* CONSTCOND */ 0)
+@@ -414,6 +418,10 @@
+ #define mksh_tcset(fd,st) ioctl((fd), TCSETAW, (st))
  #endif
  
--#if !HAVE_STRLCPY
--size_t strlcpy(char *, const char *, size_t);
-+#if defined(DEBUG) || !HAVE_STRERROR
-+#define strerror		/* poisoned */ dontuse_strerror
-+#define cstrerror		/* replaced */ cstrerror
-+extern const char *cstrerror(int);
-+#else
-+#define cstrerror(errnum)	((const char *)strerror(errnum))
- #endif
- 
--#if !HAVE_SYS_SIGLIST_DECL
--extern const char *const sys_siglist[];
-+#if !HAVE_STRLCPY
-+size_t strlcpy(char *, const char *, size_t);
- #endif
- 
- #ifdef __INTERIX
-@@ -477,16 +495,20 @@
- })
- #define vstrchr(s,c)	(cstrchr((s), (c)) != NULL)
- #define vstrstr(b,l)	(cstrstr((b), (l)) != NULL)
--#define mkssert(e)	((e) ? (void)0 : exit(255))
- #else /* !DEBUG, !gcc */
- #define cstrchr(s,c)	((const char *)strchr((s), (c)))
- #define cstrstr(s,c)	((const char *)strstr((s), (c)))
- #define vstrchr(s,c)	(strchr((s), (c)) != NULL)
- #define vstrstr(b,l)	(strstr((b), (l)) != NULL)
--#define mkssert(e)	((void)0)
- #endif
- 
--#if (!defined(MKSH_BUILDMAKEFILE4BSD) && !defined(MKSH_BUILDSH)) || (MKSH_BUILD_R != 411)
-+#if defined(DEBUG) || defined(__COVERITY__)
-+#define mkssert(e)	do { if (!(e)) exit(255); } while (/* CONSTCOND */ 0)
-+#else
-+#define mkssert(e)	do { } while (/* CONSTCOND */ 0)
++#ifndef ISTRIP
++#define ISTRIP		0
 +#endif
 +
-+#if (!defined(MKSH_BUILDMAKEFILE4BSD) && !defined(MKSH_BUILDSH)) || (MKSH_BUILD_R != 419)
+ /* remove redundancies */
+ 
+ #if defined(MirBSD) && (MirBSD >= 0x0AB3) && !defined(MKSH_OPTSTATIC)
+@@ -518,7 +526,7 @@
+ #define mkssert(e)	do { } while (/* CONSTCOND */ 0)
+ #endif
+ 
+-#if (!defined(MKSH_BUILDMAKEFILE4BSD) && !defined(MKSH_BUILDSH)) || (MKSH_BUILD_R != 481)
++#if (!defined(MKSH_BUILDMAKEFILE4BSD) && !defined(MKSH_BUILDSH)) || (MKSH_BUILD_R != 489)
  #error Must run Build.sh to compile this.
+ extern void thiswillneverbedefinedIhope(void);
  int
- im_sorry_dave(void)
-@@ -652,7 +674,8 @@
- struct sretrace_info;
- struct yyrecursive_state;
+@@ -660,7 +668,7 @@
+  */
+ enum sh_flag {
+ #define SHFLAGS_ENUMS
+-#include "sh_flags.h"
++#include "sh_flags.gen"
+ 	FNFLAGS		/* (place holder: how many flags are there) */
+ };
  
--extern struct sretrace_info *retrace_info;
-+EXTERN struct sretrace_info *retrace_info E_INIT(NULL);
-+EXTERN int subshell_nesting_type E_INIT(0);
+@@ -1587,6 +1595,7 @@
+ #undef CTRL
+ #define	CTRL(x)		((x) == '?' ? 0x7F : (x) & 0x1F)	/* ASCII */
+ #define	UNCTRL(x)	((x) ^ 0x40)				/* ASCII */
++#define	ISCTRL(x)	(((signed char)((uint8_t)(x) + 1)) < 33)
  
- extern struct env {
- 	ALLOC_ITEM alloc_INT;	/* internal, do not touch */
-@@ -785,10 +808,8 @@
- #define TT_HEREDOC_EXP	0
- /* temporary file used for history editing (fc -e) */
- #define TT_HIST_EDIT	1
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- /* temporary file used during in-situ command substitution */
- #define TT_FUNSUB	2
--#endif
+ #define IDENT		64
  
- /* temp/heredoc files. The file is removed when the struct is freed. */
- struct temp {
-@@ -1300,9 +1321,7 @@
- #define SPAT	10	/* separate pattern: | */
- #define CPAT	11	/* close pattern: ) */
- #define ADELIM	12	/* arbitrary delimiter: ${foo:2:3} ${foo/bar/baz} */
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- #define FUNSUB	14	/* ${ foo;} substitution (NUL terminated) */
--#endif
- 
- /*
-  * IO redirection
-@@ -1361,7 +1380,7 @@
- #define DOTEMP	BIT(8)		/* dito: in word part of ${..[%#=?]..} */
- #define DOVACHECK BIT(9)	/* var assign check (for typeset, set, etc) */
- #define DOMARKDIRS BIT(10)	/* force markdirs behaviour */
--#if !defined(MKSH_SMALL) && !defined(MKSH_DISABLE_EXPERIMENTAL)
-+#if !defined(MKSH_SMALL)
- #define DOTCOMEXEC BIT(11)	/* not an eval flag, used by sh -c hack */
+@@ -1782,7 +1791,7 @@
+ char **histpos(void);
+ int histnum(int);
  #endif
- 
-@@ -1507,7 +1526,7 @@
- #define SF_ALIASEND	BIT(2)	/* faking space at end of alias */
- #define SF_TTY		BIT(3)	/* type == SSTDIN & it is a tty */
- #define SF_HASALIAS	BIT(4)	/* u.tblp valid (SALIAS, SEOF) */
--#if !defined(MKSH_SMALL) && !defined(MKSH_DISABLE_EXPERIMENTAL)
-+#if !defined(MKSH_SMALL)
- #define SF_MAYEXEC	BIT(5)	/* special sh -c optimisation hack */
+-int findhist(int, int, const char *, int);
++int findhist(int, int, const char *, bool);
+ char **hist_get_newest(bool);
+ void inittraps(void);
+ void alarm_init(void);
+@@ -1817,6 +1826,7 @@
+ int j_kill(const char *, int);
+ #ifndef MKSH_UNEMPLOYED
+ int j_resume(const char *, int);
++void j_suspend(void);
  #endif
- 
-@@ -1802,6 +1821,7 @@
- int j_stopped_running(void);
- /* lex.c */
- int yylex(int);
-+void yyskiputf8bom(void);
- void yyerror(const char *, ...)
-     MKSH_A_NORETURN
-     MKSH_A_FORMAT(__printf__, 1, 2);
-@@ -1875,7 +1895,7 @@
- void initctypes(void);
- size_t option(const char *);
- char *getoptions(void);
--void change_flag(enum sh_flag, int, unsigned int);
-+void change_flag(enum sh_flag, int, bool);
- int parse_args(const char **, int, bool *);
- int getn(const char *, int *);
- int gmatchx(const char *, const char *, bool);
-@@ -1970,8 +1990,7 @@
- struct tbl *setint_v(struct tbl *, struct tbl *, bool);
- void setint(struct tbl *, mksh_ari_t);
- void setint_n(struct tbl *, mksh_ari_t, int);
--struct tbl *typeset(const char *, uint32_t, uint32_t, int, int)
--    MKSH_A_NONNULL((__nonnull__ (1)));
-+struct tbl *typeset(const char *, uint32_t, uint32_t, int, int);
- void unset(struct tbl *, int);
- const char *skip_varname(const char *, int);
- const char *skip_wdvarname(const char *, bool);
-@@ -2034,7 +2053,7 @@
- 	int flags;			/* TEF_* */
- } Test_env;
- 
--extern const char *const dbtest_tokens[];
-+extern const char * const dbtest_tokens[];
- 
- Test_op	test_isop(Test_meta, const char *);
+ int j_jobs(const char *, int, int);
+ void j_notify(void);
+@@ -2062,6 +2072,7 @@
  int test_eval(Test_env *, Test_op, const char *, const char *, bool);
-Index: src/bin/mksh/shf.c
-diff -u src/bin/mksh/shf.c:1.47 src/bin/mksh/shf.c:1.56
---- src/bin/mksh/shf.c:1.47	Wed Oct  3 16:16:15 2012
-+++ src/bin/mksh/shf.c	Tue Jan  1 03:32:44 2013
-@@ -1,7 +1,7 @@
- /*	$OpenBSD: shf.c,v 1.15 2006/04/02 00:48:33 deraadt Exp $	*/
+ int test_parse(Test_env *);
  
- /*-
-- * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2011
-+ * Copyright (c) 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2011, 2012
-  *	Thorsten Glaser <tg@mirbsd.org>
-  *
-  * Provided that these terms and disclaimer and all copyright notices
-@@ -24,7 +24,7 @@
++/* tty_fd is not opened O_BINARY, it's thus never read/written */
+ EXTERN int tty_fd E_INIT(-1);	/* dup'd tty file descriptor */
+ EXTERN bool tty_devtty;		/* true if tty_fd is from /dev/tty */
+ EXTERN mksh_ttyst tty_state;	/* saved tty state */
+Index: src/bin/mksh/sh_flags.h
+diff -u src/bin/mksh/sh_flags.h:1.16 src/bin/mksh/sh_flags.h:removed
+--- src/bin/mksh/sh_flags.h:1.16	Sun Aug 11 14:57:11 2013
++++ src/bin/mksh/sh_flags.h	Fri Nov 29 15:15:18 2013
+@@ -1,166 +0,0 @@
+-#if defined(SHFLAGS_DEFNS)
+-__RCSID("$MirOS: src/bin/mksh/sh_flags.h,v 1.16 2013/08/11 14:57:11 tg Exp $");
+-#define FN(sname,cname,ochar,flags)		\
+-	static const struct {			\
+-		/* character flag (if any) */	\
+-		char c;				\
+-		/* OF_* */			\
+-		unsigned char optflags;		\
+-		/* long name of option */	\
+-		char name[sizeof(sname)];	\
+-	} shoptione_ ## cname = {		\
+-		ochar, flags, sname		\
+-	};
+-#elif defined(SHFLAGS_ENUMS)
+-#define FN(sname,cname,ochar,flags)	cname,
+-#define F0(sname,cname,ochar,flags)	cname = 0,
+-#elif defined(SHFLAGS_ITEMS)
+-#define FN(sname,cname,ochar,flags)	\
+-	((const char *)(&shoptione_ ## cname)) + 2,
+-#endif
+-
+-#ifndef F0
+-#define F0 FN
+-#endif
+-
+-/*
+- * special cases (see parse_args()): -A, -o, -s
+- *
+- * options are sorted by their longnames
+- */
+-
+-/* -a	all new parameters are created with the export attribute */
+-F0("allexport", FEXPORT, 'a', OF_ANY)
+-
+-#if HAVE_NICE
+-/* ./.	bgnice */
+-FN("bgnice", FBGNICE, 0, OF_ANY)
+-#endif
+-
+-/* ./.	enable {} globbing (non-standard) */
+-FN("braceexpand", FBRACEEXPAND, 0, OF_ANY)
+-
+-#if !defined(MKSH_NO_CMDLINE_EDITING) || defined(MKSH_LEGACY_MODE)
+-/* ./.	Emacs command line editing mode */
+-FN("emacs", FEMACS, 0, OF_ANY)
+-#endif
+-
+-/* -e	quit on error */
+-FN("errexit", FERREXIT, 'e', OF_ANY)
+-
+-#if !defined(MKSH_NO_CMDLINE_EDITING) || defined(MKSH_LEGACY_MODE)
+-/* ./.	Emacs command line editing mode, gmacs variant */
+-FN("gmacs", FGMACS, 0, OF_ANY)
+-#endif
+-
+-/* ./.	reading EOF does not exit */
+-FN("ignoreeof", FIGNOREEOF, 0, OF_ANY)
+-
+-/* ./.	inherit -x flag */
+-FN("inherit-xtrace", FXTRACEREC, 0, OF_ANY)
+-
+-/* -i	interactive shell */
+-FN("interactive", FTALKING, 'i', OF_CMDLINE)
+-
+-/* -k	name=value are recognised anywhere */
+-FN("keyword", FKEYWORD, 'k', OF_ANY)
+-
+-/* -l	login shell */
+-FN("login", FLOGIN, 'l', OF_CMDLINE)
+-
+-/* -X	mark dirs with / in file name completion */
+-FN("markdirs", FMARKDIRS, 'X', OF_ANY)
+-
+-#ifndef MKSH_UNEMPLOYED
+-/* -m	job control monitoring */
+-FN("monitor", FMONITOR, 'm', OF_ANY)
+-#endif
+-
+-/* -C	don't overwrite existing files */
+-FN("noclobber", FNOCLOBBER, 'C', OF_ANY)
+-
+-/* -n	don't execute any commands */
+-FN("noexec", FNOEXEC, 'n', OF_ANY)
+-
+-/* -f	don't do file globbing */
+-FN("noglob", FNOGLOB, 'f', OF_ANY)
+-
+-/* ./.	don't kill running jobs when login shell exits */
+-FN("nohup", FNOHUP, 0, OF_ANY)
+-
+-/* ./.	don't save functions in history (no effect) */
+-FN("nolog", FNOLOG, 0, OF_ANY)
+-
+-#ifndef MKSH_UNEMPLOYED
+-/* -b	asynchronous job completion notification */
+-FN("notify", FNOTIFY, 'b', OF_ANY)
+-#endif
+-
+-/* -u	using an unset variable is an error */
+-FN("nounset", FNOUNSET, 'u', OF_ANY)
+-
+-/* ./.	don't do logical cds/pwds (non-standard) */
+-FN("physical", FPHYSICAL, 0, OF_ANY)
+-
+-/* ./.	errorlevel of a pipeline is the rightmost nonzero value */
+-FN("pipefail", FPIPEFAIL, 0, OF_ANY)
+-
+-/* ./.	adhere more closely to POSIX even when undesirable */
+-FN("posix", FPOSIX, 0, OF_ANY)
+-
+-/* -p	use suid_profile; privileged shell */
+-FN("privileged", FPRIVILEGED, 'p', OF_ANY)
+-
+-/* -r	restricted shell */
+-FN("restricted", FRESTRICTED, 'r', OF_CMDLINE)
+-
+-/* ./.	kludge mode for better compat with traditional sh (OS-specific) */
+-FN("sh", FSH, 0, OF_ANY)
+-
+-/* -s	(invocation) parse stdin (pseudo non-standard) */
+-FN("stdin", FSTDIN, 's', OF_CMDLINE)
+-
+-/* -h	create tracked aliases for all commands */
+-FN("trackall", FTRACKALL, 'h', OF_ANY)
+-
+-/* -U	enable UTF-8 processing (non-standard) */
+-FN("utf8-mode", FUNICODE, 'U', OF_ANY)
+-
+-/* -v	echo input */
+-FN("verbose", FVERBOSE, 'v', OF_ANY)
+-
+-#if !defined(MKSH_NO_CMDLINE_EDITING) || defined(MKSH_LEGACY_MODE)
+-/* ./.	Vi command line editing mode */
+-FN("vi", FVI, 0, OF_ANY)
+-
+-/* ./.	enable ESC as file name completion character (non-standard) */
+-FN("vi-esccomplete", FVIESCCOMPLETE, 0, OF_ANY)
+-
+-/* ./.	enable Tab as file name completion character (non-standard) */
+-FN("vi-tabcomplete", FVITABCOMPLETE, 0, OF_ANY)
+-
+-/* ./.	always read in raw mode (no effect) */
+-FN("viraw", FVIRAW, 0, OF_ANY)
+-#endif
+-
+-/* -x	execution trace (display commands as they are run) */
+-FN("xtrace", FXTRACE, 'x', OF_ANY)
+-
+-/* -c	(invocation) execute specified command */
+-FN("", FCOMMAND, 'c', OF_CMDLINE)
+-
+-/*
+- * anonymous flags: used internally by shell only (not visible to user)
+- */
+-
+-/* ./.	direct builtin call (divined from argv[0] multi-call binary) */
+-FN("", FAS_BUILTIN, 0, OF_INTERNAL)
+-
+-/* ./.	(internal) initial shell was interactive */
+-FN("", FTALKING_I, 0, OF_INTERNAL)
+-
+-#undef FN
+-#undef F0
+-#undef SHFLAGS_DEFNS
+-#undef SHFLAGS_ENUMS
+-#undef SHFLAGS_ITEMS
+Index: src/bin/mksh/sh_flags.opt
+diff -u /dev/null src/bin/mksh/sh_flags.opt:1.1
+--- /dev/null	Fri Nov 29 15:15:18 2013
++++ src/bin/mksh/sh_flags.opt	Sun Nov 17 22:22:56 2013
+@@ -0,0 +1,190 @@
++@SHFLAGS_DEFNS
++__RCSID("$MirOS: src/bin/mksh/sh_flags.opt,v 1.1 2013/11/17 22:22:56 tg Exp $");
++#define FN(sname,cname,flags,ochar)		\
++	static const struct {			\
++		/* character flag (if any) */	\
++		char c;				\
++		/* OF_* */			\
++		unsigned char optflags;		\
++		/* long name of option */	\
++		char name[sizeof(sname)];	\
++	} shoptione_ ## cname = {		\
++		ochar, flags, sname		\
++	};
++@SHFLAGS_ENUMS
++#define FN(sname,cname,flags,ochar)	cname,
++#define F0(sname,cname,flags,ochar)	cname = 0,
++@SHFLAGS_ITEMS
++#define FN(sname,cname,flags,ochar)	\
++	((const char *)(&shoptione_ ## cname)) + 2,
++@@
++
++/* special cases */
++
++<o:|!SHFLAGS_NOT_CMD
++<T:|!SHFLAGS_NOT_CMD
++<A:|!SHFLAGS_NOT_SET
++<o;|!SHFLAGS_NOT_SET
++<s|!SHFLAGS_NOT_SET
++
++/*
++ * options are sorted by their longnames
++ */
++
++/* -a	all new parameters are created with the export attribute */
++>a|
++F0("allexport", FEXPORT, OF_ANY
++
++/* ./.	bgnice */
++>| HAVE_NICE
++FN("bgnice", FBGNICE, OF_ANY
++
++/* ./.	enable {} globbing (non-standard) */
++>|
++FN("braceexpand", FBRACEEXPAND, OF_ANY
++
++/* ./.	Emacs command line editing mode */
++>|!defined(MKSH_NO_CMDLINE_EDITING) || defined(MKSH_LEGACY_MODE)
++FN("emacs", FEMACS, OF_ANY
++
++/* -e	quit on error */
++>e|
++FN("errexit", FERREXIT, OF_ANY
++
++/* ./.	Emacs command line editing mode, gmacs variant */
++>|!defined(MKSH_NO_CMDLINE_EDITING) || defined(MKSH_LEGACY_MODE)
++FN("gmacs", FGMACS, OF_ANY
++
++/* ./.	reading EOF does not exit */
++>|
++FN("ignoreeof", FIGNOREEOF, OF_ANY
++
++/* ./.	inherit -x flag */
++>|
++FN("inherit-xtrace", FXTRACEREC, OF_ANY
++
++/* -i	interactive shell */
++>i|!SHFLAGS_NOT_CMD
++FN("interactive", FTALKING, OF_CMDLINE
++
++/* -k	name=value are recognised anywhere */
++>k|
++FN("keyword", FKEYWORD, OF_ANY
++
++/* -l	login shell */
++>l|!SHFLAGS_NOT_CMD
++FN("login", FLOGIN, OF_CMDLINE
++
++/* -X	mark dirs with / in file name completion */
++>X|
++FN("markdirs", FMARKDIRS, OF_ANY
++
++/* -m	job control monitoring */
++>m|!MKSH_UNEMPLOYED
++FN("monitor", FMONITOR, OF_ANY
++
++/* -C	don't overwrite existing files */
++>C|
++FN("noclobber", FNOCLOBBER, OF_ANY
++
++/* -n	don't execute any commands */
++>n|
++FN("noexec", FNOEXEC, OF_ANY
++
++/* -f	don't do file globbing */
++>f|
++FN("noglob", FNOGLOB, OF_ANY
++
++/* ./.	don't kill running jobs when login shell exits */
++>|
++FN("nohup", FNOHUP, OF_ANY
++
++/* ./.	don't save functions in history (no effect) */
++>|
++FN("nolog", FNOLOG, OF_ANY
++
++/* -b	asynchronous job completion notification */
++>b|!MKSH_UNEMPLOYED
++FN("notify", FNOTIFY, OF_ANY
++
++/* -u	using an unset variable is an error */
++>u|
++FN("nounset", FNOUNSET, OF_ANY
++
++/* ./.	don't do logical cds/pwds (non-standard) */
++>|
++FN("physical", FPHYSICAL, OF_ANY
++
++/* ./.	errorlevel of a pipeline is the rightmost nonzero value */
++>|
++FN("pipefail", FPIPEFAIL, OF_ANY
++
++/* ./.	adhere more closely to POSIX even when undesirable */
++>|
++FN("posix", FPOSIX, OF_ANY
++
++/* -p	use suid_profile; privileged shell */
++>p|
++FN("privileged", FPRIVILEGED, OF_ANY
++
++/* -r	restricted shell */
++>r|!SHFLAGS_NOT_CMD
++FN("restricted", FRESTRICTED, OF_CMDLINE
++
++/* ./.	kludge mode for better compat with traditional sh (OS-specific) */
++>|
++FN("sh", FSH, OF_ANY
++
++/* -s	(invocation) parse stdin (pseudo non-standard) */
++>s|!SHFLAGS_NOT_CMD
++FN("stdin", FSTDIN, OF_CMDLINE
++
++/* -h	create tracked aliases for all commands */
++>h|
++FN("trackall", FTRACKALL, OF_ANY
++
++/* -U	enable UTF-8 processing (non-standard) */
++>U|
++FN("utf8-mode", FUNICODE, OF_ANY
++
++/* -v	echo input */
++>v|
++FN("verbose", FVERBOSE, OF_ANY
++
++/* ./.	Vi command line editing mode */
++>|!defined(MKSH_NO_CMDLINE_EDITING) || defined(MKSH_LEGACY_MODE)
++FN("vi", FVI, OF_ANY
++
++/* ./.	enable ESC as file name completion character (non-standard) */
++>|!defined(MKSH_NO_CMDLINE_EDITING) || defined(MKSH_LEGACY_MODE)
++FN("vi-esccomplete", FVIESCCOMPLETE, OF_ANY
++
++/* ./.	enable Tab as file name completion character (non-standard) */
++>|!defined(MKSH_NO_CMDLINE_EDITING) || defined(MKSH_LEGACY_MODE)
++FN("vi-tabcomplete", FVITABCOMPLETE, OF_ANY
++
++/* ./.	always read in raw mode (no effect) */
++>|!defined(MKSH_NO_CMDLINE_EDITING) || defined(MKSH_LEGACY_MODE)
++FN("viraw", FVIRAW, OF_ANY
++
++/* -x	execution trace (display commands as they are run) */
++>x|
++FN("xtrace", FXTRACE, OF_ANY
++
++/* -c	(invocation) execute specified command */
++>c|!SHFLAGS_NOT_CMD
++FN("", FCOMMAND, OF_CMDLINE
++
++/*
++ * anonymous flags: used internally by shell only (not visible to user
++ */
++
++/* ./.	direct builtin call (divined from argv[0] multi-call binary) */
++>|
++FN("", FAS_BUILTIN, OF_INTERNAL
++
++/* ./.	(internal) initial shell was interactive */
++>|
++FN("", FTALKING_I, OF_INTERNAL
++
++|SHFLAGS_OPTCS
+Index: src/bin/mksh/shf.c
+diff -u src/bin/mksh/shf.c:1.61 src/bin/mksh/shf.c:1.62
+--- src/bin/mksh/shf.c:1.61	Sun Jul 21 18:36:03 2013
++++ src/bin/mksh/shf.c	Wed Oct  9 11:59:30 2013
+@@ -25,7 +25,7 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/shf.c,v 1.47 2012/10/03 16:16:15 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/shf.c,v 1.56 2013/01/01 03:32:44 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/shf.c,v 1.61 2013/07/21 18:36:03 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/shf.c,v 1.62 2013/10/09 11:59:30 tg Exp $");
  
  /* flags to shf_emptybuf() */
  #define EB_READSW	0x01	/* about to switch to reading */
-@@ -490,7 +490,7 @@
- 		return (NULL);
+@@ -62,7 +62,7 @@
+ 	shf->flags = SHF_ALLOCS;
+ 	/* Rest filled in by reopen. */
  
- 	/* save room for NUL */
--	--bsize;	
-+	--bsize;
- 	do {
- 		if (shf->rnleft == 0) {
- 			if (shf_fillbuf(shf) == EOF)
-@@ -552,7 +552,7 @@
- 		 * Can unget what was read, but not something different;
- 		 * we don't want to modify a string.
- 		 */
--		if (shf->rp[-1] != c)
-+		if ((int)(shf->rp[-1]) != c)
- 			return (EOF);
- 		shf->flags &= ~SHF_EOF;
- 		shf->rp--;
-@@ -722,7 +722,7 @@
- 	n = shf_vfprintf(&shf, fmt, args);
- 	va_end(args);
- 	/* NUL terminates */
--	shf_sclose(&shf); 
-+	shf_sclose(&shf);
- 	return (n);
- }
- 
-@@ -764,7 +764,12 @@
- 	ssize_t field, precision, len;
- 	unsigned long lnum;
- 	/* %#o produces the longest output */
--	char numbuf[(8 * sizeof(long) + 2) / 3 + 1];
-+	char numbuf[(8 * sizeof(long) + 2) / 3 + 1
-+#ifdef DEBUG
-+		/* a NUL for LLVM/Clang scan-build */
-+		+ 1
-+#endif
-+	    ];
- 	/* this stuff for dealing with the buffer */
- 	ssize_t nwritten = 0;
- 
-@@ -902,6 +907,16 @@
-  integral:
- 			flags |= FL_NUMBER;
- 			cp = numbuf + sizeof(numbuf);
-+#ifdef DEBUG
-+			/*
-+			 * this is necessary so Clang 3.2 realises
-+			 * utf_skipcols/shf_putc in the output loop
-+			 * terminate; these values are always ASCII
-+			 * so an out-of-bounds access cannot happen
-+			 * but Clang doesn't know that
-+			 */
-+			*--cp = '\0';
-+#endif
- 
- 			switch (c) {
- 			case 'd':
-@@ -953,6 +968,10 @@
- 			}
- 			}
- 			len = numbuf + sizeof(numbuf) - (s = cp);
-+#ifdef DEBUG
-+			/* see above comment for Clang 3.2 */
-+			--len;
-+#endif
- 			if (flags & FL_DOT) {
- 				if (precision > len) {
- 					field = precision;
-@@ -971,14 +990,13 @@
- 
- 		case 'c':
- 			flags &= ~FL_DOT;
--			numbuf[0] = (char)(VA(int));
--			s = numbuf;
--			len = 1;
--			break;
-+			c = (char)(VA(int));
-+			/* FALLTHROUGH */
- 
- 		case '%':
- 		default:
- 			numbuf[0] = c;
-+			numbuf[1] = 0;
- 			s = numbuf;
- 			len = 1;
- 			break;
-@@ -1059,3 +1077,82 @@
- 	return (shf_putc_i(c, shf));
- }
- #endif
-+
-+#ifdef DEBUG
-+const char *
-+cstrerror(int errnum)
-+{
-+#undef strerror
-+	return (strerror(errnum));
-+#define strerror dontuse_strerror /* poisoned */
-+}
-+#elif !HAVE_STRERROR
-+
-+#if HAVE_SYS_ERRLIST
-+#if !HAVE_SYS_ERRLIST_DECL
-+extern const int sys_nerr;
-+extern const char * const sys_errlist[];
-+#endif
-+#endif
-+
-+const char *
-+cstrerror(int errnum)
-+{
-+	/* "Unknown error: " + sign + rough estimate + NUL */
-+	static char errbuf[15 + 1 + (8 * sizeof(int) + 2) / 3 + 1];
-+
-+#if HAVE_SYS_ERRLIST
-+	if (errnum > 0 && errnum < sys_nerr && sys_errlist[errnum])
-+		return (sys_errlist[errnum]);
-+#endif
-+
-+	switch (errnum) {
-+	case 0:
-+		return ("Undefined error: 0");
-+#ifdef EPERM
-+	case EPERM:
-+		return ("Operation not permitted");
-+#endif
-+#ifdef ENOENT
-+	case ENOENT:
-+		return ("No such file or directory");
-+#endif
-+#ifdef ESRCH
-+	case ESRCH:
-+		return ("No such process");
-+#endif
-+#ifdef E2BIG
-+	case E2BIG:
-+		return ("Argument list too long");
-+#endif
-+#ifdef ENOEXEC
-+	case ENOEXEC:
-+		return ("Exec format error");
-+#endif
-+#ifdef ENOMEM
-+	case ENOMEM:
-+		return ("Cannot allocate memory");
-+#endif
-+#ifdef EACCES
-+	case EACCES:
-+		return ("Permission denied");
-+#endif
-+#ifdef ENOTDIR
-+	case ENOTDIR:
-+		return ("Not a directory");
-+#endif
-+#ifdef EINVAL
-+	case EINVAL:
-+		return ("Invalid argument");
-+#endif
-+#ifdef ELOOP
-+	case ELOOP:
-+		return ("Too many levels of symbolic links");
-+#endif
-+	default:
-+		shf_snprintf(errbuf, sizeof(errbuf),
-+		    "Unknown error: %d", errnum);
-+		return (errbuf);
-+	}
-+}
-+#endif
-Index: src/bin/mksh/syn.c
-diff -u src/bin/mksh/syn.c:1.84 src/bin/mksh/syn.c:1.88
---- src/bin/mksh/syn.c:1.84	Tue Oct 30 20:49:44 2012
-+++ src/bin/mksh/syn.c	Fri Dec 28 02:28:39 2012
-@@ -23,10 +23,7 @@
+-	fd = open(name, oflags, mode);
++	fd = open(name, oflags | O_BINARY, mode);
+ 	if (fd < 0) {
+ 		eno = errno;
+ 		afree(shf, shf->areap);
+Index: src/bin/mksh/strlcpy.c
+diff -u src/bin/mksh/strlcpy.c:1.7 src/bin/mksh/strlcpy.c:1.8
+--- src/bin/mksh/strlcpy.c:1.7	Wed Jun 10 18:12:50 2009
++++ src/bin/mksh/strlcpy.c	Tue Nov  5 22:10:15 2013
+@@ -1,5 +1,5 @@
+ /*-
+- * Copyright (c) 2006, 2008, 2009
++ * Copyright (c) 2006, 2008, 2009, 2013
+  *	Thorsten Glaser <tg@mirbsd.org>
+  * Copyright (c) 1998 Todd C. Miller <Todd.Miller@courtesan.com>
+  *
+@@ -18,13 +18,14 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/syn.c,v 1.84 2012/10/30 20:49:44 tg Exp $");
--
--extern int subshell_nesting_type;
--extern void yyskiputf8bom(void);
-+__RCSID("$MirOS: src/bin/mksh/syn.c,v 1.88 2012/12/28 02:28:39 tg Exp $");
- 
- struct nesting_state {
- 	int start_token;	/* token than began nesting (eg, FOR) */
-@@ -771,7 +768,7 @@
- 	return (t);
- }
- 
--const struct tokeninfo {
-+static const struct tokeninfo {
- 	const char *name;
- 	short val;
- 	short reserved;
-@@ -969,13 +966,13 @@
- static const char dbtest_not[] = { CHAR, '!', EOS };
- static const char dbtest_oparen[] = { CHAR, '(', EOS };
- static const char dbtest_cparen[] = { CHAR, ')', EOS };
--const char *const dbtest_tokens[] = {
-+const char * const dbtest_tokens[] = {
- 	dbtest_or, dbtest_and, dbtest_not,
- 	dbtest_oparen, dbtest_cparen
- };
--const char db_close[] = { CHAR, ']', CHAR, ']', EOS };
--const char db_lthan[] = { CHAR, '<', EOS };
--const char db_gthan[] = { CHAR, '>', EOS };
-+static const char db_close[] = { CHAR, ']', CHAR, ']', EOS };
-+static const char db_lthan[] = { CHAR, '<', EOS };
-+static const char db_gthan[] = { CHAR, '>', EOS };
+-__RCSID("$MirOS: src/bin/mksh/strlcpy.c,v 1.7 2009/06/10 18:12:50 tg Rel $");
++__RCSID("$MirOS: src/bin/mksh/strlcpy.c,v 1.8 2013/11/05 22:10:15 tg Exp $");
  
  /*
-  * Test if the current token is a whatever. Accepts the current token if
-@@ -1018,7 +1015,7 @@
- 		    db_close)) ? TO_NONNULL : TO_NONOP;
- 	if (ret != TO_NONOP) {
- 		ACCEPT;
--		if (meta < NELEM(dbtest_tokens))
-+		if ((unsigned int)meta < NELEM(dbtest_tokens))
- 			save = wdcopy(dbtest_tokens[(int)meta], ATEMP);
- 		if (save)
- 			XPput(*te->pos.av, save);
-@@ -1134,13 +1131,10 @@
- 	struct yyrecursive_state *ys;
- 	int stok, etok;
- 
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- 	if (subtype == FUNSUB) {
- 		stok = '{';
- 		etok = '}';
--	} else
--#endif
--	  {
-+	} else {
- 		stok = '(';
- 		etok = ')';
- 	}
-Index: src/bin/mksh/tree.c
-diff -u src/bin/mksh/tree.c:1.65 src/bin/mksh/tree.c:1.67
---- src/bin/mksh/tree.c:1.65	Mon Oct 22 20:19:18 2012
-+++ src/bin/mksh/tree.c	Tue Dec  4 01:10:35 2012
+  * Copy src to string dst of size siz. At most siz-1 characters
+  * will be copied. Always NUL terminates (unless siz == 0).
+  * Returns strlen(src); if retval >= siz, truncation occurred.
+  */
++#undef strlcpy
+ size_t
+ strlcpy(char *dst, const char *src, size_t siz)
+ {
+Index: src/bin/mksh/syn.c
+diff -u src/bin/mksh/syn.c:1.92 src/bin/mksh/syn.c:1.93
+--- src/bin/mksh/syn.c:1.92	Mon Jun  3 22:28:17 2013
++++ src/bin/mksh/syn.c	Tue Sep 10 16:30:50 2013
 @@ -23,7 +23,7 @@
  
  #include "sh.h"
  
--__RCSID("$MirOS: src/bin/mksh/tree.c,v 1.65 2012/10/22 20:19:18 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/tree.c,v 1.67 2012/12/04 01:10:35 tg Exp $");
+-__RCSID("$MirOS: src/bin/mksh/syn.c,v 1.92 2013/06/03 22:28:17 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/syn.c,v 1.93 2013/09/10 16:30:50 tg Exp $");
+ 
+ struct nesting_state {
+ 	int start_token;	/* token than began nesting (eg, FOR) */
+@@ -976,7 +976,7 @@
+ dbtestp_isa(Test_env *te, Test_meta meta)
+ {
+ 	int c = tpeek(ARRAYVAR | (meta == TM_BINOP ? 0 : CONTIN));
+-	int uqword;
++	bool uqword;
+ 	char *save = NULL;
+ 	Test_op ret = TO_NONOP;
+ 
+Index: src/bin/mksh/tree.c
+diff -u src/bin/mksh/tree.c:1.71 src/bin/mksh/tree.c:1.72
+--- src/bin/mksh/tree.c:1.71	Fri Jul 26 20:33:24 2013
++++ src/bin/mksh/tree.c	Tue Sep 24 20:19:45 2013
+@@ -23,7 +23,7 @@
+ 
+ #include "sh.h"
+ 
+-__RCSID("$MirOS: src/bin/mksh/tree.c,v 1.71 2013/07/26 20:33:24 tg Exp $");
++__RCSID("$MirOS: src/bin/mksh/tree.c,v 1.72 2013/09/24 20:19:45 tg Exp $");
  
  #define INDENT	8
  
-@@ -37,6 +37,8 @@
- /* "foo& ; bar" and "foo |& ; bar" are invalid */
- static bool prevent_semicolon;
- 
-+static const char Telif_pT[] = "elif %T";
-+
- /*
-  * print a command tree
-  */
-@@ -160,7 +162,7 @@
- 			fptreef(shf, indent, "%;");
-  process_TIF:
- 			/* 5 == strlen("elif ") */
--			fptreef(shf, indent + 5 - i, "elif %T" + i, t1->left);
-+			fptreef(shf, indent + 5 - i, Telif_pT + i, t1->left);
- 			t1 = t1->right;
- 			if (t1->left != NULL) {
- 				fptreef(shf, indent, "%;");
-@@ -177,7 +179,7 @@
- 		break;
- 	case TWHILE:
- 	case TUNTIL:
--		/* 6 == strlen("while"/"until") */
-+		/* 6 == strlen("while "/"until ") */
- 		fptreef(shf, indent + 6, "%s %T",
- 		    (t->type == TWHILE) ? "while" : "until",
- 		    t->left);
-@@ -342,12 +344,10 @@
- 				shf_putc(c, shf);
- 			shf_puts(cs, shf);
- 			break;
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- 		case FUNSUB:
- 			shf_puts("${ ", shf);
- 			cs = ";}";
- 			goto pSUB;
--#endif
- 		case EXPRSUB:
- 			shf_puts("$((", shf);
- 			cs = "))";
-@@ -587,9 +587,7 @@
- 			wp++;
- 			break;
- 		case COMSUB:
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- 		case FUNSUB:
--#endif
- 		case EXPRSUB:
- 			while (*wp++ != 0)
- 				;
-@@ -829,11 +827,9 @@
-  closeandout:
- 			shf_putc('>', shf);
- 			break;
--#ifndef MKSH_DISABLE_EXPERIMENTAL
- 		case FUNSUB:
- 			shf_puts("FUNSUB<", shf);
- 			goto dumpsub;
--#endif
- 		case EXPRSUB:
- 			shf_puts("EXPRSUB<", shf);
- 			goto dumpsub;
-Index: src/bin/mksh/var.c
-diff -u src/bin/mksh/var.c:1.161 src/bin/mksh/var.c:1.165
---- src/bin/mksh/var.c:1.161	Fri Nov 30 19:25:08 2012
-+++ src/bin/mksh/var.c	Sat Dec  8 18:30:31 2012
-@@ -27,7 +27,7 @@
- #include <sys/sysctl.h>
- #endif
- 
--__RCSID("$MirOS: src/bin/mksh/var.c,v 1.161 2012/11/30 19:25:08 tg Exp $");
-+__RCSID("$MirOS: src/bin/mksh/var.c,v 1.165 2012/12/08 18:30:31 tg Exp $");
- 
- /*-
-  * Variables
-@@ -299,6 +299,7 @@
- 
- 	/* check to see if this is an array */
- 	n = array_index_calc(n, &array, &val);
-+	mkssert(n != NULL);
- 	h = hash(n);
- 	if (!ksh_isalphx(*n)) {
- 		vp = &vtemp;
-@@ -615,10 +616,13 @@
- 				--slen;
- 			}
- 			if (vp->flag & ZEROFIL && vp->flag & INTEGER) {
-+				if (!s[0] || !s[1])
-+					goto uhm_no;
- 				if (s[1] == '#')
- 					n = 2;
- 				else if (s[2] == '#')
- 					n = 3;
-+ uhm_no:
- 				if (vp->u2.field <= n)
- 					n = 0;
- 			}
-@@ -669,6 +673,8 @@
- 	char *op = (vp->flag&ALLOC) ? vp->val.s : NULL;
- 	size_t namelen, vallen;
- 
-+	mkssert(val != NULL);
-+
- 	namelen = strlen(vp->name);
- 	vallen = strlen(val) + 1;
- 
-@@ -704,7 +710,6 @@
- 	val = skip_varname(var, false);
- 	if (val == var)
- 		return (NULL);
--	mkssert(var != NULL);
- 	if (*val == '[') {
- 		if (set_refflag != SRF_NOP)
- 			errorf("%s: %s", var,
+@@ -778,15 +778,16 @@
+ 	if (--sz == 0 || (c = (unsigned char)(*cp++)) == 0)
+ 		/* NUL or not enough free space */
+ 		goto vist_out;
+-	if ((c & 0x60) == 0 || (c & 0x7F) == 0x7F) {
++	if (ISCTRL(c & 0x7F)) {
+ 		/* C0 or C1 control character or DEL */
+ 		if (--sz == 0)
+ 			/* not enough free space for two chars */
+ 			goto vist_out;
+ 		*dst++ = (c & 0x80) ? '$' : '^';
+-		c = (c & 0x7F) ^ 0x40;
++		c = UNCTRL(c & 0x7F);
+ 	} else if (UTFMODE && c > 0x7F) {
+ 		/* better not try to display broken multibyte chars */
++		/* also go easy on the Unicode: no U+FFFD here */
+ 		c = '?';
+ 	}
+ 	*dst++ = c;
+@@ -801,10 +802,10 @@
+ void
+ dumpchar(struct shf *shf, int c)
+ {
+-	if (((c & 0x60) == 0) || ((c & 0x7F) == 0x7F)) {
++	if (ISCTRL(c & 0x7F)) {
+ 		/* C0 or C1 control character or DEL */
+ 		shf_putc((c & 0x80) ? '$' : '^', shf);
+-		c = (c & 0x7F) ^ 0x40;
++		c = UNCTRL(c & 0x7F);
+ 	}
+ 	shf_putc(c, shf);
+ }
