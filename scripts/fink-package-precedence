@@ -208,6 +208,10 @@ EOMSG
 	die "Please fix build process to get consistent use of fink's headers.\n";
 }
 
+my %dir_symlinks = map {$_, 0} ( # value is flag for having seen it
+	"$fink_prefix/lib/system-openssl/include/openssl",
+	"$fink_prefix/include/boost",
+);
 my %fink_pkgs;
 my @not_found;
 my $dpkg_S = "$fink_prefix/bin/dpkg -S";
@@ -226,33 +230,34 @@ while (@fink_headers) {
 			# relative spaghetti to them (foo/bar/../bar.h)
 			$_ = abs_path($_);
 		}
+
+		# Handle some known special-cases where files are accessed via
+		# symlinks to directories. If foo -> bar/, dpkg doesn't know
+		# foo/bar.h at all; we need to track both foo and bar/bar.h.
+		foreach my $dir_symlink (sort keys %dir_symlinks) {
+			if (/^\Q$dir_symlink\E\// && -l $dir_symlink) {
+				my $target_file = abs_path($_);
+				if ($target_file =~ /$fink_prefix_regex/) {
+					# look up the actual file via fink
+					$_ = $target_file;
+				} else {
+					# actual file is not in fink's world
+					$_ = '';
+				}
+				# NB: makes the progress counter exceed the initially
+				# reported total
+				push @fink_headers, $dir_symlink if not $dir_symlinks{$dir_symlink}++;
+			}
+		}
 	}
 
+	# @chunk could contain null strings, would need to filter them out if
+	# using 3+ argument form of open()
 	open my $dpkg_S_fh, "$dpkg_S @chunk 2>&1 |" or die "Could not fork $dpkg_S: $!\n";
 	while (<$dpkg_S_fh>) {
 		if (/^dpkg: (.*\.)$/) {
 			# 'dpkg: $filename not found.' but "not found" may be localized
-			my $unknown_header = $1;
-
-			# after dpkg itself has had its chance, handle some known special-cases...
-			if ($unknown_header =~ /$fink_prefix_regex\/lib\/system-openssl\/include\/openssl\//) {
-				# %p/lib/system-openssl/include/openssl is in
-				# system-openssl-dev but it's a symlink to
-				# /usr/include/openssl. Need to treat
-				# %p/lib/system-openssl/include/openssl/*.h also as
-				# part of system-openssl-dev.
-				$fink_pkgs{"system-openssl-dev"} = 1;
-# FIXME: /usr/* not in from @fink_headers, too late to detect it here
-#			} elsif ($unknown_header =~ /\/usr\/include\/openssl\//) {
-#				# Not actually using system-openssl-dev, but having
-#				# BDep on it prevents other fink openssl*-dev from
-#				# being installed (mutual Conflicts/Replaces), so
-#				# won't accidentally pick up fink's headers if
-#				# intending to use system's
-#				$fink_pkgs{"system-openssl-dev"} = 1;
-			} else {
-				push @not_found, $1;
-			}
+			push @not_found, $1;
 		} elsif (/^([^:]+):/) {
 			$fink_pkgs{$1} = 1;
 		}
