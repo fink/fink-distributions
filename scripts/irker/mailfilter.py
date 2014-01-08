@@ -74,6 +74,7 @@ dirs = []
 firstpass = 1
 filescount = 0
 dircount = 0
+linecount = 0
 
 if subj.startswith("[cvs] "):
     filestr = subj.lstrip("[cvs] ")
@@ -107,10 +108,17 @@ if subj.startswith("[cvs] "):
         line = line.strip()
 	if foundmsg == 1:
             if line == "":
+                if linecount >= 2:
+                    linestr = "line"
+                    if linecount > 3:
+                        linestr = "lines"
+                    msgs.append("    (%s%s more %s%s)" % (bold, linecount - 2, linestr, clear))
                 foundmsg = 0
                 break
-            msg = "    %s" % (line)
-            msgs.append(msg)
+            if linecount < 2:
+                msg = "    %s" % (line)
+                msgs.append(msg)
+            linecount = linecount + 1
         elif line.startswith("Log Message:"):
             foundmsg = 1
 else:
@@ -158,7 +166,7 @@ else:
                         linestr = "line"
                         if len(newlines) - linecount > 1:
                             linestr = "lines"
-                        msgs.append("    (%s%s more %s%s)" % (white, len(newlines) - linecount, linestr, clear))
+                        msgs.append("    (%s%s more %s%s)" % (bold, len(newlines) - linecount, linestr, clear))
                         break
                     else:
                	        msgs.append("    %s" % (newline))
