@@ -96,7 +96,7 @@ if subj.startswith("[cvs] "):
         filestr = "(%d files in %d %s)" % (filescount, dircount, dirstr)
     else:
         filestr = "%s %s" % (dir, file)
-    msg = "%s%s%s: %s" % (green, theuser[1], clear, subj.lstrip("[cvs] "))
+    msg = "%s%s%s: %s" % (green, theuser[1], clear, filestr)
     msgs.append(msg)
     for line in bodylines:
         line = line.strip()
