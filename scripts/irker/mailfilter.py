@@ -72,8 +72,30 @@ filescount = 0
 filestr = ""
 dirs = []
 firstpass = 1
+filescount = 0
+dircount = 0
 
 if subj.startswith("[cvs] "):
+    filestr = subj.lstrip("[cvs] ")
+    parts = filestr.split(" ")
+    for part in parts:
+	subparts = part.split(",")
+        for subpart in subparts:
+            if re.match("^([0-9.]+|NONE)$", subpart):
+                continue
+            elif re.search("\/", subpart):
+                dir = subpart
+                dircount = dircount + 1
+            else:
+                file = subpart
+                filescount = filescount + 1
+    dirstr = "dir"
+    if dircount > 1:
+        dirstr = "dirs"
+    if filescount > 1:
+        filestr = "(%d files in %d %s)" % (filescount, dircount, dirstr)
+    else:
+        filestr = "%s %s" % (dir, file)
     msg = "%s%s%s: %s" % (green, theuser[1], clear, subj.lstrip("[cvs] "))
     msgs.append(msg)
     for line in bodylines:
