@@ -10,6 +10,7 @@ from urllib import urlencode, quote
 from urlparse import urlparse
 import textwrap
 
+showlines = 2
 targets = ['irc://chat.freenode.net/#fink']
 
 bold = "\x02"
@@ -108,14 +109,14 @@ if subj.startswith("[cvs] "):
         line = line.strip()
 	if foundmsg == 1:
             if line == "":
-                if linecount >= 2:
+                if linecount > showlines:
                     linestr = "line"
-                    if linecount > 3:
+                    if linecount - showlines > 1:
                         linestr = "lines"
-                    msgs.append("    (%s%s more %s%s)" % (bold, linecount - 2, linestr, clear))
+                    msgs.append("    (%s%s more %s%s)" % (bold, linecount - showlines, linestr, clear))
                 foundmsg = 0
                 break
-            if linecount < 2:
+            if linecount < showlines:
                 msg = "    %s" % (line)
                 msgs.append(msg)
             linecount = linecount + 1
@@ -152,6 +153,12 @@ else:
                 commiturl = githubshrink(line)
                 foundcommit = 0 
             if foundmsg == 2 and line == "":
+                if linecount > showlines:
+                    linestr = "line"
+                    if linecount - showlines > 1:
+                        linestr = "lines"
+                    msgs.append("    (%s%s more %s%s)" % (bold, linecount - showlines, linestr, clear))
+                linecount = 0
             	foundmsg = 0
                 firstpass = 1
 		continue
@@ -160,15 +167,8 @@ else:
                     msgs.append("%s%s%s (%s%s%s): %s%s%s * %s%s%s / %s: %s%s%s" % (bold, tree, clear, yellow, fullbranch[len(fullbranch) - 1], clear, green, theuser[1], clear, red, commitsum, clear, filestr, blue, commiturl, clear))
                     firstpass = 0
                 newlines = textwrap.fill(line).split("\n")
-                linecount = 0
                 for newline in newlines:
-                    if (linecount >= 2):
-                        linestr = "line"
-                        if len(newlines) - linecount > 1:
-                            linestr = "lines"
-                        msgs.append("    (%s%s more %s%s)" % (bold, len(newlines) - linecount, linestr, clear))
-                        break
-                    else:
+                    if linecount < showlines:
                	        msgs.append("    %s" % (newline))
                     linecount = linecount + 1
         elif foundmsg == 1:
