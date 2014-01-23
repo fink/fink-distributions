@@ -1,3 +1,17 @@
+diff --git a/CREDITS.TXT b/CREDITS.TXT
+index 3c1dcb0..ffcaaf1 100644
+--- a/CREDITS.TXT
++++ b/CREDITS.TXT
+@@ -443,3 +443,9 @@ D: Bunches of stuff
+ N: Bob Wilson
+ E: bob.wilson@acm.org
+ D: Advanced SIMD (NEON) support in the ARM backend.
++
++N: David Fang
++D: PowerPC-Darwin port
++
++N: Iain Sandoe
++D: PowerPC-Darwin port
 diff --git a/autoconf/configure.ac b/autoconf/configure.ac
 index a9d4915..68832a8 100644
 --- a/autoconf/configure.ac
@@ -16,6 +30,23 @@ index a9d4915..68832a8 100644
    AC_MSG_WARN([LLVM will be built thread-unsafe because atomic builtins are missing])
  ])
  AC_LANG_POP([C++])
+diff --git a/cmake/config-ix.cmake b/cmake/config-ix.cmake
+index dc991a2..c7a4506 100755
+--- a/cmake/config-ix.cmake
++++ b/cmake/config-ix.cmake
+@@ -346,6 +346,12 @@ get_host_triple(LLVM_INFERRED_HOST_TRIPLE)
+ set(LLVM_HOST_TRIPLE "${LLVM_INFERRED_HOST_TRIPLE}" CACHE STRING
+     "Host on which LLVM binaries will run")
+ 
++if( APPLE )
++get_host_osx_version(LLVM_INFERRED_OSX_VERSION)
++set(LLVM_HOST_OSX_VERSION "${LLVM_INFERRED_OSX_VERSION}" CACHE STRING
++    "Host version of Mac OS X")
++endif( APPLE )
++
+ # Determine the native architecture.
+ string(TOLOWER "${LLVM_TARGET_ARCH}" LLVM_NATIVE_ARCH)
+ if( LLVM_NATIVE_ARCH STREQUAL "host" )
 diff --git a/cmake/modules/CheckAtomic.cmake b/cmake/modules/CheckAtomic.cmake
 index 0d63a82..213b57f 100644
 --- a/cmake/modules/CheckAtomic.cmake
@@ -44,6 +75,26 @@ index 0d63a82..213b57f 100644
  #else
          volatile unsigned long val = 1;
          __sync_synchronize();
+diff --git a/cmake/modules/GetHostTriple.cmake b/cmake/modules/GetHostTriple.cmake
+index 671a8ce..37caa10 100644
+--- a/cmake/modules/GetHostTriple.cmake
++++ b/cmake/modules/GetHostTriple.cmake
+@@ -28,3 +28,15 @@ function( get_host_triple var )
+   set( ${var} ${value} PARENT_SCOPE )
+   message(STATUS "Target triple: ${value}")
+ endfunction( get_host_triple var )
++
++# Mac OS X only: get the host version
++function( get_host_osx_version var )
++  if( APPLE )
++    execute_process(COMMAND sw_vers -productVersion COMMAND cut -d. -f1-2
++      RESULT_VARIABLE TT_RV
++      OUTPUT_VARIABLE value
++      OUTPUT_STRIP_TRAILING_WHITESPACE)
++    set( ${var} ${value} PARENT_SCOPE )
++    message(STATUS "Host OS X version: ${value}")
++  endif ( APPLE )
++endfunction( get_host_osx_version var )
 diff --git a/include/llvm/ADT/SmallBitVector.h b/include/llvm/ADT/SmallBitVector.h
 index 86949b2..305a054 100644
 --- a/include/llvm/ADT/SmallBitVector.h
@@ -412,60 +463,6 @@ index aaa54e1..75b249d 100644
  } // end namespace llvm
  
  #endif
-diff --git a/include/llvm/Support/cppcat.h b/include/llvm/Support/cppcat.h
-new file mode 100644
-index 0000000..c46c576
---- /dev/null
-+++ b/include/llvm/Support/cppcat.h
-@@ -0,0 +1,48 @@
-+/**
-+	\file "util/cppcat.h"
-+	Tricks for concatenating strings with the C-preprocessor.  
-+	I learned this trick from:
-+		http://www.slack.net/~ant/cpp/unqiue_name.html
-+	$Id: cppcat.h,v 1.1 2010/03/14 22:25:16 fang Exp $
-+ */
-+
-+#ifndef	__UTIL_CPPCAT_H__
-+#define	__UTIL_CPPCAT_H__
-+
-+/**
-+	Description also copied from the same web-site.
-+
-+	Sometimes one needs to supply an identifier for something that will 
-+	never be referenced again. The most common occurrence is a local 
-+	object of some type whose construction and destruction side-effects 
-+	are wanted at the beginning and end of the scope it exists in, 
-+	respectively. Having to come up with a name is both tedious and 
-+	unclear, since the name will serve no purpose in the code. 
-+	If it were possible, providing no name would make the intent clearer.
-+
-+	In the CONCAT macro, the seemingly-redundant helper macros 
-+	(CONCAT_2_ and CONCAT_3_) are needed due to particulars of the 
-+	preprocessor.
-+
-+	Generally, this construct will only be needed in a source file 
-+	(and not a header). This makes it unlikely for it to clash with 
-+	anything else. If it's needed in a header file, care must be 
-+	taken that the name can't clash with any other identifier, 
-+	because a clash may not show up until the header is integrated 
-+	with another header file that happens to have an identical UNIQUE_NAME.
-+ */
-+
-+#define	CONCAT_3_(x, y)		x##y
-+#define	CONCAT_2_(x, y)		CONCAT_3_(x,y)
-+#define	CONCAT(x, y)		CONCAT_2_(x,y)
-+#define	UNIQUIFY(str)		CONCAT(str,__LINE__)
-+
-+/**
-+	To try to protect macros with commas inside, without
-+	requiring extra parentheses.  
-+ */
-+#define	CPPWRAP(x)		x
-+
-+
-+#endif	// __UTIL_CPPCAT_H__
-+
 diff --git a/include/llvm/Support/raw_ostream.h b/include/llvm/Support/raw_ostream.h
 index ec7e06b..09cad11 100644
 --- a/include/llvm/Support/raw_ostream.h
@@ -1051,7 +1048,7 @@ index 9559ad7..389a8e9 100644
    return InterlockedExchangeAdd(ptr, val) + val;
  #else
 diff --git a/lib/Support/CMakeLists.txt b/lib/Support/CMakeLists.txt
-index 3aecf3f..3907eb2 100644
+index 3aecf3f..f175add 100644
 --- a/lib/Support/CMakeLists.txt
 +++ b/lib/Support/CMakeLists.txt
 @@ -22,6 +22,7 @@ add_llvm_library(LLVMSupport
@@ -1429,6 +1426,18 @@ index fe83fe1..b297cd8 100644
  /// Force static initialization.
  extern "C" void LLVMInitializePowerPCAsmParser() {
    RegisterMCAsmParser<PPCAsmParser> A(ThePPC32Target);
+diff --git a/lib/Target/PowerPC/MCTargetDesc/PPCAsmBackend.cpp b/lib/Target/PowerPC/MCTargetDesc/PPCAsmBackend.cpp
+index 0d42081..87a4731 100644
+--- a/lib/Target/PowerPC/MCTargetDesc/PPCAsmBackend.cpp
++++ b/lib/Target/PowerPC/MCTargetDesc/PPCAsmBackend.cpp
+@@ -20,6 +20,7 @@
+ #include "llvm/Support/ErrorHandling.h"
+ #include "llvm/Support/MachO.h"
+ #include "llvm/Support/TargetRegistry.h"
++
+ using namespace llvm;
+ 
+ static uint64_t adjustFixupValue(unsigned Kind, uint64_t Value) {
 diff --git a/lib/Target/PowerPC/MCTargetDesc/PPCMCAsmInfo.cpp b/lib/Target/PowerPC/MCTargetDesc/PPCMCAsmInfo.cpp
 index f3dddce..3301a67 100644
 --- a/lib/Target/PowerPC/MCTargetDesc/PPCMCAsmInfo.cpp
@@ -1492,6 +1501,48 @@ index f18d095..6a50518 100644
    else
      MAI = new PPCLinuxMCAsmInfo(isPPC64);
  
+diff --git a/lib/Target/PowerPC/PPCAsmPrinter.cpp b/lib/Target/PowerPC/PPCAsmPrinter.cpp
+index ada34ed..268cbfa 100644
+--- a/lib/Target/PowerPC/PPCAsmPrinter.cpp
++++ b/lib/Target/PowerPC/PPCAsmPrinter.cpp
+@@ -58,6 +58,7 @@
+ #include "llvm/Target/TargetInstrInfo.h"
+ #include "llvm/Target/TargetOptions.h"
+ #include "llvm/Target/TargetRegisterInfo.h"
++
+ using namespace llvm;
+ 
+ namespace {
+@@ -896,6 +897,7 @@ static MCSymbol *GetLazyPtr(MCSymbol *Sym, MCContext &Ctx) {
+   return Ctx.GetOrCreateSymbol(NoStub + "$lazy_ptr");
+ }
+ 
++// 'L' needed to designate label as local
+ static MCSymbol *GetAnonSym(MCSymbol *Sym, MCContext &Ctx) {
+   // Add $tmp suffix to $stub, yielding $stub$tmp.
+   return Ctx.GetOrCreateSymbol(Sym->getName() + "$tmp");
+@@ -913,6 +915,7 @@ EmitFunctionStubs(const MachineModuleInfoMachO::SymbolListTy &Stubs) {
+   const MCSection *LSPSection = TLOFMacho.getLazySymbolPointerSection();
+   
+   // Output stubs for dynamically-linked functions
++  // see http://developer.apple.com/library/mac/#documentation/developertools/reference/assembler/050-PowerPC_Addressing_Modes_and_Assembler_Instructions/ppc_instructions.html
+   if (TM.getRelocationModel() == Reloc::PIC_) {
+     const MCSection *StubSection = 
+     OutContext.getMachOSection("__TEXT", "__picsymbolstub1",
+@@ -939,10 +942,12 @@ EmitFunctionStubs(const MachineModuleInfoMachO::SymbolListTy &Stubs) {
+       // mflr r0
+       OutStreamer.EmitInstruction(MCInstBuilder(PPC::MFLR).addReg(PPC::R0));
+       // bcl 20, 31, AnonSymbol
++      // unconditional, but doesn't push link register onto stack
+       OutStreamer.EmitInstruction(MCInstBuilder(PPC::BCLalways).addExpr(Anon));
+       OutStreamer.EmitLabel(AnonSymbol);
+-      // mflr r11
++      // mflr r11 ; move LR to r11
+       OutStreamer.EmitInstruction(MCInstBuilder(PPC::MFLR).addReg(PPC::R11));
++      // load address one half at a time
+       // addis r11, r11, ha16(LazyPtr - AnonSymbol)
+       const MCExpr *SubHa16 = PPCMCExpr::CreateHa(Sub, isDarwin, OutContext);
+       OutStreamer.EmitInstruction(MCInstBuilder(PPC::ADDIS)
 diff --git a/lib/Target/PowerPC/PPCFastISel.cpp b/lib/Target/PowerPC/PPCFastISel.cpp
 index 09117e7..b7bf0b7 100644
 --- a/lib/Target/PowerPC/PPCFastISel.cpp
@@ -1517,6 +1568,18 @@ index 8da5f05..190997b 100644
    Function::const_arg_iterator FuncArg = MF.getFunction()->arg_begin();
    unsigned CurArgIdx = 0;
    for (unsigned ArgNo = 0, e = Ins.size(); ArgNo != e; ++ArgNo) {
+diff --git a/lib/Target/PowerPC/PPCMCInstLower.cpp b/lib/Target/PowerPC/PPCMCInstLower.cpp
+index f61c8bf..97269e7 100644
+--- a/lib/Target/PowerPC/PPCMCInstLower.cpp
++++ b/lib/Target/PowerPC/PPCMCInstLower.cpp
+@@ -24,6 +24,7 @@
+ #include "llvm/MC/MCExpr.h"
+ #include "llvm/MC/MCInst.h"
+ #include "llvm/Target/Mangler.h"
++
+ using namespace llvm;
+ 
+ static MachineModuleInfoMachO &getMachOMMI(AsmPrinter &AP) {
 diff --git a/lib/Target/PowerPC/PPCRegisterInfo.cpp b/lib/Target/PowerPC/PPCRegisterInfo.cpp
 index 19ccbfc..a08471f3 100644
 --- a/lib/Target/PowerPC/PPCRegisterInfo.cpp
@@ -2606,7 +2669,7 @@ index 9752417..2bb3f75 100644
 -            else:
 +            # do not commit this patch
 +            # exception: built-in shell commands and operators
-+            elif ln[1] == '(' or ln[1] == '{' or ln[1] == '!' or ln1 == 'export' or ln1 == 'env' or ln1 == 'cd' or ln1 == 'pushd' or ln1 == 'set' or ln1 == 'test' or ln1 == 'umask':
++            elif ln[1] == '(' or ln[1] == '{' or ln[1] == '!' or ln[1] == '|' or ln1 == 'export' or ln1 == 'env' or ln1 == 'cd' or ln1 == 'pushd' or ln1 == 'set' or ln1 == 'test' or ln1 == 'umask':
                  script.append(ln)
 +            else:
 +                script.append('gtimeout 1m ' +ln)
