@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index a442408..705fbd6 100644
+index a442408..304f2f9 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -97,7 +97,10 @@ if("${LLVM_NATIVE_ARCH}" STREQUAL "X86")
@@ -40,13 +40,14 @@ index a442408..705fbd6 100644
    endif()
  endif()
  # Warnings suppressions.
-@@ -195,22 +200,23 @@ if(APPLE)
+@@ -195,22 +200,24 @@ if(APPLE)
    if(COMPILER_RT_USES_LIBCXX)
      set(SANITIZER_MIN_OSX_VERSION 10.7)
    else()
 -    set(SANITIZER_MIN_OSX_VERSION 10.6)
-+# darwin9 users will want 10.5, of course
-+    set(SANITIZER_MIN_OSX_VERSION @MACOSX_VERSION@)
++# set target evrsion = host version for now (may be cache-overridden)
++# this works when SDKROOT is blank
++    set(SANITIZER_MIN_OSX_VERSION ${LLVM_HOST_OSX_VERSION})
    endif()
    set(DARWIN_osx_CFLAGS -mmacosx-version-min=${SANITIZER_MIN_OSX_VERSION})
 -  set(DARWIN_iossim_CFLAGS 
@@ -93,10 +94,10 @@ index 006652f..fb18636 100644
  #    define __FOPEN_NAME "_fopen"
  #    define __FWRITE_NAME "_fwrite"
 diff --git a/lib/CMakeLists.txt b/lib/CMakeLists.txt
-index b620828..350a1d2 100644
+index b620828..1364547 100644
 --- a/lib/CMakeLists.txt
 +++ b/lib/CMakeLists.txt
-@@ -195,8 +195,24 @@ set(i386_SOURCES
+@@ -195,8 +195,23 @@ set(i386_SOURCES
    i386/umoddi3.S
    ${GENERIC_SOURCES})
  
@@ -113,7 +114,6 @@ index b620828..350a1d2 100644
 +	ppc/multc3.c
 +	ppc/restFP.S
 +	ppc/saveFP.S
-+	ppc/cache_flush.S
 +	${GENERIC_SOURCES})
 +
  if (NOT WIN32)
@@ -234,10 +234,18 @@ index a25827b..e75346f 100644
  
  DECLARE_REAL_AND_INTERCEPTOR(void *, malloc, uptr)
 diff --git a/lib/asan/asan_mac.cc b/lib/asan/asan_mac.cc
-index e27d70a..fe8fbfd 100644
+index e27d70a..33ba0c4 100644
 --- a/lib/asan/asan_mac.cc
 +++ b/lib/asan/asan_mac.cc
-@@ -36,23 +36,65 @@
+@@ -13,6 +13,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "sanitizer_common/sanitizer_platform.h"
++#include "sanitizer_common/sanitizer_platform_limits_posix.h" // for version info
+ #if SANITIZER_MAC
+ 
+ #include "asan_interceptors.h"
+@@ -36,23 +37,64 @@
  #include <pthread.h>
  #include <stdlib.h>  // for free()
  #include <unistd.h>
@@ -245,11 +253,10 @@ index e27d70a..fe8fbfd 100644
  #include <libkern/OSAtomic.h>
 +#endif
 +
-+#ifdef	__APPLE__
-+// #define	MAC_OS_X_VERSION_SELECTED		MAC_OS_X_VERSION_MIN_REQUIRED
-+#define	MAC_OS_X_VERSION_SELECTED		MAC_OS_X_VERSION_MAX_ALLOWED
-+#define	__DARWIN_VERSION__	((MAC_OS_X_VERSION_SELECTED - MAC_OS_X_VERSION_10_0)/10 +4)
-+#else
++// The following macros are provided by sanitizer_platform_limits_posix.h
++// MAC_OS_X_VERSION_SELECTED
++// __DARWIN_VERSION__
++#ifndef	__DARWIN_VERSION__
 +#define	__DARWIN_VERSION__	0
 +#endif
 +
@@ -388,31 +395,38 @@ index 7b79b78..e3c00d0 100644
  COMPILER_CHECK(sizeof(OFF_T) == sizeof(off_t));
  # endif
  
-diff --git a/lib/ppc/cache_flush.S b/lib/ppc/cache_flush.S
-new file mode 100644
-index 0000000..fb61f94
+diff --git a/lib/link-asm-libclang_rt.sh b/lib/link-asm-libclang_rt.sh
+new file mode 100755
+index 0000000..0122ecb
 --- /dev/null
-+++ b/lib/ppc/cache_flush.S
-@@ -0,0 +1,20 @@
-+#include <machine/cpu_capabilities.h>
++++ b/lib/link-asm-libclang_rt.sh
+@@ -0,0 +1,27 @@
++#!/bin/sh
++# Utility script for linking assembled objects into libclang_rt
++# rationale: cmake build fails to include .S files
++# usage: define the following variables and source this script, call function
 +
-+/* void sys_icache_invalidate(char *start, long len) */
++# variables needed by the following function
++# CC= compiler that will invoke assembler
++# arch={ppc,i386,...}
++# builddir=.../projects/compiler-rt/lib (relative to where function is called)
++# crtsrcdir=.../compiler-rt.git (absolute path)
++# objdir=CMakeFiles/clang_rt.$arch.dir/$arch (relative to builddir)
++# libcrt=$libdir/libclang_rt.$arch.a
 +
-+	.text
-+	.globl  _sys_icache_invalidate
-+	.align  2
-+_sys_icache_invalidate:
-+	ba      _COMM_PAGE_FLUSH_ICACHE
-+
-+
-+
-+/* void sys_dcache_flush(char *start, long len) */
-+
-+	.text
-+	.globl  _sys_dcache_flush
-+	.align  2
-+_sys_dcache_flush:
-+	ba      _COMM_PAGE_FLUSH_DCACHE
++assemble_clang_rt() {
++pushd $builddir
++mkdir -p $objdir
++for f in $crtsrcdir/lib/$arch/*.S
++do      
++        b=`basename $f`
++	echo "Assembling $arch/$b."
++        $CC -arch $arch -c $f -o $objdir/$b.o
++done
++echo "Updating static library $libcrt."
++ar cru $libcrt $objdir/*.S.o
++popd
++}
 +
 diff --git a/lib/sanitizer_common/sanitizer_allocator.h b/lib/sanitizer_common/sanitizer_allocator.h
 index 6075cfe..d0f7738 100644
@@ -575,26 +589,45 @@ index e887751..200ab9b 100644
  CHECK_SIZE_AND_OFFSET(dirent, d_off);
  #endif
 diff --git a/lib/sanitizer_common/sanitizer_platform_limits_posix.h b/lib/sanitizer_common/sanitizer_platform_limits_posix.h
-index b9a0fc9..3e9edf3 100644
+index b9a0fc9..7efcf8a 100644
 --- a/lib/sanitizer_common/sanitizer_platform_limits_posix.h
 +++ b/lib/sanitizer_common/sanitizer_platform_limits_posix.h
-@@ -18,6 +18,15 @@
+@@ -18,6 +18,34 @@
  #include "sanitizer_internal_defs.h"
  #include "sanitizer_platform.h"
  
 +// maybe this conditional should be darwin8 or 9 (pre-10)
 +#if	SANITIZER_MAC
 +#include <sys/cdefs.h>	// just for __DARWIN_64_BIT_INO_T
++
++// version macros don't get defined for ppc64
++#ifndef	MAC_OS_X_VERSION_10_0
++#define	MAC_OS_X_VERSION_10_0	1000
 +#endif
 +
-+// just doesn't exist on darwin8 -- should be auto-detected
-+#define	HAVE_STRUCT_STATFS64			0
++#ifdef	MAC_OS_X_VERSION_MAX_ALLOWED
++#define	MAC_OS_X_VERSION_SELECTED		MAC_OS_X_VERSION_MAX_ALLOWED
++#elif	defined(MAC_OS_X_VERSION_MIN_REQUIRED)
++#define	MAC_OS_X_VERSION_SELECTED		MAC_OS_X_VERSION_MIN_REQUIRED
++#elif	defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__)
++#define	MAC_OS_X_VERSION_SELECTED	__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__
++#else
++// default: 10.4
++#define	MAC_OS_X_VERSION_SELECTED	1040
++#endif
++
++#define	__DARWIN_VERSION__	((MAC_OS_X_VERSION_SELECTED - MAC_OS_X_VERSION_10_0)/10 +4)
++#endif
++
++// <sys/mount.h> -- detect __DARWIN_64_BIT_INO_T macro?
++#define	HAVE_STRUCT_STATFS64			(__DARWIN_VERSION__ > 8)
 +// EOWNERDEAD appears in darwin11 <errno.h>
++#define	HAVE_EOWNERDEAD				(__DARWIN_VERSION__ > 10)
 +
  namespace __sanitizer {
    extern unsigned struct_utsname_sz;
    extern unsigned struct_stat_sz;
-@@ -45,6 +54,9 @@ namespace __sanitizer {
+@@ -45,6 +73,9 @@ namespace __sanitizer {
  
  #if !SANITIZER_ANDROID
    extern unsigned ucontext_t_sz;
@@ -604,7 +637,7 @@ index b9a0fc9..3e9edf3 100644
  #endif // !SANITIZER_ANDROID
  
  #if SANITIZER_LINUX
-@@ -258,8 +270,12 @@ namespace __sanitizer {
+@@ -258,8 +289,12 @@ namespace __sanitizer {
  
  #if SANITIZER_MAC
    struct __sanitizer_dirent {
@@ -618,23 +651,35 @@ index b9a0fc9..3e9edf3 100644
      unsigned short d_reclen;
      // more fields that we don't care about
    };
-@@ -479,9 +495,15 @@ namespace __sanitizer {
+@@ -475,16 +510,25 @@ namespace __sanitizer {
+   extern int shmctl_shm_stat;
+ #endif
+ 
++#if SANITIZER_MAC && (__DARWIN_VERSION__ > 8)
++// not on darwin8 <net/if.h>
++#pragma pack(4)
++#endif
+   // ioctl arguments
    struct __sanitizer_ifconf {
      int ifc_len;
      union {
-+// on darwin8, <net/if.h> also has:
++#if SANITIZER_MAC
++// on darwin8,9,10,11, <net/if.h> also has:
 +//    caddr_t ifcu_buf;		// typedef char* caddr_t; // <sys/types.h>
++      char *ifcu_buf;
++#endif
 +//    struct  ifreq *ifcu_req;
        void *ifcu_req;
      } ifc_ifcu;
 -#if SANITIZER_MAC
-+#if SANITIZER_MAC && !(defined(__ppc__) || defined(__powerpc__) || defined(__POWERPC__))
-+// not on darwin8 <net/if.h>
-+// kludge: use system gcc version to infer darwin version
-+// but also don't want stage-2 to apply attribute either
-   } __attribute__((packed));
- #else
+-  } __attribute__((packed));
+-#else
    };
++#if SANITIZER_MAC && (__DARWIN_VERSION__ > 8)
++#pragma pack()
+ #endif
+ 
+ #define IOC_SIZE(nr) (((nr) >> 16) & 0x3fff)
 diff --git a/lib/tsan/lit_tests/mutex_robust.cc b/lib/tsan/lit_tests/mutex_robust.cc
 index b826616..2f30391 100644
 --- a/lib/tsan/lit_tests/mutex_robust.cc
@@ -697,3 +742,110 @@ index ddb7029..a1ff024 100644
  
  CFLAGS.ios.i386		:= $(CFLAGS) $(IOSSIM_DEPLOYMENT_ARGS)
  CFLAGS.ios.x86_64	:= $(CFLAGS) $(IOSSIM_DEPLOYMENT_ARGS)
+diff --git a/test/Unit/test.mk b/test/Unit/test.mk
+new file mode 100644
+index 0000000..750a04c
+--- /dev/null
++++ b/test/Unit/test.mk
+@@ -0,0 +1,101 @@
++# include this Makefile in $(build_dir)/projects/compiler-rt/test and predefine:
++# ARCH - ppc,i386,x86_64
++# OS - darwin
++# CC - compiler
++# CFLAGS - options
++# LLVM_SRCDIR - project root source dir
++# LIBS
++# VERSION - 3.x
++# CXXLIB - link libstdc++ or libc++
++
++COMPILER_RT_SRCDIR = $(LLVM_SRCDIR)/projects/compiler-rt
++VPATH = $(COMPILER_RT_SRCDIR)/test/Unit
++LIBDIR = ../../../lib
++DEFAULT_CFLAGS = -Os -nodefaultlibs
++DEFAULT_CPPFLAGS = -I$(COMPILER_RT_SRCDIR)/lib
++TEST_LIBDIR = $(LIBDIR)/clang/$(VERSION)/lib/$(OS)
++# LDFLAGS = -L$(TEST_LIBDIR)
++TEST_LIB = $(TEST_LIBDIR)/libclang_rt.$(ARCH).a
++LIBUNWIND = /usr/lib/libgcc_s.1.dylib
++CXXLIB ?= -lstdc++
++CXXLINK = $(CXXLIB) $(TEST_LIB) $(LIBUNWIND) $(LIBS)
++
++.SUFFIXES: .c
++
++all:
++
++.c:
++	$(CC) $(DEFAULT_CPPFLAGS) $(DEFAULT_CFLAGS) $(CFLAGS) $< \
++		$(LDFLAGS) $(TEST_LIB) $(LIBS) -o $@
++
++gcc_personality_test: gcc_personality_test.c gcc_personality_test_helper.cxx
++	$(CC) $(DEFAULT_CPPFLAGS) $(DEFAULT_CFLAGS) $(CFLAGS) -fexceptions \
++		$< $(VPATH)/gcc_personality_test_helper.cxx \
++		$(LDFLAGS) $(CXXLINK) -o $@
++
++trampoline_setup_test: trampoline_setup_test.c
++	$(CC) $(DEFAULT_CPPFLAGS) $(DEFAULT_CFLAGS) $(CFLAGS) \
++		-fnested-functions $< $(LDFLAGS) $(TEST_LIB) $(LIBS) -o $@
++
++C_TESTS = absvdi2_test absvsi2_test absvti2_test adddf3vfp_test \
++	addsf3vfp_test addvdi3_test addvsi3_test addvti3_test \
++	ashldi3_test ashlti3_test ashrdi3_test ashrti3_test \
++	bswapdi2_test bswapsi2_test clear_cache_test clzdi2_test \
++	clzsi2_test clzti2_test cmpdi2_test cmpti2_test \
++	comparedf2_test comparesf2_test ctzdi2_test ctzsi2_test \
++	ctzti2_test divdc3_test divdf3vfp_test divdi3_test \
++	divmodsi4_test divsc3_test divsf3vfp_test divsi3_test \
++	divtc3_test divti3_test divxc3_test \
++	enable_execute_stack_test eqdf2vfp_test eqsf2vfp_test \
++	extebdsfdf2vfp_test ffsdi2_test ffsti2_test fixdfdi_test \
++	fixdfsivfp_test fixdfti_test fixsfdi_test fixsfsivfp_test \
++	fixsfti_test fixunsdfdi_test fixunsdfsi_test fixunsdfsivfp_test \
++	fixunsdfti_test fixunssfdi_test fixunssfsi_test \
++	fixunssfsivfp_test fixunssfti_test fixunstfdi_test \
++	fixunsxfdi_test fixunsxfsi_test fixunsxfti_test fixxfdi_test \
++	fixxfti_test floatdidf_test floatdisf_test floatdixf_test \
++	floatsidfvfp_test floatsisfvfp_test floattidf_test \
++	floattisf_test floattixf_test floatundidf_test floatundisf_test \
++	floatundixf_test floatunssidfvfp_test floatunssisfvfp_test \
++	floatuntidf_test floatuntisf_test floatuntixf_test \
++	gcc_personality_test gedf2vfp_test gesf2vfp_test \
++	gtdf2vfp_test gtsf2vfp_test ledf2vfp_test lesf2vfp_test \
++	lshrdi3_test lshrti3_test ltdf2vfp_test ltsf2vfp_test \
++	moddi3_test modsi3_test modti3_test muldc3_test \
++	muldf3vfp_test muldi3_test mulodi4_test mulosi4_test \
++	muloti4_test mulsc3_test mulsf3vfp_test multc3_test \
++	multi3_test mulvdi3_test mulvsi3_test mulvti3_test \
++	mulxc3_test nedf2vfp_test negdf2vfp_test negdi2_test \
++	negsf2vfp_test negti2_test negvdi2_test negvsi2_test \
++	negvti2_test nesf2vfp_test paritydi2_test paritysi2_test \
++	parityti2_test popcountdi2_test popcountsi2_test \
++	popcountti2_test powidf2_test powisf2_test \
++	powitf2_test powixf2_test subdf3vfp_test subsf3vfp_test \
++	subvdi3_test subvsi3_test subvti3_test \
++	trampoline_setup_test truncdfsf2vfp_test ucmpdi2_test \
++	ucmpti2_test udivdi3_test udivmoddi4_test udivmodsi4_test \
++	udivmodti4_test udivsi3_test udivti3_test umoddi3_test \
++	umodsi3_test umodti3_test unorddf2vfp_test unordsf2vfp_test
++
++C_TEST_SOURCES = $(C_TESTS:=.c)
++TESTS = $(C_TESTS)
++
++all: $(TESTS)
++
++check: all
++	pass=0 ; \
++	fail=0 ; \
++	for t in $(TESTS) ; \
++	do if ./$$t ; \
++	then echo "PASS: $$t" ; pass=`expr $$pass + 1` ; \
++	else echo "FAIL: $$t" ; fail=`expr $$fail + 1` ; \
++	fi ; \
++	done ; \
++	echo "===================" ; \
++	echo "$$pass tests passed." ; \
++	echo "$$fail tests failed." ; \
++	test "$$fail" = 0
++
++clean:
++	rm -f $(TESTS)
++

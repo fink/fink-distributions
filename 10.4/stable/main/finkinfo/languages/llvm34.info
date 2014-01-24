@@ -1,7 +1,7 @@
 Info3: <<
 Package: llvm34
 Version: 3.4
-Revision: 0b
+Revision: 0c
 Description: Modular and reusable compiler
 License: BSD
 Maintainer: David Fang <fangism@users.sourceforge.net>
@@ -55,11 +55,11 @@ BuildDependsOnly: false
 UseMaxBuildJobs: true
 
 PatchFile: %n.patch
-PatchFile-MD5: a61a3903da1c0b43ac6110738a561796
+PatchFile-MD5: aff9983777892b21bf5e5e2b49e57a2e
 PatchFile2: %n-clang.patch
-PatchFile2-MD5: 6b29a8f781340f608471cd0d66ecf0db
+PatchFile2-MD5: 182905fc36bba5c4ff340cc4da14e992
 PatchFile3: %n-compiler-rt.patch
-PatchFile3-MD5: 5d4ad8264a174735cedd9f2d8a20e3e5
+PatchFile3-MD5: d99f6660245b55febad43728a8978676
 PatchFile4: %n-polly.patch
 PatchFile4-MD5: d6deda1584332af388053b19cb9dcc6f
 
@@ -87,8 +87,7 @@ PatchScript: <<
 	sed -e 's|@FINK_PREFIX@|%p|g' -e "s|@DARWIN_VERSION@|$darwin_vers|g" %{PatchFile4} | patch -p1
 	popd
 	pushd projects/compiler-rt
-	sed -e 's|@FINK_PREFIX@|%p|g' -e "s|@DARWIN_VERSION@|$darwin_vers|g" \
-		-e "s|@MACOSX_VERSION@|$osx_version|g" %{PatchFile3} | patch -p1
+	sed -e 's|@FINK_PREFIX@|%p|g' -e "s|@DARWIN_VERSION@|$darwin_vers|g" %{PatchFile3} | patch -p1
 	popd
 
 	# Do not want -DNDEBUG, cause linker errors (undef symbols)
@@ -110,26 +109,6 @@ PatchScript: <<
 	then sed -i.orig2 -e '/GnuCPlusPlusInclude.*4\.2\.1/,/);/d' \
 		tools/clang/lib/Frontend/InitHeaderSearch.cpp
 	fi
-
-	if false
-	then
-	# explicit template instantiation (needed for 10.7)
-	{ echo '#include "llvm/Analysis/Dominators.h"' ; \
-	echo '#include "llvm/Assembly/Writer.h"' ; \
-	grep -e namespace -e EXTERN_TEMPLATE \
-		include/llvm/Analysis/Dominators.h | \
-	sed -e 's/EXTERN_TEMPLATE_INSTANTIATION(/template /' -e 's/);/;/' ; \
-	} > lib/Analysis/Dominators.cpp
-	sed -i.orig -e '/EXTERN_TEMPLATE_INSTANTIATION/s|^|// |' include/llvm/Analysis/Dominators.h
-	sed -i.orig -e '/DomPrinter/a\
-  Dominators.cpp\
-' lib/Analysis/CMakeLists.txt
-	fi
-
-	# ld warning about binding of _abort and _raise symbols vs. libSystem's
-	# suggests -bind_at_load
-#	cp lib/Support/CMakeLists.txt{,.orig}
-#	echo "SET_TARGET_PROPERTIES(LLVMSupport PROPERTIES LINK_FLAGS -Wl,-bind_at_load)" >> lib/Support/CMakeLists.txt
 
 # needed for gcc-fsf-4.x only
 #	sed -i.orig2 -e 's|compatibility_version|dylib_&|' tools/clang/tools/libclang/CMakeLists.txt
@@ -272,6 +251,24 @@ CompileScript: <<
 	fi
 	}
 
+	clang_arch=%m
+	case "%m" in
+	powerpc) clang_arch=ppc ;;
+	powerpc64) clang_arch=ppc64 ;;
+	esac
+	# script to assemble/link in missing .S units into libclang_rt
+	asm_link_clang_rt() {
+		# $CC already set
+		arch=$clang_arch
+		builddir=projects/compiler-rt/lib
+		crtsrcdir=%b/projects/compiler-rt
+		objdir=CMakeFiles/clang_rt.$arch.dir/$arch
+		libdir=../../../lib/clang/%v/lib/darwin
+		libcrt=$libdir/libclang_rt.$arch.a
+		. $crtsrcdir/lib/link-asm-libclang_rt.sh
+		assemble_clang_rt
+	}
+
 	build_type=Release
 #	build_type=RelWithDebInfo
 	# do not let cmake auto-detect OSX_SYSROOT
@@ -299,7 +296,9 @@ CompileScript: <<
 	sed -i.orig -e 's| -DNDEBUG||g' CMakeCache.txt
 
 	# first make fails, but we have to run it first and then fix some deps
-	make -k || recompile_known_units && make || make VERBOSE=1
+	make -k || recompile_known_units && make || make -j1 VERBOSE=1
+	asm_link_clang_rt
+	make
 	pushd lib
 	ln -s BugpointPasses.{so,dylib}
 	ln -s LLVMPolly.{so,dylib}
@@ -316,7 +315,7 @@ CompileScript: <<
 	popd
 	# wd: %b
 	# create some empty test logs, which we may overwrite and install to docs
-	for f in ../build/stage1/{llvm,clang,polly}-%v-check.log
+	for f in ../build/stage1/{llvm,clang,polly,compiler-rt}-%v-check.log
 	do echo "Stage 1 Tests were not run." > $f
 	done
 	echo "######## END of BOOTSTRAP STAGE 1: built llvm/clang with the system compiler"
@@ -337,6 +336,8 @@ CompileScript: <<
 	pushd ../build/stage2
 	cmake $CMAKE_OPTIONS $relsrcdir
 	make -k || make VERBOSE=1
+	asm_link_clang_rt
+	make
 	pushd lib
 	ln -s BugpointPasses.{so,dylib}
 	ln -s LLVMPolly.{so,dylib}
@@ -352,7 +353,7 @@ CompileScript: <<
 	ln -s ../build/stage2/bin/clang++ st2-clang++
 	popd
 	# wd: %b
-	for f in ../build/stage2/{llvm,clang,polly}-%v-check.log
+	for f in ../build/stage2/{llvm,clang,polly,compiler-rt}-%v-check.log
 	do echo "Stage 2 Tests were not run." > $f
 	done
 	echo "######## END of BOOTSTRAP STAGE 2: built llvm/clang with stage 1 clang"
@@ -365,6 +366,8 @@ CompileScript: <<
 	pushd ../build/stage3
 	cmake $CMAKE_OPTIONS $relsrcdir
 	make -k || make VERBOSE=1
+	asm_link_clang_rt
+	make
 	pushd lib
 	ln -s BugpointPasses.{so,dylib}
 	ln -s LLVMPolly.{so,dylib}
@@ -375,7 +378,7 @@ CompileScript: <<
 	ln -s stage3 last
 	popd
 	# wd: %b
-	for f in ../build/stage3/{llvm,clang,polly}-%v-check.log
+	for f in ../build/stage3/{llvm,clang,polly,compiler-rt}-%v-check.log
 	do echo "Stage 3 Tests were not run." > $f
 	done
 	echo "######## END of BOOTSTRAP STAGE 3: built llvm/clang with stage 2 clang"
@@ -434,6 +437,7 @@ InfoTest: <<
 	<<
  	TestScript: <<
 	#!/bin/sh -ev
+	darwin_vers=`uname -r | cut -d. -f1`
 
 	# test suite requires newer bash than /bin/bash 2.0 for pipefail
 	# test the pipefail option of this shell first
@@ -457,7 +461,27 @@ InfoTest: <<
 	{ make -k TESTARGS=-v check-clang 2>&1 || : ;} | tee clang-%v-check.log
 	echo "******** Running included polly tests ... ********"
 	( cd tools/polly/test ; make -k TESTARGS=-v polly-test 2>&1 || : ;) | tee polly-%v-check.log
-	# TODO: compiler-rt tests
+	echo "******** Running included compiler-rt/libclang_rt tests ... ********"
+	CC=`grep "CMAKE_C_COMPILER:FILEPATH" CMakeCache.txt | cut -d= -f2`
+	( mkdir projects/compiler-rt/test
+	cd projects/compiler-rt/test
+	syslib="-lSystem"
+	clang_arch=%m
+	case "%m" in
+	powerpc) clang_arch=ppc ;;
+	powerpc64) clang_arch=ppc64 ;;
+	esac
+	test $darwin_vers -gt 10 || syslib="$syslib -lSystemStubs"
+	cat >Makefile <<EOF
+ARCH = $clang_arch
+OS = darwin
+CC = $CC
+LIBS = $syslib
+LLVM_SRCDIR = %b
+VERSION = %v
+include \$(LLVM_SRCDIR)/projects/compiler-rt/test/Unit/test.mk
+EOF
+	make -k && make check 2>&1 || : ;) | tee compiler-rt-%v-check.log
 #	echo "******** Running massive test-suite ... ********"
 #	( cd projects/test-suite ; make -k 2>&1 || : ;) | tee test-suite-%v-check.log
 	<<
