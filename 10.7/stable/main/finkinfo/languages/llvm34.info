@@ -45,7 +45,7 @@ SourceDirectory: llvm-%v
 UseMaxBuildJobs: true
 
 PatchFile: %n.patch
-PatchFile-MD5: aff9983777892b21bf5e5e2b49e57a2e
+PatchFile-MD5: ad23918483ef433cc8f324d3ab6ffcf3
 PatchFile2: %n-clang.patch
 PatchFile2-MD5: 182905fc36bba5c4ff340cc4da14e992
 PatchFile3: %n-compiler-rt.patch
@@ -109,16 +109,17 @@ PatchScript: <<
 <<
 CompileScript: <<
 	#!/bin/sh -ev
+	CMAKE_OPTIONS=()
 	# just always build these archs
 	case "%m" in
-	ppc*|powerpc*) TARGET_ARCHS="-DLLVM_TARGETS_TO_BUILD=PowerPC" ;;
-	i386*|x86*) TARGET_ARCHS="-DLLVM_TARGETS_TO_BUILD=X86" ;;
+	ppc*|powerpc*) TARGET_ARCHS="PowerPC" ;;
+	i386*|x86*) TARGET_ARCHS="X86" ;;
 	esac
 	echo "Target option: $TARGET_ARCHS"
 	# to enable cross-compiling to other archs, uncomment the following:
-	# TARGET_ARCHS="-DLLVM_TARGETS_TO_BUILD=X86;PowerPC;ARM"
-	# TARGET_ARCHS="-DLLVM_TARGETS_TO_BUILD=all"
-	CMAKE_OPTIONS="$TARGET_ARCHS"
+	# TARGET_ARCHS="X86;PowerPC;ARM"
+	# TARGET_ARCHS="all"
+	CMAKE_OPTIONS=( $CMAKE_OPTIONS -DLLVM_TARGETS_TO_BUILD="$TARGET_ARCHS" )
 
 	# automatically use ccache if detected
 	# ccache recommended, but not required
@@ -148,7 +149,7 @@ CompileScript: <<
 	export PATH=`pwd`:$PATH
 	popd
 
-	CMAKE_OPTIONS="$CMAKE_OPTIONS -DBUILD_SHARED_LIBS:BOOL=ON"
+	CMAKE_OPTIONS=( $CMAKE_OPTIONS -DBUILD_SHARED_LIBS:BOOL=ON )
 
 	# stage 1 compiler (try to use ccache if available)
 	# gcc-4.0.1 FAILS on darwin9
@@ -260,14 +261,23 @@ CompileScript: <<
 	build_type=Release
 #	build_type=RelWithDebInfo
 	# do not let cmake auto-detect OSX_SYSROOT
-	CMAKE_OPTIONS="$CMAKE_OPTIONS -DCMAKE_INSTALL_PREFIX:PATH=%p/opt/llvm-%v -DCMAKE_BUILD_TYPE:STRING=$build_type -DLLVM_LIT_ARGS:STRING=-v -DLLVM_ENABLE_ASSERTIONS:BOOL=ON -DPYTHON_EXECUTABLE:FILEPATH=%p/bin/python2.7 -DCMAKE_OSX_SYSROOT:STRING=/ -DCMAKE_OSX_DEPLOYMENT_TARGET:STRING="
+	CMAKE_OPTIONS=( $CMAKE_OPTIONS \
+		-DCMAKE_INSTALL_PREFIX:PATH=%p/opt/llvm-%v \
+		-DCMAKE_BUILD_TYPE:STRING=$build_type \
+		-DLLVM_LIT_ARGS:STRING=-v \
+		-DLLVM_ENABLE_ASSERTIONS:BOOL=ON \
+		-DPYTHON_EXECUTABLE:FILEPATH=%p/bin/python2.7 \
+		-DCMAKE_OSX_SYSROOT:STRING=/ \
+		-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING= )
 
-	STAGE1_CMAKE_OPTIONS="-DCMAKE_C_FLAGS=-fno-common -DCMAKE_CXX_FLAGS=-fno-common"
+	STAGE1_CMAKE_OPTIONS=( -DCMAKE_C_FLAGS=-fno-common -DCMAKE_CXX_FLAGS=-fno-common )
 	# trying to disable optimization flags on non-trustworthy compilers
 	# worked around in recompile_known_units(), and now using RelWithDebInfo
 	ccvers=`$CXX -v 2>&1 | tail -n 1 | cut -d\  -f3`
 	if test $ccvers = 4.0.1
-	then STAGE1_CMAKE_OPTIONS="$STAGE1_CMAKE_OPTIONS -DCMAKE_C_FLAGS_RELEASE:STRING=-O2 -DCMAKE_CXX_FLAGS_RELEASE:STRING=-O2"
+	then STAGE1_CMAKE_OPTIONS=( $STAGE1_CMAKE_OPTIONS \
+		-DCMAKE_C_FLAGS_RELEASE:STRING=-O2 \
+		-DCMAKE_CXX_FLAGS_RELEASE:STRING=-O2 )
 	fi
 	# else default to -O3
 
@@ -275,9 +285,9 @@ CompileScript: <<
 	# wd: %b
 	mkdir -p ../build/stage1
 	pushd ../build/stage1
-	echo "CMAKE_OPTIONS=$CMAKE_OPTIONS $STAGE1_CMAKE_OPTIONS"
+	echo "CMAKE_OPTIONS = ${CMAKE_OPTIONS[@]} ${STAGE1_CMAKE_OPTIONS[@]}"
 	# Technically, we only need the native back-end in stage 1...
-	cmake $CMAKE_OPTIONS $STAGE1_CMAKE_OPTIONS $relsrcdir
+	cmake "${CMAKE_OPTIONS[@]}" "${STAGE1_CMAKE_OPTIONS[@]}" $relsrcdir
 	# kill -DNDEBUG with fire
 	sed -i.orig -e 's| -DNDEBUG||g' CMakeCache.txt
 
@@ -285,6 +295,7 @@ CompileScript: <<
 	make -k || recompile_known_units && make || make -j1 VERBOSE=1
 	asm_link_clang_rt
 	make
+	# tests hardcode the .dylib extension for modules
 	pushd lib
 	ln -s BugpointPasses.{so,dylib}
 	ln -s LLVMPolly.{so,dylib}
@@ -320,16 +331,17 @@ CompileScript: <<
 	export CXX=cc-st1-clang++
 	# point to the system C++ library for now.
 	# the following won't be needed once we bootstrap with a built libc++:
+	STAGE2_CMAKE_OPTIONS=()
 	if test "$darwin_vers" -ge 13
 	then
 		clang_path=`xcrun -find clang`
 		cxx_incdir=`dirname $clang_path`/../lib/c++/v1
-		STAGE2_CMAKE_OPTIONS=\"-DCMAKE_CXX_FLAGS:STRING=-cxx-isystem\ $cxx_incdir\"
+		STAGE2_CMAKE_OPTIONS=( $STAGE2_CMAKE_OPTIONS -DCMAKE_CXX_FLAGS:STRING="-cxx-isystem $cxx_incdir" )
 	fi
 	mkdir -p ../build/stage2
 	pushd ../build/stage2
-	echo "CMAKE_OPTIONS=$CMAKE_OPTIONS $STAGE2_CMAKE_OPTIONS"
-	cmake $CMAKE_OPTIONS $STAGE2_CMAKE_OPTIONS $relsrcdir
+	echo "CMAKE_OPTIONS = ${CMAKE_OPTIONS[@]} ${STAGE2_CMAKE_OPTIONS[@]}"
+	cmake "${CMAKE_OPTIONS[@]}" "${STAGE2_CMAKE_OPTIONS[@]}" $relsrcdir
 	make -k || make VERBOSE=1
 	asm_link_clang_rt
 	make
@@ -357,10 +369,10 @@ CompileScript: <<
 	export CC=cc-st2-clang
 	export CXX=cc-st2-clang++
 	export CCACHE_DISABLE=1
-	STAGE3_CMAKE_OPTIONS="$STAGE2_CMAKE_OPTIONS"
+	STAGE3_CMAKE_OPTIONS=( $STAGE2_CMAKE_OPTIONS )
 	mkdir -p ../build/stage3
 	pushd ../build/stage3
-	cmake $CMAKE_OPTIONS $STAGE3_CMAKE_OPTIONS $relsrcdir
+	cmake "${CMAKE_OPTIONS[@]}" "${STAGE3_CMAKE_OPTIONS[@]}" $relsrcdir
 	make -k || make VERBOSE=1
 	asm_link_clang_rt
 	make
@@ -426,9 +438,10 @@ CompileScript: <<
 <<
 InfoTest: <<
 # need bash because /bin/sh 2.0 on darwin8 is missing support for pipefail
-# coreutils for gtimeout for tests
+# coreutils for gtimeout for tests, see %N.patch:utils/lit/lit/TestRunner.py
 	TestDepends: <<
-		bash (>= 3.0),
+		# only darwin8 needs fink's bash
+	#	bash (>= 3.0),
 		coreutils
 	<<
  	TestScript: <<
@@ -441,8 +454,6 @@ InfoTest: <<
 	sed -i.orig -e "/bashPath = None/s|None|'%p/bin/bash'|" utils/lit/lit/LitConfig.py
 	test -x %p/bin/bash || { echo "Error: Fink-built bash >= 3.0 required for pipefail!" ; exit 1; }
 	}
-	# force time limit per test (prefix each command-line)
-	# sed -i.orig -e "/script\.append/s|ln|'gtimeout 5m '+&|" utils/lit/lit/TestRunner.py
 
 	# need path to bootstrapping compiler
 	pushd ../opt-bin
@@ -478,6 +489,7 @@ VERSION = %v
 include \$(LLVM_SRCDIR)/projects/compiler-rt/test/Unit/test.mk
 EOF
 	make -k && make check 2>&1 || : ;) | tee compiler-rt-%v-check.log
+# TODO: libc++ tests
 #	echo "******** Running massive test-suite ... ********"
 #	( cd projects/test-suite ; make -k 2>&1 || : ;) | tee test-suite-%v-check.log
 	<<
@@ -714,6 +726,7 @@ SplitOff12: <<
 	Package: %N-shlibs
 	Description: Shared libraries for LLVM infrastructure
 	Depends: libncurses5-shlibs
+# TODO: once bootstrapped with libc++, also rtdep:libcxx1-shlibs
 	Files: <<
 		opt/llvm-%v/lib/BugpointPasses.so
 		opt/llvm-%v/lib/LLVMHello.so
