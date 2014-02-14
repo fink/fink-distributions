@@ -84,6 +84,17 @@ PatchScript: <<
 	popd
 	pushd ../libcxx-%v
 	  $patch_filter %{PatchFile5} | patch -p1
+	  # add a timeout to libc++ test, in case of hanging
+	  mv test/lit.cfg{,.orig}
+	  awk '{
+if ($1 == "cmd.append(exec_path)") {
+	s1 = $0; s2 = $0;
+	gsub("exec_path", "'\'gtimeout\''", s1);
+	gsub("exec_path", "'\'1m\''", s2);
+	print s1; print s2;
+}
+	print;
+}' test/lit.cfg.orig > test/lit.cfg
 	popd
 
 
@@ -376,6 +387,10 @@ EOF
 		LIBCXX_CMAKE_OPTIONS=( "${LIBCXX_CMAKE_OPTIONS[@]}" \
 			-DLIBCXX_LIBCXXABI_INCLUDE_PATHS="$abi_includes" )
 	fi
+	# on darwin10, build FAT
+	if test $darwin_vers = 10
+	then flags="$flags -arch i386 -arch x86_64"
+	fi
 	LIBCXX_CMAKE_OPTIONS=( "${LIBCXX_CMAKE_OPTIONS[@]}" \
 		-DCMAKE_INSTALL_PREFIX=$fink_root \
 		-DLIBCXX_ENABLE_ASSERTIONS:BOOL=ON \
@@ -595,12 +610,12 @@ EOF
 	  # don't bother analyzing diffs
 	popd
 
-if test "$do_stage35" = 1
-then
-	echo "######## START of BOOTSTRAP STAGE 3.5: building libc++ with stage 2 clang++"
 	export CC=cc-st3-clang
 	export CXX=cc-st3-clang++
 	export CCACHE_DISABLE=1
+if test "$do_stage35" = 1
+then
+	echo "######## START of BOOTSTRAP STAGE 3.5: building libc++ with stage 2 clang++"
 	mkdir -p ../build/stage3.5
 	pushd ../build/stage3.5
 	# use same flags as stage1.5
@@ -744,14 +759,19 @@ InfoTest: <<
 	  export PATH=`pwd`:$PATH
 	popd
 	cd ../build/last
+
 #	echo "******** Running included LLVM and clang tests ... ********"
 #	{ make -k TESTARGS=-v check-all 2>&1 || : ;} | tee llvm-clang-%v-check.log
+
 	echo "******** Running included LLVM tests ... ********"
 	{ make -k TESTARGS=-v check 2>&1 || : ;} | tee llvm-%v-check.log
+
 	echo "******** Running included clang tests ... ********"
 	{ make -k TESTARGS=-v check-clang 2>&1 || : ;} | tee clang-%v-check.log
+
 	echo "******** Running included polly tests ... ********"
 	( cd tools/polly/test ; make -k TESTARGS=-v polly-test 2>&1 || : ;) | tee polly-%v-check.log
+
 	echo "******** Running included compiler-rt/libclang_rt tests ... ********"
 	CC=`grep "CMAKE_C_COMPILER:FILEPATH" CMakeCache.txt | cut -d= -f2`
 	( mkdir projects/compiler-rt/test
@@ -773,10 +793,26 @@ VERSION = %v
 include \$(LLVM_SRCDIR)/projects/compiler-rt/test/Unit/test.mk
 EOF
 	make -k && make check 2>&1 || : ;) | tee compiler-rt-%v-check.log
+
 	echo "******** Running included libc++ tests ... ********"
 	pushd ../last-libcxx
-	  ( make -k check-libcxx 2>&1 || : ;) | tee libcxx-%v-check.log
+	  ( case $darwin_vers in
+	    # we built FAT, but must test each arch separately
+	    10) sed -e '/cxx_flags/s| -arch x86_64||' test/lit.site.cfg > test/lit.site.cfg.32
+	      sed -e '/cxx_flags/s| -arch i386||' test/lit.site.cfg > test/lit.site.cfg.64
+	      echo "******** Checking -arch i386 (32b):"
+	      mv test/lit.site.cfg{,.orig}
+	      cp -f test/lit.site.cfg{.32,}
+	      make -k check-libcxx || :
+	      echo "******** Checking -arch x86_64 (64b):"
+	      cp -f test/lit.site.cfg{.64,}
+	      make -k check-libcxx || : ;;
+	    # everything else: check single arch
+	    *) make -k check-libcxx || : ;;
+	    esac
+	  ) 2>&1 | tee libcxx-%v-check.log
 	popd
+
 #	echo "******** Running massive test-suite ... ********"
 #	( cd projects/test-suite ; make -k 2>&1 || : ;) | tee test-suite-%v-check.log
 	<<
