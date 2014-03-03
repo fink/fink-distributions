@@ -1,0 +1,158 @@
+Package: debsums
+Version: 2.0.52
+Revision: 1
+Distribution: 10.8
+###
+Source: mirror:debian:pool/main/d/%n/%n_%v.tar.gz
+Source-MD5: 30bdd32f923f15c839b30397683ce46c
+SourceDirectory: %n-%v
+###
+## Remove po4a
+BuildDepends: po-debconf
+Depends: <<
+  dpkg (>= 1.16.3),
+  debconf,
+  file-fnmatch-pm5124,
+  libdpkg-pm,
+  ucf,
+  cron-service
+<<
+###
+PatchScript: <<
+perl -pi -e 's,/usr,%p,g' debian/cron.* debsums rdebsums debsums_init man/debsums.1 man/po/*
+perl -pi -e 's,/etc,%p/etc,g' debian/cron.* debsums rdebsums debsums_init man/debsums.1 man/po/*
+perl -pi -e 's,/var,%p/var,g' debian/cron.* debsums rdebsums debsums_init man/debsums.1 man/po/*
+perl -pi -e 's,%p/bin/perl,/usr/bin/perl,g' debsums rdebsums debsums_init
+perl -pi -e 's,^(\#\!/usr/bin/perl.*)$,$1\nuse lib "%p/lib/perl5";,' debsums rdebsums
+### fink debs files are in %p/fink/debs
+perl -pi -e 's,%p/var/cache/apt/archives,%p/fink/debs,g' debsums_init man/debsums.1 man/po/*
+### /proc/self/fd/3 doesn't exist on darwin
+perl -pi -e 's,\| tee /proc/self/fd/3 ,,g' debian/cron.*
+
+#cd man && po4a --rm-backups po4a.cfg
+<<
+CompileScript: echo
+InstallScript: <<
+#!/bin/sh -ev
+install -d -m 0755 %i/sbin
+install -m 0755 debsums_init %i/sbin
+install -d -m 0755 %i/bin
+install -m 0755 debsums rdebsums %i/bin
+install -d -m 0755 %i/etc/default
+touch %i/etc/%n-ignore
+install -m 0644 debian/default %i/etc/default/%n
+install -d -m 0755 %i/etc/cron.daily
+install -d -m 0755 %i/etc/cron.monthly
+install -d -m 0755 %i/etc/cron.weekly
+install -m 0644 debian/cron.daily %i/etc/cron.daily/%n
+install -m 0644 debian/cron.monthly %i/etc/cron.monthly/%n
+install -m 0644 debian/cron.weekly %i/etc/cron.weekly/%n
+
+#for i in de es fr pt ru sv; do \
+#  for j in 1 8; do \
+#    install -d -m 0755 %i/share/man/$i/man$j; \
+#    for page in `find %b -name \*.$i.$j`; do \
+#      install -m 0644 $page %i/share/man/$i/man$j; \
+#      ## remove them for the last part
+#      rm -f $page; \
+#    done; \
+#  done; \
+#done
+
+for i in 1 8; do \
+  install -d -m 0755 %i/share/man/man$i; \
+  for page in `find %b -name \*.$i`; do \
+    install -m 0644 $page %i/share/man/man$i; \
+  done; \
+done
+<<
+PostInstScript: <<
+# summary of how this script can be called:
+#        * <postinst> `configure' <most-recently-configured-version>
+#        * <old-postinst> `abort-upgrade' <new version>
+#        * <conflictor's-postinst> `abort-remove' `in-favour' <package>
+#          <new-version>
+#        * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
+#          <failed-install-package> <version> `removing'
+#          <conflicting-package> <version>
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+#
+
+. %p/share/debconf/confmodule
+
+APT_CONF=%p/etc/apt/apt.conf.d/90debsums
+case "$1" in
+    configure)
+        if [ -f $APT_CONF ]; then
+            mv $APT_CONF ${APT_CONF}.bak
+        fi
+        for ext in .ucf-new .ucf-old .ucf-dist; do
+          rm -f $APT_CONF$ext
+        done
+        if which ucf >/dev/null; then
+          ucf --purge $APT_CONF
+        fi
+        if which ucfr >/dev/null; then
+          ucfr --purge %n $APT_CONF
+        fi
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+<<
+PostRmScript: <<
+# summary of how this script can be called:
+#        * <postrm> `remove'
+#        * <postrm> `purge'
+#        * <old-postrm> `upgrade' <new-version>
+#        * <new-postrm> `failed-upgrade' <old-version>
+#        * <new-postrm> `abort-install'
+#        * <new-postrm> `abort-install' <old-version>
+#        * <new-postrm> `abort-upgrade' <old-version>
+#        * <disappearer's-postrm> `disappear' <r>overwrit>r> <new-version>
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+APT_CONF=%p/etc/apt/apt.conf.d/90debsums
+
+case "$1" in
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    ;;
+
+    purge)
+        for ext in '' '~' '%%' .bak .ucf-new .ucf-old .ucf-dist; do
+          rm -f $APT_CONF$ext
+        done
+        if which ucf >/dev/null; then
+          ucf --purge $APT_CONF
+        fi
+        if which ucfr >/dev/null; then
+          ucfr --purge %n $APT_CONF
+        fi
+    ;;
+
+    *)
+        echo "postrm called with unknown argument \`$1'" >&2
+        exit 1
+esac
+<<
+ConfFiles: <<
+  %p/etc/%n-ignore
+  %p/etc/default/%n
+<<
+DocFiles: README debian/changelog debian/copyright
+Description: Tool for verification of deb files
+DescDetail: <<
+debsums can verify the integrity of installed package files against MD5
+checksums installed by the package, or generated from a .deb archive.
+<<
+License: GPL
+Maintainer: Justin F. Halett <thesin@lists.sourceforge.net>
+Homepage: http://packages.debian.org/unstable/debsums
