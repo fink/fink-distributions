@@ -1,0 +1,476 @@
+Index: configure.ac
+===================================================================
+--- configure.ac	(revision 13713)
++++ configure.ac	(working copy)
+@@ -301,6 +301,7 @@
+         AC_DEFINE([DARWIN_10_6], 100600, [DARWIN_VERS value for Mac OS X 10.6])
+         AC_DEFINE([DARWIN_10_7], 100700, [DARWIN_VERS value for Mac OS X 10.7])
+         AC_DEFINE([DARWIN_10_8], 100800, [DARWIN_VERS value for Mac OS X 10.8])
++        AC_DEFINE([DARWIN_10_9], 100900, [DARWIN_VERS value for Mac OS X 10.9])
+ 
+ 	AC_MSG_CHECKING([for the kernel version])
+ 	kernel=`uname -r`
+@@ -346,9 +347,15 @@
+ 		  DEFAULT_SUPP="darwin12.supp ${DEFAULT_SUPP}"
+ 		  DEFAULT_SUPP="darwin10-drd.supp ${DEFAULT_SUPP}"
+ 		  ;;
++	     13.*)
++		  AC_MSG_RESULT([Darwin 13.x (${kernel}) / Mac OS X 10.9 Mavericks])
++		  AC_DEFINE([DARWIN_VERS], DARWIN_10_9, [Darwin / Mac OS X version])
++		  DEFAULT_SUPP="darwin13.supp ${DEFAULT_SUPP}"
++		  DEFAULT_SUPP="darwin10-drd.supp ${DEFAULT_SUPP}"
++		  ;;
+              *) 
+ 		  AC_MSG_RESULT([unsupported (${kernel})])
+-		  AC_MSG_ERROR([Valgrind works on Darwin 10.x and 11.x (Mac OS X 10.6/7)])
++		  AC_MSG_ERROR([Valgrind works on Darwin 10.x, 11.x, 12.x and 13.x (Mac OS X 10.6/7/8/9)])
+ 		  ;;
+ 	esac
+         ;;
+Index: coregrind/m_debuginfo/debuginfo.c
+===================================================================
+--- coregrind/m_debuginfo/debuginfo.c	(revision 13713)
++++ coregrind/m_debuginfo/debuginfo.c	(working copy)
+@@ -968,7 +968,7 @@
+ void VG_(di_notify_vm_protect)( Addr a, SizeT len, UInt prot )
+ {
+    Bool do_nothing = True;
+-#  if defined(VGP_x86_darwin) && (DARWIN_VERS == DARWIN_10_7 || DARWIN_VERS == DARWIN_10_8)
++#  if defined(VGP_x86_darwin) && (DARWIN_VERS >= DARWIN_10_7)
+    do_nothing = False;
+ #  endif
+    if (do_nothing /* wrong platform */)
+Index: coregrind/m_main.c
+===================================================================
+--- coregrind/m_main.c	(revision 13713)
++++ coregrind/m_main.c	(working copy)
+@@ -1347,9 +1347,9 @@
+    else if (VG_(clo_verbosity) > 0)
+       VG_(umsg)("\n");
+ 
+-#  if defined(VGO_darwin) && DARWIN_VERS == DARWIN_10_8
++#  if defined(VGO_darwin) && DARWIN_VERS >= DARWIN_10_8
+    /* Uh, this doesn't play nice with XML output. */
+-   umsg_or_xml( "WARNING: Support on MacOS 10.8 is experimental and mostly broken.\n");
++   umsg_or_xml( "WARNING: Support on MacOS 10.8/10.9 is experimental and mostly broken.\n");
+    umsg_or_xml( "WARNING: Expect incorrect results, assertions and crashes.\n");
+    umsg_or_xml( "WARNING: In particular, Memcheck on 32-bit programs will fail to\n");
+    umsg_or_xml( "WARNING: detect any errors associated with heap-allocated data.\n");
+Index: coregrind/m_syswrap/priv_syswrap-darwin.h
+===================================================================
+--- coregrind/m_syswrap/priv_syswrap-darwin.h	(revision 13713)
++++ coregrind/m_syswrap/priv_syswrap-darwin.h	(working copy)
+@@ -560,7 +560,7 @@
+ DECL_TEMPLATE(darwin, mach_msg_thread);
+ 
+ // Mach traps
+-#if DARWIN_VERS == DARWIN_10_8
++#if DARWIN_VERS == DARWIN_10_8 || DARWIN_VERS == DARWIN_10_9
+ DECL_TEMPLATE(darwin, mach__10);
+ DECL_TEMPLATE(darwin, mach__12);
+ DECL_TEMPLATE(darwin, mach__14);
+@@ -569,7 +569,7 @@
+ DECL_TEMPLATE(darwin, mach__19);
+ DECL_TEMPLATE(darwin, mach__20);
+ DECL_TEMPLATE(darwin, mach__21);
+-#endif /* DARWIN_VERS == DARWIN_10_8 */
++#endif /* DARWIN_VERS == DARWIN_10_8 || DARWIN_VERS == DARWIN_10_9 */
+ DECL_TEMPLATE(darwin, mach_msg_unhandled);
+ DECL_TEMPLATE(darwin, mach_msg);
+ DECL_TEMPLATE(darwin, mach_reply_port);
+Index: coregrind/m_syswrap/syswrap-amd64-darwin.c
+===================================================================
+--- coregrind/m_syswrap/syswrap-amd64-darwin.c	(revision 13713)
++++ coregrind/m_syswrap/syswrap-amd64-darwin.c	(working copy)
+@@ -448,7 +448,7 @@
+       out just the relevant parts.  Hence: */
+ #  if DARWIN_VERS <= DARWIN_10_7
+    Bool is_reuse = reuse != 0;
+-#  elif DARWIN_VERS == DARWIN_10_8
++#  elif DARWIN_VERS == DARWIN_10_8 || DARWIN_VERS == DARWIN_10_9
+    Bool is_reuse = (reuse & 0x20000 /* == WQ_FLAG_THREAD_REUSE */) != 0;
+ #  endif
+ 
+Index: coregrind/m_syswrap/syswrap-darwin.c
+===================================================================
+--- coregrind/m_syswrap/syswrap-darwin.c	(revision 13713)
++++ coregrind/m_syswrap/syswrap-darwin.c	(working copy)
+@@ -1065,12 +1065,17 @@
+       F(F_PREALLOCATE);
+       F(F_SETSIZE);
+       F(F_RDADVISE);
++#if DARWIN_VERS < DARWIN_10_9
+       F(F_READBOOTSTRAP);
+       F(F_WRITEBOOTSTRAP);
++#endif
+       F(F_LOG2PHYS);
+       F(F_GETPATH);
+       F(F_PATHPKG_CHECK);
+-      F(F_ADDSIGS);   
++      F(F_ADDSIGS);
++#if DARWIN_VERS >= DARWIN_10_9
++      F(F_ADDFILESIGS);
++#endif
+    default:
+       return "UNKNOWN";
+    }
+@@ -1167,6 +1172,7 @@
+       }
+       break;
+ 
++#if DARWIN_VERS < DARWIN_10_9
+        // struct fbootstraptransfer
+    case VKI_F_READBOOTSTRAP:
+    case VKI_F_WRITEBOOTSTRAP:
+@@ -1177,6 +1183,7 @@
+       PRE_MEM_READ( "fcntl(F_READ/WRITEBOOTSTRAP, bootstrap)", 
+                     ARG3, sizeof(struct vki_fbootstraptransfer) );
+       break;
++#endif
+ 
+        // struct log2phys (out)
+    case VKI_F_LOG2PHYS:
+@@ -1227,6 +1234,21 @@
+       }
+       break;
+ 
++   case VKI_F_ADDFILESIGS: /* Add signature from same file (used by dyld for shared libs) */
++      PRINT("fcntl ( %ld, %s )", ARG1, name_for_fcntl(ARG2));
++      PRE_REG_READ3(long, "fcntl",
++                    unsigned int, fd, unsigned int, cmd,
++                    vki_fsignatures_t *, sigs);
++
++      {
++         vki_fsignatures_t *fsigs = (vki_fsignatures_t*)ARG3;
++         PRE_FIELD_READ( "fcntl(F_ADDFILESIGS, fsigs->fs_blob_start)",
++                         fsigs->fs_blob_start);
++         PRE_FIELD_READ( "fcntl(F_ADDFILESIGS, fsigs->fs_blob_size)",
++                         fsigs->fs_blob_size);
++      }
++      break;
++
+    default:
+       PRINT("fcntl ( %ld, %ld [??] )", ARG1, ARG2);
+       VG_(printf)("UNKNOWN fcntl %ld!", ARG2);
+@@ -7908,6 +7930,13 @@
+    PRINT("mach__14(FIXME,ARGUMENTS_UNKNOWN)");
+ }
+ 
++#if DARWIN_VERS >= DARWIN_10_9
++PRE(mach__15)
++{
++   PRINT("mach__15(FIXME,ARGUMENTS_UNKNOWN)");
++}
++#endif /* DARWIN_VERS >= DARWIN_10_9 */
++
+ PRE(mach__16)
+ {
+    PRINT("mach__16(FIXME,ARGUMENTS_UNKNOWN)");
+@@ -7948,6 +7977,13 @@
+    PRINT("mach__23(FIXME,ARGUMENTS_UNKNOWN)");
+ }
+ 
++#if DARWIN_VERS >= DARWIN_10_9
++PRE(mach__24)
++{
++   PRINT("mach__24(FIXME,ARGUMENTS_UNKNOWN)");
++}
++#endif /* DARWIN_VERS >= DARWIN_10_9 */
++
+ PRE(iopolicysys)
+ {
+    PRINT("iopolicysys(FIXME)(0x%lx, 0x%lx, 0x%lx)", ARG1, ARG2, ARG3);
+@@ -8489,11 +8525,16 @@
+ 
+ #  if DARWIN_VERS >= DARWIN_10_8
+    MACX_(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(14), mach__14), 
+-#  else
+-   _____(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(14)), 
+ #  endif
+ 
++#  if DARWIN_VERS >= DARWIN_10_9
++   MACX_(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(15), mach__15), 
++#  endif
++
++#  if DARWIN_VERS < DARWIN_10_8
++   _____(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(14)), 
+    _____(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(15)), 
++#  endif
+ 
+ #  if DARWIN_VERS >= DARWIN_10_8
+    MACX_(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(16), mach__16), 
+@@ -8504,6 +8545,7 @@
+    MACX_(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(21), mach__21), 
+    MACX_(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(22), mach__22), 
+    MACX_(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(23), mach__23), 
++   MACX_(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(24), mach__24), 
+ #  else
+    _____(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(16)), 
+    _____(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(17)), 
+@@ -8513,9 +8555,9 @@
+    _____(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(21)), 
+    _____(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(22)), 
+    _____(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(23)), 
++   _____(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(24)), 
+ #  endif
+ 
+-   _____(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(24)), 
+    _____(VG_DARWIN_SYSCALL_CONSTRUCT_MACH(25)), 
+    MACXY(__NR_mach_reply_port, mach_reply_port), 
+    MACXY(__NR_thread_self_trap, mach_thread_self), 
+Index: coregrind/m_ume/macho.c
+===================================================================
+--- coregrind/m_ume/macho.c	(revision 13713)
++++ coregrind/m_ume/macho.c	(working copy)
+@@ -82,7 +82,7 @@
+    }
+ }
+ 
+-#if DARWIN_VERS == DARWIN_10_8
++#if DARWIN_VERS >= DARWIN_10_8
+ static void check_mmap_float(SysRes res, SizeT len, const HChar* who)
+ {
+    if (sr_isError(res)) {
+@@ -386,7 +386,7 @@
+    This is a really nasty hack -- allocates 64M+stack size, then
+    deallocates the 64M, to guarantee that the stack is at least 64M
+    above zero. */
+-#if DARWIN_VERS == DARWIN_10_8
++#if DARWIN_VERS >= DARWIN_10_8
+ static int
+ handle_lcmain ( vki_uint8_t **out_stack_start,
+                 vki_uint8_t **out_stack_end,
+@@ -416,7 +416,7 @@
+ 
+    return 0;
+ }
+-#endif /* DARWIN_VERS == DARWIN_10_8 */
++#endif /* DARWIN_VERS >= DARWIN_10_8 */
+ 
+ 
+ 
+@@ -558,7 +558,7 @@
+ 
+       switch (lc->cmd) {
+ 
+-#if   DARWIN_VERS == DARWIN_10_8
++#if   DARWIN_VERS >= DARWIN_10_8
+       case LC_MAIN: { /* New in 10.8 */
+          struct entry_point_command* epcmd
+             = (struct entry_point_command*)lc;
+Index: darwin13.supp
+===================================================================
+--- darwin13.supp	(revision 0)
++++ darwin13.supp	(working copy)
+@@ -0,0 +1,179 @@
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Leak
++   match-leak-kinds: possible
++   fun:malloc_zone_?alloc
++   ...
++   fun:_read_images
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Leak
++   match-leak-kinds: definite
++   fun:?alloc
++   ...
++   fun:_ZN4dyld24initializeMainExecutableEv
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Leak
++   match-leak-kinds: definite
++   fun:malloc_zone_?alloc
++   fun:recursive_mutex_init
++   fun:_objc_init
++   fun:_os_object_init
++   fun:libSystem_initializer
++   ...
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Leak
++   match-leak-kinds: reachable
++   fun:malloc_zone_?alloc
++   ...
++   fun:dyld_register_image_state_change_handler
++   ...
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Leak
++   match-leak-kinds: reachable
++   fun:?alloc
++   ...
++   fun:dyld_register_image_state_change_handler
++   ...
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Leak
++   match-leak-kinds: reachable
++   fun:malloc_zone_?alloc
++   ...
++   fun:map_images_nolock
++   fun:map_images
++   ...
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Leak
++   match-leak-kinds: possible
++   fun:malloc_zone_?alloc
++   ...
++   fun:map_images_nolock
++   fun:map_images
++   ...
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Leak
++   match-leak-kinds: indirect
++   fun:?alloc
++   ...
++   fun:libSystem_initializer
++   ...
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Leak
++   match-leak-kinds: reachable
++   fun:malloc_zone_?alloc
++   ...
++   fun:libSystem_initializer
++   ...
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Leak
++   match-leak-kinds: reachable
++   fun:?alloc
++   ...
++   fun:libSystem_initializer
++   ...
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Addr1
++   ...
++   fun:libSystem_initializer
++   ...
++   fun:_dyld_start
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Addr4
++   ...
++   fun:libSystem_initializer
++   ...
++   fun:_dyld_start
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Addr8
++   ...
++   fun:libSystem_initializer
++   ...
++   fun:_dyld_start
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Addr8
++   ...
++   fun:libSystem_initializer
++   ...
++   fun:_ZN4dyld24initializeMainExecutableEv
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Addr16
++   ...
++   fun:dyld_register_image_state_change_handler
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Cond
++   fun:_platform_memchr
++   ...
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Addr16
++   obj:/usr/lib/system/libsystem_platform.dylib
++   ...
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Addr16
++   obj:/usr/lib/system/libsystem_c.dylib
++   ...
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Cond
++   obj:/usr/lib/system/libsystem_c.dylib
++   ...
++}
++
++{
++   <insert_a_suppression_name_here>
++   Memcheck:Cond
++   obj:/usr/lib/system/libsystem_platform.dylib
++   ...
++}
+Index: include/pub_tool_redir.h
+===================================================================
+--- include/pub_tool_redir.h	(revision 13713)
++++ include/pub_tool_redir.h	(working copy)
+@@ -246,9 +246,12 @@
+ #elif defined(VGO_darwin) && (DARWIN_VERS <= DARWIN_10_6)
+ #  define  VG_Z_LIBC_SONAME  libSystemZdZaZddylib    // libSystem.*.dylib
+ 
+-#elif defined(VGO_darwin) && (DARWIN_VERS >= DARWIN_10_7)
++#elif defined(VGO_darwin) && (DARWIN_VERS == DARWIN_10_7 || DARWIN_VERS == DARWIN_10_8)
+ #  define  VG_Z_LIBC_SONAME  libsystemZucZaZddylib   // libsystem_c*.dylib
+ 
++#elif defined(VGO_darwin) && (DARWIN_VERS >= DARWIN_10_9)
++#  define  VG_Z_LIBC_SONAME  libsystemZumallocZddylib   // libsystem_malloc.dylib
++
+ #else
+ #  error "Unknown platform"
+ 
+Index: include/vki/vki-darwin.h
+===================================================================
+--- include/vki/vki-darwin.h	(revision 13713)
++++ include/vki/vki-darwin.h	(working copy)
+@@ -290,6 +290,9 @@
+ #define VKI_F_LOG2PHYS	F_LOG2PHYS
+ #define VKI_F_GETPATH	F_GETPATH
+ #define VKI_F_ADDSIGS	F_ADDSIGS
++#if DARWIN_VERS >= DARWIN_10_9
++#define VKI_F_ADDFILESIGS	F_ADDFILESIGS
++#endif
+ #define VKI_F_FULLFSYNC	F_FULLFSYNC
+ #define VKI_F_PATHPKG_CHECK	F_PATHPKG_CHECK
+ #define VKI_F_FREEZE_FS	F_FREEZE_FS
