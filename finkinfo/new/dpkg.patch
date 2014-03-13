@@ -826,8 +826,8 @@ diff -ruN dpkg-1.17.6.orig/fink/patches/dselect-methods.patch dpkg-1.17.6/fink/p
 + ";
 diff -ruN dpkg-1.17.6.orig/fink/patches/extra-env.patch dpkg-1.17.6/fink/patches/extra-env.patch
 --- dpkg-1.17.6.orig/fink/patches/extra-env.patch	1969-12-31 17:00:00.000000000 -0700
-+++ dpkg-1.17.6/fink/patches/extra-env.patch	2014-03-05 14:57:42.000000000 -0700
-@@ -0,0 +1,132 @@
++++ dpkg-1.17.6/fink/patches/extra-env.patch	2014-03-13 09:49:38.000000000 -0600
+@@ -0,0 +1,184 @@
 +--- dpkg-1.17.6.orig/configure
 ++++ dpkg-1.17.6/configure
 +@@ -819,6 +819,7 @@
@@ -948,16 +948,68 @@ diff -ruN dpkg-1.17.6.orig/fink/patches/extra-env.patch dpkg-1.17.6/fink/patches
 + 		cmd->filename = cmd->argv[0] = maintscript_pre_exec(cmd);
 + 
 + 		if (maintscript_set_exec_context(cmd, "dpkg_script_t") < 0)
-+@@ -403,3 +408,11 @@
++@@ -403,3 +408,63 @@
 + 
 + 	return 1;
 + }
 ++
 ++#ifdef DPKG_MAINT_ENV_SCRIPT
+++// Need limits.h for POSIX_ARG_MAX
+++#include <limits.h>
+++
+++int execute_env_script(void);
+++
 ++int
 ++execute_env_script() {
-++	notice(_("Injecting %s\n"), DPKG_MAINT_ENV_SCRIPT);
-++	return 0;
+++	debug(dbg_scripts, "Injecting env script (%s)", DPKG_MAINT_ENV_SCRIPT);
+++
+++	struct stat sb;
+++	// is this the right max len?
+++	char buf[_POSIX_ARG_MAX];
+++
+++	if (!stat(DPKG_MAINT_ENV_SCRIPT, &sb)) {
+++		char cmd_full[sizeof(DPKG_MAINT_ENV_SCRIPT) + 16];
+++		sprintf(cmd_full, ". %s; /usr/bin/env", DPKG_MAINT_ENV_SCRIPT);
+++
+++		FILE *cmd_stream;
+++
+++		cmd_stream = popen(cmd_full, "r");
+++		if (cmd_stream) {
+++			debug(dbg_veryverbose, " -> reading %s env results...", DPKG_MAINT_ENV_SCRIPT);
+++			while (fgets(buf, _POSIX_ARG_MAX, cmd_stream)) {
+++				if (!strcmp(buf+strlen(buf)-1, "\n")) {
+++					// chomp trailing newline
+++					buf[strlen(buf)-1]=0;
+++				}
+++				// putenv owns actual passed char*
+++				debug(dbg_veryverbose, " -> adding to ENV '%s'", strdup(buf));
+++				putenv(strdup(buf));
+++			}
+++			pclose(cmd_stream);
+++
+++			return 0;
+++		} else {
+++			debug(dbg_scripts, "popen(%s) failed.", DPKG_MAINT_ENV_SCRIPT);
+++		}
+++	} else {
+++		debug(dbg_scripts, "%s not found.", DPKG_MAINT_ENV_SCRIPT);
+++	}
+++
+++	debug(dbg_scripts, "fallback: just prepend fink to PATH");
+++	{
+++		char *path;
+++
+++		path = getenv("PATH");
+++		if (path) {
+++			sprintf(buf, "PATH=%s:%s:%s", "/sw/bin", "/sw/sbin", path);
+++			putenv(strdup(buf));
+++
+++			return 0;
+++		}
+++		debug(dbg_scripts, "could not read PATH from ENV!");
+++	}
+++
+++	return 1;
 ++}
 ++#endif
 diff -ruN dpkg-1.17.6.orig/fink/patches/fink-as-vendor.patch dpkg-1.17.6/fink/patches/fink-as-vendor.patch
