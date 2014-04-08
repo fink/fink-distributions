@@ -1,0 +1,183 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use Getopt::Long qw(:config no_ignore_case);
+#interact with processes
+use IPC::Run qw( run );
+
+sub get_usage {
+	return <<EOT;
+Usage:
+check_finkrsync -H <hostname>
+  [-p <path>] [-v|-vv|-vvv] [-h]
+EOT
+}
+
+sub get_help {
+	return <<EOT;
+  -H <hostname>
+       hostname or IP of the finkinfo rsync server.
+  [-p] <path>
+       path to the TIMPSTAMP file in rsync
+  [-v|-vv|-vvv]
+       be verbose
+         (no -v) .. single line output
+         -v   ..... single line output with additional details for warnings
+         -vv  ..... multi line output, also with additional details for warnings
+         -vvv ..... debugging output, followed by normal multi line output
+  [-h]
+       show this help
+EOT
+}
+
+sub usage {
+	my ($arg) = @_; #the list of inputs
+	my ($exitcode);
+
+	if ( defined $arg ) {
+		if ( $arg =~ m/^\d+$/ ) {
+			$exitcode = $arg;
+		} else {
+			print STDOUT $arg, "\n";
+			$exitcode = 1;
+		}
+	}
+	print STDOUT get_usage();
+
+	exit($exitcode) if defined $exitcode;
+}
+
+our $verbosity = 0;
+our ($rsync, $rsync_host, $rsync_path);
+
+MAIN: {
+	#force a flush after every write or print
+	$| = 1;
+	#keep args for verbose output
+	my @ARGV_SAVE = @ARGV;
+	my ($show_help);
+
+	#read in command line arguments and init hash variables with the given
+	#values from argv
+	if ( !( GetOptions(
+		'H|host=s'	=> \$rsync_host,
+		'p|path=s'	=> \$rsync_path,
+		'v|verbosity'	=> \$verbosity,
+		'vv'		=> sub{$verbosity=2},
+		'vvv'		=> sub{$verbosity=3},
+		'h|help'	=> sub{
+			print STDOUT get_usage();
+			print STDOUT "\n";
+			print STDOUT get_help();
+			exit(0)
+		},
+		'usage|?'	=> sub{
+			print STDOUT get_usage();
+			exit(3);
+		}
+	) ) ) {
+		#call usage if GetOptions failed
+		usage(1);
+	}
+
+	#print usage if unknown arg list is left
+	usage(1) if @ARGV;
+
+	#make sure host is set
+	if ( !$rsync_host ) {
+		print "Error: host is a required option.\n";
+		exit(3);
+	}
+
+	#make sure host does not start with .+://
+	$rsync_host =~ s/^.+:\\//g;
+
+	#if path not specified assume finkinfo
+	$rsync_path = "finkinfo" unless length $rsync_path;
+
+	#make sure path doesn start or end with a /
+	$rsync_path =~ s/^\///g;
+	$rsync_path =~ s/\/$//g;
+
+	#make rsync line
+	$rsync = "rsync://" . $rsync_host . "/" . $rsync_path . "/TIMESTAMP";
+
+	#variable for command to call rsync
+	my @basecmd;
+
+	my $rsync_options = "-a";
+	$rsync_options .= "v" if ($verbosity == 3);
+
+	@basecmd = ('rsync', $rsync_options, $rsync, '/tmp/TIMESTAMP');
+
+	#keep original basecmd for later usage
+	my @getstatus = @basecmd;
+
+	#execute status command and redirect stdout and stderr to ipmioutput
+	my $rsyncoutput;
+	my $returncode;
+
+	run \@getstatus, '>&', \$rsyncoutput;
+
+	#the upper eight bits contain the error condition (exit code)
+	#see http://perldoc.perl.org/perlvar.html#Error-Variables
+	$returncode = $? >> 8;
+
+	# print debug output when verbosity is set to 3 (-vvv)
+	if ( $verbosity == 3 ) {
+		print "------------- begin of debug output (-vvv is set): ------------\n";
+		print "  script was executed with the following parameters:\n";
+		print "    $0 ", join(' ', @ARGV_SAVE), "\n";
+		print "\n";
+		print "  rsync was executed with the following parameters:\n";
+		print "   ", join(' ', @getstatus), "\n";
+		print "$rsyncoutput\n";
+		print "--------------------- end of debug output ---------------------\n";
+	}
+
+	if ( $returncode != 0 ) {
+		print "$rsyncoutput\n";
+		print "-> Execution of rsync failed with return code $returncode.\n";
+		print "-> rsync was executed with the following parameters:\n";
+		print "   ", join(' ', @getstatus), "\n";
+		exit(3);
+	} else {
+		print "RSYNC Status: ";
+
+		my $exit = 0;		
+		my $timestamp;
+
+		#get timestamp from /tmp/timestamp
+		open my $fh, '<', "/tmp/timestamp" or die $!;
+		while (<$fh>) {
+			chomp;
+			$timestamp = $_;
+		}
+		close $fh or die $!;
+
+		my $diff = sprintf("%.0f", (abs($timestamp - time) / 86400) * 24 * 60);
+
+		if ($diff > (60 * 24)) {
+			$exit = 2;
+			print "Critical";
+		} elsif ($diff > (60 * 4)) {
+			$exit = 1;
+			print "Warning";
+		} else {
+			print "OK";
+		}
+
+		if ($diff > (60 * 24)) {
+			printf " [%.0f days]", $diff/60/24;
+		} elsif($diff > 60) {
+			printf " [%.0f hours]", $diff/60;
+		} else {
+			print " [$diff minutes]";
+		}
+
+		print "\n";
+
+		exit $exit;
+	}
+};
