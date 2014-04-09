@@ -128,7 +128,7 @@ MAIN: {
 
 	#execute status command and redirect stdout and stderr to ipmioutput
 	my ($rsyncoutput1, $rsyncoutput2, $rsyncoutput3);
-	my ($returncode1, $returncode2, $returncode3);
+	my ($returncode1, $returncode2, $returncode3) = 0;
 
 	#the upper eight bits contain the error condition (exit code)
 	#see http://perldoc.perl.org/perlvar.html#Error-Variables
@@ -176,7 +176,7 @@ MAIN: {
 		go_die("Error: '$tmpdir' not created");
 	}
 
-	if ( $returncode1 != 0 || $returncode2 != 0) {
+	if ( $returncode1 != 0 ) {
 		print STDOUT "$rsync_host RSYNC Status: Critical [down]\n";
 		exit(3);
 	} else {
@@ -195,16 +195,21 @@ MAIN: {
 		my $tsdiff = sprintf("%.0f", (abs($timestamp - time) / 86400) * 24 * 60);
 
 		#get timestamp from $tmpdir/LOCAL
-		open $fh, '<', "$tmpdir/LOCAL" or go_die("$tmpdir/LOCAL: $!");
-		while (<$fh>) {
-			chomp;
-			$local = $_;
+		my $lcdiff = $tsdiff;
+		my $has_local = 0;
+		if (open $fh, '<', "$tmpdir/LOCAL") {
+			while (<$fh>) {
+				chomp;
+				$local = $_;
+			}
+			close $fh or go_die("$tmpdir/LOCAL: $!");
+			$lcdiff = sprintf("%.0f", (abs($local - time) / 86400) * 24 * 60);
+			$has_local = 1;
 		}
-		close $fh or go_die("$tmpdir/LOCAL: $!");
-		my $lcdiff = sprintf("%.0f", (abs($local - time) / 86400) * 24 * 60);
 
 		#get timestamp from $tmpdir/UPDATE
 		my $updiff = 0;
+		my $has_update = 0;
 		if (open $fh, '<', "$tmpdir/UPDATE") {
 			while (<$fh>) {
 				chomp;
@@ -212,44 +217,52 @@ MAIN: {
 			}
 			close $fh or go_die("$tmpdir/UPDATE: $!");
 			$updiff = sprintf("%.0f", (abs($updated - time) / 86400) * 24 * 60);
+			$has_update = 1;
 		}
 
-		if ($lcdiff > (60 * 24)) {
+		my $is_stuck = 0;
+		if ($has_update && $updiff < (60 * 4) && $lcdiff > $updiff) {
+			$is_stuck = 1;
+		}
+
+		my $is_stale = 0;
+		if ($has_local && $lcdiff < (60 * 4) && $tsdiff > (60 * 4)) {
+			$is_stale = 1;
+		}
+
+		if ($tsdiff > (60 * 24) || $is_stuck || $is_stale) {
 			$exit = 2;
 			$output .= "Critical";
-		} elsif ($lcdiff > (60 * 4)) {
+		} elsif ($tsdiff > (60 * 4)) {
 			$exit = 1;
 			$output .= "Warning";
-		} else {
+		} elsif ($tsdiff < (60 * 4)) {
 			$output .= "OK";
 		}
 
 		$output .= " [";
-		if ($lcdiff > (60 * 24)) {
-			$output .= sprintf "Success %.0f days ago", $lcdiff/60/24;
-		} elsif($lcdiff > 60) {
-			$output .= sprintf "Success %.0f hours ago", $lcdiff/60;
-		} else {
-			$output .= "Success $lcdiff minutes ago";
-		}
-		$output .= ", ";
 		if ($tsdiff > (60 * 24)) {
-			$output .= sprintf "Updated %.0f days ago", $tsdiff/60/24;
+			$output .= sprintf "%.0f days old", $tsdiff/60/24;
 		} elsif($tsdiff > 60) {
-			$output .= sprintf "Updated %.0f hours ago", $tsdiff/60;
+			$output .= sprintf "%.0f hours old", $tsdiff/60;
 		} else {
-			$output .= "Update $tsdiff minutes ago";
+			$output .= "$tsdiff minutes old";
 		}
-		if ($updiff) {
-			$output .= ", ";
-			if ($updiff > (60 * 24)) {
-				$output .= sprintf "Ran %.0f days ago", $updiff/60/24;
-			} elsif($updiff > 60) {
-				$output .= sprintf "Ran %.0f hours ago", $updiff/60;
-			} else {
-				$output .= "Ran $updiff minutes ago";
-			}
+
+		if ($is_stale) {
+			$output .= " - STALE";
 		}
+
+		if ($is_stuck) {
+			$output .= " - STUCK";
+		}
+
+		if (!$has_local) {
+			$output .= " (NOT RUNNING OFFICIAL SCRIPT)";
+		} elsif (!$has_update) {
+			$output .= " (OLD OFFICIAL SCRIPT)";
+		}
+
 		$output .= "]";
 
 		print STDOUT "$output\n";
