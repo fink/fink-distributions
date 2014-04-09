@@ -5,6 +5,7 @@ use warnings;
 use Getopt::Long qw(:config no_ignore_case);
 #interact with processes
 use IPC::Run qw( run );
+use File::Temp qw ( tempdir );
 
 sub get_usage {
 	return <<EOT;
@@ -12,6 +13,14 @@ Usage:
 check_finkrsync -H <hostname>
   [-p <path>] [-v|-vv|-vvv] [-h]
 EOT
+}
+
+sub go_die {
+	my $msg = shift;
+	my $exitcode = shift || 3;
+
+	print STDERR "Error: $msg\n";
+	exit($exitcode);
 }
 
 sub get_help {
@@ -86,8 +95,7 @@ MAIN: {
 
 	#make sure host is set
 	if ( !$rsync_host ) {
-		print "Error: host is a required option.\n";
-		exit(3);
+		go_die("Error: host is a required option.", 3);
 	}
 
 	#make sure host does not start with .+://
@@ -101,87 +109,150 @@ MAIN: {
 	$rsync_path =~ s/\/$//g;
 
 	#make rsync line
-	$rsync = "rsync://" . $rsync_host . "/" . $rsync_path . "/TIMESTAMP";
+	$rsync = "rsync://$rsync_host/$rsync_path/";
 
 	#variable for command to call rsync
-	my @basecmd;
+	my (@rsynccmd1, @rsynccmd2, @rsynccmd3);
 
-	my $rsync_options = "-a";
-	$rsync_options .= "v" if ($verbosity == 3);
+	my $rsync_options = "-az";
+	if ($verbosity == 3) {
+		$rsync_options .= "v";
+	} else {
+		$rsync_options .= "q";
+	}
 
-	@basecmd = ('rsync', $rsync_options, $rsync, '/tmp/TIMESTAMP');
-
-	#keep original basecmd for later usage
-	my @getstatus = @basecmd;
+	my $tmpdir = tempdir(CLEANUP => 1);
+	@rsynccmd1 = ("rsync", $rsync_options, $rsync . "TIMESTAMP", "$tmpdir/");
+	@rsynccmd2 = ("rsync", $rsync_options, $rsync . "LOCAL", "$tmpdir/");
+	@rsynccmd3 = ("rsync", $rsync_options, $rsync . "UPDATE", "$tmpdir/");
 
 	#execute status command and redirect stdout and stderr to ipmioutput
-	my $rsyncoutput;
-	my $returncode;
-
-	run \@getstatus, '>&', \$rsyncoutput;
+	my ($rsyncoutput1, $rsyncoutput2, $rsyncoutput3);
+	my ($returncode1, $returncode2, $returncode3);
 
 	#the upper eight bits contain the error condition (exit code)
 	#see http://perldoc.perl.org/perlvar.html#Error-Variables
-	$returncode = $? >> 8;
+	run \@rsynccmd1, '>&', \$rsyncoutput1;
+	$returncode1 = $? >> 8;
+	if ( $returncode1 == 0) {
+		run \@rsynccmd2, '>&', \$rsyncoutput2;
+		$returncode2 = $? >> 8;
+		if ( $returncode2 == 0) {
+			run \@rsynccmd3, '>&', \$rsyncoutput3;
+			$returncode3 = $? >> 8;
+		}
+	}
 
 	# print debug output when verbosity is set to 3 (-vvv)
 	if ( $verbosity == 3 ) {
-		print "------------- begin of debug output (-vvv is set): ------------\n";
-		print "  script was executed with the following parameters:\n";
-		print "    $0 ", join(' ', @ARGV_SAVE), "\n";
-		print "\n";
-		print "  rsync was executed with the following parameters:\n";
-		print "   ", join(' ', @getstatus), "\n";
-		print "$rsyncoutput\n";
-		print "--------------------- end of debug output ---------------------\n";
+		print STDOUT "------------- begin of debug output (-vvv is set): ------------\n";
+		print STDOUT "  script was executed with the following parameters:\n";
+		print STDOUT "    $0 ", join(' ', @ARGV_SAVE), "\n";
+		print STDOUT "  rsync was executed with the following parameters:\n";
+		print STDOUT "    ", join(' ', @rsynccmd1), "\n";
+		print STDOUT "    ", join(' ', @rsynccmd2), "\n";
+		print STDOUT "    ", join(' ', @rsynccmd3), "\n";
+
+		if ( $returncode1 != 0) {
+			print STDOUT "-> Execution of rsync failed with return code $returncode1.\n";
+			print STDOUT "$rsyncoutput1\n";
+		}
+		if ( $returncode2 != 0) {
+			print STDOUT "-> Execution of rsync failed with return code $returncode2.\n";
+			print STDOUT "$rsyncoutput2\n";
+		}
+		if ( $returncode3 != 0) {
+			print STDOUT "-> Execution of rsync failed with return code $returncode3.\n";
+			print STDOUT "$rsyncoutput3\n";
+		}
+		print STDOUT "--------------------- end of debug output ---------------------\n";
 	}
 
-	if ( $returncode != 0 ) {
+	if ( -d $tmpdir) {
 		if ($verbosity == 3) {
-			print "$rsyncoutput\n";
-			print "-> Execution of rsync failed with return code $returncode.\n";
-			print "-> rsync was executed with the following parameters:\n";
-			print "   ", join(' ', @getstatus), "\n";
-		} else {
-			print "RSYNC Status: Critical [down]\n";
+			print STDOUT "Temp dir '$tmpdir' exists.\n";
 		}
+	} else {
+		go_die("Error: '$tmpdir' not created");
+	}
+
+	if ( $returncode1 != 0 || $returncode2 != 0) {
+		print STDOUT "$rsync_host RSYNC Status: Critical [down]\n";
 		exit(3);
 	} else {
-		print "RSYNC Status: ";
+		my $output = "$rsync_host RSYNC Status: ";
 
 		my $exit = 0;		
-		my $timestamp;
+		my ($fh, $timestamp, $local, $updated);
 
-		#get timestamp from /tmp/TIMESTAMP
-		open my $fh, '<', "/tmp/TIMESTAMP" or die $!;
+		#get timestamp from $tmpdir/TIMESTAMP
+		open $fh, '<', "$tmpdir/TIMESTAMP" or go_die("$tmpdir/TIMESTAMP: $!");
 		while (<$fh>) {
 			chomp;
 			$timestamp = $_;
 		}
-		close $fh or die $!;
+		close $fh or go_die("$tmpdir/TIMESTAMP: $!");
+		my $tsdiff = sprintf("%.0f", (abs($timestamp - time) / 86400) * 24 * 60);
 
-		my $diff = sprintf("%.0f", (abs($timestamp - time) / 86400) * 24 * 60);
+		#get timestamp from $tmpdir/LOCAL
+		open $fh, '<', "$tmpdir/LOCAL" or go_die("$tmpdir/LOCAL: $!");
+		while (<$fh>) {
+			chomp;
+			$local = $_;
+		}
+		close $fh or go_die("$tmpdir/LOCAL: $!");
+		my $lcdiff = sprintf("%.0f", (abs($local - time) / 86400) * 24 * 60);
 
-		if ($diff > (60 * 24)) {
+		#get timestamp from $tmpdir/UPDATE
+		my $updiff = 0;
+		if (open $fh, '<', "$tmpdir/UPDATE") {
+			while (<$fh>) {
+				chomp;
+				$updated = $_;
+			}
+			close $fh or go_die("$tmpdir/UPDATE: $!");
+			$updiff = sprintf("%.0f", (abs($updated - time) / 86400) * 24 * 60);
+		}
+
+		if ($lcdiff > (60 * 24)) {
 			$exit = 2;
-			print "Critical";
-		} elsif ($diff > (60 * 4)) {
+			$output .= "Critical";
+		} elsif ($lcdiff > (60 * 4)) {
 			$exit = 1;
-			print "Warning";
+			$output .= "Warning";
 		} else {
-			print "OK";
+			$output .= "OK";
 		}
 
-		if ($diff > (60 * 24)) {
-			printf " [%.0f days]", $diff/60/24;
-		} elsif($diff > 60) {
-			printf " [%.0f hours]", $diff/60;
+		$output .= " [";
+		if ($lcdiff > (60 * 24)) {
+			$output .= sprintf "Success %.0f days ago", $lcdiff/60/24;
+		} elsif($lcdiff > 60) {
+			$output .= sprintf "Success %.0f hours ago", $lcdiff/60;
 		} else {
-			print " [$diff minutes]";
+			$output .= "Success $lcdiff minutes ago";
 		}
+		$output .= ", ";
+		if ($tsdiff > (60 * 24)) {
+			$output .= sprintf "Updated %.0f days ago", $tsdiff/60/24;
+		} elsif($tsdiff > 60) {
+			$output .= sprintf "Updated %.0f hours ago", $tsdiff/60;
+		} else {
+			$output .= "Update $tsdiff minutes ago";
+		}
+		if ($updiff) {
+			$output .= ", ";
+			if ($updiff > (60 * 24)) {
+				$output .= sprintf "Ran %.0f days ago", $updiff/60/24;
+			} elsif($updiff > 60) {
+				$output .= sprintf "Ran %.0f hours ago", $updiff/60;
+			} else {
+				$output .= "Ran $updiff minutes ago";
+			}
+		}
+		$output .= "]";
 
-		print "\n";
-
-		exit $exit;
+		print STDOUT "$output\n";
+		exit($exit);
 	}
 };
