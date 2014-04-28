@@ -1,7 +1,7 @@
 Info3: <<
 Package: llvm34
 Version: 3.4
-Revision: 0e
+Revision: 0f
 Description: Modular and reusable compiler
 License: BSD
 Maintainer: David Fang <fangism@users.sourceforge.net>
@@ -53,7 +53,7 @@ PatchFile3-MD5: d99f6660245b55febad43728a8978676
 PatchFile4: %n-polly.patch
 PatchFile4-MD5: d6deda1584332af388053b19cb9dcc6f
 PatchFile5: %n-libcxx.patch
-PatchFile5-MD5: 233eca5b80817eccbcb7b53d2a27085d
+PatchFile5-MD5: 72697e71d0c80073cfa4ceabd9b8d3b1
 
 PatchScript: <<
 	#!/bin/sh -ev
@@ -299,6 +299,17 @@ EOF
 		assemble_clang_rt
 	}
 
+	# need to fix llvm-config to not point to build-dir, but instead
+	# where libc++ headers and libs will be installed.
+	# This is needed because llvm3x-shlibs links to the built
+	# libc++ in the bootstrap process.
+	# Keep this path in sync with libcxx_install_dir elsewhere in this file.
+	fix_llvm_config_build_variables() {
+		sed -i.orig -e '/LLVM_CXXFLAGS/s|%b[^ ]*/include|%p/include/c++/v1|' \
+			-e '/LLVM_LDFLAGS/s|%b[^ ]*/lib|%p/lib/c++|' \
+			tools/llvm-config/BuildVariables.inc
+	}
+
 	build_type=Release
 #	build_type=RelWithDebInfo
 	# do not let cmake auto-detect OSX_SYSROOT
@@ -326,7 +337,7 @@ EOF
 	cmake "${COMMON_CMAKE_OPTIONS[@]}" "${LLVM_CMAKE_OPTIONS[@]}" "${STAGE1_CMAKE_OPTIONS[@]}" $relsrcdir
 	# kill -DNDEBUG with fire
 	sed -i.orig -e 's| -DNDEBUG||g' CMakeCache.txt
-
+	# fix_llvm_config_build_variables # not needed b/c not using libc++ yet
 	# first make fails, but we have to run it first and then fix some deps
 	make -k || recompile_known_units && make || make -j1 VERBOSE=1
 	asm_link_clang_rt
@@ -425,7 +436,7 @@ EOF
 	STAGE2_CMAKE_OPTIONS=( \
 		-DCMAKE_CXX_FLAGS="-std=c++11 -stdlib=libc++ -cxx-isystem $libcxx_abs_srcdir/include" )
 	STAGE2_LLVM_LDFLAGS=( "-L$libcxx_stage_dir" )
-# f not bootstrapping libc++, use system C++ library (buried in XCode)
+# if not bootstrapping libc++, use system C++ library (buried in XCode)
 #	if test "$darwin_vers" -ge 13
 #	then
 #		clang_path=`xcrun -find clang`
@@ -439,6 +450,7 @@ EOF
 	export LDFLAGS="${STAGE2_COMMON_LDFLAGS[@]} ${STAGE2_LLVM_LDFLAGS[@]} ${FINK_LDFLAGS[@]}"
 	echo "LDFLAGS = $LDFLAGS"
 	cmake "${COMMON_CMAKE_OPTIONS[@]}" "${LLVM_CMAKE_OPTIONS[@]}" "${STAGE2_CMAKE_OPTIONS[@]}" $relsrcdir
+	fix_llvm_config_build_variables
 	make -k || make VERBOSE=1
 	asm_link_clang_rt
 	make
@@ -492,6 +504,7 @@ EOF
 	export LDFLAGS="${STAGE2_COMMON_LDFLAGS[@]} ${STAGE2_LLVM_LDFLAGS[@]} ${FINK_LDFLAGS[@]}"
 	echo "LDFLAGS = $LDFLAGS"
 	cmake "${COMMON_CMAKE_OPTIONS[@]}" "${LLVM_CMAKE_OPTIONS[@]}" "${STAGE2_CMAKE_OPTIONS[@]}" $relsrcdir
+	fix_llvm_config_build_variables
 	make -k || make VERBOSE=1
 	asm_link_clang_rt
 	make
@@ -706,6 +719,7 @@ else
 	export LDFLAGS="${STAGE2_COMMON_LDFLAGS[@]} ${STAGE2_LLVM_LDFLAGS[@]} ${FINK_LDFLAGS[@]}"
 	echo "LDFLAGS = $LDFLAGS"
 	cmake "${COMMON_CMAKE_OPTIONS[@]}" "${LLVM_CMAKE_OPTIONS[@]}" "${STAGE2_CMAKE_OPTIONS[@]}" $relsrcdir
+	fix_llvm_config_build_variables
 	make -k || make VERBOSE=1
 	asm_link_clang_rt
 	make
@@ -1096,8 +1110,11 @@ SplitOff11: <<
 SplitOff12: <<
 	Package: %N-shlibs
 	Description: Shared libraries for LLVM infrastructure
-	# Really, only full bootstraps with libc++ depend on libcxx1-shlibs.
-	Depends: libncurses5-shlibs, libcxx1-shlibs (= %v-%r)
+	Depends: <<
+	# only darwin10+ bootstraps with built libc++
+		libcxx1-shlibs (>= %v-%r),
+		libncurses5-shlibs
+	<<
 	Files: <<
 		opt/llvm-%v/lib/BugpointPasses.so
 		opt/llvm-%v/lib/LLVMHello.so
