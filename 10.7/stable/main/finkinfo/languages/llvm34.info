@@ -1,7 +1,7 @@
 Info3: <<
 Package: llvm34
 Version: 3.4.1
-Revision: 0a
+Revision: 0c
 Description: Modular and reusable compiler
 License: BSD
 Maintainer: David Fang <fangism@users.sourceforge.net>
@@ -19,7 +19,8 @@ BuildDepends: <<
 	libncurses5-dev,
 # xml and lzma are used to build an uninstalled bin/c-index-test, so bdep-only
 	libxml2,
-	liblzma5
+	liblzma5,
+	xcode (>= 4.6)
 <<
 Depends: %N-shlibs
 # no longer uses cloog directly, only indirectly through isl
@@ -37,8 +38,10 @@ Source4: http://llvm.org/releases/3.4/polly-3.4.src.tar.gz
 Source4-MD5: 5b2958c9076a584f710423bdca9e6d5d
 Source5: http://llvm.org/releases/3.4/libcxx-3.4.src.tar.gz
 Source5-MD5: 85c3c4e2233893b037256bf9f7077857
-# Source6: http://llvm.org/releases/3.4/test-suite-3.4.src.tar.gz
-# Source6-MD5: 
+Source6: mirror:sourceforge:fink/openmp-r208472.tar.gz
+Source6-MD5: d02067cba2397fe3ad4d8274c12363c3
+# Source7: http://llvm.org/releases/3.4/test-suite-3.4.src.tar.gz
+# Source7-MD5: 
 # libcxxabi is not needed, use system's libc++abi or libsupc++
 
 SourceDirectory: llvm-%v.src
@@ -54,6 +57,10 @@ PatchFile4: %n-polly.patch
 PatchFile4-MD5: d6deda1584332af388053b19cb9dcc6f
 PatchFile5: %n-libcxx.patch
 PatchFile5-MD5: 72697e71d0c80073cfa4ceabd9b8d3b1
+PatchFile6: %n-clang-omp.patch	
+PatchFile6-MD5: 1a16e148456889d101bb3026df969e5a
+PatchFile7: %n-clang-iomp5.patch
+PatchFIle7-MD5: 7e4ff3be5b6c64736797b11d824d7365
 
 PatchScript: <<
 	#!/bin/sh -ev
@@ -78,6 +85,8 @@ PatchScript: <<
 	$patch_filter %{PatchFile} | patch -p1
 	pushd tools/clang
 	  $patch_filter %{PatchFile2} | patch -p1
+	  $patch_filter %{PatchFile6} | patch -p1
+	  $patch_filter %{PatchFile7} | patch -p1
 	popd
 	pushd tools/polly
 	  $patch_filter %{PatchFile4} | patch -p1
@@ -99,7 +108,6 @@ if ($1 == "cmd.append(exec_path)") {
 	print;
 }' test/lit.cfg.orig > test/lit.cfg
 	popd
-
 
 	# Do not want -DNDEBUG, cause linker errors (undef symbols)
 	# LLVM_ENABLE_ASSERTIONS:ON should have removed -DNDEBUG
@@ -194,9 +202,10 @@ EOF
 	    wrap_compiler st$s-clang cc-st$s-clang
 	    wrap_compiler st$s-clang++ cc-st$s-clang++
 	  done
+	  # force system make for testsuite to pass
+	  # if you suspect fink-make (4.0?) is troublesome, uncomment:
+	  # ln -s /usr/bin/make make
 	  export PATH=`pwd`:$PATH
-	  # force system make via override path
-	  ln -s /usr/bin/make make
 	popd
 
 	# stage 1 compiler (try to use ccache if available)
@@ -325,7 +334,8 @@ EOF
 		-DCMAKE_INSTALL_PREFIX:PATH=$fink_root/opt/llvm-$brv \
 		-DCMAKE_BUILD_TYPE:STRING=$build_type )
 
-	STAGE1_CMAKE_OPTIONS=( -DCMAKE_C_FLAGS=-fno-common -DCMAKE_CXX_FLAGS=-fno-common )
+	STAGE1_CMAKE_OPTIONS=( -DCMAKE_C_FLAGS=-fno-common \
+		-DCMAKE_CXX_FLAGS="-fno-common -std=c++11 -stdlib=libc++" )
 	# trying to disable optimization flags on non-trustworthy compilers
 	# worked around in recompile_known_units(), and now using RelWithDebInfo
 	ccvers=`$CXX -v 2>&1 | tail -n 1 | cut -d\  -f3`
@@ -434,10 +444,13 @@ EOF
 	libcxx_stage_dir=$build_root/last-libcxx/lib
 
 	# don't bootstrap on powerpc-darwinX until all codegen issues fixed
-	test "$build_arch" != "powerpc" || exit 0
-	test "$darwin_vers" != 8 || exit 0
-#	If you do not wish to bootstrap, just uncomment the next line:
-#	exit
+#	If you do not wish to bootstrap, change the following value to 0:
+	do_bootstrap=1
+	test "$build_arch" != "powerpc" || do_bootstrap=0
+	test "$darwin_vers" != 8 || do_bootstrap=0
+
+if test $do_bootstrap = 1
+then
 
 	echo "######## START of BOOTSTRAP STAGE 2: building llvm/clang with stage 1 clang"
 	# reuse CC and CXX from stage 1.5
@@ -709,60 +722,44 @@ fi
 
 	pushd ../build
 	  echo "######## Comparing objects from stage 2 vs. 3 of LLVM/Clang"
-	  do_stage4=0
-	  llvm_stage_diff stage{2,3} || do_stage4=1
+	  rejoice=1
+	  llvm_stage_diff stage{2,3} || rejoice=0
 	  mv compare{,2v3}
 	popd
 
-if test "$do_stage4" != 1
-then echo "######## 3-STAGE BOOTSTRAP of llvm/clang PASSED"
-exit
+if test "$rejoice" = 1
+	then echo "######## 3-STAGE BOOTSTRAP of llvm/clang PASSED"
 else
-	echo "######## START of BOOTSTRAP STAGE 4: building llvm/clang with stage 3 clang"
-	# reuse CC and CXX from stage 3.5
-	# yes, reuse STAGE2_CMAKE_OPTIONS in stage 4
-	mkdir -p ../build/stage4
-	pushd ../build/stage4
-	echo "LLVM_CMAKE_OPTIONS = ${COMMON_CMAKE_OPTIONS[@]} ${LLVM_CMAKE_OPTIONS[@]} ${STAGE2_CMAKE_OPTIONS[@]}"
-	export LDFLAGS="${STAGE2_COMMON_LDFLAGS[@]} ${STAGE2_LLVM_LDFLAGS[@]} ${FINK_LDFLAGS[@]}"
-	echo "LDFLAGS = $LDFLAGS"
-	cmake "${COMMON_CMAKE_OPTIONS[@]}" "${LLVM_CMAKE_OPTIONS[@]}" "${STAGE2_CMAKE_OPTIONS[@]}" $relsrcdir
-	fix_llvm_config_build_variables
-	make -k || make VERBOSE=1
-	asm_link_clang_rt
-	make
-	pushd lib
-	  ln -s BugpointPasses.{so,dylib}
-	  ln -s LLVMPolly.{so,dylib}
-	  ln -s LLVMHello.{so,dylib}
-	popd
-	cd ..
-	rm -f last
-	ln -s stage4 last
-	popd
-	# wd: %b
-	for f in ../build/stage4/{llvm,clang,polly,compiler-rt}-$version-check.log
-	do echo "Stage 4 Tests were not run." > $f
-	done
-	echo "######## END of BOOTSTRAP STAGE 4: built llvm/clang with stage 3 clang"
-	pushd ../build
-	  echo "######## Comparing objects from stage 3 vs. 4 of LLVM/Clang"
-	  rejoice=1
-	  llvm_stage_diff stage{3,4} || rejoice=0
-	  mv compare{,3v4}
-	popd
-	if test "$rejoice" = 1
-	then echo "######## 4-STAGE BOOTSTRAP of llvm/clang PASSED" ; exit
-	else echo "######## 4-STAGE BOOTSTRAP of llvm/clang FAILED" ; exit 1
-	fi
+	echo "######## 3-STAGE BOOTSTRAP of llvm/clang FAILED" ; exit 1
+# $rejoice = 1
 fi
+# $do_bootstrap = 1
+fi
+
+# after clang is built, bootstrap or not, build clang-openmp
+	pushd ../build/last/bin
+	  export PATH=`pwd`:$PATH
+	popd
+	pushd ../openmp-r208472/runtime
+	make -j1 compiler=clang
+	OPENMP_DIR=`ls tmp | grep dyn`
+	# install to build dir first
+	pushd tmp/$OPENMP_DIR
+	install -m 755 libiomp5.dylib %b/../build/last/lib
+	install -m 644 omp.h %b/../build/last/lib/clang/%v/include
+	popd
+	popd
 <<
 InfoTest: <<
 # need bash because /bin/sh 2.0 on darwin8 is missing support for pipefail
 # coreutils for gtimeout for tests, see %N.patch:utils/lit/lit/TestRunner.py
 	TestDepends: <<
-		# only darwin8 needs fink's bash
-	#	bash (>= 3.0),
+		# darwin8 needs fink's bash for pipefail
+		# others need fink's bash for operability with python2.7 subprocess
+		bash (>= 4.3),
+		# bash 3.2 was good enough on darwin8
+		# bash 4.2 was good enough on darwin9-12
+		# bash 4.3 good enough on darwin13
 		coreutils
 	<<
  	TestScript: <<
@@ -834,6 +831,8 @@ EOF
 	    esac
 	  ) 2>&1 | tee libcxx-%v-check.log
 	popd
+
+# TODO: test clang-openmp
 
 #	echo "******** Running massive test-suite ... ********"
 #	( cd projects/test-suite ; make -k 2>&1 || : ;) | tee test-suite-%v-check.log
@@ -941,11 +940,25 @@ InstallScript: <<
 	  popd
 	done
 
+	stem=opt/llvm-$brv
+	iprefix=%i/$stem
+	prefix=%p/$stem
+
+	# clang-openmp
+	install -m 755 %b/../build/last/lib/libiomp5.dylib $iprefix/lib
+	install_name_tool -id "$prefix/lib/libiomp5.dylib" "$iprefix/lib/libiomp5.dylib"
+	install -m 644 %b/../build/last/lib/clang/%v/include/omp.h $iprefix/lib/clang/%v/include
+
 	# need symlink /usr/bin/ld so libLTO.dylib can be found relative to @executable_path
-	iprefix=%i/opt/llvm-$brv
-	prefix=%p/opt/llvm-$brv
 	pushd $iprefix/bin
 		test -x /usr/bin/ld && ln -s /usr/bin/ld .
+	popd
+
+# convenient clang symlinks
+	mkdir -p %i/bin
+	pushd %i/bin
+	  ln -s $prefix/bin/clang clang-$brv
+	  ln -s $prefix/bin/clang++ clang++-$brv
 	popd
 
 # don't symlink libc++'s include/lib to clang's directories
@@ -1004,6 +1017,7 @@ SplitOff5: <<
 	Files: <<
 		opt/llvm-3.4/lib/libclang*
 		opt/llvm-3.4/lib/clang/%v/lib
+		opt/llvm-3.4/lib/libiomp5.dylib
 	<<
 	DocFiles: <<
 		tools/clang/*.TXT
@@ -1039,6 +1053,7 @@ SplitOff5: <<
 		!%p/opt/llvm-3.4/lib/libclangTooling.dylib
 		!%p/opt/llvm-3.4/lib/clang/%v/lib/darwin/libclang_rt.asan_osx_dynamic.dylib
 		!%p/opt/llvm-3.4/lib/clang/%v/lib/darwin/libclang_rt.asan_iossim_dynamic.dylib
+		%p/opt/llvm-3.4/lib/libiomp5.dylib 5.0.0 %n (>= 3.4.1-0)
 	<<
 <<
 SplitOff6: <<
@@ -1054,6 +1069,7 @@ SplitOff6: <<
 	Description: Executables and runtime for clang compiler
 	BuildDependsOnly: false
 	Files: <<
+		bin/clang*
 		opt/llvm-3.4/bin/clang*
 		opt/llvm-3.4/bin/ld
 		opt/llvm-3.4/lib/clang
@@ -1297,10 +1313,21 @@ Original (pre-3.0) package maintained by
 	Benjamin Reed <llvm@fink.raccoonfink.com>
 with contributions from
 	Jack Howarth <howarth@bromo.med.uc.edu>
+		clang-omp
+
 PatchFile contains:
 *	various compiler deficiency workarounds
 *	CMakeFile fixes, mostly missing dependencies
 *	CodeGen patches related to ABI, mach-o
 *	and much more!
+
+Generate openmp-$rev with..
+svn co -$rev http://llvm.org/svn/llvm-project/openmp/trunk/ openmp-$rev
+tar --exclude=.svn -zcvf openmp-$rev.tar.gz openmp-$rev
+
+Current clang-omp.patch generated by diff of clang 3.4.0 source and clang-omp from
+git co -b clang-omp https://github.com/clang-omp/clang.git
+at commit f9e2fd7640f8fc06ebe1ef2f065c6158f6b4b6ef.
+
 <<
 <<
