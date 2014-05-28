@@ -1,7 +1,7 @@
 Info4: <<
 Package: qt4-base-mac
-Version: 4.8.5
-Revision: 3
+Version: 4.8.6
+Revision: 2
 Description: Cross-Platform framework (%type_pkg[qt])
 Type: qt (mac)
 License: LGPL
@@ -34,7 +34,7 @@ Depends: <<
 	%N-qtxmlpatterns-shlibs (>= %v-%r)
 <<
 BuildDepends: <<
-	dbus1.3-dev,
+	dbus1.3-dev (>= 1.4.18-1),
 	fink (>= 0.34.4-1),
 	fink-buildenv-modules,
 	libjpeg9,
@@ -51,29 +51,19 @@ BuildConflicts: uuid, libevent1.4, libevent2
 Replaces: qtwebkit-mac (<= 4.8)
 BuildDependsOnly: true
 Source: http://download.qt-project.org/official_releases/qt/4.8/%v/qt-everywhere-opensource-src-%v.tar.gz
-Source-MD5: 1864987bdbb2f58f8ae8b350dfdbe133
-Source-Checksum: SHA1(745f9ebf091696c0d5403ce691dc28c039d77b9e)
-# Not included in Qt-4.8.5
-Source2: http://trac.webkit.org/export/157771/trunk/WebKitLibraries/libWebKitSystemInterfaceMavericks.a
-Source2-MD5: 73dfd036a933deb932446578a5304220
-Source2-Checksum: SHA1(fc5ebf85f637f9da9a68692df350e441c8ef5d7e)
+Source-MD5: 2edbe4d6c2eff33ef91732602f3518eb
+Source-Checksum: SHA1(ddf9c20ca8309a116e0466c42984238009525da6)
 PatchFile: %N.patch
-PatchFile-MD5: 62954689481b645f73ed33b9da029645
+PatchFile-MD5: 018f35b2408139ed115102dcd303d2fc
 ### Make sure we don't build any debug versions of Frameworks, plugins, libraries...
 #PatchFile2: %N-no_debug.patch
 #PatchFile2-MD5: cc9837b2835b897af67110bdc20e63e9
 ### #include <dom/Clipboard.h> to avoid incomplete types
 PatchFile3: %N-bug29399_incomplete_type.patch
 PatchFile3-MD5: a826cd616fd2afb087d7748e5402c230
-PatchFile4: %N-libc++.patch
-PatchFile4-MD5: f7d92ec28d48805e37a38a27c82d7892
-### PatchFiles 5 & 6 ar mutually exclusive.  Only activate one.
-### PatchFile5 puts the frameworks into $(prefix)/Library/Frameworks
-### PatchFile6 puts the frameworks into $(prefix)/lib
-#PatchFile5: %N-library-frameworks.patch
-#PatchFile5-MD5: b3a78076904c3b9026d6acc776697be1
-PatchFile6: %N-no_library-frameworks.patch
-PatchFile6-MD5: 4336c5c44fbf1d0e958e986c362d3120
+### PatchFile5 puts the frameworks into $(qt-prefix)/lib
+PatchFile5: %N-no_library-frameworks.patch
+PatchFile5-MD5: 4336c5c44fbf1d0e958e986c362d3120
 PatchScript: <<
 	#!/bin/sh -ev
 	. %p/sbin/fink-buildenv-helper.sh
@@ -87,18 +77,12 @@ PatchScript: <<
 		-e "s|@QT_PLUGINS_DIR@|$QT_FINK_PREFIX/plugins|g" < %{PatchFile} | patch -p1
 	#patch -p1 < %{PatchFile2}
 	patch -p1 < %{PatchFile3}
-	# only apply the libc++ patches on 10.9 and up
-	if [[ $OSX_MAJOR_VERSION > 10.8 ]]; then
-		patch -p1 < %{PatchFile4}
-	fi
-	# PatchFiles 5 & 6 ar mutually exclusive.  Only activate one.
-#	patch -p1 < %{PatchFile5}
-	patch -p1 < %{PatchFile6}
+	patch -p1 < %{PatchFile5}
 	# 10.9 no longer has corewlan
-	if [[ $OSX_MAJOR_VERSION > 10.8 ]]; then
-		perl -pi -e 's,QT_CONFIG corewlan,QT_CONFIG,g' configure
-	fi
-	mv %b/../libWebKitSystemInterfaceMavericks.a src/3rdparty/webkit/WebKitLibraries
+	# fixed in 4.8.6; remove ifthen from .info for 4.8.7 release
+#	if [[ $OSX_MAJOR_VERSION > 10.8 ]]; then
+#		perl -pi -e 's,QT_CONFIG corewlan,QT_CONFIG,g' configure
+#	fi
 	# Test fragment to use libc++ on < 10.9 (FOR TESTING ONLY)
 #	if [[ $OSX_MAJOR_VERSION < 10.9 ]]; then
 #		perl -pi -e 's|CC \= gcc|CC = clang|g; s|CXX \= g\+\+|CXX = clang++ -stdlib=libc++|g' mkspecs/common/g++-base.conf
@@ -124,6 +108,11 @@ CompileScript: <<
 	export CPATH=%p/include/dbus-1.0:%p/lib/dbus-1.0/include:%p/include
 	export LIBRARY_PATH=%p/lib
 	export QMAKE_NO_DEFAULTS=""
+	# Test fragment to use libc++ on < 10.9 (FOR TESTING ONLY)
+	# QMAKE_STDLIB not yet implemented
+#	if [[ $OSX_MAJOR_VERSION < 10.9 ]]; then
+#		QMAKE_STDLIB="-stdlib=libc++"
+#	fi
 	### need explicit PKG_CONFIG to detect dbus/sqlite3
 	export PKG_CONFIG=%p/bin/pkg-config
 	./configure \
@@ -194,26 +183,6 @@ InstallScript: <<
 		echo "  have: '$have'"
 		exit 1
 	fi
-
-	### WebKit needs this static file for things that will link with it
-	### (via .la dependency_libs), so install it, then fix the .la to point to
-	### install location (vs builddir location).
-	case $MACOSX_DEPLOYMENT_TARGET in
-		10.7)
-			WK_INT_LIB_SUFF=Lion
-			;;
-		10.8)
-			WK_INT_LIB_SUFF=MountainLion
-			;;
-		10.9)
-			WK_INT_LIB_SUFF=Mavericks
-			;;
-		*)
-			echo "Unsupported OS version"
-			exit 1 ;;
-	esac
-	cp src/3rdparty/webkit/WebKitLibraries/libWebKitSystemInterface${WK_INT_LIB_SUFF}.a %d/${QT_FINK_PREFIX}/lib
-	perl -pi -e "s|%b/src/3rdparty/webkit/Source/../WebKitLibraries|${QT_FINK_PREFIX}/lib|g" %d/${QT_FINK_PREFIX}/lib/QtWebKit{,_debug}.la
 
 	### Clean up .la, .prl files
 	### remove build-dir location and fix '-framework ' -> '-Wl,-framework,'
@@ -324,7 +293,7 @@ SplitOff4: <<
 		%N-qtgui-shlibs (>= %v-%r),
 		%N-qtscript-shlibs (>= %v-%r),
 		%N-qtxml-shlibs (>= %v-%r),
-		dbus1.3-shlibs (>= 1.2.24-1)
+		dbus1.3-shlibs (>= 1.4.18-1)
 	<<
 	Files: <<
 		lib/qt4-%type_pkg[qt]/lib/QtDBus.framework/QtDBus{,_debug}
@@ -860,8 +829,10 @@ SplitOff27: <<
 	# Qt4-suite integrated qtwebkit
 	Package: qtwebkit-%type_pkg[qt]
 	Description: OBSOLETE use qt4-base-%type_pkg[qt] instead
-	Depends: qt4-base-%type_pkg[qt]
-	RuntimeDepends: fink-obsolete-packages
+	RuntimeDepends: <<
+		fink-obsolete-packages,
+		qt4-base-%type_pkg[qt] (>= 4.8)
+	<<
 	InstallScript: <<
 		mkdir -p %i/share/doc/installed-packages
 		touch %i/share/doc/installed-packages/%n
@@ -958,64 +929,25 @@ concatenations if the shell environment variable QMAKE_NO_DEFAULTS
 is set (to anything); we use this variable in this portfile to make
 sure only internal paths (to the build) are searched by QMake.
 
-src/3rdparty/webkit/Source/WebCore/WebCore.pro
-https://bugs.webkit.org/show_bug.cgi?id=69914
-
 src/3rdparty/webkit/Source/WebKit/qt/QtWebKit.pro
 fix MKSPECS install location for WebKit
- Needed when using MacPorts' QMAKE_NO_DEFAULTS
-Add Mavericks specific static library
-https://codereview.qt-project.org/#change,69328 via QTBUG-32237
-NB: this static library game might get removed upstream
-
-src/corelib/global/qglobal.h
-Make 10.9 a 'supported' OS version so we don't spew junk warnings all over
+Needed when using MacPorts' QMAKE_NO_DEFAULTS
 
 src/corelib/tools/qelapsedtimer_mac.cpp
 https://bugreports.qt-project.org/browse/QTBUG-24031
 
-src/plugins/bearer/corewlan/qcorewlanengine.mm
-Backport commit 473e2d311ea8ec701e8c915f5c5d8b1f99209374 for clang.
-
 tools/macdeployqt/macdeployqt/main.cpp
-tools/macdeployqt/shared/shared.cpp
 http://???
+Look for our plugins location, not the location from upstream's binaries
 
 **incomplete_type**
 src/3rdparty/webkit/Source/JavaScriptCore/wtf/RetainPtr.h
 https://bugreports.qt-project.org/browse/QTBUG-29399
 
-**libc++**
-src/3rdparty/clucene/src/CLucene/StdHeader.h
-Backport commit 14641095dbeafe155a1d1000c0f0f6ca77a70b2c for libc++.
-
-src/3rdparty/javascriptcore/JavaScriptCore/runtime/Collector.cpp
-src/3rdparty/javascriptcore/JavaScriptCore/wtf/HashTable.h
-Backport commit 48baeef0766ba145d26d374561e152b40245f3b8 for libc++.
-
-src/3rdparty/webkit/Source/JavaScriptCore/wtf/NullPtr.h
-libc++ fixes
-http://mail.kde.org/pipermail/kde-freebsd/2013-September/015990.html
-https://bugs.webkit.org/show_bug.cgi?id=64429
-
-src/3rdparty/webkit/Source/WebCore/platform/Timer.cpp
-src/3rdparty/webkit/Source/WebCore/platform/Timer.h
-https://codereview.qt-project.org/#change,70444
-
-src/3rdparty/webkit/Source/WebCore/platform/network/qt/QNetworkReplyHandler.cpp
-src/3rdparty/webkit/Source/WebKit/qt/Api/qgraphicswebview.cpp
-src/3rdparty/webkit/Source/WebKit/qt/WebCoreSupport/NotificationPresenterClientQt.cpp
-https://codereview.qt-project.org/#change,70439
-
-***Use $(PREFIX)/Library/Frameworks***
-Patches to move the QtFOO.framework locations to $QtPrefix/Library/Frameworks.
-Copied from MacPorts with minor changes.
-
 ***No Library/Frameworks***
 tools/linguist/linguist/linguist.pro
 demos/browser/browser.pro
 The standard build makes libQtUiTools.dylib but forgets to add -Lbuild_dir flag to find it.
-NOT NEEDED if using Library/Frameworks patch since the correct -Fbuilddir flag does get added.
 <<
 # End Info4
 <<
