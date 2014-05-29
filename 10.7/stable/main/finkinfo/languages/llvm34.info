@@ -1,7 +1,7 @@
 Info3: <<
 Package: llvm34
 Version: 3.4.1
-Revision: 0e
+Revision: 0f
 Description: Modular and reusable compiler
 License: BSD
 Maintainer: David Fang <fangism@users.sourceforge.net>
@@ -9,6 +9,8 @@ Maintainer: David Fang <fangism@users.sourceforge.net>
 BuildDepends: <<
 	fink (>= 0.30.0), 
 	cmake (>= 2.8.10.2-1), 
+	# on darwin11+, for libc++
+	xcode (>= 4.6),
 # ccache is optional, for accelerating rebuilds
 #	ccache,
 # polly plug-in needs isl,gmp
@@ -19,8 +21,7 @@ BuildDepends: <<
 	libncurses5-dev,
 # xml and lzma are used to build an uninstalled bin/c-index-test, so bdep-only
 	libxml2,
-	liblzma5,
-	xcode (>= 4.6)
+	liblzma5
 <<
 Depends: %N-shlibs
 # no longer uses cloog directly, only indirectly through isl
@@ -58,7 +59,7 @@ PatchFile4-MD5: d6deda1584332af388053b19cb9dcc6f
 PatchFile5: %n-libcxx.patch
 PatchFile5-MD5: 72697e71d0c80073cfa4ceabd9b8d3b1
 PatchFile6: %n-clang-omp.patch	
-PatchFile6-MD5: 1a16e148456889d101bb3026df969e5a
+PatchFile6-MD5: 707c41ff79f7807a508c7d17dd54121f
 PatchFile7: %n-clang-iomp5.patch
 PatchFIle7-MD5: 7e4ff3be5b6c64736797b11d824d7365
 
@@ -109,10 +110,12 @@ if ($1 == "cmd.append(exec_path)") {
 }' test/lit.cfg.orig > test/lit.cfg
 	popd
 
+	# LLVM_ENABLE_ASSERTIONS:OFF for production compiler build
+
 	# Do not want -DNDEBUG, cause linker errors (undef symbols)
 	# LLVM_ENABLE_ASSERTIONS:ON should have removed -DNDEBUG
 	# but it doesn't, so hack it out of cmake file
-	sed -i.orig -e '/-DNDEBUG/s|.*|#&|' cmake/modules/HandleLLVMOptions.cmake
+	# sed -i.orig -e '/-DNDEBUG/s|.*|#&|' cmake/modules/HandleLLVMOptions.cmake
 
 	# point hard-coded paths to system g++-4.0.1's C++ includes
 	# remove references to g++-4.2.1, never existed in Xcode 2.5
@@ -129,12 +132,15 @@ if ($1 == "cmd.append(exec_path)") {
 		tools/clang/lib/Frontend/InitHeaderSearch.cpp
 	fi
 
-	# Adjust path for relocation of libc++ headers
-	if test "$darwin_vers" -ge 13
-		then sed -i.orig2 -e 's|AddPath("/usr/include/c++/v1"|AddPath("/Library/Developer/CommandLineTools/usr/lib/c++/v1"|' \
-			tools/clang/lib/Frontend/InitHeaderSearch.cpp
-	elif test "$darwin_vers" -ge 11
-		then sed -i.orig2 -e 's|AddPath("/usr/include/c++/v1"|AddPath("/usr/lib/c++/v1"|' \
+	# Adjust path for relocation of libc++ headers (from xcode)
+	if test "$darwin_vers" -ge 11
+	then
+		clang_path=`xcrun -find clang`
+		pushd `dirname $clang_path`
+		cd ../lib/c++/v1
+		cxx_incdir=`pwd`
+		popd
+		sed -i.orig3 -e 's|AddPath("/usr/include/c++/v1"|AddPath("'"$cxx_incdir"'"|' \
 			tools/clang/lib/Frontend/InitHeaderSearch.cpp
 	fi
 
@@ -163,7 +169,7 @@ CompileScript: <<
 	COMMON_CMAKE_OPTIONS=( -DBUILD_SHARED_LIBS:BOOL=ON \
 		-DLLVM_LIT_ARGS:STRING=-v \
 		-DPYTHON_EXECUTABLE:FILEPATH=$fink_root/bin/python2.7 )
-	LLVM_CMAKE_OPTIONS=( -DLLVM_ENABLE_ASSERTIONS:BOOL=ON \
+	LLVM_CMAKE_OPTIONS=( -DLLVM_ENABLE_ASSERTIONS:BOOL=OFF \
 		-DCMAKE_OSX_SYSROOT:STRING=/ \
 		-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING= )
 
@@ -343,8 +349,23 @@ EOF
 		-DCMAKE_INSTALL_PREFIX:PATH=$fink_root/opt/llvm-$brv \
 		-DCMAKE_BUILD_TYPE:STRING=$build_type )
 
+	# somehow, the choice of C++ library in stage 1 influences
+	# the output of TableGen in stage 2, which makes a 4th stage
+	# necessary to converge.  So select system libc++ over libstdc++
+	# on darwin 11 and 12 to make bootstrap finish in 3 stages.
+	# darwin13+ already default to using libc++.
+	# darwin10- lack libc++ altogether
+	case $darwin_vers in
+	11) force_stage1_system_libcxx=1 ;;
+	12) force_stage1_system_libcxx=1 ;;
+	*) force_stage1_system_libcxx=0 ;;
+	esac
+	if test "$force_stage1_system_libcxx" = 1
+	then STAGE1_LIBCXX_FLAGS="-std=c++11 -stdlib=libc++"
+	fi
+
 	STAGE1_CMAKE_OPTIONS=( -DCMAKE_C_FLAGS=-fno-common \
-		-DCMAKE_CXX_FLAGS="-fno-common -std=c++11 -stdlib=libc++" )
+		-DCMAKE_CXX_FLAGS="-fno-common $STAGE1_LIBCXX_FLAGS" )
 	# trying to disable optimization flags on non-trustworthy compilers
 	# worked around in recompile_known_units(), and now using RelWithDebInfo
 	ccvers=`$CXX -v 2>&1 | tail -n 1 | cut -d\  -f3`
@@ -731,21 +752,71 @@ fi
 
 	pushd ../build
 	  echo "######## Comparing objects from stage 2 vs. 3 of LLVM/Clang"
-	  rejoice=1
-	  llvm_stage_diff stage{2,3} || rejoice=0
+	  do_stage4=0
+	  llvm_stage_diff stage{2,3} || do_stage4=1
 	  mv compare{,2v3}
 	popd
 
-if test "$rejoice" = 1
-	then echo "######## 3-STAGE BOOTSTRAP of llvm/clang PASSED"
+if test "$do_stage4" != 1
+then echo "######## 3-STAGE BOOTSTRAP of llvm/clang PASSED"
 else
-	echo "######## 3-STAGE BOOTSTRAP of llvm/clang FAILED" ; exit 1
-# $rejoice = 1
+	echo "######## 3-STAGE BOOTSTRAP of llvm/clang FAILED"
+	if test "$darwin_vers" -ge 11
+	then exit 1
+	fi
+	# on darwin10-, allow 4th stage as workaround due to switching
+	# library from libstdc++ (stage 1) to libc++ (stage 2)
+	echo "######## START of BOOTSTRAP STAGE 4: building llvm/clang with stage 3 clang"
+	# reuse CC and CXX from stage 3.5
+	# yes, reuse STAGE2_CMAKE_OPTIONS in stage 4
+	mkdir -p ../build/stage4
+	pushd ../build/stage4
+	echo "LLVM_CMAKE_OPTIONS = ${COMMON_CMAKE_OPTIONS[@]} ${LLVM_CMAKE_OPTIONS[@]} ${STAGE2_CMAKE_OPTIONS[@]}"
+	export LDFLAGS="${STAGE2_COMMON_LDFLAGS[@]} ${STAGE2_LLVM_LDFLAGS[@]} ${FINK_LDFLAGS[@]}"
+	echo "LDFLAGS = $LDFLAGS"
+	cmake "${COMMON_CMAKE_OPTIONS[@]}" "${LLVM_CMAKE_OPTIONS[@]}" "${STAGE2_CMAKE_OPTIONS[@]}" $relsrcdir
+	fix_llvm_config_build_variables
+	make -k || make VERBOSE=1
+	asm_link_clang_rt
+	make
+	pushd lib
+	  ln -s BugpointPasses.{so,dylib}
+	  ln -s LLVMPolly.{so,dylib}
+	  ln -s LLVMHello.{so,dylib}
+	popd
+	cd ..
+	rm -f last
+	ln -s stage4 last
+	popd
+	# wd: %b
+	for f in ../build/stage4/{llvm,clang,polly,compiler-rt}-$version-check.log
+	do echo "Stage 4 Tests were not run." > $f
+	done
+	echo "######## END of BOOTSTRAP STAGE 4: built llvm/clang with stage 3 clang"
+	pushd ../build
+	  echo "######## Comparing objects from stage 3 vs. 4 of LLVM/Clang"
+	  rejoice=1
+	  llvm_stage_diff stage{3,4} || rejoice=0
+	  mv compare{,3v4}
+	popd
+	if test "$rejoice" = 1
+	then echo "######## 4-STAGE BOOTSTRAP of llvm/clang PASSED"
+	else echo "######## 4-STAGE BOOTSTRAP of llvm/clang FAILED" ; exit 1
+	fi
+# $do_stage4 != 1
 fi
 # $do_bootstrap = 1
 fi
 
-# after clang is built, bootstrap or not, build clang-openmp
+# after clang is built, bootstrapped or not, build clang-openmp
+	build_clang_omp=1
+	case "%m" in
+	powerpc) build_clang_omp=0 ;;
+	powerpc64) build_clang_omp=0 ;;
+	esac
+
+	if test "$build_clang_omp" = 1
+	then
 	pushd ../build/last/bin
 	  export PATH=`pwd`:$PATH
 	popd
@@ -758,6 +829,7 @@ fi
 	install -m 644 omp.h %b/../build/last/lib/clang/%v/include
 	popd
 	popd
+	fi
 <<
 InfoTest: <<
 # need bash because /bin/sh 2.0 on darwin8 is missing support for pipefail
@@ -954,9 +1026,17 @@ InstallScript: <<
 	prefix=%p/$stem
 
 	# clang-openmp
+	build_clang_omp=1
+	case "%m" in
+	powerpc) build_clang_omp=0 ;;
+	powerpc64) build_clang_omp=0 ;;
+	esac
+	if test "$build_clang_omp" = 1
+	then
 	install -m 755 %b/../build/last/lib/libiomp5.dylib $iprefix/lib
 	install_name_tool -id "$prefix/lib/libiomp5.dylib" "$iprefix/lib/libiomp5.dylib"
 	install -m 644 %b/../build/last/lib/clang/%v/include/omp.h $iprefix/lib/clang/%v/include
+	fi
 
 	# need symlink /usr/bin/ld so libLTO.dylib can be found relative to @executable_path
 	pushd $iprefix/bin
@@ -1026,7 +1106,7 @@ SplitOff5: <<
 	Files: <<
 		opt/llvm-3.4/lib/libclang*
 		opt/llvm-3.4/lib/clang/%v/lib
-		opt/llvm-3.4/lib/libiomp5.dylib
+		(%m != powerpc) opt/llvm-3.4/lib/libiomp5.dylib
 	<<
 	DocFiles: <<
 		tools/clang/*.TXT
@@ -1062,7 +1142,7 @@ SplitOff5: <<
 		!%p/opt/llvm-3.4/lib/libclangTooling.dylib
 		!%p/opt/llvm-3.4/lib/clang/%v/lib/darwin/libclang_rt.asan_osx_dynamic.dylib
 		!%p/opt/llvm-3.4/lib/clang/%v/lib/darwin/libclang_rt.asan_iossim_dynamic.dylib
-		%p/opt/llvm-3.4/lib/libiomp5.dylib 5.0.0 %n (>= 3.4.1-0)
+		(%m != powerpc) %p/opt/llvm-3.4/lib/libiomp5.dylib 5.0.0 %n (>= 3.4.1-0)
 	<<
 <<
 SplitOff6: <<
