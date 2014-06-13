@@ -1,6 +1,6 @@
 Info3: <<
 Package: guile20
-Version: 2.0.9
+Version: 2.0.11
 Revision: 1
 BuildDepends: <<
   readline6,
@@ -9,11 +9,12 @@ BuildDepends: <<
   libtool2,
   libunistring0, 
 # llvm33,
-  gc,
+  gc (>= 7.2d-2),
   gmp5,
   libiconv-dev,
   libgettext8-dev,
   gettext-tools,
+  pkgconfig,
   fink-package-precedence,
   fink (>= 0.28)
 <<
@@ -24,14 +25,11 @@ Depends: <<
 <<
 # prevent from building against old installed library
 # BuildConflicts: guile20-dev
-# this package is busted on many platforms
-BuildConflicts: libffi, libffi6
 GCC: 4.0
 Source: mirror:gnu:guile/guile-%v.tar.gz
-# Source: http://hydra.nixos.org/job/gnu/guile-2-0/tarball/latest/download-by-type/file/source-dist
-Source-MD5: 531839c3fe887382ca9d4774db544d34
+Source-MD5: e532c68c6f17822561e3001136635ddd
 # PatchFile: %n.patch
-# PatchFile-MD5: be17610e47152a7e1f863f0cb8f0c753
+# PatchFile-MD5: e18897a9e288016871ca80661d3a459e 
 PatchScript: <<
 #!/bin/sh -ev
 # %{default_script}
@@ -47,6 +45,17 @@ sed -i.orig '/SCM_ARRAY_ELEMENT_TYPE_LAST/s|,$||' libguile/array-handle.h
 sed -i.orig 's|void.*scm_t_subr|void (*scm_t_subr)()|' libguile/__scm.h
 # fix framework flag for CoreFoundation (defined in aclocal.m4)
 sed -i.orig 's|-Wl,-framework -Wl,CoreFoundation|-Wl,-framework,CoreFoundation|g' configure
+# noreturn is a macro defined by clang's headers (since 3.3)
+sed -i.orig -e '/scm_ithrow/s|int noreturn|&_arg|' libguile/throw.h libguile/throw.c
+# release accidentally botched #! lines in automake-provided scripts
+for f in `grep -lr "/nix/" build-aux`
+do sed -i.orig -e '1s|#\!.*/bin/sh|#\!/bin/sh|' $f
+done
+# clang from XCode 5.1 miscompiles(?) vm.c 
+if [[ ! "$(clang --version | head -n1 | cut -d- -f2 | cut -d')' -f1)" < "503.0.38" ]] 
+then sed -i.orig -e '/libguile_@GUILE_EFFECTIVE_VERSION@_la-vm.Tpo/s|\$(CFLAGS)|& -O0|' libguile/Makefile.in
+fi
+# convenient build script for use by other packages
 {
 echo '#!/bin/sh'
 echo 'export GUILE=guile-2.0'
@@ -71,13 +80,12 @@ ConfigureParams: <<
 <<
 NoSetCPPFLAGS: true
 NoSetLDFLAGS: true
-SetCPPFLAGS: -Dmacosx
+# SetCPPFLAGS: -Dmacosx
 # SetCFLAGS: -g -O2 -W -Wall -ansi -pedantic-errors
-# SetCFLAGS: -g -O1
 # SetCC: %p/opt/llvm-3.3/bin/clang
 UseMaxBuildJobs: true
 CompileScript: <<
-  #! /bin/sh -ex
+  #!/bin/sh -ex
   mkdir build
   cd build
   # darwin8 missing some essential POSIX thread features, so disabled
@@ -117,7 +125,7 @@ InstallScript: <<
 SplitOff: <<
   Package: %N-shlibs
   Depends: <<
-    gc-shlibs,
+    gc-shlibs (>= 7.2d-2),
     gmp5-shlibs,
 #   libffi6-shlibs,
     libncurses5-shlibs (>= 5.4-20041023-1006),
