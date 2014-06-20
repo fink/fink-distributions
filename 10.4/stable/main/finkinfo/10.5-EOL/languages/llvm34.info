@@ -1,7 +1,7 @@
 Info3: <<
 Package: llvm34
-Version: 3.4.1
-Revision: 0a
+Version: 3.4.2
+Revision: 1
 Description: Modular and reusable compiler
 License: BSD
 Maintainer: David Fang <fangism@users.sourceforge.net>
@@ -9,6 +9,8 @@ Maintainer: David Fang <fangism@users.sourceforge.net>
 BuildDepends: <<
 	fink (>= 0.30.0), 
 	cmake (>= 2.8.10.2-1), 
+	# on darwin11+, for libc++
+#	xcode (>= 4.6),
 # ccache is optional, for accelerating rebuilds
 #	ccache,
 # polly plug-in needs isl,gmp
@@ -28,17 +30,19 @@ BuildConflicts: <<
 <<
 
 Source: http://llvm.org/releases/%v/llvm-%v.src.tar.gz
-Source-MD5: b90697f4de35563ad6c35924defa8dd1
+Source-MD5: a20669f75967440de949ac3b1bad439c
 Source2: http://llvm.org/releases/%v/cfe-%v.src.tar.gz
-Source2-MD5: c64fdc567383211c9ac212d6f7b69263
+Source2-MD5: 87945973b7c73038871c5f849a818588
 Source3: http://llvm.org/releases/3.4/compiler-rt-3.4.src.tar.gz
 Source3-MD5: 7938353e3a3bda85733a165e7ac4bb84
 Source4: http://llvm.org/releases/3.4/polly-3.4.src.tar.gz
 Source4-MD5: 5b2958c9076a584f710423bdca9e6d5d
 Source5: http://llvm.org/releases/3.4/libcxx-3.4.src.tar.gz
 Source5-MD5: 85c3c4e2233893b037256bf9f7077857
-# Source6: http://llvm.org/releases/3.4/test-suite-3.4.src.tar.gz
-# Source6-MD5: 
+Source6: mirror:sourceforge:fink/openmp-r208472.tar.gz
+Source6-MD5: d02067cba2397fe3ad4d8274c12363c3
+# Source7: http://llvm.org/releases/3.4/test-suite-3.4.src.tar.gz
+# Source7-MD5: 
 # libcxxabi is not needed, use system's libc++abi or libsupc++
 
 SourceDirectory: llvm-%v.src
@@ -54,6 +58,12 @@ PatchFile4: %n-polly.patch
 PatchFile4-MD5: d6deda1584332af388053b19cb9dcc6f
 PatchFile5: %n-libcxx.patch
 PatchFile5-MD5: 72697e71d0c80073cfa4ceabd9b8d3b1
+PatchFile6: %n-clang-omp.patch	
+PatchFile6-MD5: fcbf05761ea7425b1f9b77461b9928b2
+PatchFile7: %n-clang-iomp5.patch
+PatchFile7-MD5: 7e4ff3be5b6c64736797b11d824d7365
+PatchFile8: %n-openmp-cmake.patch
+PatchFile8-MD5: 84df97a76abba61e2661527e3c222101 
 
 PatchScript: <<
 	#!/bin/sh -ev
@@ -78,6 +88,8 @@ PatchScript: <<
 	$patch_filter %{PatchFile} | patch -p1
 	pushd tools/clang
 	  $patch_filter %{PatchFile2} | patch -p1
+	  $patch_filter %{PatchFile6} | patch -p1
+	  $patch_filter %{PatchFile7} | patch -p1
 	popd
 	pushd tools/polly
 	  $patch_filter %{PatchFile4} | patch -p1
@@ -100,12 +112,6 @@ if ($1 == "cmd.append(exec_path)") {
 }' test/lit.cfg.orig > test/lit.cfg
 	popd
 
-
-	# Do not want -DNDEBUG, cause linker errors (undef symbols)
-	# LLVM_ENABLE_ASSERTIONS:ON should have removed -DNDEBUG
-	# but it doesn't, so hack it out of cmake file
-	sed -i.orig -e '/-DNDEBUG/s|.*|#&|' cmake/modules/HandleLLVMOptions.cmake
-
 	# point hard-coded paths to system g++-4.0.1's C++ includes
 	# remove references to g++-4.2.1, never existed in Xcode 2.5
 	if test "$darwin_vers" != 10
@@ -121,6 +127,24 @@ if ($1 == "cmd.append(exec_path)") {
 		tools/clang/lib/Frontend/InitHeaderSearch.cpp
 	fi
 
+	# Adjust path for relocation of libc++ headers (from xcode)
+	if test "$darwin_vers" -ge 11
+	then
+		clang_path=`xcrun -find clang`
+		pushd `dirname $clang_path`
+		cd ../lib/c++/v1
+		cxx_incdir=`pwd`
+		popd
+		sed -i.orig3 -e 's|AddPath("/usr/include/c++/v1"|AddPath("'"$cxx_incdir"'"|' \
+			tools/clang/lib/Frontend/InitHeaderSearch.cpp
+	fi
+
+	# add experimental cmake support to openmp
+	pushd ../openmp-r208472
+	  $patch_filter %{PatchFile8} | patch -p1
+	  sed -i.orig -e 's|= gcc|= %b/../build/last/bin/clang-3.4|g' testsuite/Makefile
+	popd
+	
 # needed for gcc-fsf-4.x only
 #	sed -i.orig2 -e 's|compatibility_version|dylib_&|' tools/clang/tools/libclang/CMakeLists.txt
 
@@ -142,23 +166,32 @@ CompileScript: <<
 	libcxx_rel_srcdir=../../libcxx-$brv
 	build_root=$llvm_abs_srcdir/../build
 	relsrcdir=../../llvm-%v.src
+	# LLVM_ENABLE_ASSERTIONS:OFF and LIBCXX_ENABLE_ASSERTIONS:OFF
+ 	# for production compiler build
+	enable_assertions=OFF
+
+	# Do not want -DNDEBUG, cause linker errors (undef symbols)
+	# LLVM_ENABLE_ASSERTIONS:ON should have removed -DNDEBUG
+	# but it doesn't, so hack it out of cmake file
+	test "$enable_assertions" = OFF ||
+		sed -i.orig -e '/-DNDEBUG/s|.*|#&|' cmake/modules/HandleLLVMOptions.cmake
 
 	COMMON_CMAKE_OPTIONS=( -DBUILD_SHARED_LIBS:BOOL=ON \
 		-DLLVM_LIT_ARGS:STRING=-v \
 		-DPYTHON_EXECUTABLE:FILEPATH=$fink_root/bin/python2.7 )
-	LLVM_CMAKE_OPTIONS=( -DLLVM_ENABLE_ASSERTIONS:BOOL=ON \
+	LLVM_CMAKE_OPTIONS=( -DLLVM_ENABLE_ASSERTIONS:BOOL=$enable_assertions \
 		-DCMAKE_OSX_SYSROOT:STRING=/ \
 		-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING= )
 
-	# just always build these archs
-	case "$build_arch" in
-	ppc*|powerpc*) TARGET_ARCHS="PowerPC" ;;
-	i386*|x86*) TARGET_ARCHS="X86" ;;
-	esac
-	echo "Target option: $TARGET_ARCHS"
-	# to enable cross-compiling to other archs, uncomment the following:
-	# TARGET_ARCHS="X86;PowerPC;ARM"
+	# always build the native archs' backends
+#	case "$build_arch" in
+#	ppc*|powerpc*) TARGET_ARCHS="PowerPC" ;;
+#	i386*|x86*) TARGET_ARCHS="X86" ;;
+#	esac
+	# enable cross-compiling to other archs:
+	TARGET_ARCHS="X86;PowerPC;ARM"
 	# TARGET_ARCHS="all"
+	echo "Target option: $TARGET_ARCHS"
 	LLVM_CMAKE_OPTIONS=( "${LLVM_CMAKE_OPTIONS[@]}" -DLLVM_TARGETS_TO_BUILD="$TARGET_ARCHS" )
 
 	# automatically use ccache if detected
@@ -194,6 +227,9 @@ EOF
 	    wrap_compiler st$s-clang cc-st$s-clang
 	    wrap_compiler st$s-clang++ cc-st$s-clang++
 	  done
+	  # force system make for testsuite to pass
+	  # if you suspect fink-make (4.0?) is troublesome, uncomment:
+	  # ln -s /usr/bin/make make
 	  export PATH=`pwd`:$PATH
 	popd
 
@@ -323,7 +359,23 @@ EOF
 		-DCMAKE_INSTALL_PREFIX:PATH=$fink_root/opt/llvm-$brv \
 		-DCMAKE_BUILD_TYPE:STRING=$build_type )
 
-	STAGE1_CMAKE_OPTIONS=( -DCMAKE_C_FLAGS=-fno-common -DCMAKE_CXX_FLAGS=-fno-common )
+	# somehow, the choice of C++ library in stage 1 influences
+	# the output of TableGen in stage 2, which makes a 4th stage
+	# necessary to converge.  So select system libc++ over libstdc++
+	# on darwin 11 and 12 to make bootstrap finish in 3 stages.
+	# darwin13+ already default to using libc++.
+	# darwin10- lack libc++ altogether
+	case $darwin_vers in
+	11) force_stage1_system_libcxx=1 ;;
+	12) force_stage1_system_libcxx=1 ;;
+	*) force_stage1_system_libcxx=0 ;;
+	esac
+	if test "$force_stage1_system_libcxx" = 1
+	then STAGE1_LIBCXX_FLAGS="-std=c++11 -stdlib=libc++"
+	fi
+
+	STAGE1_CMAKE_OPTIONS=( -DCMAKE_C_FLAGS=-fno-common \
+		-DCMAKE_CXX_FLAGS="-fno-common $STAGE1_LIBCXX_FLAGS" )
 	# trying to disable optimization flags on non-trustworthy compilers
 	# worked around in recompile_known_units(), and now using RelWithDebInfo
 	ccvers=`$CXX -v 2>&1 | tail -n 1 | cut -d\  -f3`
@@ -365,7 +417,7 @@ EOF
 	popd
 	# wd: %b
 	# create some empty test logs, which we may overwrite and install to docs
-	for f in ../build/stage1/{llvm,clang,polly,compiler-rt}-$version-check.log
+	for f in ../build/stage1/{llvm,clang,polly,compiler-rt,openmp}-$version-check.log
 	do echo "Stage 1 Tests were not run." > $f
 	done
 	echo "######## END of BOOTSTRAP STAGE 1: built llvm/clang with the system compiler"
@@ -404,13 +456,13 @@ EOF
 		LIBCXX_CMAKE_OPTIONS=( "${LIBCXX_CMAKE_OPTIONS[@]}" \
 			-DLIBCXX_LIBCXXABI_INCLUDE_PATHS="$abi_includes" )
 	fi
-	# on darwin10, build FAT
-	if test $darwin_vers = 10
+	# on x86 darwin10+, build FAT
+	if test $darwin_vers -ge 10
 	then flags="$flags -arch i386 -arch x86_64"
 	fi
 	LIBCXX_CMAKE_OPTIONS=( "${LIBCXX_CMAKE_OPTIONS[@]}" \
 		-DCMAKE_INSTALL_PREFIX=$fink_root \
-		-DLIBCXX_ENABLE_ASSERTIONS:BOOL=ON \
+		-DLIBCXX_ENABLE_ASSERTIONS:BOOL=$enable_assertions \
 		-DCMAKE_CXX_FLAGS="$flags" \
 		-DLIBCXX_CXX_ABI="$abi" \
 		-DLIT_EXECUTABLE=$build_root/last/bin/llvm-lit \
@@ -432,10 +484,13 @@ EOF
 	libcxx_stage_dir=$build_root/last-libcxx/lib
 
 	# don't bootstrap on powerpc-darwinX until all codegen issues fixed
-	test "$build_arch" != "powerpc" || exit 0
-	test "$darwin_vers" != 8 || exit 0
-#	If you do not wish to bootstrap, just uncomment the next line:
-#	exit
+#	If you do not wish to bootstrap, change the following value to 0:
+	do_bootstrap=1
+	test "$build_arch" != "powerpc" || do_bootstrap=0
+	test "$darwin_vers" != 8 || do_bootstrap=0
+
+if test $do_bootstrap = 1
+then
 
 	echo "######## START of BOOTSTRAP STAGE 2: building llvm/clang with stage 1 clang"
 	# reuse CC and CXX from stage 1.5
@@ -475,7 +530,7 @@ EOF
 	  ln -s ../build/stage2/bin/clang++ st2-clang++
 	popd
 	# wd: %b
-	for f in ../build/stage2/{llvm,clang,polly,compiler-rt}-$version-check.log
+	for f in ../build/stage2/{llvm,clang,polly,compiler-rt,openmp}-$version-check.log
 	do echo "Stage 2 Tests were not run." > $f
 	done
 	echo "######## END of BOOTSTRAP STAGE 2: built llvm/clang with stage 1 clang"
@@ -529,7 +584,7 @@ EOF
 	  ln -s ../build/stage3/bin/clang++ st3-clang++
 	popd
 	# wd: %b
-	for f in ../build/stage3/{llvm,clang,polly,compiler-rt}-$version-check.log
+	for f in ../build/stage3/{llvm,clang,polly,compiler-rt,openmp}-$version-check.log
 	do echo "Stage 3 Tests were not run." > $f
 	done
 	echo "######## END of BOOTSTRAP STAGE 3: built llvm/clang with stage 2 clang"
@@ -714,8 +769,13 @@ fi
 
 if test "$do_stage4" != 1
 then echo "######## 3-STAGE BOOTSTRAP of llvm/clang PASSED"
-exit
 else
+	echo "######## 3-STAGE BOOTSTRAP of llvm/clang FAILED"
+	if test "$darwin_vers" -ge 11
+	then exit 1
+	fi
+	# on darwin10-, allow 4th stage as workaround due to switching
+	# library from libstdc++ (stage 1) to libc++ (stage 2)
 	echo "######## START of BOOTSTRAP STAGE 4: building llvm/clang with stage 3 clang"
 	# reuse CC and CXX from stage 3.5
 	# yes, reuse STAGE2_CMAKE_OPTIONS in stage 4
@@ -739,7 +799,7 @@ else
 	ln -s stage4 last
 	popd
 	# wd: %b
-	for f in ../build/stage4/{llvm,clang,polly,compiler-rt}-$version-check.log
+	for f in ../build/stage4/{llvm,clang,polly,compiler-rt,openmp}-$version-check.log
 	do echo "Stage 4 Tests were not run." > $f
 	done
 	echo "######## END of BOOTSTRAP STAGE 4: built llvm/clang with stage 3 clang"
@@ -750,17 +810,53 @@ else
 	  mv compare{,3v4}
 	popd
 	if test "$rejoice" = 1
-	then echo "######## 4-STAGE BOOTSTRAP of llvm/clang PASSED" ; exit
+	then echo "######## 4-STAGE BOOTSTRAP of llvm/clang PASSED"
 	else echo "######## 4-STAGE BOOTSTRAP of llvm/clang FAILED" ; exit 1
 	fi
+# $do_stage4 != 1
 fi
+# $do_bootstrap = 1
+fi
+
+# after clang is built, bootstrapped or not, build clang-openmp
+	build_clang_omp=1
+	case "%m" in
+	powerpc) build_clang_omp=0 ;;
+	powerpc64) build_clang_omp=0 ;;
+	esac
+	if test "$build_clang_omp" = 1
+	then
+	pushd ../build/last/bin
+	  export PATH=`pwd`:$PATH
+	popd
+	pushd ../openmp-r208472/runtime
+	  mkdir build
+	  pushd build
+	    for a in 32 32e
+	    do
+	      # http://lists.cs.uiuc.edu/pipermail/openmp-dev/2014-June/000208.html
+	      rm -fr *
+	      cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -Dos=mac -Darch=$a ..
+	      make
+	    done
+	    make fat
+	    # install to build dir first
+	    install -m 755 ../exports/mac_32e/lib/libiomp5.dylib %b/../build/last/lib
+	    install -m 644 omp.h %b/../build/last/lib/clang/%v/include
+	  popd
+	popd
+	fi
 <<
 InfoTest: <<
 # need bash because /bin/sh 2.0 on darwin8 is missing support for pipefail
 # coreutils for gtimeout for tests, see %N.patch:utils/lit/lit/TestRunner.py
 	TestDepends: <<
-		# only darwin8 needs fink's bash
-	#	bash (>= 3.0),
+		# darwin8 needs fink's bash for pipefail
+		# others need fink's bash for operability with python2.7 subprocess
+		bash (>= 4.3),
+		# bash 3.2 was good enough on darwin8
+		# bash 4.2 was good enough on darwin9-12
+		# bash 4.3 good enough on darwin13
 		coreutils
 	<<
  	TestScript: <<
@@ -774,7 +870,7 @@ InfoTest: <<
 	test -x %p/bin/bash || { echo "Error: Fink-built bash >= 3.0 required for pipefail!" ; exit 1; }
 	}
 
-	# need path to bootstrapping compiler
+	# need path to bootstrapping compiler, and 'make' link
 	pushd ../opt-bin
 	  export PATH=`pwd`:$PATH
 	popd
@@ -818,6 +914,7 @@ EOF
 	pushd ../last-libcxx
 	  ( case $darwin_vers in
 	    # we built FAT, but must test each arch separately
+	    # TODO: double-test on darwin11+
 	    10) sed -e '/cxx_flags/s| -arch x86_64||' test/lit.site.cfg > test/lit.site.cfg.32
 	      sed -e '/cxx_flags/s| -arch i386||' test/lit.site.cfg > test/lit.site.cfg.64
 	      echo "******** Checking -arch i386 (32b):"
@@ -833,6 +930,26 @@ EOF
 	  ) 2>&1 | tee libcxx-%v-check.log
 	popd
 
+# pwd: ../build/last
+	echo "******** Running included openmp tests ... ********"
+# test clang-openmp
+	build_clang_omp=1
+	case "%m" in
+	powerpc) build_clang_omp=0 ;;
+	powerpc64) build_clang_omp=0 ;;
+	esac
+	if test "$build_clang_omp" = 1
+	then
+	( pushd %b/../openmp-r208472/testsuite
+	  export LIBRARY_PATH="%b/../build/last/lib:%p/lib"
+	  export DYLD_LIBRARY_PATH="%b/../build/last/lib:%p/lib"
+	  export C_INCLUDE_PATH="%b/../build/last/lib/clang/%v/include:%p/include:/usr/include"
+	  # manually prune the ld warnings
+	  make -j1 -k ctest 2>&1 | grep -v "ld: warning: directory not found for option '-L%p/opt/llvm-3.4/lib" || :
+	popd
+	) 2>&1 | tee openmp-%v-check.log
+	fi
+
 #	echo "******** Running massive test-suite ... ********"
 #	( cd projects/test-suite ; make -k 2>&1 || : ;) | tee test-suite-%v-check.log
 	<<
@@ -842,6 +959,10 @@ InstallScript: <<
 	#!/bin/sh -ev
 	# "brv" = branch version, 3.4
 	brv=3.4
+	# need 'make' link
+	pushd ../opt-bin
+	  export PATH=`pwd`:$PATH
+	popd
 	pushd ../build/last
 	  make -j1 install/fast DESTDIR="%d"
 	  # install most recent stage libc++
@@ -935,11 +1056,33 @@ InstallScript: <<
 	  popd
 	done
 
+	stem=opt/llvm-$brv
+	iprefix=%i/$stem
+	prefix=%p/$stem
+
+	# clang-openmp
+	build_clang_omp=1
+	case "%m" in
+	powerpc) build_clang_omp=0 ;;
+	powerpc64) build_clang_omp=0 ;;
+	esac
+	if test "$build_clang_omp" = 1
+	then
+	install -m 755 %b/../build/last/lib/libiomp5.dylib $iprefix/lib
+	install_name_tool -id "$prefix/lib/libiomp5.dylib" "$iprefix/lib/libiomp5.dylib"
+	install -m 644 %b/../build/last/lib/clang/%v/include/omp.h $iprefix/lib/clang/%v/include
+	fi
+
 	# need symlink /usr/bin/ld so libLTO.dylib can be found relative to @executable_path
-	iprefix=%i/opt/llvm-$brv
-	prefix=%p/opt/llvm-$brv
 	pushd $iprefix/bin
 		test -x /usr/bin/ld && ln -s /usr/bin/ld .
+	popd
+
+# convenient clang symlinks
+	mkdir -p %i/bin
+	pushd %i/bin
+	  ln -s $prefix/bin/clang clang-$brv
+	  ln -s $prefix/bin/clang++ clang++-$brv
 	popd
 
 # don't symlink libc++'s include/lib to clang's directories
@@ -977,6 +1120,7 @@ SplitOff2: <<
 		opt/llvm-3.4/share/doc/clang
 		opt/llvm-3.4/share/doc/clang-html
 		opt/llvm-3.4/share/doc/%N/testlogs/clang-%v-check.log
+		opt/llvm-3.4/share/doc/%N/testlogs/openmp-%v-check.log
 		opt/llvm-3.4/share/doc/%N/testlogs/compiler-rt-%v-check.log
 	<<
 <<
@@ -998,6 +1142,7 @@ SplitOff5: <<
 	Files: <<
 		opt/llvm-3.4/lib/libclang*
 		opt/llvm-3.4/lib/clang/%v/lib
+		(%m != powerpc) opt/llvm-3.4/lib/libiomp5.dylib
 	<<
 	DocFiles: <<
 		tools/clang/*.TXT
@@ -1033,6 +1178,7 @@ SplitOff5: <<
 		!%p/opt/llvm-3.4/lib/libclangTooling.dylib
 		!%p/opt/llvm-3.4/lib/clang/%v/lib/darwin/libclang_rt.asan_osx_dynamic.dylib
 		!%p/opt/llvm-3.4/lib/clang/%v/lib/darwin/libclang_rt.asan_iossim_dynamic.dylib
+		(%m != powerpc) %p/opt/llvm-3.4/lib/libiomp5.dylib 5.0.0 %n (>= 3.4.1-0)
 	<<
 <<
 SplitOff6: <<
@@ -1048,6 +1194,7 @@ SplitOff6: <<
 	Description: Executables and runtime for clang compiler
 	BuildDependsOnly: false
 	Files: <<
+		bin/clang*
 		opt/llvm-3.4/bin/clang*
 		opt/llvm-3.4/bin/ld
 		opt/llvm-3.4/lib/clang
@@ -1135,6 +1282,12 @@ SplitOff12: <<
 		!%p/opt/llvm-3.4/lib/libLTO.dylib
 		!%p/opt/llvm-3.4/lib/BugpointPasses.so
 		!%p/opt/llvm-3.4/lib/LLVMHello.so
+		!%p/opt/llvm-3.4/lib/libLLVMARMAsmParser.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMARMAsmPrinter.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMARMCodeGen.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMARMDesc.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMARMDisassembler.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMARMInfo.dylib
 		!%p/opt/llvm-3.4/lib/libLLVMAnalysis.dylib
 		!%p/opt/llvm-3.4/lib/libLLVMAsmParser.dylib
 		!%p/opt/llvm-3.4/lib/libLLVMAsmPrinter.dylib
@@ -1158,11 +1311,11 @@ SplitOff12: <<
 		!%p/opt/llvm-3.4/lib/libLLVMObjCARCOpts.dylib
 		!%p/opt/llvm-3.4/lib/libLLVMObject.dylib
 		!%p/opt/llvm-3.4/lib/libLLVMOption.dylib
-		(%m = powerpc) !%p/opt/llvm-3.4/lib/libLLVMPowerPCAsmParser.dylib
-		(%m = powerpc) !%p/opt/llvm-3.4/lib/libLLVMPowerPCAsmPrinter.dylib
-		(%m = powerpc) !%p/opt/llvm-3.4/lib/libLLVMPowerPCCodeGen.dylib
-		(%m = powerpc) !%p/opt/llvm-3.4/lib/libLLVMPowerPCDesc.dylib
-		(%m = powerpc) !%p/opt/llvm-3.4/lib/libLLVMPowerPCInfo.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMPowerPCAsmParser.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMPowerPCAsmPrinter.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMPowerPCCodeGen.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMPowerPCDesc.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMPowerPCInfo.dylib
 		!%p/opt/llvm-3.4/lib/libLLVMRuntimeDyld.dylib
 		!%p/opt/llvm-3.4/lib/libLLVMScalarOpts.dylib
 		!%p/opt/llvm-3.4/lib/libLLVMSelectionDAG.dylib
@@ -1173,13 +1326,13 @@ SplitOff12: <<
 		!%p/opt/llvm-3.4/lib/libLLVMVectorize.dylib
 		!%p/opt/llvm-3.4/lib/libLLVMipa.dylib
 		!%p/opt/llvm-3.4/lib/libLLVMipo.dylib
-		(%m != powerpc) !%p/opt/llvm-3.4/lib/libLLVMX86AsmParser.dylib
-		(%m != powerpc) !%p/opt/llvm-3.4/lib/libLLVMX86AsmPrinter.dylib
-		(%m != powerpc) !%p/opt/llvm-3.4/lib/libLLVMX86CodeGen.dylib
-		(%m != powerpc) !%p/opt/llvm-3.4/lib/libLLVMX86Desc.dylib
-		(%m != powerpc) !%p/opt/llvm-3.4/lib/libLLVMX86Disassembler.dylib
-		(%m != powerpc) !%p/opt/llvm-3.4/lib/libLLVMX86Info.dylib
-		(%m != powerpc) !%p/opt/llvm-3.4/lib/libLLVMX86Utils.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMX86AsmParser.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMX86AsmPrinter.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMX86CodeGen.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMX86Desc.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMX86Disassembler.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMX86Info.dylib
+		!%p/opt/llvm-3.4/lib/libLLVMX86Utils.dylib
 		!%p/opt/llvm-3.4/lib/libgtest.dylib
 		!%p/opt/llvm-3.4/lib/libgtest_main.dylib
 	<<
@@ -1263,22 +1416,23 @@ and libraries in %p/lib/c++/, so opt to use them, pass to clang:
 -cxx-isystem %p/include/c++/v1 -L%p/lib/c++
 Otherwise the default is to use the system's libc++.
 
+openmp runtime is installed privately under clang's per-version resource dir.
+
 Built with shared-libraries to reduce the binary size and peak disk usage.
-Enabled only native targets X86, PowerPC.
-Other targets can be enabled by uncommenting lines in the CompileScript.
+Targets enabled in CompileScript: X86, PowerPC, ARM.
 <<
 DescPort: <<
 Most of the patches are maintained at fangism's powerpc-darwin8 branches
 of the llvm, clang, compiler-rt projects hosted at github:
-	https://github.com/fangism/llvm/compare/release_34...powerpc-darwin8-rel-3.4.diff
-	https://github.com/fangism/clang/compare/release_34...powerpc-darwin8-rel-3.4.diff
+	https://github.com/fangism/llvm/compare/release-3.4.1...powerpc-darwin8-rel-3.4.1.diff
+	https://github.com/fangism/clang/compare/release-3.4.1...powerpc-darwin8-rel-3.4.1.diff
 	https://github.com/fangism/compiler-rt/compare/release_34...powerpc-darwin8-rel-3.4.diff
 	https://github.com/fangism/libcxx/compare/release_34...powerpc-darwin8-rel-3.4.diff
 
 On darwin>9 and x86 architectures, the package build is done as a
 3-stage bootstrap (self-host), now including a built libc++.  
-When stage 2 and 3 of bootstrap miscompare, a 4th stage is done, 
-and then compared against stage 3.  
+Should stage 2 vs. 3 of bootstrap miscompare, a 4th stage is done, 
+and then compared against stage 3 (only expected on darwin10).  
 
 	*** LLVM/Clang-3.4 still has some codegen issues for PowerPC
 	*** It is NOT considered production quality for PowerPC
@@ -1291,10 +1445,21 @@ Original (pre-3.0) package maintained by
 	Benjamin Reed <llvm@fink.raccoonfink.com>
 with contributions from
 	Jack Howarth <howarth@bromo.med.uc.edu>
+		clang-omp
+
 PatchFile contains:
 *	various compiler deficiency workarounds
 *	CMakeFile fixes, mostly missing dependencies
 *	CodeGen patches related to ABI, mach-o
 *	and much more!
+
+Generate openmp-$rev with..
+svn co -$rev http://llvm.org/svn/llvm-project/openmp/trunk/ openmp-$rev
+tar --exclude=.svn -zcvf openmp-$rev.tar.gz openmp-$rev
+
+Current clang-omp.patch generated by diff of clang 3.4.0 source and clang-omp from
+git co -b clang-omp https://github.com/clang-omp/clang.git
+at commit 13e28835a005b44481387a32666ed39a7db58eb6.
+
 <<
 <<
