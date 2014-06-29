@@ -1,6 +1,28 @@
+diff -ru Python-2.7.7.orig/Lib/_osx_support.py Python-2.7.7/Lib/_osx_support.py
+--- Python-2.7.7.orig/Lib/_osx_support.py	2014-05-31 14:58:38.000000000 -0400
++++ Python-2.7.7/Lib/_osx_support.py	2014-06-29 08:08:10.000000000 -0400
+@@ -450,8 +450,16 @@
+         # case and disallow installs.
+         cflags = _config_vars.get(_INITPRE+'CFLAGS',
+                                     _config_vars.get('CFLAGS', ''))
+-        if ((macrelease + '.') >= '10.4.' and
+-            '-arch' in cflags.strip()):
++        if macrelease:
++            try:
++                macrelease = tuple(int(i) for i in macrelease.split('.')[0:2])
++            except ValueError:
++                macrelease = (10, 0)
++        else:
++            # assume no universal support
++            macrelease = (10, 0)
++
++        if (macrelease >= (10, 4)) and '-arch' in cflags.strip():
+             # The universal build will build fat binaries, but not on
+             # systems before 10.4
+ 
 diff -ru Python-2.7.7.orig/Lib/ctypes/macholib/dyld.py Python-2.7.7/Lib/ctypes/macholib/dyld.py
 --- Python-2.7.7.orig/Lib/ctypes/macholib/dyld.py	2014-05-31 14:58:38.000000000 -0400
-+++ Python-2.7.7/Lib/ctypes/macholib/dyld.py	2014-06-05 17:01:13.000000000 -0400
++++ Python-2.7.7/Lib/ctypes/macholib/dyld.py	2014-06-29 08:07:26.000000000 -0400
 @@ -26,6 +26,7 @@
  
  DEFAULT_LIBRARY_FALLBACK = [
@@ -9,9 +31,31 @@ diff -ru Python-2.7.7.orig/Lib/ctypes/macholib/dyld.py Python-2.7.7/Lib/ctypes/m
      "/usr/local/lib",
      "/lib",
      "/usr/lib",
+diff -ru Python-2.7.7.orig/Lib/distutils/tests/test_build_ext.py Python-2.7.7/Lib/distutils/tests/test_build_ext.py
+--- Python-2.7.7.orig/Lib/distutils/tests/test_build_ext.py	2014-05-31 14:58:38.000000000 -0400
++++ Python-2.7.7/Lib/distutils/tests/test_build_ext.py	2014-06-29 08:08:10.000000000 -0400
+@@ -479,8 +479,16 @@
+ 
+         # get the deployment target that the interpreter was built with
+         target = sysconfig.get_config_var('MACOSX_DEPLOYMENT_TARGET')
+-        target = tuple(map(int, target.split('.')))
+-        target = '%02d%01d0' % target
++        target = tuple(map(int, target.split('.')[0:2]))
++        # format the target value as defined in the Apple
++        # Availability Macros.  We can't use the macro names since
++        # at least one value we test with will not exist yet.
++        if target[1] < 10:
++            # for 10.1 through 10.9.x -> "10n0"
++            target = '%02d%01d0' % target
++        else:
++            # for 10.10 and beyond -> "10nn00"
++            target = '%02d%02d00' % target
+         deptarget_ext = Extension(
+             'deptarget',
+             [deptarget_c],
 diff -ru Python-2.7.7.orig/Lib/platform.py Python-2.7.7/Lib/platform.py
 --- Python-2.7.7.orig/Lib/platform.py	2014-05-31 14:58:39.000000000 -0400
-+++ Python-2.7.7/Lib/platform.py	2014-06-05 17:01:13.000000000 -0400
++++ Python-2.7.7/Lib/platform.py	2014-06-29 08:07:26.000000000 -0400
 @@ -816,6 +816,15 @@
      if info is not None:
          return info
@@ -30,7 +74,7 @@ diff -ru Python-2.7.7.orig/Lib/platform.py Python-2.7.7/Lib/platform.py
  
 diff -ru Python-2.7.7.orig/Lib/sysconfig.py Python-2.7.7/Lib/sysconfig.py
 --- Python-2.7.7.orig/Lib/sysconfig.py	2014-05-31 14:58:39.000000000 -0400
-+++ Python-2.7.7/Lib/sysconfig.py	2014-06-05 17:01:13.000000000 -0400
++++ Python-2.7.7/Lib/sysconfig.py	2014-06-29 08:07:26.000000000 -0400
 @@ -303,12 +303,6 @@
              msg = msg + " (%s)" % e.strerror
          raise IOError(msg)
@@ -44,9 +88,35 @@ diff -ru Python-2.7.7.orig/Lib/sysconfig.py Python-2.7.7/Lib/sysconfig.py
      # There's a chicken-and-egg situation on OS X with regards to the
      # _sysconfigdata module after the changes introduced by #15298:
      # get_config_vars() is called by get_platform() as part of the
+diff -ru Python-2.7.7.orig/Lib/test/test__osx_support.py Python-2.7.7/Lib/test/test__osx_support.py
+--- Python-2.7.7.orig/Lib/test/test__osx_support.py	2014-05-31 14:58:39.000000000 -0400
++++ Python-2.7.7/Lib/test/test__osx_support.py	2014-06-29 08:08:10.000000000 -0400
+@@ -109,7 +109,9 @@
+ 
+     def test__supports_universal_builds(self):
+         import platform
+-        self.assertEqual(platform.mac_ver()[0].split('.') >= ['10', '4'],
++        mac_ver_tuple = tuple(int(i) for i in
++                            platform.mac_ver()[0].split('.')[0:2])
++        self.assertEqual(mac_ver_tuple >= (10, 4),
+                             _osx_support._supports_universal_builds())
+ 
+     def test__find_appropriate_compiler(self):
+diff -ru Python-2.7.7.orig/Lib/test/test_posix.py Python-2.7.7/Lib/test/test_posix.py
+--- Python-2.7.7.orig/Lib/test/test_posix.py	2014-05-31 14:58:39.000000000 -0400
++++ Python-2.7.7/Lib/test/test_posix.py	2014-06-29 08:08:10.000000000 -0400
+@@ -520,7 +520,7 @@
+         if sys.platform == 'darwin':
+             import sysconfig
+             dt = sysconfig.get_config_var('MACOSX_DEPLOYMENT_TARGET') or '10.0'
+-            if float(dt) < 10.6:
++            if tuple(int(n) for n in dt.split('.')[0:2]) < (10, 6):
+                 raise unittest.SkipTest("getgroups(2) is broken prior to 10.6")
+ 
+         # 'id -G' and 'os.getgroups()' should return the same
 diff -ru Python-2.7.7.orig/Makefile.pre.in Python-2.7.7/Makefile.pre.in
 --- Python-2.7.7.orig/Makefile.pre.in	2014-05-31 14:58:39.000000000 -0400
-+++ Python-2.7.7/Makefile.pre.in	2014-06-05 17:01:13.000000000 -0400
++++ Python-2.7.7/Makefile.pre.in	2014-06-29 08:07:26.000000000 -0400
 @@ -484,7 +484,7 @@
  	fi
  
@@ -79,7 +149,7 @@ diff -ru Python-2.7.7.orig/Makefile.pre.in Python-2.7.7/Makefile.pre.in
  	else	true; \
 diff -ru Python-2.7.7.orig/Misc/python-config.in Python-2.7.7/Misc/python-config.in
 --- Python-2.7.7.orig/Misc/python-config.in	2014-05-31 14:58:39.000000000 -0400
-+++ Python-2.7.7/Misc/python-config.in	2014-06-05 17:01:13.000000000 -0400
++++ Python-2.7.7/Misc/python-config.in	2014-06-29 08:07:26.000000000 -0400
 @@ -46,12 +46,10 @@
      elif opt in ('--libs', '--ldflags'):
          libs = getvar('LIBS').split() + getvar('SYSLIBS').split()
@@ -99,7 +169,7 @@ diff -ru Python-2.7.7.orig/Misc/python-config.in Python-2.7.7/Misc/python-config
  
 diff -ru Python-2.7.7.orig/Misc/python.pc.in Python-2.7.7/Misc/python.pc.in
 --- Python-2.7.7.orig/Misc/python.pc.in	2014-05-31 14:58:39.000000000 -0400
-+++ Python-2.7.7/Misc/python.pc.in	2014-06-05 17:01:13.000000000 -0400
++++ Python-2.7.7/Misc/python.pc.in	2014-06-29 08:07:26.000000000 -0400
 @@ -1,6 +1,6 @@
  prefix=@prefix@
  exec_prefix=@exec_prefix@
@@ -110,7 +180,7 @@ diff -ru Python-2.7.7.orig/Misc/python.pc.in Python-2.7.7/Misc/python.pc.in
  Name: Python
 diff -ru Python-2.7.7.orig/Modules/dbmmodule.c Python-2.7.7/Modules/dbmmodule.c
 --- Python-2.7.7.orig/Modules/dbmmodule.c	2014-05-31 14:58:40.000000000 -0400
-+++ Python-2.7.7/Modules/dbmmodule.c	2014-06-05 17:01:13.000000000 -0400
++++ Python-2.7.7/Modules/dbmmodule.c	2014-06-29 08:07:26.000000000 -0400
 @@ -19,7 +19,7 @@
  static char *which_dbm = "GNU gdbm";  /* EMX port of GDBM */
  #endif
@@ -122,7 +192,7 @@ diff -ru Python-2.7.7.orig/Modules/dbmmodule.c Python-2.7.7/Modules/dbmmodule.c
  #include <gdbm-ndbm.h>
 diff -ru Python-2.7.7.orig/configure Python-2.7.7/configure
 --- Python-2.7.7.orig/configure	2014-05-31 14:58:40.000000000 -0400
-+++ Python-2.7.7/configure	2014-06-05 17:02:35.000000000 -0400
++++ Python-2.7.7/configure	2014-06-29 08:26:09.000000000 -0400
 @@ -5386,7 +5386,7 @@
  	  ;;
      Darwin*)
@@ -132,7 +202,24 @@ diff -ru Python-2.7.7.orig/configure Python-2.7.7/configure
  	RUNSHARED=DYLD_LIBRARY_PATH=`pwd`${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}
  	;;
      AIX*)
-@@ -8060,8 +8060,8 @@
+@@ -6045,8 +6045,14 @@
+ 
+ 	    # Calculate the right deployment target for this build.
+ 	    #
+-	    cur_target=`sw_vers -productVersion | sed 's/\(10\.[0-9]*\).*/\1/'`
+-	    if test ${cur_target} '>' 10.2; then
++		cur_target_major=`sw_vers -productVersion | \
++				sed 's/\([[0-9]]*\)\.\([[0-9]]*\).*/\1/'`
++		cur_target_minor=`sw_vers -productVersion | \
++				sed 's/\([[0-9]]*\)\.\([[0-9]]*\).*/\2/'`
++		cur_target="${cur_target_major}.${cur_target_minor}"
++		if test ${cur_target_major} -eq 10 && \
++		   test ${cur_target_minor} -ge 3
++		then
+ 		    cur_target=10.3
+ 		    if test ${enable_universalsdk}; then
+ 			    if test "${UNIVERSAL_ARCHS}" = "all"; then
+@@ -8060,8 +8066,8 @@
  	#ARCH_RUN_32BIT="true"
      fi
  
@@ -143,7 +230,7 @@ diff -ru Python-2.7.7.orig/configure Python-2.7.7/configure
      LIBTOOL_CRUFT=$LIBTOOL_CRUFT' -compatibility_version $(VERSION) -current_version $(VERSION)';;
  esac
  
-@@ -8208,20 +8208,8 @@
+@@ -8208,20 +8214,8 @@
  			LDCXXSHARED="$LDCXXSHARED "'-bundle_loader $(BINDIR)/python$(VERSION)$(EXE)'
  		fi ;;
  	Darwin/*)
@@ -166,7 +253,7 @@ diff -ru Python-2.7.7.orig/configure Python-2.7.7/configure
  			if test "$enable_framework" ; then
  				# Link against the framework. All externals should be defined.
  				BLDSHARED="$LDSHARED "'$(PYTHONFRAMEWORKDIR)/Versions/$(VERSION)/$(PYTHONFRAMEWORK)'
-@@ -8229,11 +8217,10 @@
+@@ -8229,11 +8223,10 @@
  				LDCXXSHARED="$LDCXXSHARED "'$(PYTHONFRAMEWORKPREFIX)/$(PYTHONFRAMEWORKDIR)/Versions/$(VERSION)/$(PYTHONFRAMEWORK)'
  			else
  				# No framework, use the Python app as bundle-loader
@@ -181,7 +268,7 @@ diff -ru Python-2.7.7.orig/configure Python-2.7.7/configure
  		;;
  	Linux*|GNU*|QNX*)
  		LDSHARED='$(CC) -shared'
-@@ -8623,7 +8610,7 @@
+@@ -8623,7 +8616,7 @@
  if test "x$ac_cv_lib_intl_textdomain" = xyes; then :
  
  $as_echo "#define WITH_LIBINTL 1" >>confdefs.h
@@ -190,7 +277,7 @@ diff -ru Python-2.7.7.orig/configure Python-2.7.7/configure
  fi
  
  
-@@ -14115,7 +14102,7 @@
+@@ -14115,7 +14108,7 @@
  
  # first curses configure check
  ac_save_cppflags="$CPPFLAGS"
@@ -199,7 +286,7 @@ diff -ru Python-2.7.7.orig/configure Python-2.7.7/configure
  
  for ac_header in curses.h ncurses.h
  do :
-@@ -14473,7 +14460,7 @@
+@@ -14473,7 +14466,7 @@
  
  if test $ac_sys_system = Darwin
  then
@@ -210,7 +297,7 @@ diff -ru Python-2.7.7.orig/configure Python-2.7.7/configure
  
 diff -ru Python-2.7.7.orig/setup.py Python-2.7.7/setup.py
 --- Python-2.7.7.orig/setup.py	2014-05-31 14:58:40.000000000 -0400
-+++ Python-2.7.7/setup.py	2014-06-05 17:20:59.000000000 -0400
++++ Python-2.7.7/setup.py	2014-06-29 08:08:10.000000000 -0400
 @@ -264,13 +264,17 @@
                                                longest, g)
  
@@ -237,7 +324,18 @@ diff -ru Python-2.7.7.orig/setup.py Python-2.7.7/setup.py
  
      def build_extension(self, ext):
  
-@@ -921,53 +926,8 @@
+@@ -733,7 +738,9 @@
+         if host_platform == 'darwin':
+             os_release = int(os.uname()[2].split('.')[0])
+             dep_target = sysconfig.get_config_var('MACOSX_DEPLOYMENT_TARGET')
+-            if dep_target and dep_target.split('.') < ['10', '5']:
++            if (dep_target and
++                    (tuple(int(n) for n in dep_target.split('.')[0:2])
++                        < (10, 5) ) ):
+                 os_release = 8
+             if os_release < 9:
+                 # MacOSX 10.4 has a broken readline. Don't try to build
+@@ -921,53 +928,8 @@
          # construct a list of paths to look for the header file in on
          # top of the normal inc_dirs.
          db_inc_paths = [
@@ -292,7 +390,7 @@ diff -ru Python-2.7.7.orig/setup.py Python-2.7.7/setup.py
          db_inc_paths = [p for p in db_inc_paths if os.path.exists(p)]
  
          db_ver_inc_map = {}
-@@ -1093,12 +1053,7 @@
+@@ -1093,12 +1055,7 @@
          # We hunt for #define SQLITE_VERSION "n.n.n"
          # We need to find >= sqlite version 3.0.8
          sqlite_incdir = sqlite_libdir = None
@@ -306,7 +404,7 @@ diff -ru Python-2.7.7.orig/setup.py Python-2.7.7/setup.py
                             ]
          if cross_compiling:
              sqlite_inc_paths = []
-@@ -1112,7 +1067,7 @@
+@@ -1112,7 +1069,7 @@
          if host_platform == 'darwin':
              sysroot = macosx_sdk_root()
  
@@ -315,7 +413,7 @@ diff -ru Python-2.7.7.orig/setup.py Python-2.7.7/setup.py
              d = d_
              if host_platform == 'darwin' and is_macosx_sdk_path(d):
                  d = os.path.join(sysroot, d[1:])
-@@ -1144,11 +1099,9 @@
+@@ -1144,11 +1101,9 @@
              sqlite_dirs_to_check = [
                  os.path.join(sqlite_incdir, '..', 'lib64'),
                  os.path.join(sqlite_incdir, '..', 'lib'),
@@ -328,7 +426,7 @@ diff -ru Python-2.7.7.orig/setup.py Python-2.7.7/setup.py
              if sqlite_libfile:
                  sqlite_libdir = [os.path.abspath(os.path.dirname(sqlite_libfile))]
  
-@@ -1268,7 +1221,7 @@
+@@ -1268,7 +1223,7 @@
                          if self.compiler.find_library_file(lib_dirs,
                                                                 'gdbm_compat'):
                              gdbm_libs.append('gdbm_compat')
@@ -337,7 +435,7 @@ diff -ru Python-2.7.7.orig/setup.py Python-2.7.7/setup.py
                              print "building dbm using gdbm"
                              dbmext = Extension(
                                  'dbm', ['dbmmodule.c'],
-@@ -1346,7 +1299,7 @@
+@@ -1346,7 +1301,7 @@
                  # _curses_panel.so must link with panelw.
                  panel_library = 'panelw'
              curses_libs = [curses_library]
@@ -346,7 +444,7 @@ diff -ru Python-2.7.7.orig/setup.py Python-2.7.7/setup.py
                                      [os.path.join(d, 'ncursesw') for d in inc_dirs])
              exts.append( Extension('_curses', ['_cursesmodule.c'],
                                     include_dirs = curses_incs,
-@@ -2092,7 +2045,8 @@
+@@ -2092,7 +2047,8 @@
                          sources=sources,
                          depends=depends)
          ext_test = Extension('_ctypes_test',
