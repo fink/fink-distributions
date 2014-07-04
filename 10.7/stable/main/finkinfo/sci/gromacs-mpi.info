@@ -1,18 +1,16 @@
 Package: gromacs-mpi
-Version: 4.6.1
-Revision: 4
-Depends: %N-shlibs (= %v-%r), fftw3-shlibs (>= 3.3.4-1), gsl-shlibs, openmotif4-shlibs, openmpi (>= 1.8.1-3), x11
-BuildDepends: fftw3 (>= 3.3.4-1), gsl, openmpi (>= 1.8.1-3), openmotif4, x11-dev, cmake
-BuildConflicts: gromacs-mpi-dev, gromacs-dev, gromacs (<= 4.6-1), gromacs-mpi (<= 4.6-1)
+Version: 5.0
+Revision: 1
+Depends: %N-shlibs (= %v-%r), fftw3-shlibs (>= 3.3.4-2), openmpi (>= 1.8.1-3), x11
+BuildDepends: boost1.55-nopython, fftw3 (>= 3.3.4-2), openmpi (>= 1.8.1-3), pandoc, x11-dev, cmake
+BuildConflicts: atlas, gromacs-mpi-dev, gromacs-dev, gromacs (<= 4.6-1), gromacs-mpi (<= 4.6-1)
 Conflicts: gromacs, gromacs-mpi, gromacs-bin (<< 4.6-1), gromacs-mpi-bin (<< 4.6-1)
 Replaces: gromacs, gromacs-mpi, gromacs-bin (<< 4.6-1), gromacs-mpi-bin (<< 4.6-1)
 BuildDependsOnly: False
 UseMaxBuildJobs: True
 Distribution: 10.7, 10.8, 10.9
 Source: mirror:custom:gromacs-%v.tar.gz
-Source-MD5: a2a7952ec5566fe4b470285dbe5818e8
-PatchFile: gromacs.patch
-PatchFile-MD5: 4ea1ce7a4adf72f27bcb668cfb3a88a2
+Source-MD5: faa1153efda4e909c7136b128afdb46e
 CustomMirror: <<
 Primary: ftp://ftp.gromacs.org/pub/gromacs/
 <<
@@ -20,7 +18,7 @@ DocFiles: AUTHORS COPYING README
 InfoTest: <<
  TestSuiteSize: medium
  TestSource: http://gerrit.gromacs.org/download/regressiontests-%v.tar.gz
- TestSource-MD5: 0b648a4fc431777d746bf78313d33bf5
+ TestSource-MD5: a07524afebca5013540d4f2f72df2dce
  TestScript: <<
    #!/bin/sh -ev
    mv ../regressiontests-%v regressiontests-%v
@@ -30,7 +28,6 @@ InfoTest: <<
 << 
 PatchScript: <<
 #!/bin/zsh -efv
-%{default_script}
 perl -pi.bak -e 's|512|4096|g'  src/gmxlib/futil.c
 perl -pi.bak -e 's|/bin/csh|/bin/csh -f|g' share/**/* 2>/dev/null
 perl -pi.bak -e 's|/lib/cpp|/usr/bin/cpp|g' share/**/* 2>/dev/null
@@ -43,19 +40,30 @@ mkdir build
 InstallScript: <<
 #!/bin/bash -efv
 cd build
-CMAKE_OPTIONS="-DGMX_X11="ON" -DGMX_MPI="ON" -DGMX_GSL="ON" -DCMAKE_INSTALL_NAME_DIR=%p/lib -DCMAKE_INSTALL_PREFIX=%p"
+CMAKE_OPTIONS="-DBOOST_ROOT=%p/opt/boost-1_55 \
+		-DGMX_GPU="OFF" \
+		-DGMX_FFT_LIBRARY=fftw3 \
+		-DGMX_X11="ON" \
+		-DGMX_MPI="ON" \
+		-DCMAKE_INSTALL_NAME_DIR=%p/lib \
+		-DCMAKE_INSTALL_PREFIX=%p \
+		-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING="" \
+		-DCMAKE_OSX_SYSROOT:STRING=/"
 if [ -f %b/INSTALL_MAKE_CHECK ]; then
-   CMAKE_OPTIONS="$CMAKE_OPTIONS -DREGRESSIONTEST_PATH=%b/regressiontests-%v"
+   NUMPROC="$(sysctl -n hw.ncpu)"
+   CMAKE_OPTIONS="$CMAKE_OPTIONS -DGMX_TEST_NUMBER_PROCS:STRING=$NUMPROC -DREGRESSIONTEST_PATH=%b/regressiontests-%v"
 fi
 # no assembler support for AVX intrinsics until transition to clang
 if [ "%m" == "x86_64" -o "%m" == "i386" ]; then
-   CMAKE_OPTIONS="$CMAKE_OPTIONS -DGMX_CPU_ACCELERATION:STRING=SSE2"
+   CMAKE_OPTIONS="$CMAKE_OPTIONS -DGMX_SIMD:STRING=SSE2"
 fi
 cmake $CMAKE_OPTIONS ..
 make
 if [ -f %b/INSTALL_MAKE_CHECK ]; then
-  export DYLD_LIBRARY_PATH="%b/build/src/tools:%b/build/src/kernel:%b/build/src/gmxlib:%b/build/src/mdlib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A:%p/lib:%p/lib/gcc4.8/lib:/usr/lib"
+  export LIBRARY_PATH="%b/build/lib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A:%p/lib:%p/lib/openmpi:%p/lib/gcc4.9/lib:/usr/lib"
+  export DYLD_LIBRARY_PATH="%b/build/lib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A:%p/lib:%p/lib/openmpi:%p/lib/gcc4.9/lib:/usr/lib"
   make check
+  export -n LIBRARY_PATH
   export -n DYLD_LIBRARY_PATH
 fi
 mkdir -p %i/include/%n
@@ -64,34 +72,24 @@ make clean
 cmake -DGMX_DOUBLE="ON" $CMAKE_OPTIONS ..
 make
 if [ -f %b/INSTALL_MAKE_CHECK ]; then
-  export DYLD_LIBRARY_PATH="%b/build/src/tools:%b/build/src/kernel:%b/build/src/gmxlib:%b/build/src/mdlib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A:%p/lib:%p/lib/gcc4.8/lib:/usr/lib"
-  make check 
+  export LIBRARY_PATH="%b/build/lib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A:%p/lib:%p/lib/openmpi:%p/lib/gcc4.9/lib:/usr/lib"
+  export DYLD_LIBRARY_PATH="%b/build/lib:/System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A:%p/lib:%p/lib/openmpi:%p/lib/gcc4.9/lib:/usr/lib"
+  make check
+  export -n LIBRARY_PATH
   export -n DYLD_LIBRARY_PATH
 fi
 make install DESTDIR=%d
 <<
 SplitOff: <<
 Package: %N-shlibs
-Depends: fftw3-shlibs (>= 3.3.4-1), gsl-shlibs, openmotif4-shlibs, openmpi-shlibs (>= 1.8.1-3), x11
+Depends: fftw3-shlibs (>= 3.3.4-2), openmpi-shlibs (>= 1.8.1-3), x11
 Files: <<
-	lib/libgmx_mpi.8*.dylib
-	lib/libgmxana_mpi.8*.dylib
-	lib/libmd_mpi.8*.dylib
-	lib/libgmxpreprocess_mpi.8*.dylib
-	lib/libgmx_mpi_d.8*.dylib
-	lib/libgmxana_mpi_d.8*.dylib
-	lib/libmd_mpi_d.8*.dylib
-	lib/libgmxpreprocess_mpi_d.8*.dylib
+	lib/libgromacs_mpi.0*.dylib
+	lib/libgromacs_mpi_d.0*.dylib
 <<
 Shlibs: <<
-	%p/lib/libgmx_mpi.8.dylib 8.0.0 %n (>= 4.6.1-1)
-	%p/lib/libgmxana_mpi.8.dylib 8.0.0 %n (>= 4.6.1-1)
-	%p/lib/libmd_mpi.8.dylib 8.0.0 %n (>= 4.6.1-1)
-	%p/lib/libgmxpreprocess_mpi.8.dylib 8.0.0 %n (>= 4.6.1-1)
-	%p/lib/libgmx_mpi_d.8.dylib 8.0.0 %n (>= 4.6.1-1)
-	%p/lib/libgmxana_mpi_d.8.dylib 8.0.0 %n (>= 4.6.1-1)
-	%p/lib/libmd_mpi_d.8.dylib 8.0.0 %n (>= 4.6.1-1)
-	%p/lib/libgmxpreprocess_mpi_d.8.dylib 8.0.0 %n (>= 4.6.1-1)
+	%p/lib/libgromacs_mpi.0.dylib 0.0.0 %n (>= 5.0-1)
+	%p/lib/libgromacs_mpi_d.0.dylib 0.0.0 %n (>= 5.0-1)
 <<
 DocFiles: AUTHORS COPYING README
 <<
@@ -104,14 +102,8 @@ BuildDependsOnly: True
 Files: <<
 	include
 	lib/pkgconfig
-	lib/libgmx_mpi.dylib
-	lib/libgmxana_mpi.dylib
-	lib/libmd_mpi.dylib
-	lib/libgmxpreprocess_mpi.dylib
-	lib/libgmx_mpi_d.dylib
-	lib/libgmxana_mpi_d.dylib
-	lib/libmd_mpi_d.dylib
-	lib/libgmxpreprocess_mpi_d.dylib
+	lib/libgromacs_mpi.dylib
+	lib/libgromacs_mpi_d.dylib
 <<
 DocFiles: AUTHORS COPYING README
 <<
