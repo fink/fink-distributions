@@ -1,38 +1,67 @@
 Info4: <<
 Package: squid-unified
-Version: 3.1.14
+Version: 3.4.6
 Revision: 1
 Epoch: 1
 Description: Proxy caching server
 License: GPL
 Maintainer: Benjamin Reed <squid@fink.raccoonfink.com>
 
-Depends: daemonic
+Depends: <<
+	cyrus-sasl2-shlibs,
+	daemonic,
+	db53-aes-shlibs,
+	nettle4a-shlibs,
+	libtool2-shlibs,
+	openldap24-shlibs,
+	openssl100-shlibs
+<<
 BuildDepends: <<
+	autoconf2.6,
+	automake1.14,
+	cyrus-sasl2-dev,
+	db53-aes,
 	fink (>= 0.32),
-	openssl100-dev
+	fink-package-precedence,
+	libtool2,
+	nettle4a,
+	openldap24-dev,
+	openssl100-dev,
+	pkgconfig
 <<
 Replaces: <<
 	squid (<< %v-%r),
 	squid-ssl (<< %v-%r)
 <<
 
-Source: http://www.squid-cache.org/Versions/v3/3.1/squid-%v.tar.bz2
-Source-MD5: 8f82a451b04c3bf3c29202c548d2f2dd
+Source: http://www.squid-cache.org/Versions/v3/3.4/squid-%v.tar.xz
+Source-MD5: 78dba1ef230761577bce53633ca05c9d
+Source-Checksum: SHA1(a876998248e1f8e5f6cdfd69adb98ac22608708a)
 PatchFile: squid-unified.patch
-PatchFile-MD5: 1a782a775681ea4f36a387bf4be0c682
+PatchFile-MD5: dce93b3c9f242bb4c7cac45d7a9e6926
+PatchFile2: squid-unified-fatal_cc.patch
+PatchFile2-MD5: 3aa46a38b5e63d004c14b7a5801844c6
+PatchScript: <<
+	patch -p1 < %{PatchFile2}
+	./bootstrap.sh
+	patch -p1 < %{PatchFile}
+	# Remove 'getconf' commands that are broken on Xcode5
+	perl -pi  -e 's/(.*L.*getconf.*buildmodel.*)/#\1/g' configure
+<<
 
 SetCPPFLAGS: -I%p/include
 SetLDFLAGS: -L%p/lib
-SetLIBS: -L%p/lib
+SetLIBS: -L%p/lib -lresolv
 NoSetCPPFLAGS: true
 NoSetLDFLAGS: true
 NoSetLIBS: true
-UseMaxBuildJobs: true
+# rock is removed from storeio list due to test failure:
+# http://bugs.squid-cache.org/show_bug.cgi?id=3805
 ConfigureParams: <<
---disable-dependency-tracking \
+--enable-dependency-tracking \
 --disable-shared \
 --enable-static \
+--enable-storeio="aufs diskd ufs" \
 \
 --enable-async-io \
 --enable-auth \
@@ -61,19 +90,16 @@ ConfigureParams: <<
 \
 --with-aio \
 --with-large-files \
---with-openssl=%p/lib/openssl \
+--with-openssl=%p \
 --with-pthreads \
 \
 --mandir=%p/share/man \
---libexecdir=%p/sbin
+--libexecdir=%p/sbin \
+--with-krb5-config=no
 <<
+GCC: 4.0
 CompileScript: <<
 	#!/bin/sh -ex
-#	darwin_vers=`uname -r | cut -d. -f1`
-#	if [ "$darwin_vers" = 11 ]; then
-#		export CC=gcc-4.2
-#		export CXX=g++-4.2
-#	fi
 
 	perl -pi -e "s,newLength < 0 \|\| ,," src/String.cci
 	perl -pi -e "s,class AuthUserHashPointer,struct AuthUserHashPointer," src/auth/Gadgets.h
@@ -85,8 +111,19 @@ CompileScript: <<
 	export lt_cv_sys_max_cmd_len=65536
 	./configure %c
 	make DEFAULT_SWAP_DIR=%p/var/cache/squid DEFAULT_LOG_PREFIX=%p/var/log/squid DEFAULT_MIB_PATH=%p/share/doc/%n DEFAULT_PID_FILE=%p/var/run/squid.pid
+	fink-package-precedence .
 <<
 
+InfoTest: <<
+	TestDepends: <<
+		cppunit1.12.1
+	<<
+	TestScript: <<
+		#!/bin/sh -ev
+		make -j1 check || exit 2
+		fink-package-precedence .
+	<<
+<<
 InstallScript: <<
 make -j1 install DESTDIR=%d DEFAULT_SWAP_DIR=%p/var/cache/squid DEFAULT_LOG_PREFIX=%p/var/log/squid DEFAULT_MIB_PATH=%p/share/doc/%n DEFAULT_PID_FILE=%p/var/run/squid.pid
 install -d -m 755 -o nobody %i/var/cache/squid
@@ -98,20 +135,20 @@ cp src/squid.conf.default %i/etc/squid.conf
 cp src/mime.conf.default %i/etc/mime.conf
 cp tools/cachemgr.conf %i/etc/cachemgr.conf
 <<
-DocFiles: CO* CREDITS ChangeLog QUICKSTART README* RELEASENOTES* SPONSORS
+DocFiles: CO* CREDITS ChangeLog QUICKSTART README* RELEASENOTES*
 SplitOff: <<
 	Package: squid
 	Depends: %N (= %e:%v-%r)
 	RuntimeDepends: fink-obsolete-packages
 	Description: OBSOLETE use package 'squid-unified' instead
-	DocFiles: CONTRIBUTORS COPYING COPYRIGHT CREDITS ChangeLog INSTALL QUICKSTART README RELEASENOTES.html SPONSORS
+	DocFiles: CONTRIBUTORS COPYING COPYRIGHT CREDITS ChangeLog INSTALL QUICKSTART README RELEASENOTES.html
 <<
 SplitOff2: <<
 	Package: squid-ssl
 	Depends: %N (= %e:%v-%r)
 	RuntimeDepends: fink-obsolete-packages
 	Description: OBSOLETE use package 'squid-unified' instead
-	DocFiles: CONTRIBUTORS COPYING COPYRIGHT CREDITS ChangeLog INSTALL QUICKSTART README RELEASENOTES.html SPONSORS
+	DocFiles: CONTRIBUTORS COPYING COPYRIGHT CREDITS ChangeLog INSTALL QUICKSTART README RELEASENOTES.html
 <<
 
 PostInstScript: <<
@@ -163,6 +200,17 @@ access to the squid proxy (ie, connections from localhost).  By
 default, squid is configured to listen on port 3128 for proxy
 connections.  To change this, add or change the http_port line to the
 port you want squid to listen on.
+<<
+DescPort: <<
+nieder: bumped to 3.4.2 to deal with clang compiler errors.
+
+fatal.cc: http://bugs.squid-cache.org/show_bug.cgi?id=3927
+
+tests/testRock still fails: http://bugs.squid-cache.org/show_bug.cgi?id=3805
+so turn off 'rock' as an allowed storeio.
+
+turn off kerberos since it fails on 10.9
+http://bugs.squid-cache.org/show_bug.cgi?id=4023
 <<
 <<
 
