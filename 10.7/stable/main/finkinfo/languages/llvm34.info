@@ -1,7 +1,7 @@
 Info3: <<
 Package: llvm34
 Version: 3.4.2
-Revision: 1
+Revision: 2
 Description: Modular and reusable compiler
 License: BSD
 Maintainer: David Fang <fangism@users.sourceforge.net>
@@ -59,7 +59,7 @@ PatchFile4-MD5: d6deda1584332af388053b19cb9dcc6f
 PatchFile5: %n-libcxx.patch
 PatchFile5-MD5: 72697e71d0c80073cfa4ceabd9b8d3b1
 PatchFile6: %n-clang-omp.patch	
-PatchFile6-MD5: 25e4ae65ec8b3611894baf868e95c815 
+PatchFile6-MD5: fcbf05761ea7425b1f9b77461b9928b2
 PatchFile7: %n-clang-iomp5.patch
 PatchFile7-MD5: 7e4ff3be5b6c64736797b11d824d7365
 PatchFile8: %n-openmp-cmake.patch
@@ -127,17 +127,29 @@ if ($1 == "cmd.append(exec_path)") {
 		tools/clang/lib/Frontend/InitHeaderSearch.cpp
 	fi
 
-	# Adjust path for relocation of libc++ headers (from xcode)
-	if test "$darwin_vers" -ge 11
-	then
-		clang_path=`xcrun -find clang`
-		pushd `dirname $clang_path`
-		cd ../lib/c++/v1
-		cxx_incdir=`pwd`
-		popd
-		sed -i.orig3 -e 's|AddPath("/usr/include/c++/v1"|AddPath("'"$cxx_incdir"'"|' \
-			tools/clang/lib/Frontend/InitHeaderSearch.cpp
-	fi
+	# Adjust path for relocation of libc++ headers (from xcode or system)
+	test -d /usr/lib/c++/v1 ||
+	test "$darwin_vers" -lt 11 ||
+	{
+	  clang_path=`xcrun -find clang`
+	  pushd `dirname $clang_path`
+	  if test -d ../lib/c++/v1
+	  then
+	    cd ../lib/c++/v1
+	    cxx_incdir=`pwd`
+	  elif test -d ../include/c++/v1
+	  then
+	    cd ../include/c++/v1
+	    cxx_incdir=`pwd`
+	  else
+	    echo "Unable to find libc++ headers relative to $clang_path (from xcrun)."
+	    exit 1
+	  fi
+	  popd
+	  echo "Found system libc++ headers in: $cxx_incdir"
+	  sed -i.orig3 -e 's|AddPath("/usr/include/c++/v1"|AddPath("'"$cxx_incdir"'"|' \
+		tools/clang/lib/Frontend/InitHeaderSearch.cpp
+	}
 
 	# add experimental cmake support to openmp
 	pushd ../openmp-r208472
@@ -161,6 +173,8 @@ CompileScript: <<
 	version=%v
 	# tarballs have mixed versions b/c some components did not change
 	brv=3.4
+	darwin_vers=`uname -r | cut -d. -f1`
+	osx_version=`sw_vers -productVersion | cut -d. -f-2`
 	llvm_abs_srcdir=%b
 	libcxx_abs_srcdir=$llvm_abs_srcdir/../libcxx-$brv
 	libcxx_rel_srcdir=../../libcxx-$brv
@@ -179,9 +193,10 @@ CompileScript: <<
 	COMMON_CMAKE_OPTIONS=( -DBUILD_SHARED_LIBS:BOOL=ON \
 		-DLLVM_LIT_ARGS:STRING=-v \
 		-DPYTHON_EXECUTABLE:FILEPATH=$fink_root/bin/python2.7 )
-	LLVM_CMAKE_OPTIONS=( -DLLVM_ENABLE_ASSERTIONS:BOOL=$enable_assertions \
-		-DCMAKE_OSX_SYSROOT:STRING=/ \
-		-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING= )
+	LLVM_CMAKE_OPTIONS=( -DLLVM_ENABLE_ASSERTIONS:BOOL=$enable_assertions )
+#	LLVM_CMAKE_OPTIONS=( "${LLVM_CMAKE_OPTIONS[@]}" \
+#		-DCMAKE_OSX_SYSROOT:STRING=/ \
+#		-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING= )
 
 	# always build the native archs' backends
 #	case "$build_arch" in
@@ -235,8 +250,6 @@ EOF
 
 	# stage 1 compiler (try to use ccache if available)
 	# gcc-4.0.1 FAILS on darwin9
-	osx_version=`sw_vers -productVersion | cut -d. -f-2`
-	darwin_vers=`uname -r | cut -d. -f1`
 	case "$darwin_vers" in
 	8)
 	  export CC=ccgcc
