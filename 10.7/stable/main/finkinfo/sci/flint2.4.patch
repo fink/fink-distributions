@@ -1,28 +1,109 @@
-diff --git a/Makefile.in b/Makefile.in
-index 6e940cd..8e7c5ff 100644
---- a/Makefile.in
-+++ b/Makefile.in
-@@ -1,3 +1,10 @@
-+minor_current=@MINOR@
-+revision=@REVISION@
-+SHARED_FLAGS=-shared \
-+    -Wl,-install_name,$(PREFIX)/lib/$(FLINT_LIB) \
-+    -Wl,-compatibility_version,$(minor_current) \
-+    -Wl,-current_version,$(minor_current).$(revision)
-+
- ifdef $(DLPATH)
-   $(DLPATH):=$($(DLPATH)):$(DLPATH_ADD)
- else
-@@ -102,10 +109,10 @@ $(FLINT_LIB): $(LOBJS) $(LIB_SOURCES) $(EXT_SOURCES) $(HEADERS) $(EXT_HEADERS) |
- 	$(AT)$(foreach dir, $(BUILD_DIRS), mkdir -p build/$(dir); BUILD_DIR=../build/$(dir); export BUILD_DIR; MOD_DIR=$(dir); export MOD_DIR; $(MAKE) -f ../Makefile.subdirs -C $(dir) shared || exit $$?;)
- 	$(AT)if [ "$(WANT_NTL)" -eq "1" ]; then \
- 	  $(MAKE) build/interfaces/NTL-interface.lo; \
--	  $(CXX) $(ABI_FLAG) -shared build/interfaces/NTL-interface.lo $(LOBJS) $(MOD_LOBJS) $(EXT_OBJS) $(LIBS2) -o $(FLINT_LIB); \
-+	  $(CXX) $(ABI_FLAG) $(SHARED_FLAGS) build/interfaces/NTL-interface.lo $(LOBJS) $(MOD_LOBJS) $(EXT_OBJS) $(LIBS2) -o $(FLINT_LIB); \
- 	fi
- 	$(AT)if [ "$(WANT_NTL)" -ne "1" ]; then \
--	  $(CC) $(ABI_FLAG) -shared $(LOBJS) $(MOD_LOBJS) $(EXT_OBJS) $(LIBS2) -o $(FLINT_LIB); \
-+	  $(CC) $(ABI_FLAG) $(SHARED_FLAGS) $(LOBJS) $(MOD_LOBJS) $(EXT_OBJS) $(LIBS2) -o $(FLINT_LIB); \
- 	fi
+commit a7f911140e7d0a0125653a40aa2c5fe257bd78f5
+Author: Fredrik Johansson <fredrik.johansson@gmail.com>
+Date:   2014-09-18 14:49:05 +0200
+
+    redefine fmpz_invmod to consider any integer invertible mod 1 (for gmp 6.0 compatibility)
+
+diff --git a/fmpz/doc/fmpz.txt b/fmpz/doc/fmpz.txt
+index fb422d8..2ada719 100644
+--- a/fmpz/doc/fmpz.txt
++++ b/fmpz/doc/fmpz.txt
+@@ -899,7 +899,8 @@ int fmpz_invmod(fmpz_t f, const fmpz_t g, const fmpz_t h)
+     Sets $f$ to the inverse of $g$ modulo $h$.  The value of $h$ may 
+     not be $0$ otherwise an exception results.  If the inverse exists 
+     the return value will be non-zero, otherwise the return value will
+-    be $0$ and the value of $f$ undefined. 
++    be $0$ and the value of $f$ undefined. As a special case, we
++    consider any number invertible modulo $h = \pm 1$, with inverse 0.
  
- libflint.a: $(OBJS) $(LIB_SOURCES) $(EXT_SOURCES) $(HEADERS) $(EXT_HEADERS) | build build/interfaces
+ void fmpz_negmod(fmpz_t f, const fmpz_t g, const fmpz_t h)
+ 
+diff --git a/fmpz/invmod.c b/fmpz/invmod.c
+index a0cf601..0e20f39 100644
+--- a/fmpz/invmod.c
++++ b/fmpz/invmod.c
+@@ -67,7 +67,11 @@ fmpz_invmod(fmpz_t f, const fmpz_t g, const fmpz_t h)
+             if (c2 < WORD(0))
+                 c2 = -c2;
+             if (c2 == WORD(1))
+-                return 0;       /* special case not handled by n_invmod */
++            {
++                fmpz_zero(f);
++                return 1;       /* special case not handled by n_invmod */
++            }
++
+             gcd = z_gcdinv(&inv, c1, c2);
+ 
+             return (gcd == UWORD(1) ? fmpz_set_si(f, inv), 1 : 0);
+@@ -106,7 +110,10 @@ fmpz_invmod(fmpz_t f, const fmpz_t g, const fmpz_t h)
+             if (c2 < WORD(0))
+                 c2 = -c2;
+             if (c2 == WORD(1))
+-                return 0;       /* special case not handled by z_gcd_invert */
++            {
++                fmpz_zero(f);
++                return 1;       /* special case not handled by z_gcd_invert */
++            }
+             /* reduce g mod h first */
+ 
+             r = flint_mpz_fdiv_ui(COEFF_TO_PTR(c1), c2);
+diff --git a/fmpz/test/t-invmod.c b/fmpz/test/t-invmod.c
+index aea236e..8ff1c7f 100644
+--- a/fmpz/test/t-invmod.c
++++ b/fmpz/test/t-invmod.c
+@@ -30,6 +30,19 @@
+ #include "ulong_extras.h"
+ #include "fmpz.h"
+ 
++/* Use the definiton of GMP versions >= 6.0 */
++int
++mpz_invert2(mpz_t a, const mpz_t b, const mpz_t c)
++{
++    if (mpz_cmpabs_ui(c, 1) == 0)
++    {
++        mpz_set_ui(a, 0);
++        return 1;
++    }
++    else
++        return mpz_invert(a, b, c);
++}
++
+ int
+ main(void)
+ {
+@@ -63,7 +76,7 @@ main(void)
+         fmpz_get_mpz(e, b);
+ 
+         r1 = fmpz_invmod(c, a, b);
+-        r2 = mpz_invert(f, d, e);
++        r2 = mpz_invert2(f, d, e);
+ 
+         fmpz_get_mpz(g, c);
+ 
+@@ -106,7 +119,7 @@ main(void)
+         fmpz_get_mpz(d, a);
+ 
+         r1 = fmpz_invmod(c, a, a);
+-        r2 = mpz_invert(f, d, d);
++        r2 = mpz_invert2(f, d, d);
+ 
+         fmpz_get_mpz(g, c);
+ 
+@@ -149,7 +162,7 @@ main(void)
+         fmpz_get_mpz(e, b);
+ 
+         r1 = fmpz_invmod(a, a, b);
+-        r2 = mpz_invert(f, d, e);
++        r2 = mpz_invert2(f, d, e);
+ 
+         fmpz_get_mpz(g, a);
+ 
+@@ -192,7 +205,7 @@ main(void)
+         fmpz_get_mpz(e, b);
+ 
+         r1 = fmpz_invmod(b, a, b);
+-        r2 = mpz_invert(f, d, e);
++        r2 = mpz_invert2(f, d, e);
+ 
+         fmpz_get_mpz(g, b);
+ 
