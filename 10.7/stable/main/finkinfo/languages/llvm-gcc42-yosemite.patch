@@ -1,0 +1,263 @@
+diff -uNr llvmgcc42-2336.11.orig/gcc/config/darwin-c.c llvmgcc42-2336.11/gcc/config/darwin-c.c
+--- llvmgcc42-2336.11.orig/gcc/config/darwin-c.c	2010-07-26 19:03:00.000000000 -0400
++++ llvmgcc42-2336.11/gcc/config/darwin-c.c	2014-10-22 07:45:08.000000000 -0400
+@@ -817,32 +817,36 @@
+ }
+ 
+ /* Return the value of darwin_macosx_version_min suitable for the
+-   __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ macro,
+-   so '10.4.2' becomes 1042.
++   __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ macro, so '10.4.2'
++   becomes 1040 and '10.10.0' becomes 101000.  The lowest digit is
++   always zero, as is the second lowest for '10.10.x' and above.
+    Print a warning if the version number is not known.  */
+ static const char *
+ /* APPLE LOCAL ARM 5683689 */
+ macosx_version_as_macro (void)
+ {
+-  static char result[] = "1000";
++  static char result[7] = "1000";
++  int minorDigitIdx;
+ 
+   if (strncmp (darwin_macosx_version_min, "10.", 3) != 0)
+     goto fail;
+   if (! ISDIGIT (darwin_macosx_version_min[3]))
+     goto fail;
+-  result[2] = darwin_macosx_version_min[3];
+-  if (darwin_macosx_version_min[4] != '\0')
+-    {
+-      if (darwin_macosx_version_min[4] != '.')
+-	goto fail;
+-      if (! ISDIGIT (darwin_macosx_version_min[5]))
+-	goto fail;
+-      if (darwin_macosx_version_min[6] != '\0')
++
++  minorDigitIdx = 3;
++  result[2] = darwin_macosx_version_min[minorDigitIdx++];
++  if (ISDIGIT (darwin_macosx_version_min[minorDigitIdx]))
++  {
++    /* Starting with OS X 10.10, the macro ends '00' rather than '0',
++       i.e. 10.10.x becomes 101000 rather than 10100.  */
++    result[3] = darwin_macosx_version_min[minorDigitIdx++];
++    result[4] = '0';
++    result[5] = '0';
++    result[6] = '\0';
++  }
++  if (darwin_macosx_version_min[minorDigitIdx] != '\0'
++      && darwin_macosx_version_min[minorDigitIdx] != '.')
+ 	goto fail;
+-      result[3] = darwin_macosx_version_min[5];
+-    }
+-  else
+-    result[3] = '0';
+ 
+   return result;
+ 
+diff -uNr llvmgcc42-2336.11.orig/gcc/config/darwin-driver.c llvmgcc42-2336.11/gcc/config/darwin-driver.c
+--- llvmgcc42-2336.11.orig/gcc/config/darwin-driver.c	2009-07-22 16:36:27.000000000 -0400
++++ llvmgcc42-2336.11/gcc/config/darwin-driver.c	2014-10-22 07:28:45.000000000 -0400
+@@ -174,8 +174,6 @@
+   version_p = osversion + 1;
+   if (ISDIGIT (*version_p))
+     major_vers = major_vers * 10 + (*version_p++ - '0');
+-  if (major_vers > 4 + 9)
+-    goto parse_failed;
+   if (*version_p++ != '.')
+     goto parse_failed;
+   version_pend = strchr(version_p, '.');
+diff -uNr llvmgcc42-2336.11.orig/gcc/testsuite/gcc.dg/darwin-minversion-1.c llvmgcc42-2336.11/gcc/testsuite/gcc.dg/darwin-minversion-1.c
+--- llvmgcc42-2336.11.orig/gcc/testsuite/gcc.dg/darwin-minversion-1.c	2008-11-25 18:00:54.000000000 -0500
++++ llvmgcc42-2336.11/gcc/testsuite/gcc.dg/darwin-minversion-1.c	2014-10-22 07:28:45.000000000 -0400
+@@ -4,7 +4,8 @@
+ /* { dg-options "-mmacosx-version-min=10.1 -m32" } */
+ /* { dg-do run { target powerpc*-*-darwin* i?86*-*-darwin* } } */
+ 
+-int main(void)
++int
++main ()
+ {
+ #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ != 1010
+   fail me;
+diff -uNr llvmgcc42-2336.11.orig/gcc/testsuite/gcc.dg/darwin-minversion-2.c llvmgcc42-2336.11/gcc/testsuite/gcc.dg/darwin-minversion-2.c
+--- llvmgcc42-2336.11.orig/gcc/testsuite/gcc.dg/darwin-minversion-2.c	2008-11-25 18:00:54.000000000 -0500
++++ llvmgcc42-2336.11/gcc/testsuite/gcc.dg/darwin-minversion-2.c	2014-10-22 07:28:45.000000000 -0400
+@@ -4,7 +4,8 @@
+ /* { dg-options "-mmacosx-version-min=10.1 -mmacosx-version-min=10.3 -m32" } */
+ /* { dg-do run { target powerpc*-*-darwin* i?86*-*-darwin* } } */
+ 
+-int main(void)
++int
++main ()
+ {
+ #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ != 1030
+   fail me;
+--- llvmgcc42-2336.11/llvmCore/Makefile.rules.orig	2014-10-22 08:14:13.000000000 -0400
++++ llvmgcc42-2336.11/llvmCore/Makefile.rules	2014-10-22 08:15:37.000000000 -0400
+@@ -557,9 +557,9 @@
+ ifeq ($(HOST_OS),Darwin)
+   DARWIN_VERSION := `sw_vers -productVersion`
+   # Strip a number like 10.4.7 to 10.4
+-  DARWIN_VERSION := $(shell echo $(DARWIN_VERSION)| sed -E 's/(10.[0-9]).*/\1/')
++  DARWIN_VERSION := $(shell echo $(DARWIN_VERSION)| sed -E 's/(10.[0-9][0-9]).*/\1/')
+   # Get "4" out of 10.4 for later pieces in the makefile.
+-  DARWIN_MAJVERS := $(shell echo $(DARWIN_VERSION)| sed -E 's/10.([0-9]).*/\1/')
++  DARWIN_MAJVERS := $(shell echo $(DARWIN_VERSION)| sed -E 's/10.([0-9][0-9]).*/\1/')
+ 
+   SharedLinkOptions=-Wl,-flat_namespace -Wl,-undefined -Wl,suppress \
+                     -dynamiclib
+--- llvmgcc42-2336.11//fixincludes/inclhack.def.orig	2014-10-22 10:52:23.000000000 -0400
++++ llvmgcc42-2336.11/fixincludes/inclhack.def	2014-10-22 11:07:07.000000000 -0400
+@@ -5092,4 +5092,14 @@
+ };
+ /* LLVM LOCAL end */
+ 
++fix = {
++    hackname  = yosemite_fix;
++    files     = xpc/base.h;
++    sed       = "s/__has_extension(attribute_unavailable_with_message)/0/g";
++    sed       = "s/__has_feature(objc_arc)/0/g";
++    test_text = 
++    "__has_extension(attribute_unavailable_with_message)"
++    "__has_feature(objc_arc)";
++};  
++
+ /*EOF*/
+--- llvmgcc42-2336.11//fixincludes/fixincl.x.orig	2014-10-22 11:01:50.000000000 -0400
++++ llvmgcc42-2336.11/fixincludes/fixincl.x	2014-10-22 11:05:07.000000000 -0400
+@@ -1,12 +1,12 @@
+ /*  -*- buffer-read-only: t -*- vi: set ro:
+- * 
++ *
+  * DO NOT EDIT THIS FILE   (fixincl.x)
+- * 
+- * It has been AutoGen-ed  Friday July 17, 2009 at 11:13:21 AM CEST
++ *
++ * It has been AutoGen-ed  October 22, 2014 at 11:05:07 AM by AutoGen 5.18.2
+  * From the definitions    inclhack.def
+  * and the template file   fixincl
+  */
+-/* DO NOT SVN-MERGE THIS FILE, EITHER Fri Jul 17 11:13:21 CEST 2009
++/* DO NOT SVN-MERGE THIS FILE, EITHER Wed Oct 22 11:05:07 EDT 2014
+  *
+  * You must regenerate it.  Use the ./genfixes script.
+  *
+@@ -15,29 +15,25 @@
+  * certain ANSI-incompatible system header files which are fixed to work
+  * correctly with ANSI C and placed in a directory that GNU C will search.
+  *
+- * This file contains 217 fixup descriptions.
++ * This file contains 218 fixup descriptions.
+  *
+  * See README for more information.
+  *
+  *  inclhack copyright (c) 1998, 1999, 2000, 2001
+  *  The Free Software Foundation, Inc.
+  *
+-  *  inclhack is free software.
+- *  
+- *  You may redistribute it and/or modify it under the terms of the
+- *  GNU General Public License, as published by the Free Software
+- *  Foundation; either version 2, or (at your option) any later version.
+- *  
+- *  inclhack is distributed in the hope that it will be useful,
+- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++  *  inclhack is free software: you can redistribute it and/or modify it
++ *  under the terms of the GNU General Public License as published by the
++ *  Free Software Foundation, either version 3 of the License, or
++ *  (at your option) any later version.
++ *
++ *  inclhack is distributed in the hope that it will be useful, but
++ *  WITHOUT ANY WARRANTY; without even the implied warranty of
+  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+  *  See the GNU General Public License for more details.
+- *  
+- *  You should have received a copy of the GNU General Public License
+- *  along with inclhack.  See the file "COPYING".  If not,
+- *  write to:  The Free Software Foundation, Inc.,
+- *             59 Temple Place - Suite 330,
+- *             Boston,  MA  02111-1307, USA.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with this program.  If not, see <http://www.gnu.org/licenses/>.
+  */
+ 
+ /* * * * * * * * * * * * * * * * * * * * * * * * * *
+@@ -4652,13 +4648,10 @@
+  */
+ tSCC zMath_ExceptionBypass0[] =
+        "We have a problem when using C\\+\\+|for C\\+\\+, _[a-z0-9A-Z_]+_exception; for C, exception";
+-tSCC zMath_ExceptionBypass1[] =
+-       "defined __cplusplus";
+ 
+ #define    MATH_EXCEPTION_TEST_CT  2
+ static tTestDesc aMath_ExceptionTests[] = {
+   { TT_NEGREP,   zMath_ExceptionBypass0, (regex_t*)NULL },
+-  { TT_NEGREP,   zMath_ExceptionBypass1, (regex_t*)NULL },
+   { TT_EGREP,    zMath_ExceptionSelect0, (regex_t*)NULL }, };
+ 
+ /*
+@@ -8837,6 +8830,33 @@
+     "-e", "s/int __d0, __d1;/__intptr_t __d0, __d1;/g",
+     (char*)NULL };
+ 
++/* * * * * * * * * * * * * * * * * * * * * * * * * *
++ *
++ *  Description of Yosemite_Fix fix
++ */
++tSCC zYosemite_FixName[] =
++     "yosemite_fix";
++
++/*
++ *  File name selection pattern
++ */
++tSCC zYosemite_FixList[] =
++  "xpc/base.h\0";
++/*
++ *  Machine/OS name selection pattern
++ */
++#define apzYosemite_FixMachs (const char**)NULL
++#define YOSEMITE_FIX_TEST_CT  0
++#define aYosemite_FixTests   (tTestDesc*)NULL
++
++/*
++ *  Fix Command Arguments for Yosemite_Fix
++ */
++static const char* apzYosemite_FixPatch[] = { "sed",
++    "-e", "s/__has_extension(attribute_unavailable_with_message)/0/g",
++    "-e", "s/__has_feature(objc_arc)/0/g",
++    (char*)NULL };
++
+ 
+ /* * * * * * * * * * * * * * * * * * * * * * * * * *
+  *
+@@ -8844,7 +8864,7 @@
+  */
+ #define REGEX_COUNT          262
+ #define MACH_LIST_SIZE_LIMIT 261
+-#define FIX_COUNT            217
++#define FIX_COUNT            218
+ 
+ /*
+  *  Enumerate the fixes
+@@ -9066,7 +9086,8 @@
+     X11_CLASS_USAGE_FIXIDX,
+     X11_NEW_FIXIDX,
+     X11_SPRINTF_FIXIDX,
+-    GLIBC_FDZERO_INLINE_ASM_FIXIDX
++    GLIBC_FDZERO_INLINE_ASM_FIXIDX,
++    YOSEMITE_FIX_FIXIDX
+ } t_fixinc_idx;
+ 
+ tFixDesc fixDescList[ FIX_COUNT ] = {
+@@ -10153,5 +10174,10 @@
+   {  zGlibc_Fdzero_Inline_AsmName,    zGlibc_Fdzero_Inline_AsmList,
+      apzGlibc_Fdzero_Inline_AsmMachs,
+      GLIBC_FDZERO_INLINE_ASM_TEST_CT, FD_MACH_ONLY,
+-     aGlibc_Fdzero_Inline_AsmTests,   apzGlibc_Fdzero_Inline_AsmPatch, 0 }
++     aGlibc_Fdzero_Inline_AsmTests,   apzGlibc_Fdzero_Inline_AsmPatch, 0 },
++
++  {  zYosemite_FixName,    zYosemite_FixList,
++     apzYosemite_FixMachs,
++     YOSEMITE_FIX_TEST_CT, FD_MACH_ONLY,
++     aYosemite_FixTests,   apzYosemite_FixPatch, 0 }
+ };
