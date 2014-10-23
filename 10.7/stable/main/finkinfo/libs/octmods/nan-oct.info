@@ -1,9 +1,10 @@
 Info2: <<
 Package: nan%type_pkg[-blas]-oct%type_pkg[oct]
-Version: 2.5.5
-Type: oct (3.2.4 3.4.3 3.6.0 3.6.1 3.6.2 3.6.3 3.6.4), forge (nan), -blas (-atlas -ref .), gcc (4.8), lapack (3.4.2)
+Version: 2.5.9
+Type: oct (3.2.4 3.4.3 3.6.0 3.6.1 3.6.2 3.6.3 3.6.4 3.8.2), forge (nan), -blas (-atlas -ref .), gcc (4.9), lapack (3.5.0)
 Distribution: ( %type_pkg[oct] << 364 ) 10.7, ( %type_pkg[oct] << 364 ) 10.8
-Revision: 9
+Revision: 1
+
 Maintainer: Alexander Hansen <alexkhansen@users.sourceforge.net>
 # unfortunately, Homepage won't do types
 Homepage: http://octave.sourceforge.net/nan/index.html 
@@ -83,7 +84,7 @@ BuildDepends: <<
   (%type_raw[-blas] = -ref)		lapack%type_pkg[lapack],
   (%type_raw[-blas] = -ref)		liboctave%type_pkg[oct]-ref-dev,
   gcc%type_pkg[gcc]-compiler,
-  fink-octave-scripts (>= 0.2.0-1),
+  fink-octave-scripts (>= 0.3.1-1),
   fftw3, 
   hdf5.8
   <<
@@ -110,29 +111,40 @@ Replaces: <<
 <<
 
 Source: mirror:sourceforge:octave/%type_raw[forge]-%v.tar.gz
-Source-MD5: 59b62a01b832f3c269a65f1a92b56f58
+Source-MD5: e0eee539c628f7698cf6b1a6c28bfe63
 SourceDirectory: NaN
 
 PatchFile: %{Ni}.patch
-PatchFile-MD5: 990f9f68a41dffeb6bfdf71ee9af1c65
+PatchFile-MD5: 65eb16d3bc64761f53741499d790420e
 PatchScript: <<
 	#!/bin/sh -ev
+	# set up script mkoctfile for Octave 3.8 and later which uses Fink's gcc49
+	if [ %type_pkg[oct] -ge 380 ] ; then
+		mkdir bin
+		perl -p -e "s/\%%OCTAVE_CONF_VERSION\%%/%type_raw[oct]/g ; \
+				 	s/\@GCCVERS\@/%type_raw[gcc]/g ; 
+					s,\@FF2C\@,"`%p/bin/mkoctfile-%type_raw[oct] -p FF2C`", ; \
+					s,\%%OCTAVE_CONF_LAPACK_LIBS\%%,\"`%p/bin/mkoctfile-%type_raw[oct] -p LAPACK_LIBS`\", ; \
+					s,\%%OCTAVE_CONF_BLAS_LIBS\%%,\"`%p/bin/mkoctfile-%type_raw[oct] -p BLAS_LIBS`\", ; \
+					s/\@CC\@/oct-cc/ ; \
+					s/\@CXX\@/oct-cxx/g" %p/share/fink-octave-scripts/mkoctfile-gcc4n.in > bin/mkoctfile-%type_raw[oct]-gcc%type_raw[gcc]
+		chmod a+x bin/mkoctfile-%type_raw[oct]-gcc%type_raw[gcc]
+		perl -pi -e 's,(-lgomp),-L%p/lib/gcc%type_raw[gcc]/lib \1,g' src/Makefile
+	fi
+	export PATH="%b/bin:$PATH"
 	sed 	-e 's|@FINKPREFIX@|%p|g' \
 			-e 's|@OCTVERSION@|%type_raw[oct]|g' \
-			-e "s|@BLAS_LIBS@|`mkoctfile-gcc%type_raw[gcc] -p BLAS_LIBS`|" \
+			-e "s|@BLAS_LIBS@|`mkoctfile-%type_raw[oct]-gcc%type_raw[gcc] -p BLAS_LIBS`|" \
 			-e 's|@GCC@|%type_raw[gcc]|' \
 				%{PatchFile} | patch -p1
-	# Use tweaked header to allow use of gcc48.
+	# Use tweaked header to allow use of gcc49.
 	perl -p -e 's/#include "mexproto.h"//' %p/include/octave-%type_raw[oct]/octave/mex.h > src/mex.h
 	perl -pi -e "s/(extern \"C\")/#include \"mexproto.h\"\n\1/" src/mex.h
-	cd src
-	rm *.mexw64 *.mexw32 *.mexa64
 <<
 
 SetLIBS: -L%p/lib/gcc%type_raw[gcc]/lib/
 NoSetCPPFLAGS: true
 NoSetLDFLAGS: true
-SetLIBRARY_PATH: /usr/X11R6/lib:%p/lib
 UseMaxBuildJobs: false
 BuildAsNobody: false
 
@@ -142,6 +154,10 @@ CompileScript: <<
 if [ %type_pkg[oct] -ge 343 ]
 	then pkgsrc=NaN
 	else pkgsrc=nan
+fi
+
+if [ %type_pkg[oct] -ge 380 ] ; then
+	export PATH="%b/bin:$PATH"
 fi
 
 %p/share/fink-octave-scripts/octave-forge-patch.sh %type_raw[forge] %v %type_raw[oct] %b %i $pkgsrc
@@ -156,26 +172,18 @@ DescPackaging: <<
 This package:
 Patch to Use BLAS_LIBS output from mkoctfile rather than just -lblas.
 
-Requires tweaking to use gcc48-compiler, which is required for libgomp.
+Requires tweaking to use gcc49-compiler, which is required for libgomp.
 
 Hideous Distribution tagging is so that we can keep a *single* .info file in the
 10.7 tree that covers all octversions for 10.7/10.8, but keeps only 3.6.4 for 10.9.  
 This is by design.  Don't touch this file without my permission.
 
 Common for all octave-forge packages:
-We read in postinst and prerm template scripts installed by octaveN and modify
-them to use the name of this package because Octave's package manager can't 
+Preinst and postinst scripts are dynamically set up via
+%p/share/fink-octave-scripts/octave-forge-patch.sh because Octave's package manager can't 
 cope with non-literal arguments.
 
 The Type: forge (pkgname) is used to minimize what needs to be changed when
 using this .info file as a template.
-<<
-DescPort: <<
-src/xptopen.cpp:	OS X defines __DARWIN_BYTE_ORDER, __DARWIN_BIG_ENDIAN, and
-					__DARWIN_LITTLE_ENDIAN rather than just __BYTE_ORDER, 
-					__BIG_ENDIAN, and __LITTLE_ENDIAN, respectively, so we 
-					#define the latter as their __DARWIN_ counterparts.	
-
-Clean out mex files for Windows which were included for some reason.
 <<
 <<
