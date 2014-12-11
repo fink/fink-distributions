@@ -1,7 +1,7 @@
 Info3: <<
 Package: llvm34
 Version: 3.4.2
-Revision: 1
+Revision: 3
 Description: Modular and reusable compiler
 License: BSD
 Maintainer: David Fang <fangism@users.sourceforge.net>
@@ -49,11 +49,11 @@ SourceDirectory: llvm-%v.src
 UseMaxBuildJobs: true
 
 PatchFile: %n.patch
-PatchFile-MD5: f0666216fb23fa2873e2299fc92fdea4
+PatchFile-MD5: c0909cfa8c2719bdadd6cec81609626d
 PatchFile2: %n-clang.patch
 PatchFile2-MD5: fd4e1ca160cc22e33f7c6d8fb3d8fe1d
 PatchFile3: %n-compiler-rt.patch
-PatchFile3-MD5: d99f6660245b55febad43728a8978676
+PatchFile3-MD5: 3d049d753e289b281d5f1fd3365fadf6
 PatchFile4: %n-polly.patch
 PatchFile4-MD5: d6deda1584332af388053b19cb9dcc6f
 PatchFile5: %n-libcxx.patch
@@ -63,7 +63,7 @@ PatchFile6-MD5: fcbf05761ea7425b1f9b77461b9928b2
 PatchFile7: %n-clang-iomp5.patch
 PatchFile7-MD5: 7e4ff3be5b6c64736797b11d824d7365
 PatchFile8: %n-openmp-cmake.patch
-PatchFile8-MD5: 84df97a76abba61e2661527e3c222101 
+PatchFile8-MD5: 5271212d336b2bf08322674cf8a94543 
 
 PatchScript: <<
 	#!/bin/sh -ev
@@ -127,17 +127,29 @@ if ($1 == "cmd.append(exec_path)") {
 		tools/clang/lib/Frontend/InitHeaderSearch.cpp
 	fi
 
-	# Adjust path for relocation of libc++ headers (from xcode)
-	if test "$darwin_vers" -ge 11
-	then
-		clang_path=`xcrun -find clang`
-		pushd `dirname $clang_path`
-		cd ../lib/c++/v1
-		cxx_incdir=`pwd`
-		popd
-		sed -i.orig3 -e 's|AddPath("/usr/include/c++/v1"|AddPath("'"$cxx_incdir"'"|' \
-			tools/clang/lib/Frontend/InitHeaderSearch.cpp
-	fi
+	# Adjust path for relocation of libc++ headers (from xcode or system)
+	test -d /usr/lib/c++/v1 ||
+	test "$darwin_vers" -lt 11 ||
+	{
+	  sys_clang_path=`xcrun -find clang`
+	  pushd `dirname $sys_clang_path`
+	  if test -d ../lib/c++/v1
+	  then
+	    cd ../lib/c++/v1
+	    sys_cxx_incdir=`pwd`
+	  elif test -d ../include/c++/v1
+	  then
+	    cd ../include/c++/v1
+	    sys_cxx_incdir=`pwd`
+	  else
+	    echo "Unable to find libc++ headers relative to $sys_clang_path (from xcrun)."
+	    exit 1
+	  fi
+	  popd
+	  echo "Found system libc++ headers in: $sys_cxx_incdir"
+	  sed -i.orig3 -e 's|AddPath("/usr/include/c++/v1"|AddPath("'"$sys_cxx_incdir"'"|' \
+		tools/clang/lib/Frontend/InitHeaderSearch.cpp
+	}
 
 	# add experimental cmake support to openmp
 	pushd ../openmp-r208472
@@ -161,6 +173,8 @@ CompileScript: <<
 	version=%v
 	# tarballs have mixed versions b/c some components did not change
 	brv=3.4
+	darwin_vers=`uname -r | cut -d. -f1`
+	osx_version=`sw_vers -productVersion | cut -d. -f-2`
 	llvm_abs_srcdir=%b
 	libcxx_abs_srcdir=$llvm_abs_srcdir/../libcxx-$brv
 	libcxx_rel_srcdir=../../libcxx-$brv
@@ -179,7 +193,9 @@ CompileScript: <<
 	COMMON_CMAKE_OPTIONS=( -DBUILD_SHARED_LIBS:BOOL=ON \
 		-DLLVM_LIT_ARGS:STRING=-v \
 		-DPYTHON_EXECUTABLE:FILEPATH=$fink_root/bin/python2.7 )
-	LLVM_CMAKE_OPTIONS=( -DLLVM_ENABLE_ASSERTIONS:BOOL=$enable_assertions \
+	LLVM_CMAKE_OPTIONS=( -DLLVM_ENABLE_ASSERTIONS:BOOL=$enable_assertions )
+	test "$darwin_vers" -ge 10 ||
+	LLVM_CMAKE_OPTIONS=( "${LLVM_CMAKE_OPTIONS[@]}" \
 		-DCMAKE_OSX_SYSROOT:STRING=/ \
 		-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING= )
 
@@ -235,8 +251,6 @@ EOF
 
 	# stage 1 compiler (try to use ccache if available)
 	# gcc-4.0.1 FAILS on darwin9
-	osx_version=`sw_vers -productVersion | cut -d. -f-2`
-	darwin_vers=`uname -r | cut -d. -f1`
 	case "$darwin_vers" in
 	8)
 	  export CC=ccgcc
@@ -328,10 +342,17 @@ EOF
 	powerpc64) clang_arch=ppc64 ;;
 	i386) cxxabi_arch=i686 ;;
 	esac
+	case "$clang_arch" in
+	ppc) other_arch=ppc64 ;;
+	ppc64) other_arch=ppc ;;
+	i386) other_arch=x86_64 ;;
+	x86_64) other_arch=i386 ;;
+	esac
 	# script to assemble/link in missing .S units into libclang_rt
 	asm_link_clang_rt() {
-		# $CC already set
-		arch=$clang_arch
+		# $CC, $CCAS_FLAGS already set
+		# $1 is $clang_arch or $other_arch
+		arch=$1
 		builddir=projects/compiler-rt/lib
 		crtsrcdir=$llvm_abs_srcdir/projects/compiler-rt
 		objdir=CMakeFiles/clang_rt.$arch.dir/$arch
@@ -339,6 +360,19 @@ EOF
 		libcrt=$libdir/libclang_rt.$arch.a
 		. $crtsrcdir/lib/link-asm-libclang_rt.sh
 		assemble_clang_rt
+	}
+	# link both 32b and 64b builtin libs
+	asm_link_clang_rts() {
+		asm_link_clang_rt $clang_arch
+		asm_link_clang_rt $other_arch
+	}
+
+	# for stage2 and 3, don't bother with ppc64
+	strip_ppc64 () {
+	rtmkfls=`grep -lr --exclude='*.orig' -e "-arch ppc" projects/compiler-rt`
+	for f in $rtmkfls
+	do sed -i.orig -e 's|-arch ppc64||' $f
+	done
 	}
 
 	# need to fix llvm-config to not point to build-dir, but instead
@@ -398,7 +432,7 @@ EOF
 	# fix_llvm_config_build_variables # not needed b/c not using libc++ yet
 	# first make fails, but we have to run it first and then fix some deps
 	make -k || recompile_known_units && make || make -j1 VERBOSE=1
-	asm_link_clang_rt
+	asm_link_clang_rts
 	make
 	# tests hardcode the .dylib extension for modules
 	pushd lib
@@ -426,22 +460,24 @@ EOF
 	FINK_LDFLAGS=( "$LDFLAGS" )
 	# beyond stage1, use the following flags for both libc++ and llvm
 	STAGE2_COMMON_LDFLAGS=()
-	# darwin8: stage2+ needs odcctools
+	# darwin8: stage2+ needs odcctools for linking and -no-integrated-as
+	cctools_path=$fink_root/lib/odcctools/bin
 	if test $darwin_vers -le 8
-	then STAGE2_COMMON_LDFLAGS=( "-B$fink_root/lib/odcctools/bin" )
+	then STAGE2_COMMON_LDFLAGS=( "-B$cctools_path" )
 	fi
+
+	case "$build_arch" in
+	# PowerPC is not ready for -integrated-as yet
+	powerpc*) int_as_flag="-no-integrated-as -B$cctools_path" ;;
+	esac
 
 	echo "######## START of BOOTSTRAP STAGE 1.5: building libc++ with stage 1 clang++"
 	export CCACHE_COMPILERCHECK=content
 	export CC=cc-st1-clang
 	export CXX=cc-st1-clang++
-	LIBCXX_CMAKE_OPTIONS=()
-	case "$build_arch" in
-	# PowerPC is not ready for -integrated-as yet
-	powerpc*) flags="$flags -no-integrated-as" ;;
-	esac
+	LIBCXX_CMAKE_OPTIONS=( -DCMAKE_BUILD_TYPE:STRING=$build_type )
 	if test $darwin_vers -le 10
-	then flags="$flags -DDARWIN_LIBSUPCXX=$darwin_vers"
+	then flags="$int_as_flag -DDARWIN_LIBSUPCXX=$darwin_vers"
 		abi=libsupc++
 		if test -f /usr/include/c++/4.2.1/cxxabi.h
 		then sys_cxxabi_root=/usr/include/c++/4.2.1
@@ -493,27 +529,29 @@ if test $do_bootstrap = 1
 then
 
 	echo "######## START of BOOTSTRAP STAGE 2: building llvm/clang with stage 1 clang"
-	# reuse CC and CXX from stage 1.5
-	STAGE2_CMAKE_OPTIONS=( \
-		-DCMAKE_CXX_FLAGS="-std=c++11 -stdlib=libc++ -cxx-isystem $libcxx_abs_srcdir/include" )
-	STAGE2_LLVM_LDFLAGS=( "-L$libcxx_stage_dir" )
+	libcxx_srcdir="$libcxx_abs_srcdir/include"
 # if not bootstrapping libc++, use system C++ library (buried in XCode)
 #	if test "$darwin_vers" -ge 13
 #	then
-#		clang_path=`xcrun -find clang`
-#		cxx_incdir=`dirname $clang_path`/../lib/c++/v1
-#		STAGE2_CMAKE_OPTIONS=( "${STAGE2_CMAKE_OPTIONS[@]}" \
-#			-DCMAKE_CXX_FLAGS:STRING="-cxx-isystem $cxx_incdir" )
+#		sys_clang_path=`xcrun -find clang`
+#		sys_cxx_incdir=`dirname $sys_clang_path`/../lib/c++/v1
+#		libcxx_srcdir="$sys_cxx_incdir"
 #	fi
+	stage23_cxx_flags="-std=c++11 -stdlib=libc++ -cxx-isystem $libcxx_srcdir"
+	# reuse CC and CXX from stage 1.5
+	STAGE2_CMAKE_OPTIONS=( \
+		-DCMAKE_CXX_FLAGS="$stage23_cxx_flags $int_as_flag" )
+	STAGE2_LLVM_LDFLAGS=( "-L$libcxx_stage_dir" )
 	mkdir -p ../build/stage2
 	pushd ../build/stage2
 	echo "LLVM_CMAKE_OPTIONS = ${COMMON_CMAKE_OPTIONS[@]} ${LLVM_CMAKE_OPTIONS[@]} ${STAGE2_CMAKE_OPTIONS[@]}"
 	export LDFLAGS="${STAGE2_COMMON_LDFLAGS[@]} ${STAGE2_LLVM_LDFLAGS[@]} ${FINK_LDFLAGS[@]}"
 	echo "LDFLAGS = $LDFLAGS"
 	cmake "${COMMON_CMAKE_OPTIONS[@]}" "${LLVM_CMAKE_OPTIONS[@]}" "${STAGE2_CMAKE_OPTIONS[@]}" $relsrcdir
+	test "$build_arch" != "powerpc" || strip_ppc64
 	fix_llvm_config_build_variables
 	make -k || make VERBOSE=1
-	asm_link_clang_rt
+	export CCAS_FLAGS="$int_as_flag" ; asm_link_clang_rts
 	make
 	pushd lib
 	  ln -s BugpointPasses.{so,dylib}
@@ -565,9 +603,10 @@ then
 	export LDFLAGS="${STAGE2_COMMON_LDFLAGS[@]} ${STAGE2_LLVM_LDFLAGS[@]} ${FINK_LDFLAGS[@]}"
 	echo "LDFLAGS = $LDFLAGS"
 	cmake "${COMMON_CMAKE_OPTIONS[@]}" "${LLVM_CMAKE_OPTIONS[@]}" "${STAGE2_CMAKE_OPTIONS[@]}" $relsrcdir
+	test "$build_arch" != "powerpc" || strip_ppc64
 	fix_llvm_config_build_variables
 	make -k || make VERBOSE=1
-	asm_link_clang_rt
+	export CCAS_FLAGS="$int_as_flag" ; asm_link_clang_rts
 	make
 	pushd lib
 	  ln -s BugpointPasses.{so,dylib}
@@ -738,18 +777,19 @@ fi
 	echo "Objects that differ ($1 vs. $2):"
 	for f in "${diffs[@]}"
 	do echo "  examining: $f"
+	  loc_err=0
 	  mkdir -p `dirname compare/$f`
 	  case $f in
 	  *.inc|*.h|*.gen) diff -u {$1,$2}/$f > compare/$f.diff ||
 	    diff_size compare/$f.diff ||
-	    resolve_path_diffs {$1,$2}/$f $1 $2 || err=1 ;;
+	    resolve_path_diffs {$1,$2}/$f $1 $2 || loc_err=1 ;;
 	  tools/llvm-config/CMakeFiles/llvm-config.dir/llvm-config.cpp.o)
 	    echo "  $f -- OK: asm sensitive to \$builddir" ;;
 	  lib/Support/CMakeFiles/LLVMSupport.dir/CommandLine.cpp.o)
 	    echo "  $f -- OK: __DATE__, __TIME__ cpp macros in strings" ;;
-	  *.o) resolve_obj_diffs $1 $2 $f || err=1 ;;
+	  *.o) resolve_obj_diffs $1 $2 $f || loc_err=1 ;;
 	  esac
-	  test "$err" = 0 || unresolved_diffs=("${unresolved_diffs[@]}" $f)
+	  test "$loc_err" = 0 || err=1 && unresolved_diffs=("${unresolved_diffs[@]}" $f)
 	done
 	if test "$err" = 1
 	then echo "UNRESOLVED DIFFS ($1 vs. $2):"
@@ -787,7 +827,7 @@ else
 	cmake "${COMMON_CMAKE_OPTIONS[@]}" "${LLVM_CMAKE_OPTIONS[@]}" "${STAGE2_CMAKE_OPTIONS[@]}" $relsrcdir
 	fix_llvm_config_build_variables
 	make -k || make VERBOSE=1
-	asm_link_clang_rt
+	export CCAS_FLAGS="$int_as_flag" ; asm_link_clang_rts
 	make
 	pushd lib
 	  ln -s BugpointPasses.{so,dylib}
@@ -834,9 +874,8 @@ fi
 	  pushd build
 	    for a in 32 32e
 	    do
-	      # http://lists.cs.uiuc.edu/pipermail/openmp-dev/2014-June/000208.html
-	      rm -fr *
-	      cmake -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -Dos=mac -Darch=$a ..
+	      CC=clang CXX=clang++ cmake -Dos=mac -Darch=$a ..
+	      rm -f CMakeFiles/iomp5.dir/src/*.o
 	      make
 	    done
 	    make fat
@@ -890,7 +929,7 @@ InfoTest: <<
 
 	echo "******** Running included compiler-rt/libclang_rt tests ... ********"
 	CC=`grep "CMAKE_C_COMPILER:FILEPATH" CMakeCache.txt | cut -d= -f2`
-	( mkdir projects/compiler-rt/test
+	( mkdir -p projects/compiler-rt/test
 	cd projects/compiler-rt/test
 	syslib="-lSystem"
 	clang_arch=%m
@@ -1076,6 +1115,7 @@ InstallScript: <<
 	# need symlink /usr/bin/ld so libLTO.dylib can be found relative to @executable_path
 	pushd $iprefix/bin
 		test -x /usr/bin/ld && ln -s /usr/bin/ld .
+		# shouldn't this be odcctools' ld for darwin8?
 	popd
 
 # convenient clang symlinks
@@ -1433,6 +1473,10 @@ On darwin>9 and x86 architectures, the package build is done as a
 3-stage bootstrap (self-host), now including a built libc++.  
 Should stage 2 vs. 3 of bootstrap miscompare, a 4th stage is done, 
 and then compared against stage 3 (only expected on darwin10).  
+
+NEW: as of 3.4.2-3, powerpc-darwin8 is now capable of bootstrapping in
+4 stages!  However, the test results look worse than that of a 1-stage,
+so we leave bootstrap disabled for powerpc.
 
 	*** LLVM/Clang-3.4 still has some codegen issues for PowerPC
 	*** It is NOT considered production quality for PowerPC
