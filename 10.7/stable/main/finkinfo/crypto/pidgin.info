@@ -81,7 +81,17 @@ PatchScript: <<
 	#!/bin/sh -ev
 	%{default_script}
 	# find ssl certificates under %p/etc
-	sed -i.orig2 -e '/ca-certificates/s|certificates|bundle|' \
+	# additional patching of configure: 
+	# to fix validation-failure on .la files
+	# patch could also apply to configure.ac
+	sed -i.orig2 -e '/LIBS=/s|-framework |-Wl,-framework,|g' \
+		-e '/eval.*TCL_LIB_SPEC=/a\
+	TCL_LIB_SPEC=`echo "$TCL_LIB_SPEC" | sed "s/-framework /-Wl,-framework,/g"`' \
+		-e '/eval.*TK_LIB_SPEC=/a\
+	TK_LIB_SPEC=`echo "$TK_LIB_SPEC" | sed "s/-framework /-Wl,-framework,/g"`' \
+		-e '/SM_LIBS.*libpath_add/s|-lICE|& -lX11|' \
+		-e '/PYTHON.*-config/s|--libs|--ldflags|' \
+		-e '/ca-certificates/s|certificates|bundle|' \
 		-e 's|/etc/ssl|%p/&|g' configure
 <<
 DocFiles: <<
@@ -92,6 +102,7 @@ DocFiles: <<
 # --with-perl-lib confuses the build somehow?
 # TODO: re-enable perl
 ConfigureParams: <<
+	PYTHON=%p/bin/python2.7 \
 	--mandir=%p/share/man \
 	--disable-schemas-install \
 	--disable-perl \
@@ -108,33 +119,25 @@ ConfigureParams: <<
 	--disable-dependency-tracking \
 	--with-x \
 	--x-includes=/usr/X11R6/include --x-libraries=/usr/X11R6/lib \
+	--with-ncurses-headers=%p/include \
 	--with-nspr-includes=%p/include/nspr --with-nspr-libs=%p/lib
 <<
 #	--enable-farsight detected by default, is noe --enable-farstream
+# don't find system's ncurses or any ncursesw
 # SetCFLAGS: -Os -g
 # needed to build consistently regardless of Tcl/Tk -- dmacks
 SetCPPFLAGS: -I%p/include -I/usr/X11R6/include
 UseMaxBuildJobs: true
 CompileScript: <<
-#!/bin/sh -ev
-# additional patching of configure: to fix validation-failure on .la files
-# patch could also apply to configure.ac
-mv configure configure.bkp1
-sed -e '/LIBS=/s|-framework |-Wl,-framework,|g' \
-	-e '/eval.*TCL_LIB_SPEC=/a\
-TCL_LIB_SPEC=`echo "$TCL_LIB_SPEC" | sed "s/-framework /-Wl,-framework,/g"`' \
-	-e '/eval.*TK_LIB_SPEC=/a\
-TK_LIB_SPEC=`echo "$TK_LIB_SPEC" | sed "s/-framework /-Wl,-framework,/g"`' \
-	-e '/SM_LIBS.*libpath_add/s|-lICE|& -lX11|' \
-	configure.bkp1 > configure
-chmod +x configure
-mkdir build
-cd build
-PYTHON=%p/bin/python2.7 pythonpath=%p/bin/python2.7 ../configure %c
-# hack HAVE_X11 because configure failed to find x11.pc
-mv config.h config.h.bkp
-sed '/HAVE_X11/s|.*|#define HAVE_X11 1|' config.h.bkp > config.h
-make
+	#!/bin/sh -ev
+	mkdir build
+	cd build
+	../configure %c
+	# hack HAVE_X11 because configure failed to find x11.pc
+	# prevent detection of wide-char support in ncurses
+	sed -i.bkp -e '/HAVE_X11/s|.*|#define HAVE_X11 1|' \
+		-e '/#undef.*NO_WIDECHAR/s|.*|#define NO_WIDECHAR 1|' config.h
+	make
 <<
 InfoTest: <<
 	TestScript: <<
