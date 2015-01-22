@@ -1,6 +1,6 @@
 diff -Nurd -x'*~' mathgl-2.0.3.orig/src/data_new.cpp mathgl-2.0.3/src/data_new.cpp
 --- mathgl-2.0.3.orig/src/data_new.cpp	2012-07-27 03:27:00.000000000 -0400
-+++ mathgl-2.0.3/src/data_new.cpp	2014-10-26 02:20:19.000000000 -0400
++++ mathgl-2.0.3/src/data_new.cpp	2015-01-21 23:52:59.000000000 -0500
 @@ -24,6 +24,12 @@
  #include <gsl/gsl_fft_complex.h>
  #include <gsl/gsl_dht.h>
@@ -14,9 +14,132 @@ diff -Nurd -x'*~' mathgl-2.0.3.orig/src/data_new.cpp mathgl-2.0.3/src/data_new.c
  #endif
  //-----------------------------------------------------------------------------
  void mgl_data_envelop(HMDT d, char dir)
+diff -Nurd -x'*~' mathgl-2.0.3.orig/src/export.cpp mathgl-2.0.3/src/export.cpp
+--- mathgl-2.0.3.orig/src/export.cpp	2012-07-27 03:27:00.000000000 -0400
++++ mathgl-2.0.3/src/export.cpp	2015-01-21 23:51:34.000000000 -0500
+@@ -32,6 +32,10 @@
+ #include <jpeglib.h>
+ }
+ #endif
++
++#if MGL_HAVE_GIF
++#include <gif_lib.h>
++#endif
+ //-----------------------------------------------------------------------------
+ int mgl_pnga_save(const char *fname, int w, int h, unsigned char **p)
+ {
+@@ -213,7 +217,11 @@
+ int mgl_gif_save(const char *fname, int w, int h, unsigned char **l)
+ {
+ #if MGL_HAVE_GIF
++#if GIFLIB_MAJOR>=5
++	GifFileType *fg = EGifOpenFileName(fname, 0, 0);
++#else
+ 	GifFileType *fg = EGifOpenFileName(fname, 0);
++#endif
+ 	// define colormap
+ 	GifColorType col[256];
+ 	memset(col,0,256*sizeof(GifColorType));
+@@ -227,9 +235,15 @@
+ 		col[m].Blue =51*k;
+ 	}
+ 	// write header
++#if GIFLIB_MAJOR>=5
++	ColorMapObject *gmap = GifMakeMapObject(256, col);
++	EGifPutScreenDesc(fg, w, h, 256,0,gmap);
++	GifFreeMapObject(gmap);
++#else
+ 	ColorMapObject *gmap = MakeMapObject(256, col);
+ 	EGifPutScreenDesc(fg, w, h, 256,0,gmap);
+ 	FreeMapObject(gmap);
++#endif
+ 	// write frame
+ 	EGifPutImageDesc(fg, 0, 0, w, h, 0, 0);
+ 	GifPixelType *line = new GifPixelType[w*h];
+@@ -242,7 +256,11 @@
+ 		line[m] = i+6*(j+6*k);
+ 	}
+ 	EGifPutLine(fg, line, w*h);
++#if GIFLIB_MAJOR>5 || (GIFLIB_MAJOR==5 && GIFLIB_MINOR>0)
++	EGifCloseFile(fg,0);
++#else
+ 	EGifCloseFile(fg);
++#endif
+ 	delete []line;	return 0;
+ #else
+ 	return 1;
+@@ -256,11 +274,20 @@
+ void mglCanvas::StartGIF(const char *fname, int ms)
+ {
+ #if MGL_HAVE_GIF
+-	if(gif)	EGifCloseFile(gif);
+-	EGifSetGifVersion("89a");
+ 	std::string fn=fname;
+ 	if(fn.empty())	{	fn=PlotId+".gif";	fname = fn.c_str();	}
++#if GIFLIB_MAJOR>5 || (GIFLIB_MAJOR==5 && GIFLIB_MINOR>0)
++	if(gif)	EGifCloseFile(gif,0);
++#else
++	if(gif)	EGifCloseFile(gif);
++#endif
++#if GIFLIB_MAJOR>=5
++	gif = EGifOpenFileName(fname, 0, 0);
++	EGifSetGifVersion(gif,true);
++#else
++	EGifSetGifVersion("89a");
+ 	gif = EGifOpenFileName(fname, 0);
++#endif
+ 	// get picture sizes
+ 	// NOTE: you shouldn't call SetSize() after StartGIF() !!!
+ 	long width, height;
+@@ -279,23 +306,45 @@
+ 		col[m].Blue =51*k;
+ 	}
+ 	// write header
++#if GIFLIB_MAJOR>=5
++	ColorMapObject *gmap = GifMakeMapObject(256, col);
++	EGifPutScreenDesc(gif, width, height, 256,0,gmap);
++	GifFreeMapObject(gmap);
++#else
+ 	ColorMapObject *gmap = MakeMapObject(256, col);
+ 	EGifPutScreenDesc(gif, width, height, 256,0,gmap);
+ 	FreeMapObject(gmap);
++#endif
+ 	// put animation parameters
+ 	ms /= 10;
+ 	unsigned char ext1[11] = {0x4E, 0x45, 0x54, 0x53, 0x43, 0x41, 0x50, 0x45, 0x32, 0x2E, 0x30}, ext3[3] = {0x01, 0xff, 0xff}, ext2[9] = {0x08, ms%256, ms/256, 0xff};
++#if GIFLIB_MAJOR>=5
++	EGifPutExtensionLeader(gif,0xff);
++	EGifPutExtensionBlock(gif,11,ext1);
++	EGifPutExtensionBlock(gif,3,ext3);
++	EGifPutExtensionTrailer(gif);
++	EGifPutExtension(gif,0xf9,4,ext2);
++#else
+ 	EGifPutExtensionFirst(gif,0xff,11,ext1);
+ 	EGifPutExtensionLast(gif,0xff,3,ext3);
+ 	EGifPutExtension(gif,0xf9,4,ext2);
+ #endif
++#else
++	mgl_set_global_warn("GIF support was disabled. Please, enable it and rebuild MathGL.");
++#endif
+ }
+ //-----------------------------------------------------------------------------
+ void mglCanvas::CloseGIF()
+ {
+ #if MGL_HAVE_GIF
++#if GIFLIB_MAJOR>5 || (GIFLIB_MAJOR==5 && GIFLIB_MINOR>0)
++	if(gif)	EGifCloseFile(gif,0);
++#else
+ 	if(gif)	EGifCloseFile(gif);
+ #endif
++#else
++	mgl_set_global_warn("GIF support was disabled. Please, enable it and rebuild MathGL.");
++#endif
+ 	gif = 0;
+ }
+ //-----------------------------------------------------------------------------
 diff -Nurd -x'*~' mathgl-2.0.3.orig/src/pde.cpp mathgl-2.0.3/src/pde.cpp
 --- mathgl-2.0.3.orig/src/pde.cpp	2012-07-27 03:27:00.000000000 -0400
-+++ mathgl-2.0.3/src/pde.cpp	2014-10-26 02:22:15.000000000 -0400
++++ mathgl-2.0.3/src/pde.cpp	2015-01-21 23:52:59.000000000 -0500
 @@ -23,6 +23,12 @@
  #define GAMMA	0.1
  #if MGL_HAVE_GSL
