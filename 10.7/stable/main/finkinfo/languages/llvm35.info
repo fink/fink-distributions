@@ -1,6 +1,6 @@
 Info3: <<
 Package: llvm35
-Version: 3.5.0
+Version: 3.5.1
 Revision: 1
 Description: Modular and reusable compiler
 License: BSD
@@ -33,36 +33,37 @@ BuildConflicts: <<
 <<
 
 Source: http://llvm.org/releases/%v/llvm-%v.src.tar.xz
-Source-MD5: d6987305a1a0e58e128c1374cd3b8fef
+Source-MD5: 2d3d8004f38852aa679e5945b8ce0b14
 Source2: http://llvm.org/releases/%v/cfe-%v.src.tar.xz
-Source2-MD5: 27718dd13c7df83e15f997116bbb4aef
+Source2-MD5: 93f9532f8f7e6f1d8e5c1116907051cb
 Source3: http://llvm.org/releases/%v/compiler-rt-%v.src.tar.xz
-Source3-MD5: 02624d2a9144278c3808c00dbbab56c8
+Source3-MD5: d626cfb8a9712cb92b820798ab5bc1f8
 Source4: http://llvm.org/releases/%v/polly-%v.src.tar.xz
-Source4-MD5: 2ee0167c7ed7c85026cdb18ad6f4ade8
+Source4-MD5: b02e005a54e0911ccd8b7f1ca039cb51
 Source5: http://llvm.org/releases/%v/libcxx-%v.src.tar.xz
-Source5-MD5: d7b72d65307c677e1ed29a9c425e0421
+Source5-MD5: 406f09b1dab529f3f7879f4d548329d2
 Source6: http://llvm.org/releases/%v/openmp-%v.src.tar.xz
-Source6-MD5: 13eb389377b4803c8f6ec0d3eab189fd
+Source6-MD5: 121ddb10167d7fc38b1f7e4b029cf059
 # Source7: http://llvm.org/releases/3.5/test-suite-3.5.src.tar.xz
 # Source7-MD5: 
 # libcxxabi is not needed, use system's libc++abi or libsupc++
 
 SourceDirectory: llvm-%v.src
+# NoSourceDirectory: true
 UseMaxBuildJobs: true
 
 PatchFile: %n.patch
-PatchFile-MD5: ecaf94589ea651deb3afa9d634ddc050
+PatchFile-MD5: 85f6186c1644c67b7f5015a12c3ac9d7
 PatchFile2: %n-clang.patch
 PatchFile2-MD5: c81342d20cea8ef1e2871d47c76d4155
 PatchFile3: %n-compiler-rt.patch
-PatchFile3-MD5: 0b65933168696622caa414fc1a1444e5
+PatchFile3-MD5: f89188d1b52e50e144a67ae34b33ae92
 PatchFile4: %n-polly.patch
 PatchFile4-MD5: f7ccc7bed1f45b478d696536260269b3
 PatchFile5: %n-libcxx.patch
 PatchFile5-MD5: a96f721f07ce9cdfa501db751000b7af
 PatchFile6: %n-clang-omp.patch
-PatchFile6-MD5: 8b4c22de63790420416d0bc3a9361c0d
+PatchFile6-MD5: fa3d84690b274fb9c70da6ceae17223a
 PatchFile7: %n-clang-iomp5.patch
 PatchFile7-MD5: ee4a8910c21e6ceb60393813d2fb0f1e
 PatchFile8: %n-openmp-r219214.patch
@@ -76,6 +77,19 @@ PatchScript: <<
 	brv=3.5
 	darwin_vers=`uname -r | cut -d. -f1`
 	osx_version=`sw_vers -productVersion | cut -d. -f-2`
+
+	llvm_abs_srcdir=%b
+	# manual unpack for pre-xz fink
+	if test "$darwin_vers" -lt 9
+	then
+	  for a in llvm cfe compiler-rt polly libcxx openmp
+	  do xz -dc $a-%v.src.tar.xz | tar xvf -
+	  done
+	  cd llvm-%v.src
+	  llvm_abs_srcdir="$llvm_abs_srcdir/llvm-%v.src"
+	fi
+	build_root="$llvm_abs_srcdir/../build"
+
 	# cmake build ties subproject dirs together into one build
 	pushd tools
 	  ln -f -s ../../cfe-%v.src ./clang
@@ -101,6 +115,8 @@ PatchScript: <<
 	pushd projects/compiler-rt
 	  $patch_filter %{PatchFile3} | patch -p1
 	  sed -i.orig -e '/http.*Article/s|^|// |' lib/asan/asan_malloc_mac.cc
+	  test "$darwin_vers" -gt 9 || sed -i.orig -e 's|__bzero|bzero|g' lib/sanitizer_common/sanitizer_common_interceptors.inc
+	  # or do actual symbol check on nm /usr/lib/libc.dylib /usr/lib/system/libsystem_c.dylib
 	popd
 	pushd ../libcxx-%v.src
 	  $patch_filter %{PatchFile5} | patch -p1
@@ -162,7 +178,7 @@ if ($1 == "cmd.append(exec_path)") {
 	  sed -i.orig -e '/message-converter/s|--enum=|--enum-file=|' \
 		-e '/message-converter/s|--default=|--default-file=|' \
 		runtime/CMakeLists.txt
-	  sed -i.orig -e 's|= gcc|= %b/../build/last/bin/clang-3.5|g' testsuite/Makefile
+	  sed -i.orig -e "s|= gcc|= $build_root/last/bin/clang-3.5|g" testsuite/Makefile
 	popd
 	
 # needed for gcc-fsf-4.x only
@@ -184,13 +200,17 @@ CompileScript: <<
 	darwin_vers=`uname -r | cut -d. -f1`
 	osx_version=`sw_vers -productVersion | cut -d. -f-2`
 	llvm_abs_srcdir=%b
-	libcxx_abs_srcdir=$llvm_abs_srcdir/../libcxx-%v.src
+	test "$darwin_vers" -gt 8 || llvm_abs_srcdir="$llvm_abs_srcdir/llvm-%v.src"
+	libcxx_abs_srcdir="$llvm_abs_srcdir/../libcxx-%v.src"
 	libcxx_rel_srcdir=../../libcxx-%v.src
-	build_root=$llvm_abs_srcdir/../build
+	build_root="$llvm_abs_srcdir/../build"
 	relsrcdir=../../llvm-%v.src
 	# LLVM_ENABLE_ASSERTIONS:OFF and LIBCXX_ENABLE_ASSERTIONS:OFF
 	# for production compiler build
 	enable_assertions=OFF
+
+	# darwin8: manually unpacked xz
+	test "$darwin_vers" -ge 9 || cd llvm-%v.src
 
 	# Do not want -DNDEBUG, cause linker errors (undef symbols)
 	# LLVM_ENABLE_ASSERTIONS:ON should have removed -DNDEBUG
@@ -223,6 +243,7 @@ CompileScript: <<
 	# comment-out the next line if ccache is not desired
 	test -x $p/bin/ccache && CCACHE=ccache || CCACHE=
 	export CCACHE
+	echo "ccache: CCACHE=$CCACHE"
 
 	wrap_compiler() {
 	cat >$2 <<EOF
@@ -238,8 +259,17 @@ EOF
 	# wrap ccache into single cmd b/c cmake can't handle "ccache g++"
 	mkdir ../opt-bin
 	pushd ../opt-bin
-	  wrap_compiler clang ccclang
-	  wrap_compiler clang++ ccclang++
+	  case "$darwin_vers" in
+	  8|9|10)
+	    # fink-build from clang34
+	    wrap_compiler %p/bin/clang-3.4 ccclang
+	    wrap_compiler %p/bin/clang++-3.4 ccclang++
+	    ;;
+	  *)
+	    wrap_compiler clang ccclang
+	    wrap_compiler clang++ ccclang++
+	    ;;
+	  esac
 	  wrap_compiler gcc-fsf-$fsfgccv ccgcc-$fsfgccv
 	  wrap_compiler g++-fsf-$fsfgccv ccg++-$fsfgccv
 	# also setup bootstrap stage compilers
@@ -288,7 +318,7 @@ EOF
 	esac
 	# script to assemble/link in missing .S units into libclang_rt
 	asm_link_clang_rt() {
-		# $CC already set
+		# $CC, $CCAS_FLAGS already set
 		# $1 is $clang_arch or $other_arch
 		arch=$1
 		builddir=projects/compiler-rt/lib
@@ -311,8 +341,8 @@ EOF
 	# libc++ in the bootstrap process.
 	# Keep this path in sync with libcxx_install_dir elsewhere in this file.
 	fix_llvm_config_build_variables() {
-		sed -i.orig -e '/LLVM_CXXFLAGS/s|%b[^ ]*/include|%p/include/c++/v1|' \
-			-e '/LLVM_LDFLAGS/s|%b[^ ]*/lib|%p/lib/c++|' \
+		sed -i.orig -e "/LLVM_CXXFLAGS/s|$llvm_abs_srcdir[^ ]*/include|%p/include/c++/v1|" \
+			-e "/LLVM_LDFLAGS/s|$llvm_abs_srcdir[^ ]*/lib|%p/lib/c++|" \
 			tools/llvm-config/BuildVariables.inc
 	}
 
@@ -328,25 +358,44 @@ EOF
 	# necessary to converge.  So select system libc++ over libstdc++
 	# on darwin 11 and 12 to make bootstrap finish in 3 stages.
 	# darwin13+ already default to using libc++.
-	# darwin10- lack libc++ altogether
-	case $darwin_vers in
-	11) force_stage1_system_libcxx=1 ;;
-	12) force_stage1_system_libcxx=1 ;;
-	*) force_stage1_system_libcxx=0 ;;
+	# darwin10- lack a system libc++ altogether,
+	# but libcxx1-dev (3.4) provides it
+	force_stage1_system_libcxx=0
+	force_stage1_fink_libcxx=0
+	case "$darwin_vers" in
+	8|9|10) force_stage1_fink_libcxx=1 ;;
+	11|12) force_stage1_system_libcxx=1 ;;
 	esac
 	if test "$force_stage1_system_libcxx" = 1
-	then STAGE1_LIBCXX_FLAGS="-std=c++11 -stdlib=libc++"
+	then STAGE1_LIBCXX_FLAGS=( -std=c++11 -stdlib=libc++ )
+	fi
+	if test "$force_stage1_fink_libcxx" = 1
+	then STAGE1_LIBCXX_FLAGS=( -std=c++11 -stdlib=libc++ -cxx-isystem %p/include/c++/v1 -L%p/lib/c++ -Qunused-arguments )
+	  STAGE1_LD_FLAGS=( -L%p/lib/c++ )
+	fi
+	if test "$darwin_vers" -lt 9
+	then STAGE1_AS_FLAGS=( -B%p/lib/odcctools/bin )
+	  STAGE1_LD_FLAGS=("${STAGE1_LD_FLAGS[@]}" -B%p/lib/odcctools/bin )
+	fi
+	if test "$build_arch" = powerpc
+	then STAGE1_AS_FLAGS=( "${STAGE1_AS_FLAGS[@]}" -no-integrated-as )
 	fi
 
+	case "$build_arch" in
+	# PowerPC is not ready for -integrated-as yet
+	powerpc*) int_as_flag="-no-integrated-as -B$cctools_path" ;;
+	esac
+
+	STAGE1_CXX_OPTIONS="-fno-common \
+		${STAGE1_LIBCXX_FLAGS[@]} \
+		${STAGE1_AS_FLAGS[@]}"
+	STAGE1_LD_FLAGS="${STAGE1_LD_FLAGS[@]}"
 	STAGE1_CMAKE_OPTIONS=( -DCMAKE_C_FLAGS=-fno-common \
-		-DCMAKE_CXX_FLAGS="-fno-common $STAGE1_LIBCXX_FLAGS" )
-	ccvers=`$CXX -v 2>&1 | tail -n 1 | cut -d\  -f3`
-	if test $ccvers = 4.0.1
-	then STAGE1_CMAKE_OPTIONS=( "${STAGE1_CMAKE_OPTIONS[@]}" \
-		-DCMAKE_C_FLAGS_RELEASE:STRING=-O2 \
-		-DCMAKE_CXX_FLAGS_RELEASE:STRING=-O2 )
-	fi
-	# else default to -O3
+		-DCMAKE_CXX_FLAGS="$STAGE1_CXX_OPTIONS" \
+		-DCMAKE_SHARED_LINKER_FLAGS="$STAGE1_LD_FLAGS" \
+		-DCMAKE_MODULE_LINKER_FLAGS="$STAGE1_LD_FLAGS" \
+		-DCMAKE_EXE_LINKER_FLAGS="$STAGE1_LD_FLAGS" )
+	echo "STAGE1_CMAKE_OPTIONS = ${STAGE1_CMAKE_OPTIONS[@]}"
 
 	echo "######## START of BOOTSTRAP STAGE 1: building llvm/clang with the system compiler"
 	# wd: %b
@@ -467,9 +516,9 @@ then
 #	fi
 	stage23_cxx_flags="-std=c++11 -stdlib=libc++ -cxx-isystem $libcxx_srcdir"
 	# reuse CC and CXX from stage 1.5
-	STAGE2_CMAKE_OPTIONS=( \
-		-DCMAKE_CXX_FLAGS="$stage23_cxx_flags $int_as_flag" )
 	STAGE2_LLVM_LDFLAGS=( "-L$libcxx_stage_dir" )
+	STAGE2_CMAKE_OPTIONS=( \
+		-DCMAKE_CXX_FLAGS="$stage23_cxx_flags $int_as_flag ${STAGE2_LLVM_LDFLAGS[@]}" )
 	mkdir -p ../build/stage2
 	pushd ../build/stage2
 	echo "LLVM_CMAKE_OPTIONS = ${COMMON_CMAKE_OPTIONS[@]} ${LLVM_CMAKE_OPTIONS[@]} ${STAGE2_CMAKE_OPTIONS[@]}"
@@ -784,6 +833,19 @@ fi
 # $do_bootstrap = 1
 fi
 
+# symlinks for unittests so that @loader_path/../lib finds dependent libraries
+	if test "$darwin_vers" -le 8
+	then
+	  pushd unittests
+	  for d in `find . -type d | grep "/" | grep -v CMake | sed 's|^\./||'`
+	  do
+	    p=`echo $d | sed -e 's|[A-Za-z]*|..|g'`
+	    echo "linking to 'lib' in $d/.."
+	    pushd $d/.. && ln -s -f $p/lib . && popd
+	  done
+	  popd
+	fi
+
 # after clang is built, bootstrapped or not, build clang-openmp
 	build_clang_omp=1
 	case "%m" in
@@ -801,13 +863,13 @@ fi
 	    for a in 32 32e
 	    do
 	      CC=clang CXX=clang++ cmake -Dos=mac -Darch=$a ..
-	      rm -f CMakeFiles/iomp5.dir/src/*.o
+	      rm -f CMakeFiles/iomp5.dir/src/*.o *.dylib
 	      make
 	    done
 	    make fat
 	    # install to build dir first
-	    install -m 755 ../exports/mac_32e/lib/libiomp5.dylib %b/../build/last/lib
-	    install -m 644 omp.h %b/../build/last/lib/clang/%v/include
+	    install -m 755 ../exports/mac_32e/lib/libiomp5.dylib "$build_root/last/lib"
+	    install -m 644 omp.h "$build_root/last/lib/clang/%v/include"
 	  popd
 	popd
 	fi
@@ -923,6 +985,9 @@ EOF
 InstallScript: <<
 	#!/bin/sh -ev
 	darwin_vers=`uname -r | cut -d. -f1`
+	# darwin8: manually unpacked xz
+	test "$darwin_vers" -ge 9 || cd llvm-%v.src
+
 	# "brv" = branch version, 3.5
 	brv=3.5
 	# optional: de-rpath shared library dependencies
@@ -1422,8 +1487,9 @@ closer resembles the packaging in earlier versions, llvm34.
 DescPort: <<
 Most of the patches are maintained at fangism's powerpc-darwin8 branches
 of the llvm, clang, compiler-rt projects hosted at github:
-	https://github.com/fangism/llvm/compare/release-3.5.0...powerpc-darwin8-rel-3.5.0.diff
-	https://github.com/fangism/clang/compare/release-3.5.0...powerpc-darwin8-rel-3.5.0.diff
+	https://github.com/fangism/llvm/compare/release-3.5.1...powerpc-darwin8-rel-3.5.1.diff
+	https://github.com/fangism/clang/compare/release-3.5.1...powerpc-darwin8-rel-3.5.1.diff
+The following did not change since 3.5.0:
 	https://github.com/fangism/compiler-rt/compare/release-3.5.0...powerpc-darwin8-rel-3.5.0.diff
 	https://github.com/fangism/libcxx/compare/release-3.5.0...powerpc-darwin8-rel-3.5.0.diff
 
