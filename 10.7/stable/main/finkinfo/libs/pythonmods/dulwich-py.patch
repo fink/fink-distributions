@@ -1,0 +1,99 @@
+Author: Jelmer Vernooĳ <jelmer@google.com>
+Date:   Fri Mar 6 12:29:07 2015 +0000
+
+    Fix buffer overflow in C version of apply_delta().
+    
+    This is CVE-2015-0838.
+    
+    Thanks to Ivan Fratric of the Google Security Team for
+    reporting this issue.
+
+diff --git a/NEWS b/NEWS
+index 4d3c1ce..73f0e26 100644
+--- a/NEWS
++++ b/NEWS
+@@ -1,3 +1,14 @@
++0.9.9	2015-03-20
++
++ SECURITY BUG FIXES
++
++  * Fix buffer overflow in C implementation of pack apply_delta().
++    (CVE-2015-0838)
++
++    Thanks to Ivan Fratric of the Google Security Team for
++    reporting this issue.
++    (Jelmer Vernooij)
++
+ 0.9.8	2014-11-30
+ 
+  BUG FIXES
+diff --git a/dulwich/__init__.py b/dulwich/__init__.py
+index 35d9808..bc36593 100644
+--- a/dulwich/__init__.py
++++ b/dulwich/__init__.py
+@@ -21,4 +21,4 @@
+ 
+ """Python implementation of the Git file formats and protocols."""
+ 
+-__version__ = (0, 9, 8)
++__version__ = (0, 9, 9)
+diff --git a/dulwich/_pack.c b/dulwich/_pack.c
+index d1534a5..8a8912e 100644
+--- a/dulwich/_pack.c
++++ b/dulwich/_pack.c
+@@ -146,10 +146,14 @@ static PyObject *py_apply_delta(PyObject *self, PyObject *args)
+ 				break;
+ 			memcpy(out+outindex, src_buf+cp_off, cp_size);
+ 			outindex += cp_size;
++			dest_size -= cp_size;
+ 		} else if (cmd != 0) {
++			if (cmd > dest_size)
++				break;
+ 			memcpy(out+outindex, delta+index, cmd);
+ 			outindex += cmd;
+ 			index += cmd;
++			dest_size -= cmd;
+ 		} else {
+ 			PyErr_SetString(PyExc_ValueError, "Invalid opcode 0");
+ 			Py_DECREF(ret);
+@@ -167,7 +171,7 @@ static PyObject *py_apply_delta(PyObject *self, PyObject *args)
+ 		return NULL;
+ 	}
+ 
+-	if (dest_size != outindex) {
++	if (dest_size != 0) {
+ 		PyErr_SetString(PyExc_ValueError, "dest size incorrect");
+ 		Py_DECREF(ret);
+ 		return NULL;
+diff --git a/dulwich/tests/test_pack.py b/dulwich/tests/test_pack.py
+index 666a639..53e4a22 100644
+--- a/dulwich/tests/test_pack.py
++++ b/dulwich/tests/test_pack.py
+@@ -191,6 +191,14 @@ class TestPackDeltas(TestCase):
+         self._test_roundtrip(self.test_string_huge + self.test_string1,
+                              self.test_string_huge + self.test_string2)
+ 
++    def test_dest_overflow(self):
++        self.assertRaises(
++            ValueError,
++            apply_delta, 'a'*0x10000, '\x80\x80\x04\x80\x80\x04\x80' + 'a'*0x10000)
++        self.assertRaises(
++            ValueError,
++            apply_delta, '', '\x00\x80\x02\xb0\x11\x11')
++
+ 
+ @skipIfPY3
+ class TestPackData(PackTests):
+diff --git a/setup.py b/setup.py
+index 89be710..7a03845 100755
+--- a/setup.py
++++ b/setup.py
+@@ -8,7 +8,7 @@ except ImportError:
+     from distutils.core import setup, Extension
+ from distutils.core import Distribution
+ 
+-dulwich_version_string = '0.9.8'
++dulwich_version_string = '0.9.9'
+ 
+ include_dirs = []
+ # Windows MSVC support
