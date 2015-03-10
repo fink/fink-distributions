@@ -1,0 +1,238 @@
+Fixes building gdb on x86_64-apple-darwin14 with clang, which produces
+a number of warnings from -Wformat-nonliteral.
+
+Ref: https://sourceware.org/ml/gdb/2015-02/msg00047.html
+
+2015-02-26  Pedro Alves  <palves@redhat.com>
+
+	* auto-load.h (file_is_auto_load_safe): Add ATTRIBUTE_PRINTF.
+	* complaints.c (vcomplaint): Pass argument FMT directly to
+	printf-like functions instead of complaint->fmt.
+	* ctf.c (ctf_save_write_metadata): Add ATTRIBUTE_PRINTF.
+	* darwin-nat.c (inferior_debug): Add ATTRIBUTE_PRINTF.
+	* compile/compile-loc2c.c (pushf, unary, binary): Add
+	ATTRIBUTE_PRINTF.
+	(do_compile_dwarf_expr_to_c): Pass string literal as format string
+	to pushf.
+	(BINARY): Pass string literal as format string to 'binary'.
+	* compile/compile-object-load.c (link_callbacks_einfo): Add
+	ATTRIBUTE_PRINTF.
+	* guile/guile-internal.h (gdbscm_printf): Add ATTRIBUTE_PRINTF.
+---
+ gdb/auto-load.h                   |  3 ++-
+ gdb/compile/compile-loc2c.c       | 19 ++++++++++++++-----
+ gdb/compile/compile-object-load.c |  3 +++
+ gdb/complaints.c                  | 16 +++++++++++-----
+ gdb/ctf.c                         |  5 +++++
+ gdb/darwin-nat.c                  |  3 +++
+ gdb/guile/guile-internal.h        |  6 ++++--
+ gdb/remote.c                      |  3 +++
+ 9 files changed, 61 insertions(+), 13 deletions(-)
+
+diff --git a/gdb/auto-load.h b/gdb/auto-load.h
+index 1d10e91..d241946 100644
+--- a/gdb/auto-load.h
++++ b/gdb/auto-load.h
+@@ -45,7 +45,8 @@ extern struct cmd_list_element **auto_load_show_cmdlist_get (void);
+ extern struct cmd_list_element **auto_load_info_cmdlist_get (void);
+ 
+ extern int file_is_auto_load_safe (const char *filename,
+-				   const char *debug_fmt, ...);
++				   const char *debug_fmt, ...)
++  ATTRIBUTE_PRINTF (2, 3);
+ 
+ extern int auto_load_gdb_scripts_enabled
+   (const struct extension_language_defn *extlang);
+diff --git a/gdb/compile/compile-loc2c.c b/gdb/compile/compile-loc2c.c
+index 3f43e58..6a3615d 100644
+--- a/gdb/compile/compile-loc2c.c
++++ b/gdb/compile/compile-loc2c.c
+@@ -443,6 +443,9 @@ push (int indent, struct ui_file *stream, ULONGEST l)
+ /* Emit code to push an arbitrary expression.  This works like
+    printf.  */
+ 
++static void pushf (int indent, struct ui_file *stream, const char *format, ...)
++  ATTRIBUTE_PRINTF (3, 4);
++
+ static void
+ pushf (int indent, struct ui_file *stream, const char *format, ...)
+ {
+@@ -460,6 +463,9 @@ pushf (int indent, struct ui_file *stream, const char *format, ...)
+ /* Emit code for a unary expression -- one which operates in-place on
+    the top-of-stack.  This works like printf.  */
+ 
++static void unary (int indent, struct ui_file *stream, const char *format, ...)
++  ATTRIBUTE_PRINTF (3, 4);
++
+ static void
+ unary (int indent, struct ui_file *stream, const char *format, ...)
+ {
+@@ -474,6 +480,8 @@ unary (int indent, struct ui_file *stream, const char *format, ...)
+ 
+ /* Emit code for a unary expression -- one which uses the top two
+    stack items, popping the topmost one.  This works like printf.  */
++static void binary (int indent, struct ui_file *stream, const char *format, ...)
++  ATTRIBUTE_PRINTF (3, 4);
+ 
+ static void
+ binary (int indent, struct ui_file *stream, const char *format, ...)
+@@ -651,7 +659,7 @@ do_compile_dwarf_expr_to_c (int indent, struct ui_file *stream,
+   fprintfi_filtered (indent, stream, "int __gdb_tos = -1;\n");
+ 
+   if (initial != NULL)
+-    pushf (indent, stream, core_addr_to_string (*initial));
++    pushf (indent, stream, "%s", core_addr_to_string (*initial));
+ 
+   while (op_ptr < op_end)
+     {
+@@ -911,7 +919,8 @@ do_compile_dwarf_expr_to_c (int indent, struct ui_file *stream,
+ 
+ 	case DW_OP_pick:
+ 	  offset = *op_ptr++;
+-	  pushf (indent, stream, "__gdb_stack[__gdb_tos - %d]", offset);
++	  pushf (indent, stream, "__gdb_stack[__gdb_tos - %s]",
++		 plongest (offset));
+ 	  break;
+ 
+ 	case DW_OP_swap:
+@@ -1000,8 +1009,8 @@ do_compile_dwarf_expr_to_c (int indent, struct ui_file *stream,
+ 	  break;
+ 
+ #define BINARY(OP)							\
+-	  binary (indent, stream, ("__gdb_stack[__gdb_tos-1] " #OP	\
+-				   " __gdb_stack[__gdb_tos]"));	\
++	  binary (indent, stream, "%s", "__gdb_stack[__gdb_tos-1] " #OP \
++				   " __gdb_stack[__gdb_tos]");	\
+ 	  break
+ 
+ 	case DW_OP_and:
+@@ -1076,7 +1085,7 @@ do_compile_dwarf_expr_to_c (int indent, struct ui_file *stream,
+ 					    addr_size,
+ 					    cfa_start, cfa_end,
+ 					    &text_offset, per_cu);
+-		pushf (indent, stream, cfa_name);
++		pushf (indent, stream, "%s", cfa_name);
+ 	      }
+ 	  }
+ 
+diff --git a/gdb/compile/compile-object-load.c b/gdb/compile/compile-object-load.c
+index e187970..8a7f232 100644
+--- a/gdb/compile/compile-object-load.c
++++ b/gdb/compile/compile-object-load.c
+@@ -224,6 +224,9 @@ link_callbacks_unattached_reloc (struct bfd_link_info *link_info,
+ 
+ /* Helper for link_callbacks callbacks vector.  */
+ 
++static void link_callbacks_einfo (const char *fmt, ...)
++  ATTRIBUTE_PRINTF (1, 2);
++
+ static void
+ link_callbacks_einfo (const char *fmt, ...)
+ {
+diff --git a/gdb/complaints.c b/gdb/complaints.c
+index 7e52656..dbacb2a 100644
+--- a/gdb/complaints.c
++++ b/gdb/complaints.c
+@@ -183,21 +183,27 @@ vcomplaint (struct complaints **c, const char *file,
+   else
+     series = complaints->series;
+ 
++  /* Pass 'fmt' instead of 'complaint->fmt' to printf-like callees
++     from here on, to avoid "format string is not a string literal"
++     warnings.  'fmt' is this function's printf-format parameter, so
++     the compiler can assume the passed in argument is a literal
++     string somewhere up the call chain.  */
++  gdb_assert (complaint->fmt == fmt);
++
+   if (complaint->file != NULL)
+-    internal_vwarning (complaint->file, complaint->line, 
+-		       complaint->fmt, args);
++    internal_vwarning (complaint->file, complaint->line, fmt, args);
+   else if (deprecated_warning_hook)
+-    (*deprecated_warning_hook) (complaint->fmt, args);
++    (*deprecated_warning_hook) (fmt, args);
+   else
+     {
+       if (complaints->explanation == NULL)
+ 	/* A [v]warning() call always appends a newline.  */
+-	vwarning (complaint->fmt, args);
++	vwarning (fmt, args);
+       else
+ 	{
+ 	  char *msg;
+ 	  struct cleanup *cleanups;
+-	  msg = xstrvprintf (complaint->fmt, args);
++	  msg = xstrvprintf (fmt, args);
+ 	  cleanups = make_cleanup (xfree, msg);
+ 	  wrap_here ("");
+ 	  if (series != SUBSEQUENT_MESSAGE)
+diff --git a/gdb/ctf.c b/gdb/ctf.c
+index cf73ea0..9891321 100644
+--- a/gdb/ctf.c
++++ b/gdb/ctf.c
+@@ -102,6 +102,11 @@ struct trace_write_handler
+ static void
+ ctf_save_write_metadata (struct trace_write_handler *handler,
+ 			 const char *format, ...)
++  ATTRIBUTE_PRINTF (2, 3);
++
++static void
++ctf_save_write_metadata (struct trace_write_handler *handler,
++			 const char *format, ...)
+ {
+   va_list args;
+ 
+diff --git a/gdb/darwin-nat.c b/gdb/darwin-nat.c
+index f9481c7..dfce179 100644
+--- a/gdb/darwin-nat.c
++++ b/gdb/darwin-nat.c
+@@ -171,6 +171,9 @@ __attribute__ ((section ("__TEXT,__info_plist"),used)) =
+   "</dict>\n"
+   "</plist>\n";
+ 
++static void inferior_debug (int level, const char *fmt, ...)
++  ATTRIBUTE_PRINTF (2, 3);
++
+ static void
+ inferior_debug (int level, const char *fmt, ...)
+ {
+diff --git a/gdb/guile/guile-internal.h b/gdb/guile/guile-internal.h
+index 9a8ef68..fe306b4 100644
+--- a/gdb/guile/guile-internal.h
++++ b/gdb/guile/guile-internal.h
+@@ -146,7 +146,8 @@ extern void gdbscm_define_functions (const scheme_function *, int public);
+ extern void gdbscm_define_integer_constants (const scheme_integer_constant *,
+ 					     int public);
+ 
+-extern void gdbscm_printf (SCM port, const char *format, ...);
++extern void gdbscm_printf (SCM port, const char *format, ...)
++  ATTRIBUTE_PRINTF (2, 3);
+ 
+ extern void gdbscm_debug_display (SCM obj);
+ 
+@@ -484,7 +485,8 @@ extern char *gdbscm_scm_to_c_string (SCM string);
+ 
+ extern SCM gdbscm_scm_from_c_string (const char *string);
+ 
+-extern SCM gdbscm_scm_from_printf (const char *format, ...);
++extern SCM gdbscm_scm_from_printf (const char *format, ...)
++    ATTRIBUTE_PRINTF (1, 2);
+ 
+ extern char *gdbscm_scm_to_string (SCM string, size_t *lenp,
+ 				   const char *charset,
+diff --git a/gdb/remote.c b/gdb/remote.c
+index 3479140..3d2c1c2 100644
+--- a/gdb/remote.c
++++ b/gdb/remote.c
+@@ -6986,6 +6986,9 @@ remote_read_bytes (struct target_ops *ops, CORE_ADDR memaddr,
+    FORMAT and the remaining arguments, then gets the reply.  Returns
+    whether the packet was a success, a failure, or unknown.  */
+ 
++static enum packet_result remote_send_printf (const char *format, ...)
++  ATTRIBUTE_PRINTF (1, 2);
++
+ static enum packet_result
+ remote_send_printf (const char *format, ...)
+ {
+-- 
+1.9.3
