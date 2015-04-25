@@ -1,14 +1,13 @@
 Package: apache2
-Version: 2.4.7
-Revision: 1.1
+Version: 2.4.10
+Revision: 10.1
 ###
 Provides: httpd
 BuildDepends: <<
 	dpkg-dev (>= 1.16.1),
-	fink (>= 0.32),
+	fink (>= 0.38.99.git),
 	libaprutil.0-dev (>= 1.5.0),
 	libapr.0-dev (>= 1.5.0),
-	libpcap1,
 	libpcre1,
 	pkgconfig,
 	openssl,
@@ -17,6 +16,7 @@ BuildDepends: <<
 <<
 Depends: <<
 	mime-support,
+	%N-utils (>= 2.4),
 	%N-data (= %v-%r),
 	%N-bin (= %v-%r)
 <<
@@ -30,17 +30,23 @@ RuntimeDepends: <<
 	anacron
 <<
 Replaces: apache2.2-common
-Conflicts: apache2.2-common
+Conflicts: apache2.2-common (<< 2.3)
 Recommends: ssl-cert
+Suggests: <<
+	www-browser,
+	%N-doc,
+	%N-suexec-pristine | %N-suexec-custom
+<<
 ###
-Source: mirror:apache:httpd/httpd-%v.tar.gz
-Source-MD5: 9272aadaa2d702f6ae5758641d830d7f
+Source: mirror:debian:pool/main/a/apache2/%n_%v.orig.tar.bz2
+Source-MD5: 44543dff14a4ebc1e9e2d86780507156
+SourceDirectory: httpd-%v
 ###
 PatchFile: %n.patch
-PatchFile-MD5: a7ded2ab4bd0623ad9211ef3b66ddb04
+PatchFile-MD5: 725c3ca7e9b906f402c7950ace9659d6
 PatchScript: <<
 BASE=$(echo %p | perl -pi -e 's,/,,'); \
-sed -e 's,@FINKPREFIX@,%p,g' -e "s,@FINKBASE@,${BASE},g" %{PatchFile} | patch -p1
+sed -e 's,@FINKPREFIX@,%p,g' -e "s,@FINKBASE@,${BASE},g" -e 's,@REPLACESW@,\/sw,g' %{PatchFile} | patch -p1
 
 ### Include more patches, mostly from debian build
 patch -p1 < fink/patches/fhs_compliance.patch
@@ -48,8 +54,15 @@ patch -p1 < fink/patches/no_LD_LIBRARY_PATH.patch
 patch -p1 < fink/patches/suexec-CVE-2007-1742.patch
 patch -p1 < fink/patches/customize_apxs.patch
 patch -p1 < fink/patches/build_suexec-custom.patch
+patch -p1 < fink/patches/pull_upstream_2.4.x_branch.patch
 # This patch is applied manually
 #  patch -p1 < fink/patches/suexec-custom.patch
+patch -p1 < fink/patches/CVE-2014-3583_mod_proxy_fcgi.diff
+patch -p1 < fink/patches/mpm_event_use_after_free.diff
+patch -p1 < fink/patches/mod_ssl_memleak.diff
+patch -p1 < fink/patches/mod_ssl-oscp_stapling_crash.diff
+patch -p1 < fink/patches/CVE-2014-8109_mod_lua.diff
+patch -p1 < fink/patches/CVE-2015-0228_mod_lua.diff
 
 ### Fink changes
 patch -p1 < fink/patches/fink_layout.patch
@@ -107,7 +120,7 @@ ConfigureParams: <<
 --with-pcre=yes \
 --enable-pie \
 --enable-mpms-shared=all \
---enable-mods-shared="all cgi" \
+--enable-mods-shared="all cgi ident authnz_fcgi" \
 --enable-mods-static="unixd logio watchdog version" \
 LTFLAGS="--no-silent"
 <<
@@ -159,6 +172,7 @@ cp -r fink/config-dir/* %i/etc/apache2
 install -m755 fink/a2enmod %i/sbin
 install -m755 fink/apache2ctl %i/sbin
 install -m755 fink/a2query %i/sbin
+install -m755 fink/ask-for-passphrase %i/share/apache2/
 install -m644 fink/debhelper/apache2-maintscript-helper %i/share/apache2/
 
 install -d -m755 %i/etc/cron.daily
@@ -207,7 +221,7 @@ install -m644 fink/apache2.monit %i/share/doc/%N/examples
 SplitOff: <<
   Package: %N-suexec
   Depends: %N-suexec-pristine (= %v-%r)
-  Description: Transitional package for apache2-suexec-pristine
+  Description: Transitional package
   DescDetail: <<
 This is a transitional package for apache2-suexec-pristine, and can be safely
 removed after the installation is complete.
@@ -264,11 +278,12 @@ SplitOff2: <<
 install -d -m755 %i/lib/apache2
 mv %I/sbin/suexec-pristine %i/lib/apache2/
 
+install -d -m755 %i/var/lib/apache2
 install -d -m755 %i/share/man/man8
 mv %I/share/man/man8/suexec-pristine.8 %i/share/man/man8
   <<
   DocFiles: LICENSE
-  Description: Apache HTTP Server standard suexec program for mod_suexec
+  Description: Apache standard suexec for mod_suexec
   DescDetail: <<
 Provides the standard suexec helper program for mod_suexec. This version is
 compiled with document root %p/var/www and userdir suffix public_html. If you
@@ -294,6 +309,32 @@ esac
 
 chmod 4754 %p/lib/apache2/suexec-pristine
 chgrp www %p/lib/apache2/suexec-pristine
+
+exit 0
+  <<
+  PostRmScript: <<
+set -e
+
+# summary of how this script can be called:
+#        * <postrm> `remove'
+#        * <postrm> `purge'
+#        * <old-postrm> `upgrade' <new-version>
+#        * <new-postrm> `failed-upgrade' <old-version>
+#        * <new-postrm> `abort-install'
+#        * <new-postrm> `abort-install' <old-version>
+#        * <new-postrm> `abort-upgrade' <old-version>
+#        * <disappearer's-postrm> `disappear' <overwriter>
+#          <overwriter-version>
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+case "$1" in
+    purge)
+
+       rm -f %p/var/lib/apache2/deferred_actions
+    ;;
+
+esac
 
 exit 0
   <<
@@ -333,7 +374,7 @@ install -d -m755 %i/share/man/man8
 install -m644 fink/manpages/suexec-custom.8 %i/share/man/man8
   <<
   DocFiles: LICENSE
-  Description: Apache HTTP Server configurable suexec program for mod_suexec
+  Description: Apache configurable suexec for mod_suexec
   DescDetail: <<
 Provides a customizable version of the suexec helper program for mod_suexec.
 This is not the version from upstream, but can be configured with a
@@ -391,7 +432,7 @@ SplitOff4: <<
   Recommends: %N
   Description: Apache HTTP Server (on-site documentation)
   DescDetail: <<
-The Apache Software Foundation's goal is to build a secure, efficient and
+The Apache HTTP Server Project's goal is to build a secure, efficient and
 extensible HTTP server as standards-compliant open source software. The
 result has long been the number one web server on the Internet.
 .
@@ -470,12 +511,12 @@ SplitOff5: <<
   <<
   Description: Apache HTTP Server (development headers)
   DescDetail: <<
-The Apache Software Foundation's goal is to build a secure, efficient and
+The Apache HTTP Server Project's goal is to build a secure, efficient and
 extensible HTTP server as standards-compliant open source software. The
 result has long been the number one web server on the Internet.
 .
-This package provides development headers and the apxs2 binary for the Apache 2
-HTTP server useful to develop and link third party additions to the Fink
+This package provides development headers and the apxs2 binary for the Apache
+2 HTTP server, useful to develop and link third party additions to the Fink
 Apache HTTP server package.
 .
 It also provides dh_apache2 and dh sequence addons useful to install various
@@ -513,7 +554,7 @@ ln -s %p/bin/apxs %i/bin/apxs2
 SplitOff6: <<
   Package: %N-data
   Replaces: apache2.2-common
-  Conflicts: apache2.2-common
+  Conflicts: apache2.2-common (<< 2.3)
   InstallScript: <<
 install -d -m755 %i/share
 mv %I/share/apache2 %i/share
@@ -534,7 +575,7 @@ mv %I/sbin/envvars-std %i/share/apache2/build
   DocFiles: LICENSE
   Description: Apache HTTP Server (common files)
   DescDetail: <<
-The Apache Software Foundation's goal is to build a secure, efficient and
+The Apache HTTP Server Project's goal is to build a secure, efficient and
 extensible HTTP server as standards-compliant open source software. The
 result has long been the number one web server on the Internet.
 .
@@ -555,15 +596,12 @@ SplitOff7: <<
   <<
   Provides: <<
 	apache2-mpm-event,
-	apache2-mpm-itk,
 	apache2-mpm-prefork,
-	apache2-mpm-worker,
-	httpd,
-	httpd-cgi
+	apache2-mpm-worker
   <<
   Replaces: <<
 	apache2.2-bin (<< 2.3),
-	apache2.2-common,
+	apache2.2-common (<< 2.3),
 	apache2-mpm-prefork (<< 2.3),
 	apache2-mpm-itk (<< 2.3),
 	apache2-mpm-worker (<< 2.3),
@@ -571,7 +609,7 @@ SplitOff7: <<
   <<
   Conflicts: <<
 	apache2.2-bin (<< 2.3),
-	apache2.2-common
+	apache2.2-common (<< 2.3)
   <<
   InstallScript: <<
 install -d -m755 %i/share/man/man8
@@ -584,14 +622,13 @@ install -m644 fink/manpages/apache2.8 %i/share/man/man8
   DocFiles: LICENSE
   Description: Apache HTTP Server (binary files and modules)
   DescDetail: <<
- The Apache Software Foundation's goal is to build a secure, efficient and
+ The Apache HTTP Server Project's goal is to build a secure, efficient and
  extensible HTTP server as standards-compliant open source software. The
  result has long been the number one web server on the Internet.
  .
  This package contains the binaries only and does not set up a working
  web-server instance. Install the "apache2" package to get a fully working
- instance. Do not install this package unless you want to set-up the Apache
- HTTP server entirely on your own.
+ instance.
   <<
 <<
 ###
@@ -642,7 +679,7 @@ install -m644 fink/manpages/split-logfile.8 %i/share/man/man8
  Provides some add-on programs useful for any web server.  These include:
   - ab (Apache benchmark tool)
   - fcgistarter (Start a FastCGI program)
-  - logresolve (Resolve IP addresses to hostname in logfiles)
+  - logresolve (Resolve IP addresses to hostnames in logfiles)
   - htpasswd (Manipulate basic authentication files)
   - htdigest (Manipulate digest authentication files)
   - htdbm (Manipulate basic authentication files in DBM format, using APR)
@@ -918,6 +955,16 @@ esac
 exit 0
   <<
 <<
+SplitOff14: <<
+  Package: %N.2-common
+  Depends: %N (>= 2.3)
+  Description: Transitional package for apache2
+  DescDetail: <<
+This is a transitional package for apache2-bin, and can be safely removed
+after the installation is complete.
+  <<
+  DocFiles: LICENSE
+<<
 ###
 ConfFiles: <<
   %p/etc/apache2/mods-available/access_compat.load
@@ -1105,7 +1152,6 @@ OBSOLETE_CONFFILES="%p/etc/apache2/mods-available/authz_default.load
 %p/etc/apache2/mods-available/cern_meta.load
 %p/etc/apache2/mods-available/disk_cache.load
 %p/etc/apache2/mods-available/disk_cache.conf
-%p/etc/apache2/mods-available/ident.load
 %p/etc/apache2/mods-available/imagemap.load
 %p/etc/apache2/mods-available/version.load"
 
@@ -1193,7 +1239,9 @@ case "$1" in
 		fi
 
 		if [ -n "$2" ] && dpkg --compare-versions "$2" 'lt' '2.4.7-1~' && dpkg --compare-versions "$2" 'ge' '2.4.1-1' ; then
-			CUR_MPM=$(a2query -M) || exit 1
+			CUR_MPM="$(ls %p/etc/apache2/mods-enabled/mpm_*.load)"
+			CUR_MPM="${CUR_MPM##*/mpm_}"
+			CUR_MPM="${CUR_MPM%%.load}"
 			if [ "$CUR_MPM" == "itk" ] ; then
 				echo "apache2-mpm-itk" >> %p/etc/apache2/.apache2_mpm_selected
 			fi
@@ -1246,7 +1294,6 @@ OBSOLETE_CONFFILES="%p/etc/apache2/mods-available/authz_default.load
 %p/etc/apache2/mods-available/cern_meta.load
 %p/etc/apache2/mods-available/disk_cache.load
 %p/etc/apache2/mods-available/disk_cache.conf
-%p/etc/apache2/mods-available/ident.load
 %p/etc/apache2/mods-available/imagemap.load
 %p/etc/apache2/mods-available/version.load"
 
@@ -1493,14 +1540,22 @@ install_default_site()
 install_default_files()
 {
 	if is_fresh_install $@ || we_are_upgrading_from_wheezy $@ ; then
-		if [ ! -e %p/var/www/index.html  -a \
-			! -h %p/var/www/index.html  -a \
-			! -e %p/var/www/index.cgi   -a \
-			! -e %p/var/www/index.pl    -a \
-			! -e %p/var/www/index.php   -a \
-			! -e %p/var/www/index.xhtml -a \
-			! -e %p/var/www/index.htm ] ; then
-				cp %p/share/apache2/default-site/index.html %p/var/www/html/index.html
+		local do_copy=true
+		local dir ext
+		for dir in %p/var/www %p/var/www/html ; do
+			for ext in html cgi pl php xhtml htm ; do
+				if [ -e $dir/index.$ext ] ; then
+					do_copy=false
+					break 2
+				fi
+			done
+			if [ -h $dir/index.html ] ; then
+				do_copy=false
+				break
+			fi
+		done
+		if $do_copy ; then
+			cp %p/usr/share/apache2/default-site/index.html %p/var/www/html/index.html
 		fi
 	fi
 }
@@ -1602,6 +1657,77 @@ warn_itk_users()
 	fi
 }
 
+msg ()
+{
+	local PRIORITY="$1"
+	local MSG="$2"
+	echo "$PRIORITY: $MSG"
+	if type logger > /dev/null 2>&1 ; then
+		logger -p daemon.$PRIORITY -t apache2.postinst "$MSG" || true
+	fi
+}
+
+execute_deferred_actions ()
+{
+	if [ ! -e %p/var/lib/apache2/deferred_actions ]; then
+		return 0
+	fi
+
+	local error=false
+
+	cat %p/var/lib/apache2/deferred_actions |
+	while read PACKAGE FUNCTION ARG1 ARG2 ARG3
+	do
+		if ! dpkg-query -f '${Status}' -W "$PACKAGE"|grep -q installed ; then
+			# If the package has been removed again, skip the actions
+			continue
+		fi
+		case "$FUNCTION" in
+		apache2_invoke)
+			case "$ARG1" in
+			enmod|dismod|enconf|disconf|ensite|dissite)
+				# We can ignore reload/restart in ARG3 because apache2 has not
+				# been started, yet.
+				msg "info" "Executing deferred 'a2$ARG1 $ARG2' for package $PACKAGE"
+				a2$ARG1 -m -q "$ARG2"
+				;;
+			*)
+				msg "error" "'apache2_invoke $ARG1' in %p/var/lib/apache2/deferred_actions invalid"
+				error=true
+			esac
+			;;
+		apache2_switch_mpm)
+			local MPM="mpm_$ARG1"
+			local CUR_MPM="$(ls %p/etc/apache2/mods-enabled/mpm_*.load)"
+			CUR_MPM="${CUR_MPM##*/mpm_}"
+			CUR_MPM="${CUR_MPM%%.load}"
+			if [ ! -e %p/etc/apache2/mods-available/$MPM.load ] ; then
+				msg "error" "$MPM not found in 'apache2_switch_mpm $ARG1' for package $PACKAGE"
+				error=true
+			elif [ ! -e %p/etc/apache2/mods-enabled/$MPM.load ] ; then
+				msg "info" "$MPM: No action required"
+			else
+				msg "info" "Switch to $MPM for package $PACKAGE"
+				if ! a2dismod -m -q "mpm_$CUR_MPM" ||
+				   ! a2enmod -m -q "mpm_$MPM"
+				then
+					msg "error" "Switching to $MPM failed"
+					error=true
+				fi
+			fi
+			;;
+		*)
+			msg "ERROR: function '$FUNCTION' in %p/var/lib/apache2/deferred_actions invalid"
+			;;
+		esac
+	done
+
+	if $error ; then
+		msg "error" "Some deferred actions failed. You will need to fix the configuration manually."
+	fi
+	rm %p/var/lib/apache2/deferred_actions
+}
+
 #XXX: Deal with the sites-available/sites-enabled *.conf transition, e.g. rename
 #     all files which look like site configuration?
 
@@ -1619,6 +1745,7 @@ case "$1" in
 		move_httpd_conf $@
 		migrate_data $@
 		warn_itk_users $@
+		execute_deferred_actions
 
 		# post installation cleanup
 		if [ -e %p/etc/apache2/.apache2_mpm_selected ] ; then
@@ -1684,7 +1811,6 @@ OBSOLETE_CONFFILES="%p/etc/apache2/mods-available/authz_default.load
 %p/etc/apache2/mods-available/cern_meta.load
 %p/etc/apache2/mods-available/disk_cache.load
 %p/etc/apache2/mods-available/disk_cache.conf
-%p/etc/apache2/mods-available/ident.load
 %p/etc/apache2/mods-available/imagemap.load
 %p/etc/apache2/mods-available/version.load"
 
@@ -1781,12 +1907,12 @@ exit 0
 ###
 Description: Apache HTTP Server
 DescDetail: <<
-The Apache Software Foundation's goal is to build a secure, efficient and
+The Apache HTTP Server Project's goal is to build a secure, efficient and
 extensible HTTP server as standards-compliant open source software. The
 result has long been the number one web server on the Internet.
 .
-This package contains the configuration files, init scripts and support
-scripts. It does not install the actual apache2 binaries.
+Installing this package results in a full installation, including the
+configuration files, init scripts and support scripts.
 <<
 License: BSD
 Homepage: http://www.apache.org
