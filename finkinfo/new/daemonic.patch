@@ -1,0 +1,210 @@
+diff -ruN daemonic-20010902.orig/Makefile daemonic-20010902/Makefile
+--- daemonic-20010902.orig/Makefile	2001-08-31 15:29:05.000000000 -0600
++++ daemonic-20010902/Makefile	2015-04-09 11:59:28.000000000 -0600
+@@ -39,6 +39,7 @@
+ install: all
+ 	if test ! -d $(DESTDIR)$(bindir) ; then $(INSTALLDIR) -m 755 $(DESTDIR)$(bindir) ; fi
+ 	if test ! -d $(DESTDIR)$(descdir) ; then $(INSTALLDIR) -m 755 $(DESTDIR)$(descdir) ; fi
++	if test ! -d $(DESTDIR)$(descdir)-enabled ; then $(INSTALLDIR) -m 755 $(DESTDIR)$(descdir)-enabled ; fi
+ 	$(INSTALLFILE) -m 755 $(TARGET) $(DESTDIR)$(bindir)
+ 
+ $(TARGET): $(OBJS)
+diff -ruN daemonic-20010902.orig/daemonic.init daemonic-20010902/daemonic.init
+--- daemonic-20010902.orig/daemonic.init	1969-12-31 17:00:00.000000000 -0700
++++ daemonic-20010902/daemonic.init	2015-04-21 10:44:43.000000000 -0600
+@@ -0,0 +1,89 @@
++#!@PERLEXE@
++# -*- mode: Perl; tab-width: 4; -*-
++#
++# daemoic.init - a daemon initialization script for launchd
++# Copyright (c) 2001-2013 The Fink Package Manager Team
++#
++# This program is free software; you can redistribute it and/or
++# modify it under the terms of the GNU General Public License
++# as published by the Free Software Foundation; either version 2
++# of the License, or (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program; if not, write to the Free Software
++# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110, USA.
++#
++
++$| = 1;
++use strict;
++
++use lib "@FINKPREFIX@/lib/perl5";	# Be careful to use the right libs
++
++my $osxvers = `/usr/bin/sw_vers -productVersion`;
++my ($major, $minor, $micro) = $osxvers =~ /^(\d+)\.(\d+)\.(.*)$/;
++my $version = int($major . $minor);
++
++# Only start things on 10.10+
++if ($version <= 109) {
++	print "OS X is less then 10.10, Using StartupItems instead.\n";
++	exit 0;
++}
++
++# use module
++use XML::Simple;
++
++my $xmldir = "@FINKPREFIX@/etc/daemons-enabled";	# Where we read the daemon inits from
++
++opendir (XMLDIR, $xmldir) or die $!;
++
++print "--- " . localtime(time) . "\n";
++my ($xml, $xmldata, $msg, $results);
++while (my $xmlfile = readdir(XMLDIR)) {
++	# Use a regular expression to ignore files beginning with a period
++	next if (-d "$xmldir/$xmlfile");
++
++	$xml = new XML::Simple;
++
++	$xmldata = $xml->XMLin("$xmldir/$xmlfile");
++
++	$msg = $xmldata->{message};
++	chomp($msg);
++	runprog($msg, "$xmldir/$xmlfile");
++}
++
++closedir(XMLDIR);
++
++print "--- Done\n";
++
++exit 0;
++
++sub runprog {
++	my $msg = shift;
++	my $xmlfile = shift;
++
++	print "Starting " . $msg . " ... ";
++
++	$results = `@FINKPREFIX@/sbin/daemonic.init.run $xmlfile &`;
++
++	if ($? == 0) {
++		print "OK\n";
++	} else {
++		print "FAILED ";
++		if ($? == -1) {
++			print "(failed to execute: $!)\n";
++		} elsif ($? & 127) {
++			print "(child died)\n";
++		} else {
++			print "(child exited with value $?)\n";
++		}
++
++		if ($results) {
++			print "Output: $results\n";
++		}
++	}
++}
+diff -ruN daemonic-20010902.orig/daemonic.init.run daemonic-20010902/daemonic.init.run
+--- daemonic-20010902.orig/daemonic.init.run	1969-12-31 17:00:00.000000000 -0700
++++ daemonic-20010902/daemonic.init.run	2015-04-22 09:19:47.000000000 -0600
+@@ -0,0 +1,58 @@
++#!@PERLEXE@
++# -*- mode: Perl; tab-width: 4; -*-
++#
++# daemoic.init - a daemon initialization script for launchd
++# Copyright (c) 2001-2013 The Fink Package Manager Team
++#
++# This program is free software; you can redistribute it and/or
++# modify it under the terms of the GNU General Public License
++# as published by the Free Software Foundation; either version 2
++# of the License, or (at your option) any later version.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of
++# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++# GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License
++# along with this program; if not, write to the Free Software
++# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110, USA.
++#
++
++$| = 1;
++use strict;
++
++use lib "@FINKPREFIX@/lib/perl5";	# Be careful to use the right libs
++
++# use module
++use POSIX;
++use XML::Simple;
++
++my $xmlfile = shift;
++my $xml = new XML::Simple;
++my $xmldata = $xml->XMLin($xmlfile);
++
++my $cmd = $xmldata->{daemon}->{executable}->{content};
++
++if ($xmldata->{daemon}->{parameters}) {
++	$cmd .= " " . $xmldata->{daemon}->{parameters};
++}
++
++my $bg = $xmldata->{daemon}->{executable}->{background} || 'no';
++
++if ($bg eq 'yes' || $bg eq 'true') {
++	$cmd .= " 2>&1 &";
++} else {
++	$cmd .= " 2>&1";
++}
++
++$cmd = qq{source @FINKPREFIX@/bin/init.sh && $cmd};
++
++my $pid = fork; die "fork failed" unless defined $pid;
++
++if ($pid) {
++	wait;
++} else {
++	setpgrp;
++	exec $cmd or die "Bad exec: $!";
++}
+diff -ruN daemonic-20010902.orig/enable.c daemonic-20010902/enable.c
+--- daemonic-20010902.orig/enable.c	2001-08-31 15:28:31.000000000 -0600
++++ daemonic-20010902/enable.c	2015-04-09 12:48:46.000000000 -0600
+@@ -30,6 +30,9 @@
+ 
+ #include "daemonic.h"
+ 
++#ifndef DESCDIR
++#define DESCDIR "/etc/daemons"
++#endif
+ 
+ /* detect system */
+ 
+@@ -98,6 +101,7 @@
+   DAEMON_DESC *dd;
+ 
+ #ifdef STYLE_SYSTEMSTARTER
++  char cmd[PATH_MAX];
+   char destdir[PATH_MAX];
+   char fn[PATH_MAX];
+   FILE *f;
+@@ -119,6 +123,13 @@
+     return err;
+   }
+ 
++  /* creating symlink */
++  snprintf(cmd, PATH_MAX-1,
++	"ln -s %s/%s.xml %s-enabled/%s.xml", DESCDIR, service->name, DESCDIR, service->name);
++  err = system(cmd);
++  if (err) {
++    printf(stderr, "Can't create symlink in %s-enabled.\n", DESCDIR);
++  }
+ 
+   /* write script */
+   snprintf(fn, PATH_MAX-1, "%s/daemonic-%s", destdir, service->name);
+@@ -231,7 +242,7 @@
+   }
+ 
+   snprintf(cmd, PATH_MAX-1,
+-	   "rm -rf /Library/StartupItems/daemonic-%s", service->name);
++	   "rm -rf /Library/StartupItems/daemonic-%s %s-enabled/%s.xml", service->name, DESCDIR, service->name);
+   err = system(cmd);
+   /* FIXME: check return status */
+ 
