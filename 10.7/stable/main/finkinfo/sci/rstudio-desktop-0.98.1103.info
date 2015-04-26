@@ -1,0 +1,135 @@
+Package: rstudio-desktop
+Version: 0.98.1103
+Revision: 5
+Description: IDE for R
+License: GPL
+Homepage: http://rstudio.org
+Maintainer: BABA Yoshihiko <babayoshihiko@mac.com>
+Depends: <<
+  boost1.55-nopython-shlibs,
+  libiconv,
+  libpng16-shlibs,
+  r-base (>= 3.2.0-2),
+  r-base32,
+  r-base32-shlibs
+<<
+BuildDepends: << 
+  ant,
+  boost1.55-nopython,
+  cmake,
+  fink (>= 0.30.0),
+  fink-package-precedence,
+  libiconv-dev,
+  libpng16,
+  r-base (>=3.2.0-2),
+  r-base32-dev,
+  system-java16
+<<
+
+Source: https://github.com/rstudio/rstudio/archive/v%v.tar.gz
+Source-MD5: 0561012efbfd1ade9c86f67d5a8996ce
+SourceDirectory: rstudio-%v
+
+Source2: https://s3.amazonaws.com/rstudio-buildtools/gin-1.5.zip
+Source2-MD5: 2409168cc18bf5f341e107e6887fe359
+
+Source3: https://s3.amazonaws.com/rstudio-buildtools/gwt-2.6.0.zip
+Source3-MD5: b08b2b0c50ef2249703aa8422388d5db
+
+Source4: https://s3.amazonaws.com/rstudio-dictionaries/core-dictionaries.zip
+Source4-MD5: 0e03798b8e53096c4a906bde05e32378
+
+Source5: https://s3.amazonaws.com/rstudio-buildtools/mathjax-23.zip
+Source5-MD5: b6ed5342258d0088eaeb4903a0109214
+
+Source6: https://s3.amazonaws.com/rstudio-buildtools/pandoc-1.13.1.zip
+Source6-MD5: 4c1f8b7279f17a6af9064142a74963a1
+
+Source7: http://dev.gentoo.org/~gienah/distfiles/shinyapps-0.98.1000.tar.gz
+Source7-MD5: 894332611143bf660d083971a6c0ddd0
+
+# includes fix for boost and apple headers both using "common" words
+# for tokens and parameters
+PatchFile: %n.patch
+PatchFile-MD5: 0680426a6cf9968fc25fb61aa89e7983
+PatchFile2: %n-libc++.patch
+PatchFile2-MD5: 22affa675047994040a2005ca82476f5 
+PatchScript: <<
+	#!/bin/sh -ev
+	sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
+	if [ "`uname -r | cut -d. -f1`" -ge "13" ]; then
+		# default to proper c++ lib
+		perl -pi -e 's|stdlib=libstdc|stdlib=libc|g' src/cpp/CMakeLists.txt
+		# apply upstream libc++ fixes
+		patch -p1  < %{PatchFile2}
+	fi
+	# specify that namespace core the is in the global namespace and not
+	# relative to some other namespace (like its ::core not ::boost::core)
+	find . \( -name *.cpp -or -name *.hpp \) -exec sed \
+		-e 's@<core::@< ::core::@g' -e 's@\([^:]\)core::@\1::core::@g' -i {} \;
+<<
+
+GCC: 4.0
+SetCXXFLAGS: -I%p/Library/Frameworks/R.framework/Versions/3.2/Resources/include -DBOOST_SIGNALS_NO_DEPRECATION_WARNING
+SetLDFLAGS: %p/Library/Frameworks/R.framework/Versions/3.2/Resources/lib/libR.dylib
+CompileScript: <<
+#!/bin/bash -ev
+  # make sure the R from r-base never gets used during the build
+  export PATH="%p/Library/Frameworks/R.framework/Versions/3.2/Resources/bin:%p/bin:/bin:/usr/bin:/sbin:/usr/sbin"
+  # Move Source2-5 files
+  # See dependencies/osx/install-dependencies-osx
+  mkdir -p src/gwt/lib/gin/1.5
+  FILES="LICENSE README javadoc"
+  for FILE in $FILES;
+    do
+      mv  ../$FILE   src/gwt/lib/gin/1.5/
+    done
+  mv  ../*.jar         src/gwt/lib/gin/1.5/
+  
+  mkdir -p src/gwt/lib/gwt
+  mv ../gwt-2.6.0 src/gwt/lib/gwt/2.6.0
+  
+  mkdir -p dependencies/common/dictionaries
+  mv ../*.dic* dependencies/common/dictionaries/
+  mv ../*.aff dependencies/common/dictionaries/
+  
+  mv ../mathjax-23 dependencies/common/
+  mv ../shinyapps dependencies/common/
+ 
+  mkdir -p dependencies/common/pandoc
+  mv ../pandoc-1.13.1 dependencies/common/pandoc/1.13.1
+
+  # See package/osx/make-package
+  mkdir -p build
+  cd build
+
+  cmake -DRSTUDIO_TARGET=Desktop \
+        -DRSTUDIO_PACKAGE_BUILD=1 \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=%b/Applications \
+        -DCMAKE_VERBOSE_MAKEFILE=TRUE \
+        -DLIBR_LIBRARIES=%p/Library/Frameworks/R.framework/Versions/3.2/Resources/lib \
+	-DBOOST_ROOT=%p/opt/boost-1_55 \
+        ..
+
+  make VERBOSE=1
+  make install CMAKE_INSTALL_PREFIX=%p/Applications
+<<
+# Install Phase.
+InstallScript: <<
+#!/bin/bash -ev
+  echo "test"
+<<
+DescPackaging: <<
+Upstream has abandoned QT on darwin as of v0.98.475 in favor of the WebKit framework...
+http://blog.rstudio.org/2013/11/12/rstudio-os-x-mavericks-issues-resolved/
+so unnecessary Depends/BuildDepends on qt/webit are purged.
+
+Synced with newest r-base package. If the user doesn't have the r-base package
+installed, fink will install the r-base from the latest R release causing the
+wrong symlinks to be installed for the designated r-base release.
+
+Backport upstream libc++ compile fixes from rstudio github.
+Switched to boost 1.55 and preemptively applied gentoo fix for 1.56 and later.
+<<
+AppBundles: Applications/RStudio.app
