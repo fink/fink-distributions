@@ -8481,6 +8481,34 @@ diff -ruN httpd-2.4.10.orig/fink/patches/customize_apxs.patch httpd-2.4.10/fink/
 + include %INSTALLBUILDDIR%/special.mk
 + 
 + #   the used tools
+diff -ruN httpd-2.4.10.orig/fink/patches/define_restarts.diff httpd-2.4.10/fink/patches/define_restarts.diff
+--- httpd-2.4.10.orig/fink/patches/define_restarts.diff	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.4.10/fink/patches/define_restarts.diff	2015-04-27 09:07:51.000000000 -0600
+@@ -0,0 +1,24 @@
++# https://svn.apache.org/r1651083
++# https://bz.apache.org/bugzilla/show_bug.cgi?id=57268
++# https://bz.apache.org/bugzilla/show_bug.cgi?id=56008
++#
++#   Merge r1643825 from trunk:
++#   
++#   * core: Fix -D[efined] or <Define>[d] variables lifetime accross restarts.
++#           PR 57328.
++#   
++#   Submitted-by: Armin Abfalterer <a.abfalterer gmail.com>
++#   Reviewed/Committed-by: ylavic
++#   
++#   Submitted by: ylavic
++#   Reviewed/backported by: jim
++--- apache2.orig/server/core.c
+++++ apache2/server/core.c
++@@ -1271,6 +1271,7 @@ AP_DECLARE(const char *) ap_resolve_env(
++ static int reset_config_defines(void *dummy)
++ {
++     ap_server_config_defines = saved_server_config_defines;
+++    saved_server_config_defines = NULL;
++     server_config_defined_vars = NULL;
++     return OK;
++ }
 diff -ruN httpd-2.4.10.orig/fink/patches/fhs_compliance.patch httpd-2.4.10/fink/patches/fhs_compliance.patch
 --- httpd-2.4.10.orig/fink/patches/fhs_compliance.patch	1969-12-31 17:00:00.000000000 -0700
 +++ httpd-2.4.10/fink/patches/fhs_compliance.patch	2015-04-25 12:15:07.000000000 -0600
@@ -8924,6 +8952,190 @@ diff -ruN httpd-2.4.10.orig/fink/patches/mod_ssl_memleak.diff httpd-2.4.10/fink/
 + 
 +     /* Also don't call CRYPTO_cleanup_all_ex_data here; any registered
 +      * ex_data indices may have been cached in static variables in
+diff -ruN httpd-2.4.10.orig/fink/patches/mpm_event_crash.diff httpd-2.4.10/fink/patches/mpm_event_crash.diff
+--- httpd-2.4.10.orig/fink/patches/mpm_event_crash.diff	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.4.10/fink/patches/mpm_event_crash.diff	2015-04-27 09:08:54.000000000 -0600
+@@ -0,0 +1,138 @@
++# https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=779078
++#
++# https://bz.apache.org/bugzilla/show_bug.cgi?id=57268
++#
++# https://svn.apache.org/r1642858
++# https://svn.apache.org/r1645936
++# https://svn.apache.org/r1651656
++# https://svn.apache.org/r1664365
++#
++# Fix mpm_event crashes due to various race conditions
++#
++--- apache2.orig/server/mpm/event/event.c
+++++ apache2/server/mpm/event/event.c
++@@ -767,7 +767,21 @@ static void set_signals(void)
++ #endif
++ }
++ 
++-static int start_lingering_close_common(event_conn_state_t *cs)
+++static void notify_suspend(event_conn_state_t *cs)
+++{
+++    ap_run_suspend_connection(cs->c, cs->r);
+++    cs->suspended = 1;
+++    cs->c->sbh = NULL;
+++}
+++
+++static void notify_resume(event_conn_state_t *cs, ap_sb_handle_t *sbh)
+++{
+++    cs->c->sbh = sbh;
+++    cs->suspended = 0;
+++    ap_run_resume_connection(cs->c, cs->r);
+++}
+++
+++static int start_lingering_close_common(event_conn_state_t *cs, int in_worker)
++ {
++     apr_status_t rv;
++     struct timeout_queue *q;
++@@ -798,8 +812,13 @@ static int start_lingering_close_common(
++         cs->pub.state = CONN_STATE_LINGER_NORMAL;
++     }
++     apr_atomic_inc32(&lingering_count);
+++    if (in_worker) { 
+++        notify_suspend(cs);
+++    }
+++    else {
+++        cs->c->sbh = NULL;
+++    }
++     apr_thread_mutex_lock(timeout_mutex);
++-    cs->c->sbh = NULL;
++     TO_QUEUE_APPEND(*q, cs);
++     cs->pfd.reqevents = (
++             cs->pub.sense == CONN_SENSE_WANT_WRITE ? APR_POLLOUT :
++@@ -831,10 +850,11 @@ static int start_lingering_close_common(
++ static int start_lingering_close_blocking(event_conn_state_t *cs)
++ {
++     if (ap_start_lingering_close(cs->c)) {
+++        notify_suspend(cs);
++         ap_push_pool(worker_queue_info, cs->p);
++         return 0;
++     }
++-    return start_lingering_close_common(cs);
+++    return start_lingering_close_common(cs, 1);
++ }
++ 
++ /*
++@@ -858,7 +878,7 @@ static int start_lingering_close_nonbloc
++         ap_push_pool(worker_queue_info, cs->p);
++         return 0;
++     }
++-    return start_lingering_close_common(cs);
+++    return start_lingering_close_common(cs, 0);
++ }
++ 
++ /*
++@@ -882,18 +902,6 @@ static int stop_lingering_close(event_co
++     return 0;
++ }
++ 
++-static void notify_suspend(event_conn_state_t *cs)
++-{
++-    ap_run_suspend_connection(cs->c, cs->r);
++-    cs->suspended = 1;
++-}
++-
++-static void notify_resume(event_conn_state_t *cs)
++-{
++-    cs->suspended = 0;
++-    ap_run_resume_connection(cs->c, cs->r);
++-}
++-
++ /*
++  * This runs before any non-MPM cleanup code on the connection;
++  * if the connection is currently suspended as far as modules
++@@ -904,7 +912,7 @@ static apr_status_t ptrans_pre_cleanup(v
++     event_conn_state_t *cs = dummy;
++ 
++     if (cs->suspended) {
++-        notify_resume(cs);
+++        notify_resume(cs, NULL);
++     }
++     return APR_SUCCESS;
++ }
++@@ -1003,9 +1011,10 @@ static void process_socket(apr_thread_t
++     }
++     else {
++         c = cs->c;
++-        c->sbh = sbh;
++-        notify_resume(cs);
+++        notify_resume(cs, sbh);
++         c->current_thread = thd;
+++        /* Subsequent request on a conn, and thread number is part of ID */
+++        c->id = conn_id;
++     }
++ 
++     if (c->clogging_input_filters && !c->aborted) {
++@@ -1083,7 +1092,6 @@ read_request:
++ 
++     if (cs->pub.state == CONN_STATE_LINGER) {
++         start_lingering_close_blocking(cs);
++-        notify_suspend(cs);
++     }
++     else if (cs->pub.state == CONN_STATE_CHECK_REQUEST_LINE_READABLE) {
++         /* It greatly simplifies the logic to use a single timeout value here
++@@ -1096,7 +1104,6 @@ read_request:
++          */
++         cs->expiration_time = ap_server_conf->keep_alive_timeout +
++                               apr_time_now();
++-        c->sbh = NULL;
++         notify_suspend(cs);
++         apr_thread_mutex_lock(timeout_mutex);
++         TO_QUEUE_APPEND(keepalive_q, cs);
++@@ -1114,7 +1121,6 @@ read_request:
++     }
++     else if (cs->pub.state == CONN_STATE_SUSPENDED) {
++         apr_atomic_inc32(&suspended_count);
++-        c->sbh = NULL;
++         notify_suspend(cs);
++     }
++ }
+diff -ruN httpd-2.4.10.orig/fink/patches/mpm_event_graceful_restart_deadlock.diff httpd-2.4.10/fink/patches/mpm_event_graceful_restart_deadlock.diff
+--- httpd-2.4.10.orig/fink/patches/mpm_event_graceful_restart_deadlock.diff	1969-12-31 17:00:00.000000000 -0700
++++ httpd-2.4.10/fink/patches/mpm_event_graceful_restart_deadlock.diff	2015-04-27 09:10:22.000000000 -0600
+@@ -0,0 +1,38 @@
++# https://svn.apache.org/r1634526
++# https://bz.apache.org/bugzilla/show_bug.cgi?id=56960
++# 
++# Author: Jim Jagielski <jim@apache.org>
++# Date:   Mon Oct 27 12:46:45 2014 +0000
++# 
++#     Merge r1629577 from trunk:
++#     
++#     event: Fix worker-listener deadlock in graceful restart caused by get_worker()
++#     allocating new worker after ap_queue_info_term(), but not setting the
++#     have_idle_worker variable. PR 56960.
++#     
++#     Submitted By: Zin UDA
++#     Committed By: jkaluza
++#     
++#     Submitted by: jkaluza
++#     Reviewed/backported by: jim
++#     
++#     git-svn-id: https://svn.apache.org/repos/asf/httpd/httpd/branches/2.4.x@1634526 13f79535-47bb-0310-9956-ffa450edef68
++# 
++--- apache2.orig/server/mpm/event/event.c
+++++ apache2/server/mpm/event/event.c
++@@ -1264,13 +1264,13 @@ static void get_worker(int *have_idle_wo
++     else
++         rc = ap_queue_info_try_get_idler(worker_queue_info);
++ 
++-    if (rc == APR_SUCCESS) {
+++    if (rc == APR_SUCCESS || APR_STATUS_IS_EOF(rc)) {
++         *have_idle_worker_p = 1;
++     }
++     else if (!blocking && rc == APR_EAGAIN) {
++         *all_busy = 1;
++     }
++-    else if (!APR_STATUS_IS_EOF(rc)) {
+++    else {
++         ap_log_error(APLOG_MARK, APLOG_ERR, rc, ap_server_conf, APLOGNO(00472)
++                      "ap_queue_info_wait_for_idler failed.  "
++                      "Attempting to shutdown process gracefully");
 diff -ruN httpd-2.4.10.orig/fink/patches/mpm_event_use_after_free.diff httpd-2.4.10/fink/patches/mpm_event_use_after_free.diff
 --- httpd-2.4.10.orig/fink/patches/mpm_event_use_after_free.diff	1969-12-31 17:00:00.000000000 -0700
 +++ httpd-2.4.10/fink/patches/mpm_event_use_after_free.diff	2015-04-25 12:09:48.000000000 -0600
