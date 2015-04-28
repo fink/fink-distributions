@@ -1,130 +1,38 @@
 Package: ssl-cert
-Version: 1.0.33
+Version: 1.0.36
 Revision: 1
 Epoch: 1
 ###
-Source: mirror:debian:/pool/main/s/%n/%n_%v.tar.gz
-Source-MD5: 8c7e7c875e997825d8d3806ee5e6f4da
+BuildDepends: <<
+	fink (>= 0.38.99.git),
+	debhelper (>= 9),
+	po-debconf
+<<
+Depends: <<
+	openssl,
+	debconf (>= 0.5) | debconf-2.0
+<<
+Suggests: <<
+	openssl-blacklist
+<<
+###
+Source: mirror:debian:/pool/main/s/%n/%n_%v.tar.xz
+Source-MD5: bcf6651ec8d70c56b051af365a9a6e70
 SourceDirectory: %n-%v
+###
+DefaultScript: debhelper
+###
 PatchScript: <<
-  perl -pi -e 's,/usr,%p,g' make-ssl-cert make-ssl-cert.8
-  perl -pi -e 's,/etc/ssl,%p/etc/ssl,g' make-ssl-cert make-ssl-cert.8
-  perl -pi -e 's,chown root:ssl-cert,chown root:admin,g' make-ssl-cert
-  perl -pi -e 's,mktemp,/usr/bin/mktemp -t tmp,g' make-ssl-cert
-<<
-BuildDepends: fink (>= 0.38.99.git), dpkg (>= 1.15), po-debconf
-Depends: openssl, debconf
-###
-ConfFiles: <<
-  %p/share/ssl-cert/ssleay.cnf
-<<
-DocFiles: debian/copyright debian/changelog README
-###
-CompileScript: echo
-InstallScript: <<
-install -d -m755 %i/sbin
-install -d -m755 %i/etc/ssl/certs
-install -d -m755 %i/etc/ssl/private
-install -d -m755 %i/share/man/man8
-install -d -m755 %i/share/%n
+%{default_script}
 
-install -m775 %b/make-ssl-cert %i/sbin
-install -m644 %b/make-ssl-cert.8 %i/share/man/man8
-install -m644 %b/ssleay.cnf %i/share/%n
-<<
-###
-Debconf: <<
-  TemplatesFile: %b/debian/templates
-  PODirectory: %b/debian/po
-<<
-###
-PostInstScript: <<
-. %p/share/debconf/confmodule
+perl -pi -e 's,/usr,%p,g' make-ssl-cert make-ssl-cert.8
+perl -pi -e 's,/etc/ssl,%p/etc/ssl,g' make-ssl-cert make-ssl-cert.8
+perl -pi -e 's,chown root:ssl-cert,chown root:admin,g' make-ssl-cert
+perl -pi -e 's,mktemp,/usr/bin/mktemp -t tmp,g' make-ssl-cert
 
-### we use root, hopefully that is secure enough
-# Create the ssl-cert system group for snakeoil ownership:
-#if ! getent group ssl-cert >/dev/null; then
-#	addgroup --quiet --system --force-badname ssl-cert
-#fi
-
-check_vuln_version () {
-	if dpkg --compare-versions "$2" ge "$1" && dpkg --compare-versions "$2" lt $3 ; then
-		check_key="yes"
-	fi
-}
-
-# Check if the generated snakeoil key/cert has been generated 
-# from a vulnerable openssl version and replace it if necessary.
-if [ -x %p/bin/openssl-vulnkey -a -n "$2" ] ; then
-	check_key=""
-	check_vuln_version 0               "$2" 1.0.13-0ubuntu0.7.04.1
-	check_vuln_version 1.0.13-1        "$2" 1.0.14-0ubuntu0.7.10.1
-	check_vuln_version 1.0.14-0ubuntu1 "$2" 1.0.14-0ubuntu2.1
-	check_vuln_version 1.0.15          "$2" 1.0.19ubuntu1
-
-	CERT="%p/etc/ssl/certs/ssl-cert-snakeoil.pem"
-	KEY="%p/etc/ssl/private/ssl-cert-snakeoil.key"
-	# check if the cert and key file exist,
-	# the issuer and subject are the same (self signed cert)
-	# and the private key is vulnerable
-	if [ "${check_key}" = "yes" -a \
-	     -e "${CERT}" -a -e "${KEY}" -a \
-	     "$(openssl x509 -issuer -noout < ${CERT} | sed 's/issuer= //')" = "$(openssl x509 -subject -noout < ${CERT} | sed 's/subject= //')" ]; then
-	    	if ! openssl-vulnkey -q ${KEY}; then
-			db_version 2.0
-        		db_input critical make-ssl-cert/vulnerable_prng || true
-        		db_go
-			if [ ! -e ${CERT}.broken ] && [ ! -e ${KEY}.broken ] ; then
-				mv ${CERT} ${CERT}.broken
-				mv ${KEY} ${KEY}.broken
-			fi
-			make-ssl-cert generate-default-snakeoil --force-overwrite
-		fi
-	fi
-fi
-
-# no need to perform any check. If the certificates are there
-# it will exit 0.
-make-ssl-cert generate-default-snakeoil
-
-# allow group ssl-cert to access /etc/ssl/private
-if ! dpkg-statoverride --list %p/etc/ssl/private >/dev/null 2>&1
-then
-    dpkg-statoverride --update --add root admin 710 %p/etc/ssl/private
-fi
-
-# If we're upgrading from an older version, fix the unreadable key:
-if dpkg --compare-versions "$2" lt 1.0.12; then
-	chgrp admin %p/etc/ssl/private/ssl-cert-snakeoil.key
-	chmod g+r %p/etc/ssl/private/ssl-cert-snakeoil.key
-fi
-<<
-PostRmScript: <<
-if [ "$1" = purge ] ; then
-	rm -f %p/etc/ssl/certs/ssl-cert-snakeoil.pem \
-	      %p/etc/ssl/certs/ssl-cert-snakeoil.pem.broken \
-              %p/etc/ssl/private/ssl-cert-snakeoil.key \
-	      %p/etc/ssl/private/ssl-cert-snakeoil.key.broken
-
-	# remove hash symlink
-	find %p/etc/ssl/certs -maxdepth 1 -lname ssl-cert-snakeoil.pem -delete > /dev/null 2>&1 || true
-
-	if dpkg-statoverride --list %p/etc/ssl/private 2>&1 | grep -q "root admin 710"
-	then
-		dpkg-statoverride --remove %p/etc/ssl/private
-		# /etc/ssl/private is also in package openssl, change permissions back
-		# if not
-		if [ -e %p/etc/ssl/private ] ; then
-			chgrp root %p/etc/ssl/private
-			chmod 700 %p/etc/ssl/private
-				
-		fi
-	fi
-	# if openssl conffiles are not there (i.e purged), try to delete dirs
-	if [ ! -e %p/etc/ssl/openssl.cnf ] ; then
-		rmdir %p/etc/ssl/private %p/etc/ssl/certs %p/etc/ssl 2> /dev/null || true
-	fi
-fi
+# Remove ssl-cert group from pkg
+sed -i '5,9d;50,55d' debian/postinst
+perl -pi -e 's,chgrp ssl-cert,chgrp admin,g' debian/postinst
 <<
 ###
 Description: Simple debconf wrapper for OpenSSL
