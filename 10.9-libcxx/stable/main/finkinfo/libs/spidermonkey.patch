@@ -1,0 +1,222 @@
+diff -Nurd js/src/Makefile.ref js-patched/src/Makefile.ref
+--- js/src/Makefile.ref	2006-07-26 15:16:47.000000000 -0400
++++ js-patched/src/Makefile.ref	2011-05-11 12:41:56.000000000 -0400
+@@ -63,11 +63,11 @@
+ 
+ ifdef JS_THREADSAFE
+ DEFINES += -DJS_THREADSAFE
+-INCLUDES += -I$(DIST)/include/nspr
++INCLUDES += -I@FINKPREFIX@/include/nspr
+ ifdef USE_MSVC
+ OTHER_LIBS += $(DIST)/lib/libnspr$(NSPR_LIBSUFFIX).lib
+ else
+-OTHER_LIBS += -L$(DIST)/lib -lnspr$(NSPR_LIBSUFFIX)
++OTHER_LIBS += -L@FINKPREFIX@/lib/nspr -lnspr$(NSPR_LIBSUFFIX)
+ endif
+ endif
+ 
+@@ -134,7 +134,7 @@
+ ifdef JS_READLINE
+ # For those platforms with the readline library installed.
+ DEFINES += -DEDITLINE
+-PROG_LIBS += -lreadline -ltermcap
++PROG_LIBS += -lreadline
+ else
+ ifdef JS_EDITLINE
+ # Use the editline library, built locally.
+@@ -188,6 +188,8 @@
+ 	jsstr.h		\
+ 	jsxdrapi.h	\
+ 	jsxml.h		\
++	jsutil.h	\
++	jsprf.h		\
+ 	$(NULL)
+ 
+ API_HFILES =		\
+@@ -373,3 +375,16 @@
+ SUFFIXES: .i
+ %.i: %.c
+ 	$(CC) -C -E $(CFLAGS) $< > $*.i
++
++DESTDIR :=
++PREFIX := @FINKPREFIX@
++BINDIR := $(PREFIX)/bin
++MY_LIBDIR := $(PREFIX)/$(LIBDIR)
++INCLUDEDIR := $(PREFIX)/include/js
++INSTALL := install
++install:
++	$(INSTALL) -m 755 -d $(DESTDIR)$(INCLUDEDIR) $(DESTDIR)$(MY_LIBDIR) $(DESTDIR)$(BINDIR)
++	$(INSTALL) -m 755 $(SHARED_LIBRARY) $(DESTDIR)$(MY_LIBDIR)
++	$(INSTALL) -m 644 $(LIBRARY) $(DESTDIR)$(MY_LIBDIR)
++	$(INSTALL) -m 755 $(OBJDIR)/js $(OBJDIR)/jscpucfg $(DESTDIR)$(BINDIR)
++	$(INSTALL) -m 644 $(HFILES) $(DESTDIR)$(INCLUDEDIR)
+diff -Nurd js/src/config/Darwin.mk js-patched/src/config/Darwin.mk
+--- js/src/config/Darwin.mk	2007-02-05 11:24:49.000000000 -0500
++++ js-patched/src/config/Darwin.mk	2011-05-11 12:45:41.000000000 -0400
+@@ -43,13 +43,13 @@
+ # Just ripped from Linux config
+ #
+ 
+-CC = cc
++CC = gcc
+ CCC = g++
+-CFLAGS +=  -Wall -Wno-format
+-OS_CFLAGS = -DXP_UNIX -DSVR4 -DSYSV -D_BSD_SOURCE -DPOSIX_SOURCE -DDARWIN
++CFLAGS +=  -Wall -Wno-format -no-cpp-precomp -fno-common -pipe
++OS_CFLAGS = -DJS_THREADSAFE -DXP_UNIX -DSVR4 -DSYSV -D_BSD_SOURCE -DPOSIX_SOURCE -DDARWIN -DJS_C_STRINGS_ARE_UTF8
+ 
+ RANLIB = ranlib
+-MKSHLIB = $(CC) -dynamiclib $(XMKSHLIBOPTS) -framework System
++MKSHLIB = $(CC) -compatibility_version 1.0 -current_version 1.0 -framework System -dynamiclib $(XMKSHLIBOPTS) -lm -lplds4 -lplc4 -lnspr4 $(LDFLAGS)
+ 
+ SO_SUFFIX = dylib
+ 
+@@ -59,7 +59,6 @@
+ CPU_ARCH = $(shell uname -m)
+ ifeq (86,$(findstring 86,$(CPU_ARCH)))
+ CPU_ARCH = x86
+-OS_CFLAGS+= -DX86_LINUX
+ endif
+ GFX_ARCH = x
+ 
+@@ -67,14 +66,6 @@
+ 
+ ASFLAGS += -x assembler-with-cpp
+ 
+-ifeq ($(CPU_ARCH),alpha)
+-
+-# Ask the C compiler on alpha linux to let us work with denormalized
+-# double values, which are required by the ECMA spec.
+-
+-OS_CFLAGS += -mieee
+-endif
+-
+ # Use the editline library to provide line-editing support.
+ JS_EDITLINE = 1
+ 
+diff -Nurd js/src/config/Linux_All.mk js-patched/src/config/Linux_All.mk
+--- js/src/config/Linux_All.mk	2005-05-10 15:53:44.000000000 -0400
++++ js-patched/src/config/Linux_All.mk	2011-05-11 12:41:43.000000000 -0400
+@@ -41,37 +41,15 @@
+ # Config for all versions of Linux
+ #
+ 
+-CC = gcc
+-CCC = g++
+ CFLAGS +=  -Wall -Wno-format
+ OS_CFLAGS = -DXP_UNIX -DSVR4 -DSYSV -D_BSD_SOURCE -DPOSIX_SOURCE -DHAVE_LOCALTIME_R
+ 
+ RANLIB = echo
+-MKSHLIB = $(LD) -shared $(XMKSHLIBOPTS)
++MKSHLIB = $(LD) -shared $(XMKSHLIBOPTS) -soname $(notdir $@)
+ 
+ #.c.o:
+ #      $(CC) -c -MD $*.d $(CFLAGS) $<
+ 
+-CPU_ARCH = $(shell uname -m)
+-# don't filter in x86-64 architecture
+-ifneq (x86_64,$(CPU_ARCH))
+-ifeq (86,$(findstring 86,$(CPU_ARCH)))
+-CPU_ARCH = x86
+-OS_CFLAGS+= -DX86_LINUX
+-
+-ifeq (gcc, $(CC))
+-# if using gcc on x86, check version for opt bug 
+-# (http://bugzilla.mozilla.org/show_bug.cgi?id=24892)
+-GCC_VERSION := $(shell gcc -v 2>&1 | grep version | awk '{ print $$3 }')
+-GCC_LIST:=$(sort 2.91.66 $(GCC_VERSION) )
+-
+-ifeq (2.91.66, $(firstword $(GCC_LIST)))
+-CFLAGS+= -DGCC_OPT_BUG
+-endif
+-endif
+-endif
+-endif
+-
+ GFX_ARCH = x
+ 
+ OS_LIBS = -lm -lc
+@@ -88,16 +66,6 @@
+ endif
+ 
+ # Use the editline library to provide line-editing support.
+-JS_EDITLINE = 1
++JS_READLINE = 1
+ 
+-ifeq ($(CPU_ARCH),x86_64)
+-# Use VA_COPY() standard macro on x86-64
+-# FIXME: better use it everywhere
+ OS_CFLAGS += -DHAVE_VA_COPY -DVA_COPY=va_copy
+-endif
+-
+-ifeq ($(CPU_ARCH),x86_64)
+-# We need PIC code for shared libraries
+-# FIXME: better patch rules.mk & fdlibm/Makefile*
+-OS_CFLAGS += -DPIC -fPIC
+-endif
+diff -Nurd js/src/config.mk js-patched/src/config.mk
+--- js/src/config.mk	2006-07-27 17:00:57.000000000 -0400
++++ js-patched/src/config.mk	2011-05-11 12:41:43.000000000 -0400
+@@ -116,6 +116,8 @@
+ CP = cp
+ endif
+ 
++BUILD_OPT := 1
++
+ ifdef BUILD_OPT
+ OPTIMIZER  = -O
+ DEFINES    += -UDEBUG -DNDEBUG -UDEBUG_$(USER)
+diff -Nurd js/src/fdlibm/Makefile.ref js-patched/src/fdlibm/Makefile.ref
+--- js/src/fdlibm/Makefile.ref	2003-11-14 19:11:04.000000000 -0500
++++ js-patched/src/fdlibm/Makefile.ref	2011-05-11 12:41:43.000000000 -0400
+@@ -151,7 +151,7 @@
+ 
+ $(OBJDIR)/%.o: %.c
+ 	@$(MAKE_OBJDIR)
+-	$(CC) -o $@ -c $(CFLAGS) $*.c
++	$(CC) -o $@ -c $(CFLAGS) $*.c -fPIC
+ 
+ $(OBJDIR)/%.o: %.s
+ 	@$(MAKE_OBJDIR)
+diff -Nurd js/src/jsprf.c js-patched/src/jsprf.c
+--- js/src/jsprf.c	2006-07-06 22:12:02.000000000 -0400
++++ js-patched/src/jsprf.c	2011-05-11 12:41:43.000000000 -0400
+@@ -58,6 +58,8 @@
+ */
+ #ifdef HAVE_VA_COPY
+ #define VARARGS_ASSIGN(foo, bar)        VA_COPY(foo,bar)
++#elif defined(va_copy)
++#define VARARGS_ASSIGN(foo, bar)        va_copy(foo,bar)
+ #elif defined(HAVE_VA_LIST_AS_ARRAY)
+ #define VARARGS_ASSIGN(foo, bar)        foo[0] = bar[0]
+ #else
+diff -Nurd js/src/rules.mk js-patched/src/rules.mk
+--- js/src/rules.mk	2006-07-06 22:12:02.000000000 -0400
++++ js-patched/src/rules.mk	2011-05-11 12:41:43.000000000 -0400
+@@ -82,6 +82,10 @@
+ 	@$(MAKE_OBJDIR)
+ 	$(CC) -o $@ -c $(CFLAGS) $*.c
+ 
++$(OBJDIR)/%.lo: %.c
++	@$(MAKE_OBJDIR)
++	$(CC) -o $@ -c $(CFLAGS) $*.c -fPIC
++
+ $(OBJDIR)/%.o: %.s
+ 	@$(MAKE_OBJDIR)
+ 	$(AS) -o $@ $(ASFLAGS) $*.s
+@@ -111,11 +115,12 @@
+ 	    /implib:"$(OBJDIR)/$(@F:.dll=.lib)" $^
+ else
+ $(LIBRARY): $(LIB_OBJS)
+-	$(AR) rv $@ $?
++	$(AR) cr $@ $?
+ 	$(RANLIB) $@
+ 
+-$(SHARED_LIBRARY): $(LIB_OBJS)
+-	$(MKSHLIB) -o $@ $(LIB_OBJS) $(LDFLAGS) $(OTHER_LIBS)
++SHARED_LIB_OBJS := $(LIB_OBJS:.o=.lo)
++$(SHARED_LIBRARY): $(SHARED_LIB_OBJS)
++	$(MKSHLIB) -o $@ $(SHARED_LIB_OBJS) $(LDFLAGS) $(OTHER_LIBS) -install_name $(PREFIX)/lib/$(notdir $@)
+ endif
+ endif
+ 
