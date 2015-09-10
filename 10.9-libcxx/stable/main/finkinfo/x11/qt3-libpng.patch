@@ -1,0 +1,272 @@
+diff -Nurd qt-x11-free-3.3.8/src/kernel/qpngio.cpp qt-x11-free-3.3.8-new/src/kernel/qpngio.cpp
+--- qt-x11-free-3.3.8/src/kernel/qpngio.cpp	2007-02-02 09:01:15.000000000 -0500
++++ qt-x11-free-3.3.8-new/src/kernel/qpngio.cpp	2013-07-19 02:19:47.000000000 -0400
+@@ -43,6 +43,9 @@
+ #include "qiodevice.h"
+ 
+ #include <png.h>
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++#include <zlib.h>
++#endif /* LIBPNG 1.5 */
+ 
+ 
+ #ifdef Q_OS_TEMP
+@@ -123,9 +126,29 @@
+     png_get_IHDR(png_ptr, info_ptr, &width, &height, &bit_depth, &color_type,
+ 	0, 0, 0);
+ 
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++    png_colorp info_ptr_palette = NULL;
++    int info_ptr_num_palette = 0;
++    if (png_get_valid(png_ptr, info_ptr, PNG_INFO_PLTE)) {
++	png_get_PLTE(png_ptr, info_ptr, &info_ptr_palette, &info_ptr_num_palette);
++    }
++
++    png_bytep info_ptr_trans_alpha = NULL;
++    int info_ptr_num_trans = 0;
++    png_color_16p info_ptr_trans_color = NULL;
++
++    if (png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS)) {
++	png_get_tRNS(png_ptr, info_ptr, &info_ptr_trans_alpha, &info_ptr_num_trans, &info_ptr_trans_color);
++    }
++#endif /* LIBPNG 1.5 */
++
+     if ( color_type == PNG_COLOR_TYPE_GRAY ) {
+ 	// Black & White or 8-bit grayscale
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++	if ( bit_depth == 1 && png_get_channels(png_ptr, info_ptr) == 1 ) {
++#else /* LIBPNG 1.5 */
+ 	if ( bit_depth == 1 && info_ptr->channels == 1 ) {
++#endif /* LIBPNG 1.5 */
+ 	    png_set_invert_mono( png_ptr );
+ 	    png_read_update_info( png_ptr, info_ptr );
+ 	    if (!image.create( width, height, 1, 2, QImage::BigEndian ))
+@@ -159,7 +182,13 @@
+ 		image.setColor( i, qRgba(c,c,c,0xff) );
+ 	    }
+ 	    if ( png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS) ) {
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++		const int g = info_ptr_trans_color->gray;
++#elif ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=4 )
++		const int g = info_ptr->trans_color.gray;
++#else
+ 		const int g = info_ptr->trans_values.gray;
++#endif
+ 		if (g < ncols) {
+ 		    image.setAlphaBuffer(TRUE);
+ 		    image.setColor(g, image.color(g) & RGB_MASK);
+@@ -168,7 +197,11 @@
+ 	}
+     } else if ( color_type == PNG_COLOR_TYPE_PALETTE
+      && png_get_valid(png_ptr, info_ptr, PNG_INFO_PLTE)
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++     && info_ptr_num_palette <= 256 )
++#else /* LIBPNG 1.5 */
+      && info_ptr->num_palette <= 256 )
++#endif /* LIBPNG 1.5 */
+     {
+ 	// 1-bit and 8-bit color
+ 	if ( bit_depth != 1 )
+@@ -176,28 +209,55 @@
+ 	png_read_update_info( png_ptr, info_ptr );
+ 	png_get_IHDR(png_ptr, info_ptr,
+ 	    &width, &height, &bit_depth, &color_type, 0, 0, 0);
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++	if (!image.create(width, height, bit_depth, info_ptr_num_palette,
++#else /* LIBPNG 1.5 */
+ 	if (!image.create(width, height, bit_depth, info_ptr->num_palette,
++#endif /* LIBPNG 1.5 */
+ 	    QImage::BigEndian))
+ 	    return;
+ 	int i = 0;
+ 	if ( png_get_valid(png_ptr, info_ptr, PNG_INFO_tRNS) ) {
+ 	    image.setAlphaBuffer( TRUE );
++
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++	    while ( i < info_ptr_num_trans ) {
++		image.setColor(i, qRgba(
++		    info_ptr_palette[i].red,
++		    info_ptr_palette[i].green,
++		    info_ptr_palette[i].blue,
++#else /* LIBPNG 1.5 */
+ 	    while ( i < info_ptr->num_trans ) {
+ 		image.setColor(i, qRgba(
+ 		    info_ptr->palette[i].red,
+ 		    info_ptr->palette[i].green,
+ 		    info_ptr->palette[i].blue,
++#endif /* LIBPNG 1.5 */
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++		    info_ptr_trans_alpha[i]
++#elif ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=4 )
++		    info_ptr->trans_alpha[i]
++#else
+ 		    info_ptr->trans[i]
++#endif
+ 		    )
+ 		);
+ 		i++;
+ 	    }
+ 	}
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++	while ( i < info_ptr_num_palette ) {
++	    image.setColor(i, qRgba(
++		info_ptr_palette[i].red,
++		info_ptr_palette[i].green,
++		info_ptr_palette[i].blue,
++#else /* LIBPNG 1.5 */
+ 	while ( i < info_ptr->num_palette ) {
+ 	    image.setColor(i, qRgba(
+ 		info_ptr->palette[i].red,
+ 		info_ptr->palette[i].green,
+ 		info_ptr->palette[i].blue,
++#endif /* LIBPNG 1.5 */
+ 		0xff
+ 		)
+ 	    );
+@@ -284,7 +344,11 @@
+ 	return;
+     }
+ 
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++    if (setjmp(png_jmpbuf(png_ptr))) {
++#else /* LIBPNG 1.5 */
+     if (setjmp(png_ptr->jmpbuf)) {
++#endif /* LIBPNG 1.5 */
+ 	png_destroy_read_struct(&png_ptr, &info_ptr, &end_info);
+ 	iio->setStatus(-4);
+ 	return;
+@@ -469,7 +533,11 @@
+ 	return FALSE;
+     }
+ 
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++    if (setjmp(png_jmpbuf(png_ptr))) {
++#else /* LIBPNG 1.5 */
+     if (setjmp(png_ptr->jmpbuf)) {
++#endif /* LIBPNG 1.5 */
+ 	png_destroy_write_struct(&png_ptr, &info_ptr);
+ 	return FALSE;
+     }
+@@ -491,10 +559,18 @@
+ 
+     png_set_write_fn(png_ptr, (void*)this, qpiw_write_fn, qpiw_flush_fn);
+ 
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++#warning XXXtnn not too sure about this
++/* 
++according to png.h, channels is only used on read, not writes, so we
++should be able to comment this out.
++*/
++#else /* LIBPNG 1.5 */
+     info_ptr->channels =
+ 	(image.depth() == 32)
+ 	    ? (image.hasAlphaBuffer() ? 4 : 3)
+ 	    : 1;
++#endif /* LIBPNG 1.5 */
+ 
+     png_set_IHDR(png_ptr, info_ptr, image.width(), image.height(),
+ 	image.depth() == 1 ? 1 : 8 /* per channel */,
+@@ -504,11 +580,18 @@
+ 		: PNG_COLOR_TYPE_RGB
+ 	    : PNG_COLOR_TYPE_PALETTE, 0, 0, 0);
+ 
+-
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++    png_color_8 sig_bit;
++    sig_bit.red = 8;
++    sig_bit.green = 8;
++    sig_bit.blue = 8;
++    png_set_sBIT(png_ptr, info_ptr, &sig_bit);
++#else /* LIBPNG 1.5 */
+     //png_set_sBIT(png_ptr, info_ptr, 8);
+     info_ptr->sig_bit.red = 8;
+     info_ptr->sig_bit.green = 8;
+     info_ptr->sig_bit.blue = 8;
++#endif /* LIBPNG 1.5 */
+ 
+     if (image.depth() == 1 && image.bitOrder() == QImage::LittleEndian)
+        png_set_packswap(png_ptr);
+@@ -522,11 +605,22 @@
+ 	png_set_PLTE(png_ptr, info_ptr, palette, num_palette);
+ 	int* trans = new int[num_palette];
+ 	int num_trans = 0;
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++	png_colorp info_ptr_palette = NULL;
++	int tmp;
++	png_get_PLTE(png_ptr, info_ptr, &info_ptr_palette, &tmp);
++#endif /* LIBPNG 1.5 */
+ 	for (int i=0; i<num_palette; i++) {
+ 	    QRgb rgb=image.color(i);
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++	    info_ptr_palette[i].red = qRed(rgb);
++	    info_ptr_palette[i].green = qGreen(rgb);
++	    info_ptr_palette[i].blue = qBlue(rgb);
++#else /* LIBPNG 1.5 */
+ 	    info_ptr->palette[i].red = qRed(rgb);
+ 	    info_ptr->palette[i].green = qGreen(rgb);
+ 	    info_ptr->palette[i].blue = qBlue(rgb);
++#endif /* LIBPNG 1.5 */
+ 	    if (image.hasAlphaBuffer()) {
+ 		trans[i] = rgb >> 24;
+ 		if (trans[i] < 255) {
+@@ -534,6 +628,9 @@
+ 		}
+ 	    }
+ 	}
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++	png_set_PLTE(png_ptr, info_ptr, info_ptr_palette, num_palette);
++#endif /* LIBPNG 1.5 */
+ 	if (num_trans) {
+ 	    copy_trans = new png_byte[num_trans];
+ 	    for (int i=0; i<num_trans; i++)
+@@ -544,7 +641,14 @@
+     }
+ 
+     if ( image.hasAlphaBuffer() ) {
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++        png_color_8p sig_bit;
++        png_get_sBIT(png_ptr, info_ptr, &sig_bit);
++        sig_bit->alpha = 8;
++        png_set_sBIT(png_ptr, info_ptr, sig_bit);
++#else /* LIBPNG 1.5 */
+ 	info_ptr->sig_bit.alpha = 8;
++#endif /* LIBPNG 1.5 */
+     }
+ 
+     // Swap ARGB to RGBA (normal PNG format) before saving on
+@@ -1030,7 +1134,11 @@
+ 	    return -1;
+ 	}
+ 
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++	if (setjmp(png_jmpbuf(png_ptr))) {
++#else /* LIBPNG 1.5 */
+ 	if (setjmp((png_ptr)->jmpbuf)) {
++#endif /* LIBPNG 1.5 */
+ 	    png_destroy_read_struct(&png_ptr, &info_ptr, 0);
+ 	    image = 0;
+ 	    return -1;
+@@ -1057,7 +1165,11 @@
+ 
+     if ( !png_ptr ) return 0;
+ 
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++    if (setjmp(png_jmpbuf(png_ptr))) {
++#else /* LIBPNG 1.5 */
+     if (setjmp(png_ptr->jmpbuf)) {
++#endif /* LIBPNG 1.5 */
+ 	png_destroy_read_struct(&png_ptr, &info_ptr, 0);
+ 	image = 0;
+ 	state = MovieStart;
+@@ -1117,7 +1229,11 @@
+     consumer->frameDone(QPoint(offx,offy),r);
+     consumer->end();
+     state = FrameStart;
++#if PNG_LIBPNG_VER_MAJOR>1 || ( PNG_LIBPNG_VER_MAJOR==1 && PNG_LIBPNG_VER_MINOR>=5 )
++    unused_data = png_process_data_pause(png, 0);
++#else /* LIBPNG 1.5 */
+     unused_data = (int)png->buffer_size; // Since libpng doesn't tell us
++#endif /* LIBPNG 1.5 */
+ }
+ 
+ #ifdef PNG_USER_CHUNKS_SUPPORTED

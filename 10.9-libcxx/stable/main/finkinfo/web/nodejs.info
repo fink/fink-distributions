@@ -1,0 +1,235 @@
+Package: nodejs
+Version: 0.10.26
+Revision: 1.1
+###
+BuildDepends: <<
+	pkgconfig,
+	python27,
+	curl,
+	gyp-py27,
+	openssl100-dev,
+	libcares2
+<<
+Depends: <<
+	openssl100-shlibs,
+	libcares2-shlibs
+<<
+Recommends: <<
+	ca-certificates
+<<
+###
+Source: http://nodejs.org/dist/v%v/node-v%v.tar.gz
+Source-MD5: 15e9018dadc63a2046f61eb13dfd7bd6
+Source2: mirror:debian:pool/main/n/%n/%n_%v~dfsg1-1.debian.tar.gz
+Source2-MD5: 567c20416ff552b43f48cf0e7cc5d497
+Source2ExtractDir: node-v%v
+###
+DocFiles: AUTHORS ChangeLog LICENSE README.md debian/README.Fink
+###
+PatchScript: <<
+### Fix debian patch for fink
+perl -pi -e 's,\/usr\/lib\/nodejs,\%p\/lib\/nodejs,g' debian/patches/2001_FHS_and_rename_to_nodejs.patch
+
+## Deps that shouldn't be included
+rm -rf \
+	./doc/sh_javascript.min.js \
+	./deps/npm/ \
+	./deps/openssl/ \
+	./deps/zlib/ \
+	./deps/cares/ \
+	./test/gc/node_modules/ \
+	./tools/blog/ \
+	./tools/gyp/ \
+	./tools/closure_linter/ \
+	./tools/msvs/genfiles/ \
+	./tools/wrk/
+perl -pi -e 's,\/etc,\%p\/etc,g' debian/patches/2014_donotinclude_root_certs.patch
+
+patch -p1 < debian/patches/2001_FHS_and_rename_to_nodejs.patch
+patch -p1 < debian/patches/2004_relax_failing_test.patch
+patch -p1 < debian/patches/2005_expected_failing_tests.patch
+patch -p1 < debian/patches/2010_fix_makefile_missing_zlib.patch
+patch -p1 < debian/patches/2011_mipsel.patch
+patch -p1 < debian/patches/2012_kfreebsd.patch
+patch -p1 < debian/patches/2013_gyp_noparallel_compat.patch
+patch -p1 < debian/patches/1001_readfile_eisdir.patch
+patch -p1 < debian/patches/1002_increase_timeout_in_test.patch
+patch -p1 < debian/patches/1003_test_disable_chunked_response.patch
+patch -p1 < debian/patches/1004_test_writeNaN.patch
+patch -p1 < debian/patches/1005_restore_sh_javascript_nonminified.patch
+patch -p1 < debian/patches/2014_donotinclude_root_certs.patch
+
+perl -pi -e 's,10\.5,10\.7,g' common.gypi deps/v8/build/standalone.gypi 
+perl -pi -e 's,\/usr,\%p,g' common.gypi
+for i in `find deps -type f`; do perl -pi -e 's,\/usr,\%p,g' $i; perl -pi -e 's,\%p\/bin\/env,\/usr\/bin\/env,g' $i; done;
+
+# Force fink's python 2.7
+for i in $(grep -r "env python" * | cut -f1 -d":"); do \
+	perl -pi -e 's,env python,env python2.7,g' $i; \
+done
+
+# Fix test, OSX ulimit -n = 256 so lower files to bellow 250 in test
+perl -pi -e 's,256,128,g' test/simple/test-memory-usage-emfile.js
+<<
+###
+InstallScript: <<
+make install DESTDIR=%d
+
+install -d -m0755 %i/include/nodejs/deps/uv/include/uv-private
+install -m644 deps/uv/include/uv.h %i/include/nodejs/deps/uv/include
+install -m644 deps/uv/include/uv-private/*.h %i/include/nodejs/deps/uv/include/uv-private
+install -d -m0755 %i/include/nodejs/src
+install -m644 src/*.h %i/include/nodejs/src
+install -m644 common.gypi %i/include/nodejs
+
+mv %i/bin/node %i/bin/nodejs
+mv %i/share/man/man1/node.1 %i/share/man/man1/nodejs.1
+
+install -d -m0755 %i/share/doc/%n
+cp -R %b/doc/api %i/share/doc/%n
+
+find %i/share/doc/nodejs -name *.json -delete
+sed -i -n '1h; 1!H; ${g; s/<script[^><]*>[^><]*<.script[^><]*>//g; p;}' %i/share/doc/nodejs/api/*.html
+
+install -d -m0755 %i/include/nodejs/deps/v8/include
+ln -s %p/include/v8.h %i/include/nodejs/deps/v8/include/v8.h
+ln -s %p/include/v8-preparser.h %i/include/nodejs/deps/v8/include/v8-preparser.h
+ln -s %p/include/v8-profiler.h %i/include/nodejs/deps/v8/include/v8-profiler.h
+ln -s %p/include/v8stdint.h %i/include/nodejs/deps/v8/include/v8stdint.h
+ln -s %p/include/v8-testing.h %i/include/nodejs/deps/v8/include/v8-testing.h
+ln -s %p/include/v8-debug.h %i/include/nodejs/deps/v8/include/v8-debug.h
+ln -s %p/bin/nodejs %i/bin/node
+ln -s %p/share/man/man1/nodejs.1 %i/share/man/man1/node.1
+
+mv debian/nodejs.README.Debian debian/README.Fink
+
+rm -rf %i/lib
+install -d -m0755 %i/lib/nodejs
+<<
+###
+InfoTest: <<
+	TestScript: <<
+echo "test-child-process-customfd-bounded still fails due to ulimit...";
+make test-simple test-message || exit 2
+	<<
+<<
+###
+ConfigureParams: <<
+	--without-dtrace \
+	--without-npm \
+	--without-snapshot \
+	--shared-cares \
+	--shared-cares-includes=%p/include \
+	--shared-cares-libpath=%p/lib \
+	--shared-openssl \
+	--shared-openssl-includes=%p/include/openssl \
+	--shared-openssl-libpath=%p/lib \
+	--shared-zlib \
+	--shared-zlib-libname=z
+<<
+## fink's libv8 is too old
+#	--shared-zlib-includes=/usr/include \
+#	--shared-zlib-libpath=/usr/lib \
+#	--shared-v8 \
+#	--shared-v8-includes=%p/include \
+#	--shared-v8-libpath=%p/lib \
+###
+Description: Evented I/O for V8 javascript
+DescDetail: <<
+Node.js is a platform built on Chrome's JavaScript runtime for easily
+building fast, scalable network applications. Node.js uses an
+event-driven, non-blocking I/O model that makes it lightweight and
+efficient, perfect for data-intensive real-time applications that run
+across distributed devices.
+.
+Node.js is bundled with several useful libraries to handle server
+tasks:
+.
+System, Events, Standard I/O, Modules, Timers, Child Processes, POSIX,
+HTTP, Multipart Parsing, TCP, DNS, Assert, Path, URL, Query Strings.
+<<
+DescUsage: <<
+  OSX ulimit is 256... Below was found online, breaks fink policy and I can not
+  recommend it as I have not tested it.  That being said I thought I'd include
+  it as documention to help others.
+
+  Solution on Superuser.com: http://superuser.com/a/514049
+
+    echo 'kern.maxfiles=20480' | sudo tee -a /etc/sysctl.conf
+    echo -e 'limit maxfiles 8192 20480\nlimit maxproc 1000 2000' \
+            | sudo tee -a /etc/launchd.conf
+    echo 'ulimit -n 4096' | sudo tee -a /etc/profile
+
+  After rebooting, everything worked fine.
+<<
+###
+PostInstScript: <<
+if [ "$1" = "configure" ]; then
+	if dpkg --compare-versions "$2" le 0.6.19~dfsg1-2; then
+		update-alternatives --remove js %p/bin/node
+	fi
+
+	update-alternatives --install %p/bin/js js %p/bin/nodejs 200 \
+			    --slave %p/share/man/man1/js.1 js.1 %p/share/man/man1/nodejs.1
+fi
+<<
+PreRmScript: <<
+if [ "$1" = "remove" ]; then
+	update-alternatives --remove js %p/bin/nodejs
+fi
+<<
+###
+SplitOff: <<
+	Package: %N-dev
+	Depends: <<
+		%N (= %v-%r)
+	<<
+	Replaces: <<
+		%N (<< 0.10.25-1)
+	<<
+	Files: <<
+		include
+	<<
+	DocFiles:  AUTHORS ChangeLog LICENSE
+	Description: Evented I/O for V8 javascript (dev files)
+	DescDetail: <<
+Node.js is a platform built on Chrome's JavaScript runtime for easily
+building fast, scalable network applications. Node.js uses an
+event-driven, non-blocking I/O model that makes it lightweight and
+efficient, perfect for data-intensive real-time applications that run
+across distributed devices.
+.
+This package is needed to build plugins.
+	<<
+<<
+SplitOff2: <<
+	Package: %N-legacy
+	Depends: <<
+		%N (>= %v-%r)
+	<<
+	Replaces: <<
+		%N (<< 0.10.25-1)
+	<<
+	Files: <<
+		bin/node
+		share/man/man1/node.1
+	<<
+	DocFiles:  AUTHORS ChangeLog LICENSE
+	Description: Evented I/O for V8 javascript (legacy)
+	DescDetail: <<
+Node.js is a platform built on Chrome's JavaScript runtime for easily
+building fast, scalable network applications. Node.js uses an
+event-driven, non-blocking I/O model that makes it lightweight and
+efficient, perfect for data-intensive real-time applications that run
+across distributed devices.
+.
+This package contains a symlink for legacy Node.js code requiring
+binary to be %p/bin/node (not %p/bin/nodejs as provided in Fink).
+.
+No other Debian packages should depend on this package.
+	<<
+<<
+###
+License: BSD
+Homepage: http://nodejs.org/
+Maintainer: Justin F. Hallett <thesin@users.sourceforge.net>
