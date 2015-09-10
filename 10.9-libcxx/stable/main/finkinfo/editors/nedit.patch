@@ -1,0 +1,387 @@
+diff -uNr nedit-5.6.orig/Xlt/SlideC.c nedit-5.6.orig.patched/Xlt/SlideC.c
+--- nedit-5.6.orig/Xlt/SlideC.c	2005-12-01 09:31:43.000000000 -0500
++++ nedit-5.6.orig.patched/Xlt/SlideC.c	2015-04-12 00:42:42.000000000 -0400
+@@ -116,14 +116,14 @@
+ /* notify that initialize called    XtArgsProc        */ NULL,
+ /* NULL                             XtProc            */ NULL,
+ /* NULL                             XtPointer         */ NULL,
+-/* NULL                             Cardinal          */ (Cardinal)NULL,
++/* NULL                             Cardinal          */ (Cardinal)(uintptr_t)NULL,
+ /* resources for subclass fields    XtResourceList    */ resources,
+ /* number of entries in resources   Cardinal          */ XtNumber(resources),
+ /* resource class quarkified        XrmClass          */ NULLQUARK,
+-/* NULL                             Boolean           */ (Boolean)NULL,
+-/* NULL                             XtEnum            */ (XtEnum)NULL,
+-/* NULL				    Boolean           */ (Boolean)NULL,
+-/* NULL                             Boolean           */ (Boolean)NULL,
++/* NULL                             Boolean           */ (Boolean)(uintptr_t)NULL,
++/* NULL                             XtEnum            */ (XtEnum)(uintptr_t)NULL,
++/* NULL				    Boolean           */ (Boolean)(uintptr_t)NULL,
++/* NULL                             Boolean           */ (Boolean)(uintptr_t)NULL,
+ /* free data for subclass pointers  XtWidgetProc      */ destroy,
+ /* NULL                             XtProc            */ NULL,
+ /* NULL			            XtProc            */ NULL,
+diff -uNr nedit-5.6.orig/fix nedit-5.6.orig.patched/fix
+--- nedit-5.6.orig/fix	1969-12-31 19:00:00.000000000 -0500
++++ nedit-5.6.orig.patched/fix	2015-04-12 00:43:05.000000000 -0400
+@@ -0,0 +1,62 @@
++diff -up nedit-5.5/source/file.c.orig nedit-5.5/source/file.c
++--- nedit-5.5/source/file.c.orig	2004-08-24 11:37:24.000000000 +0200
+++++ nedit-5.5/source/file.c	2008-09-26 09:33:53.000000000 +0200
++@@ -1314,7 +1314,7 @@ void PrintWindow(WindowInfo *window, int
++ */
++ void PrintString(const char *string, int length, Widget parent, const char *jobName)
++ {
++-    char tmpFileName[L_tmpnam];    /* L_tmpnam defined in stdio.h */
+++    char *tmpFileName=strdup("/tmp/neditXXXXXX");
++     FILE *fp;
++     int fd;
++ 
++@@ -1325,14 +1325,10 @@ void PrintString(const char *string, int
++ 	    1. Create a filename
++ 	    2. Open the file with the O_CREAT|O_EXCL flags
++ 	So all an attacker can do is a DoS on the print function. */
++-    tmpnam(tmpFileName);
+++    fd = mkstemp(tmpFileName);
++ 
++     /* open the temporary file */
++-#ifdef VMS
++-    if ((fp = fopen(tmpFileName, "w", "rfm = stmlf")) == NULL)
++-#else
++-    if ((fd = open(tmpFileName, O_CREAT|O_EXCL|O_WRONLY, S_IRUSR | S_IWUSR)) < 0 || (fp = fdopen(fd, "w")) == NULL)
++-#endif /* VMS */
+++    if ((fp = fdopen(fd, "w")) == NULL)
++     {
++         DialogF(DF_WARN, parent, 1, "Error while Printing",
++                 "Unable to write file for printing:\n%s", "OK",
++@@ -1346,7 +1342,7 @@ void PrintString(const char *string, int
++     
++     /* write to the file */
++ #ifdef IBM_FWRITE_BUG
++-    write(fileno(fp), string, length);
+++    write(fd, string, length);
++ #else
++     fwrite(string, sizeof(char), length, fp);
++ #endif
++@@ -1356,6 +1352,7 @@ void PrintString(const char *string, int
++                 "%s not printed:\n%s", "OK", jobName, errorString());
++         fclose(fp); /* should call close(fd) in turn! */
++         remove(tmpFileName);
+++	free(tmpFileName);
++         return;
++     }
++     
++@@ -1366,6 +1363,7 @@ void PrintString(const char *string, int
++                 "Error closing temp. print file:\n%s", "OK",
++                 errorString());
++         remove(tmpFileName);
+++	free(tmpFileName);
++         return;
++     }
++ 
++@@ -1377,6 +1375,7 @@ void PrintString(const char *string, int
++     PrintFile(parent, tmpFileName, jobName);
++     remove(tmpFileName);
++ #endif /*VMS*/
+++    free(tmpFileName);
++     return;
++ }
++ 
+diff -uNr nedit-5.6.orig/makefiles/Makefile.macosx nedit-5.6.orig.patched/makefiles/Makefile.macosx
+--- nedit-5.6.orig/makefiles/Makefile.macosx	2004-07-14 15:48:21.000000000 -0400
++++ nedit-5.6.orig.patched/makefiles/Makefile.macosx	2015-04-12 00:42:42.000000000 -0400
+@@ -9,7 +9,7 @@
+ # Change this line to point at the location your Motif libraries/headers are
+ # installed.  (e.g. /usr/local or /sw)  Use "locate libXm." to find the
+ # libraries, then remove the /lib suffix.
+-MOTIFDIR=/usr/local
++MOTIFDIR=@PREFIX@
+ 
+ # Use the first line if you're using OpenMotif, use the second if you're using
+ # LessTif from Fink.
+@@ -19,8 +19,8 @@
+ # Use the first line to link to Motif statically (highly recommended) or the 
+ # second line to link dynamically.  With Fink you'll probably have to use
+ # dynamic linking, since they don't normally distribute the static libraries.
+-MOTIFLINK=${MOTIFDIR}/lib/libXm.a
+-#MOTIFLINK=-L${MOTIFDIR}/lib -lXm.2
++#MOTIFLINK=${MOTIFDIR}/lib/libXm.a
++MOTIFLINK=-L${MOTIFDIR}/lib -lXm
+ 
+ 
+ ############### You shouldn't need to edit anything below here ##############
+@@ -36,9 +36,9 @@
+ # To test if the Motif library exports the runtime version
+ # add -DHAVE__XMVERSIONSTRING to CFLAGS
+ #
+-CFLAGS=-O -no-cpp-precomp -mdynamic-no-pic -DNO_XMIM -I/usr/X11R6/include \
+-        -I${MOTIFDIR}/include -DUSE_DIRENT -DUSE_LPR_PRINT_CMD
+-LIBS= ${EXTRALINKFLAGS} -L/usr/X11R6/lib ${MOTIFLINK} -lXp \
++CFLAGS=-O -no-cpp-precomp -mdynamic-no-pic -DNO_XMIM -I${MOTIFDIR}/include \
++        -I@X11DIR@/include -DUSE_DIRENT -DUSE_LPR_PRINT_CMD
++LIBS= ${EXTRALINKFLAGS} ${MOTIFLINK} -L@X11DIR@/lib -lXp \
+         -lXpm -lXext -lXt -lSM -lICE -lX11
+ 
+ #
+@@ -46,4 +46,4 @@
+ #
+ include Makefile.common
+ 
+-verify_config: check_tif_rule
++verify_config:
+diff -uNr nedit-5.6.orig/source/file.c nedit-5.6.orig.patched/source/file.c
+--- nedit-5.6.orig/source/file.c	2008-11-18 01:10:07.000000000 -0500
++++ nedit-5.6.orig.patched/source/file.c	2015-04-12 00:43:10.000000000 -0400
+@@ -1372,7 +1372,7 @@
+ */
+ void PrintString(const char *string, int length, Widget parent, const char *jobName)
+ {
+-    char tmpFileName[L_tmpnam];    /* L_tmpnam defined in stdio.h */
++    char *tmpFileName=strdup("/tmp/neditXXXXXX");
+     FILE *fp;
+     int fd;
+ 
+@@ -1383,14 +1383,10 @@
+ 	    1. Create a filename
+ 	    2. Open the file with the O_CREAT|O_EXCL flags
+ 	So all an attacker can do is a DoS on the print function. */
+-    tmpnam(tmpFileName);
++    fd = mkstemp(tmpFileName);
+ 
+     /* open the temporary file */
+-#ifdef VMS
+-    if ((fp = fopen(tmpFileName, "w", "rfm = stmlf")) == NULL)
+-#else
+-    if ((fd = open(tmpFileName, O_CREAT|O_EXCL|O_WRONLY, S_IRUSR | S_IWUSR)) < 0 || (fp = fdopen(fd, "w")) == NULL)
+-#endif /* VMS */
++    if ((fp = fdopen(fd, "w")) == NULL)
+     {
+         DialogF(DF_WARN, parent, 1, "Error while Printing",
+                 "Unable to write file for printing:\n%s", "OK",
+@@ -1404,7 +1400,7 @@
+     
+     /* write to the file */
+ #ifdef IBM_FWRITE_BUG
+-    write(fileno(fp), string, length);
++    write(fd, string, length);
+ #else
+     fwrite(string, sizeof(char), length, fp);
+ #endif
+@@ -1414,6 +1410,7 @@
+                 "%s not printed:\n%s", "OK", jobName, errorString());
+         fclose(fp); /* should call close(fd) in turn! */
+         remove(tmpFileName);
++	free(tmpFileName);
+         return;
+     }
+     
+@@ -1424,6 +1421,7 @@
+                 "Error closing temp. print file:\n%s", "OK",
+                 errorString());
+         remove(tmpFileName);
++	free(tmpFileName);
+         return;
+     }
+ 
+@@ -1435,6 +1433,7 @@
+     PrintFile(parent, tmpFileName, jobName);
+     remove(tmpFileName);
+ #endif /*VMS*/
++    free(tmpFileName);
+     return;
+ }
+ 
+@@ -1914,7 +1913,7 @@
+     if (XmToggleButtonGetState(w)) {
+         XtPointer userData;
+         XtVaGetValues(w, XmNuserData, &userData, NULL);
+-        *(int*) clientData = (int) userData;
++        *(int*) clientData = (int) (uintptr_t) userData;
+     }
+ }
+ 
+diff -uNr nedit-5.6.orig/source/highlight.c nedit-5.6.orig.patched/source/highlight.c
+--- nedit-5.6.orig/source/highlight.c	2008-01-04 17:11:03.000000000 -0500
++++ nedit-5.6.orig.patched/source/highlight.c	2015-04-12 00:42:42.000000000 -0400
+@@ -512,7 +512,7 @@
+     if (!pattern) {
+ 	return NULL;
+     }
+-    return (void*)pattern->userStyleIndex;    
++    return (void*)(uintptr_t)pattern->userStyleIndex;    
+ }
+     
+ /*
+diff -uNr nedit-5.6.orig/source/macro.c nedit-5.6.orig.patched/source/macro.c
+--- nedit-5.6.orig/source/macro.c	2008-08-20 10:57:35.000000000 -0400
++++ nedit-5.6.orig.patched/source/macro.c	2015-04-12 00:42:42.000000000 -0400
+@@ -2924,7 +2924,7 @@
+         readStringArg(argList[i], &btnLabel, btnStorage, errMsg);
+     	btn = XtVaCreateManagedWidget("mdBtn", xmPushButtonWidgetClass, dialog,
+     	    	XmNlabelString, s1=XmStringCreateSimple(btnLabel),
+-    	    	XmNuserData, (XtPointer)(i+1), NULL);
++    	    	XmNuserData, (XtPointer)(uintptr_t)(i+1), NULL);
+     	XtAddCallback(btn, XmNactivateCallback, dialogBtnCB, window);
+     	XmStringFree(s1);
+     }
+@@ -2965,7 +2965,7 @@
+     	return; /* shouldn't happen */
+     if (XtClass(w) == xmPushButtonWidgetClass) {
+ 	XtVaGetValues(w, XmNuserData, &userData, NULL);
+-	retVal.val.n = (int)userData;
++	retVal.val.n = (int)(uintptr_t)userData;
+     } else
+     	retVal.val.n = 1;
+     retVal.tag = INT_TAG;
+@@ -3101,7 +3101,7 @@
+         readStringArg(argList[i], &btnLabel, btnStorage, errMsg);
+     	btn = XtVaCreateManagedWidget("mdBtn", xmPushButtonWidgetClass, dialog,
+     	    	XmNlabelString, s1=XmStringCreateSimple(btnLabel),
+-    	    	XmNuserData, (XtPointer)(i+1), NULL);
++    	    	XmNuserData, (XtPointer)(uintptr_t)(i+1), NULL);
+     	XtAddCallback(btn, XmNactivateCallback, stringDialogBtnCB, window);
+     	XmStringFree(s1);
+     }
+@@ -3155,7 +3155,7 @@
+        returned in w. */
+     if (XtClass(w) == xmPushButtonWidgetClass) {
+ 	XtVaGetValues(w, XmNuserData, &userData, NULL);
+-	btnNum = (int)userData;
++	btnNum = (int)(uintptr_t)userData;
+     } else
+     	btnNum = 1;
+     
+@@ -3680,7 +3680,7 @@
+       readStringArg(argList[i], &btnLabel, btnStorage, errMsg);
+       btn = XtVaCreateManagedWidget("mdBtn", xmPushButtonWidgetClass, dialog,
+               XmNlabelString, s1=XmStringCreateSimple(btnLabel),
+-              XmNuserData, (XtPointer)(i+1), NULL);
++              XmNuserData, (XtPointer)(uintptr_t)(i+1), NULL);
+       XtAddCallback(btn, XmNactivateCallback, listDialogBtnCB, window);
+       XmStringFree(s1);
+     }
+@@ -3760,7 +3760,7 @@
+        returned in w. */
+     if (XtClass(w) == xmPushButtonWidgetClass) {
+       XtVaGetValues(w, XmNuserData, &userData, NULL);
+-      btnNum = (int)userData;
++      btnNum = (int)(uintptr_t)userData;
+     } else
+       btnNum = 1;
+     
+diff -uNr nedit-5.6.orig/source/nc.c nedit-5.6.orig.patched/source/nc.c
+--- nedit-5.6.orig/source/nc.c	2007-11-29 17:18:48.000000000 -0500
++++ nedit-5.6.orig.patched/source/nc.c	2015-04-12 00:42:42.000000000 -0400
+@@ -503,7 +503,7 @@
+     
+     /* prompt user whether to start server */
+     if (!Preferences.autoStart) {
+-	printf(message);
++	printf("%s", message);
+ 	do {
+     	    c = getc(stdin);
+ 	} while (c == ' ' || c == '\t');
+diff -uNr nedit-5.6.orig/source/preferences.c nedit-5.6.orig.patched/source/preferences.c
+--- nedit-5.6.orig/source/preferences.c	2008-11-18 01:10:07.000000000 -0500
++++ nedit-5.6.orig.patched/source/preferences.c	2015-04-12 00:42:42.000000000 -0400
+@@ -1520,7 +1520,7 @@
+     } else
+     {
+         fprintf(stderr, "Could not read additional preferences file: ");
+-        fprintf(stderr, filename);
++        fprintf(stderr, "%s", filename);
+         fprintf(stderr, "\n");
+     }
+ }
+@@ -2296,7 +2296,7 @@
+ 	XtVaGetValues(menu, XmNchildren, &items, XmNnumChildren, &nItems, NULL);
+ 	for (n=0; n<(int)nItems; n++) {
+     	    XtVaGetValues(items[n], XmNuserData, &userData, NULL);
+-    	    XmToggleButtonSetState(items[n], (int)userData == mode, False);
++    	    XmToggleButtonSetState(items[n], (int)(uintptr_t)userData == mode, False);
+ 	}
+     }
+ }
+@@ -5148,7 +5148,7 @@
+             	xmToggleButtonGadgetClass, menu,
+             	XmNlabelString, s1=XmStringCreateSimple(LanguageModes[i]->name),
+  	    	XmNmarginHeight, 0,
+-   		XmNuserData, (void *)i,
++   		XmNuserData, (void *)(uintptr_t)i,
+     		XmNset, window->languageMode==i, NULL);
+         XmStringFree(s1);
+ 	XtAddCallback(btn, XmNvalueChangedCallback, setLangModeCB, window);
+@@ -5169,14 +5169,14 @@
+     XtVaGetValues(w, XmNuserData, &mode, NULL);
+     
+     /* If the mode didn't change, do nothing */
+-    if (window->languageMode == (int)mode)
++    if (window->languageMode == (int)(uintptr_t)mode)
+     	return;
+     
+     /* redo syntax highlighting word delimiters, etc. */
+ /*
+     reapplyLanguageMode(window, (int)mode, False);
+ */
+-    params[0] = (((int)mode) == PLAIN_LANGUAGE_MODE) ? "" : LanguageModes[(int)mode]->name;
++    params[0] = (((int)(uintptr_t)mode) == PLAIN_LANGUAGE_MODE) ? "" : LanguageModes[(int)(uintptr_t)mode]->name;
+     XtCallActionProc(window->textArea, "set_language_mode", NULL, params, 1);
+ }
+ 
+diff -uNr nedit-5.6.orig/source/regularExp.c nedit-5.6.orig.patched/source/regularExp.c
+--- nedit-5.6.orig/source/regularExp.c	2008-02-29 18:12:26.000000000 -0500
++++ nedit-5.6.orig.patched/source/regularExp.c	2015-04-12 00:42:42.000000000 -0400
+@@ -2656,7 +2656,7 @@
+ 
+ /* Default table for determining whether a character is a word delimiter. */
+ 
+-static unsigned char  Default_Delimiters [UCHAR_MAX] = {0};
++static unsigned char  Default_Delimiters [UCHAR_MAX+1] = {0};
+ 
+ static unsigned char *Current_Delimiters;  /* Current delimiter table */
+ 
+@@ -4157,7 +4157,7 @@
+       table [*c] = 1;
+    }
+ 
+-   table [(int) NULL] = 1; /* These       */
++   table [(int)(uintptr_t) NULL] = 1; /* These       */
+    table [(int) '\t'] = 1; /* characters  */
+    table [(int) '\n'] = 1; /* are always  */
+    table [(int) ' ' ] = 1; /* delimiters. */
+diff -uNr nedit-5.6.orig/source/userCmds.c nedit-5.6.orig.patched/source/userCmds.c
+--- nedit-5.6.orig/source/userCmds.c	2008-11-18 01:10:08.000000000 -0500
++++ nedit-5.6.orig.patched/source/userCmds.c	2015-04-12 00:42:42.000000000 -0400
+@@ -1116,7 +1116,7 @@
+ 	    	XtVaGetValues(items[n], XmNsubMenuId, &subMenu, NULL);
+ 		dimSelDepItemsInMenu(subMenu, menuList, nMenuItems, sensitive);
+ 	    } else {
+-		index = (int)userData - 10;
++		index = (int)(uintptr_t)userData - 10;
+ 		if (index <0 || index >= nMenuItems)
+     		    return;
+ 		if (menuList[index]->input == FROM_SELECTION)
+@@ -1928,7 +1928,7 @@
+     	    XmNlabelString, st1,
+     	    XmNacceleratorText, st2,
+     	    XmNmnemonic, f->mnemonic,
+-    	    XmNuserData, (XtPointer)(index+10), NULL);
++    	    XmNuserData, (XtPointer)(uintptr_t)(index+10), NULL);
+     XtAddCallback(btn, XmNactivateCallback, cbRtn, cbArg);
+     XmStringFree(st1);
+     XmStringFree(st2);
+diff -uNr nedit-5.6.orig/util/prefFile.c nedit-5.6.orig.patched/util/prefFile.c
+--- nedit-5.6.orig/util/prefFile.c	2008-08-20 10:57:36.000000000 -0400
++++ nedit-5.6.orig.patched/util/prefFile.c	2015-04-12 00:42:42.000000000 -0400
+@@ -353,9 +353,9 @@
+       	*(int *)rsrcDescrip->valueAddr = 0;
+     	return False;
+       case PREF_STRING:
+-	if ((int)strlen(string) >= (int)rsrcDescrip->arg)
++	if ((int)strlen(string) >= (int)(uintptr_t)rsrcDescrip->arg)
+       	    return False;
+-	strncpy(rsrcDescrip->valueAddr, string, (int)rsrcDescrip->arg);
++	strncpy(rsrcDescrip->valueAddr, string, (int)(uintptr_t)rsrcDescrip->arg);
+       	return True;
+       case PREF_ALLOC_STRING:
+       	*(char **)rsrcDescrip->valueAddr = XtMalloc(strlen(string) + 1);

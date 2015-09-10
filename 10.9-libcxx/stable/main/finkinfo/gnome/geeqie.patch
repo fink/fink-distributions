@@ -1,0 +1,110 @@
+diff -Nurd -x'*~' geeqie-1.1.orig/configure.in geeqie-1.1/configure.in
+--- geeqie-1.1.orig/configure.in	2012-08-12 16:13:40.000000000 -0400
++++ geeqie-1.1/configure.in	2015-02-18 01:46:41.000000000 -0500
+@@ -275,14 +275,22 @@
+     [liblcms=$enableval], [liblcms=auto])
+ 
+ if test "x${liblcms}" != "xno"; then
+-  PKG_CHECK_MODULES(LCMS, [lcms >= 1.14],
++  PKG_CHECK_MODULES(LCMS, [lcms2 >= 2.0],
+     [
+       HAVE_LCMS=yes
+       AC_DEFINE(HAVE_LCMS, 1, [define to enable use of color profiles with lcms])
++      AC_DEFINE(HAVE_LCMS2, 1, [lcms2 is used])
+     ],
+     [
+-      HAVE_LCMS=no
+-      AC_MSG_WARN([$LCMS_PKG_ERRORS])
++    PKG_CHECK_MODULES(LCMS, [lcms >= 1.14],
++      [
++        HAVE_LCMS=yes
++        AC_DEFINE(HAVE_LCMS, 1, [define to enable use of color profiles with lcms])
++      ],
++      [
++        HAVE_LCMS=no
++        AC_MSG_WARN([$LCMS_PKG_ERRORS])
++      ])
+     ])
+ else
+   HAVE_LCMS=disabled
+diff -Nurd -x'*~' geeqie-1.1.orig/src/color-man.c geeqie-1.1/src/color-man.c
+--- geeqie-1.1.orig/src/color-man.c	2012-08-12 16:13:41.000000000 -0400
++++ geeqie-1.1/src/color-man.c	2015-02-18 01:46:01.000000000 -0500
+@@ -21,7 +21,11 @@
+ #ifdef HAVE_LCMS
+ /*** color support enabled ***/
+ 
++#ifdef HAVE_LCMS2
++#include <lcms2.h>
++#else
+ #include <lcms.h>
++#endif
+ 
+ 
+ typedef struct _ColorManCache ColorManCache;
+@@ -52,7 +56,9 @@
+ 	if (init_done) return;
+ 	init_done = TRUE;
+ 
++#ifndef HAVE_LCMS2
+ 	cmsErrorAction(LCMS_ERROR_IGNORE);
++#endif
+ }
+ 
+ static cmsHPROFILE color_man_create_adobe_comp(void)
+@@ -425,7 +431,16 @@
+ 		case COLOR_PROFILE_FILE:
+ 			if (profile)
+ 				{
++#ifdef HAVE_LCMS2
++				cmsUInt32Number r;
++				char buffer[20];
++				buffer[0] = '\0';
++				r = cmsGetProfileInfoASCII(profile, cmsInfoDescription, "en", "US", &buffer, 20);
++				buffer[19] = '\0'; /* Just to be sure */
++				return g_strdup(buffer);
++#else
+ 				return g_strdup(cmsTakeProductName(profile));
++#endif
+ 				}
+ 			return g_strdup(_("Custom profile"));
+ 			break;
+diff -Nurd -x'*~' geeqie-1.1.orig/src/exif-common.c geeqie-1.1/src/exif-common.c
+--- geeqie-1.1.orig/src/exif-common.c	2012-08-12 16:13:41.000000000 -0400
++++ geeqie-1.1/src/exif-common.c	2015-02-18 01:55:05.000000000 -0500
+@@ -23,8 +23,8 @@
+ #ifdef HAVE_LCMS
+ /*** color support enabled ***/
+ 
+-#ifdef HAVE_LCMS_LCMS_H
+-  #include <lcms/lcms.h>
++#ifdef HAVE_LCMS2
++  #include <lcms2.h>
+ #else
+   #include <lcms.h>
+ #endif
+@@ -413,6 +413,9 @@
+ 
+ static gchar *exif_build_formatted_ColorProfile(ExifData *exif)
+ {
++#ifdef HAVE_LCMS2
++	cmsUInt8Number profileID[17];
++#endif
+ 	const gchar *name = "";
+ 	const gchar *source = "";
+ 	guchar *profile_data;
+@@ -452,7 +455,13 @@
+ 			profile = cmsOpenProfileFromMem(profile_data, profile_len);
+ 			if (profile)
+ 				{
+-				name = cmsTakeProductName(profile);
++#ifdef HAVE_LCMS2
++				profileID[16] = '\0';
++				cmsGetHeaderProfileID(profile, profileID);
++				name = (gchar *) profileID;
++#else
++				name = (gchar *) cmsTakeProductName(profile);
++#endif
+ 				cmsCloseProfile(profile);
+ 				}
+ 			g_free(profile_data);

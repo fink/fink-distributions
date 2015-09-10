@@ -1,0 +1,243 @@
+# -*- coding: ascii; tab-width: 4; x-counterpart: python27.patch -*-
+Info2: <<
+Package: python%type_pkg[python]
+Version: 2.7.10
+Revision: 1
+Epoch: 1
+Type: python 2.7
+Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
+Depends: <<
+	%N-shlibs (= %e:%v-%r),
+	blt-shlibs,
+	bzip2-shlibs,
+	db53-aes-shlibs,
+	expat1-shlibs (>= 2.1.0-1),
+	fink (>= 0.34.8),
+	gdbm3-shlibs,
+	libffi6-shlibs,
+	libgettext8-shlibs,
+	libncursesw5-shlibs,
+	openssl100-shlibs (>= 1.0.2a-1),
+	readline6-shlibs,
+	sqlite3-shlibs  (>= 3.7.2-2),
+	tcltk (>= 8.4.1-1),
+	x11
+<<
+BuildDepends: <<
+	blt-dev (>= 2.4z-15),
+	bzip2-dev,
+	db53-aes,
+	expat1 (>= 2.1.0-1),
+	fink (>= 0.32), 
+	gdbm3,
+	gettext-bin,
+	gettext-tools,
+	libffi6,
+	libgettext8-dev,
+	libncursesw5,
+	readline6,
+	sqlite3-dev (>= 3.7.2-2),
+	openssl100-dev (>= 1.0.2a-1),
+	tcltk-dev (>= 8.4.1-1),
+	x11-dev
+<<
+# Python 2.7.9+ wants to install these packages but that conflicts with fink's.
+Recommends: pip-py%type_pkg[python], setuptools-tng-py%type_pkg[python]
+
+Provides: argparse-py%type_pkg[python]
+Source: http://python.org/ftp/python/%v/Python-%v.tar.xz
+Source-MD5: c685ef0b8e9f27b5e3db5db12b268ac6
+Source2: http://www.python.org/ftp/python/doc/%v/python-%v-docs-html.tar.bz2
+Source2-MD5: 545fef39b52b15641f6936c623150c63
+PatchFile: %n.patch
+PatchFile-MD5: 4aebb3e595b279abfc04fac5b8befd5a
+PatchScript: <<
+	sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
+	perl -pi -e 's|/usr/local|%p|' setup.py
+	# /tmp and /var/tmp are symlinks to /private/tmp and /private/var/tmp
+	# on OS X. That's fine except it can cause tests in some packages to
+	# fail since '/tmp' != '/private/tmp'. Default to using /private/tmp.
+	perl -pi -e "s|'/tmp', '/var/tmp'|'/private/tmp', '/private/var/tmp'|" Lib/tempfile.py
+<<
+
+UseMaxBuildJobs: true
+
+ConfigureParams: <<
+	--enable-shared \
+	--with-dbmliborder=gdbm \
+	--with-system-expat \
+	--with-system-ffi \
+	--with-tcltk-includes="-I%p/include -I$X11DIR/include" \
+	--with-tcltk-libs="-L%p/libs -ltcl -ltk" \
+	--without-ensurepip
+<<
+CompileScript: <<
+#!/bin/sh -ex
+	darwin_vers=`uname -r | cut -d. -f1`
+	if [ "$darwin_vers" -ge 11 ]; then
+		perl -pi -e 's/ -lSystemStubs//' ./configure
+		perl -pi -e 's/-O3/-fwrapv -O3/' ./configure
+	fi
+	if [ "$darwin_vers" -ge 12 ]; then
+		X11DIR=/opt/X11
+	else
+		X11DIR=/usr/X11
+	fi
+	if [ "%m" = "x86_64" ]; then
+		perl -pi -e 's|num_missing != 5:|num_missing != 7:|g; s|have 5 missing|have 7 missing|' ./setup.py
+		# Architecture:x86_64 can't build with toolbox-glue
+		./configure %c --disable-toolbox-glue
+	else
+		./configure %c
+	fi
+	make
+	echo "If the build fails here, please see"
+	echo "http://www.finkproject.org/faq/comp-general.php?phpLang=en#missing-usr-include-headers"
+	echo "for the most likely solution."
+<<
+
+InfoTest: <<
+	TestConflicts: pyxml-py%type_pkg[python], gnome-applets
+	TestScript: LANG=en_US.UTF-8 make -k test EXTRATESTOPTS='-w -x test_distutils test_argparse test_httpservers test_gdb' || exit 2
+<<
+
+InstallScript: <<
+#!/bin/sh -ex
+	# _sysconfigdata.py contains build-time variables that point to %b.
+	# This is harmless but upsets fink's validator.
+	# Change to %p/lib to make fink happy.
+	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config,' `ls -d %b/build/lib*`/_sysconfigdata.py
+	# Don't propagate -lintl to other packages.
+	perl -pi -e 's/-lintl //' `ls -d %b/build/lib*`/_sysconfigdata.py
+	make install DESTDIR=%d
+
+	# we don't want -lintl to appear in LIBS otherwise python-config will propagate it
+	perl -pi -e 's/-lintl //' %i/lib/python%type_raw[python]/config/Makefile
+
+	# fix all main things to be python-versioned filenames with
+	# unversioned symlinks to them
+	pushd %i/bin
+		for f in 2to3 idle pydoc smtpd.py; do
+			mv ${f} ${f}%type_raw[python]
+			ln -s ${f}%type_raw[python] %i/bin/${f}
+		done
+	popd
+	ln -s python%type_raw[python].1 %i/share/man/man1/python%type_pkg[python].1
+	
+	# Add symlink to %p/lib.
+	ln -s %p/lib/python%type_raw[python]/config/libpython%type_raw[python].dylib %i/lib/libpython%type_raw[python].dylib
+
+	# install some docs and other useful tidbits
+	rm -rf Misc/RPM
+	/bin/cp -R Misc Tools %i/lib/python%type_raw[python]
+	mkdir -p %i/share/doc/%n
+	/bin/cp -R Demo Doc %i/share/doc/%n
+	mkdir -p %i/share/doc/%n/html
+	/bin/cp -R ../python-%v-docs-html/ %i/share/doc/%n/html
+<<
+SplitOff: <<
+ Package: %N-shlibs
+ Files: lib/libpython%type_raw[python].dylib lib/python%type_raw[python]/config/libpython%type_raw[python].dylib
+ Shlibs: %p/lib/python2.7/config/libpython2.7.dylib 2.7.0 %n (>= 1:2.7-1)
+ DocFiles: README LICENSE 
+<<
+SplitOff2: <<
+ Package: python
+ Depends: %N (>= %e:%v-%r)
+ Conflicts: python-nox
+ Replaces: python-nox, python25 (<< 1:2.5.1-3)
+ Files: <<
+		bin/2to3
+		bin/idle
+		bin/pydoc
+		bin/python
+		bin/python2
+		bin/python-config
+		bin/python2-config
+		bin/smtpd.py
+		lib/pkgconfig/python.pc
+		lib/pkgconfig/python2.pc
+		share/man/man1/python.1
+	<<
+ DocFiles: README LICENSE
+ Description: Generic commands to invoke python%type_pkg[python]
+ DescDetail: <<
+  This package only contains non-versioned symlinks to the binaries included
+  with python%type_pkg[python].
+ <<
+ DescUsage: <<
+  This package should only be used when you don't care which version of the
+  python 2.x interpreter you need.
+ <<
+<<
+DocFiles: README LICENSE 
+Description: Interpreted, object-oriented language
+DescDetail: <<
+ Python is often compared to Tcl, Perl, Scheme or Java. 
+ This package installs unix python - not the OSX Framework version.
+ Builds a two-level namespace dynamic libpython (needed for koffice).
+
+ The interpretter is installed as "python%type_raw[python]", and all associated
+ commands are similarly named with the python-version in them. To get
+ the simple "python" command, install the fink package "python" (note:
+ the "python" command there is not guaranteed to be python%type_raw[python]!).
+<<
+DescUsage: <<
+	python%type_raw[python] changes the compiler options used to compile
+	third-party python modules. Please do not add %type_raw[python] variants
+	to them without actually testing that they build cleanly.
+<<
+
+DescPackaging: <<
+	Patch a lot of things to impliment shared-lib support for
+	non-Framework build on Darwin.
+
+	Static libpython is installed in lib/pythonX.X/config/ but
+	shared goes in %p/lib by default. Fink's packaging has always
+	placed manually-built shared lib in config/ along side static,
+	This gives consistency regardless of -search_paths_first.
+	Continue this practice so that -pyXX varianted packages don't
+	need special-casing for certain variants.
+
+	Make sure all compiled modules link against libpython%type_raw[python] (and
+	propagate this to third-party compiled modules) to ensure that
+	all symbols resolved at compile-time to avoid packager
+	mistakes and user runtime surprises.
+
+	Play lots of games to make sure we get expected support
+	libraries. Also make sure -L/sw/lib/system-openssl is passed
+	before -L/sw (build system seems to confuse standard meanings
+	and uses of CFLAGS vs CPPFLAGS vs LDFLAGS) but avoid
+	propagating into modules that compile using distutils.
+
+	Adjust "python" unversioned link to be a symlink not a hard link.
+
+	Must remain Epoch'ed so that this "python" pkg to be newer
+	than the one from lower %v pkgs.
+
+	Shared lib is buried next to static one instead of being in
+	%p/lib because that's where it's always been in the fink
+	package series. Why would they be in different places? Patch
+	-config script to continue this tradition (bug in previous
+	versions accidentally did the Right Thing here).
+<<
+DescPort: <<
+	Patch setup.py to find ncursesw headers and drop libncurses5 dep.
+
+	platform.mac_ver now works on 64 bit, but leave our posix.uname
+	fallback in just in case.
+	Fink's gdbm3 installs %p/include/ndbm.h but python expects
+	%p/include/gdbm/ndbm.h so python ends up using /usr/include/ndbm.h
+	but the lib from gdbm3 which is, shall we say, bad. Force it to find
+	%p/include/ndbm.h instead.
+	
+	test_ctypes fails with clang unless _ctypes/_ctypes_test.c is built
+	with -O0 so force that in setup.py.
+	
+	Patch ctypes to look in %p/lib for libraries.
+	
+	Upstream patch to build with readline 6.3.
+<<
+License: OSI-Approved
+Homepage: http://www.python.org
+<<

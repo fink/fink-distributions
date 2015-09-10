@@ -1,0 +1,1902 @@
+diff --git a/.gitignore b/.gitignore
+index b26d5f7..3cbf832 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -52,3 +52,19 @@ docs/_build/
+ 
+ # PyBuilder
+ target/
++
++# old ignores
++*.ii
++*.ii-*
++*.s
++*.s-*
++*.o
++*.o-*
++*.dylib
++*.a
++temp.*
++a.out
++*.pass
++*.fail
++*.log
++*.bz2
+diff --git a/cmake/Modules/HandleLibCXXABI.cmake b/cmake/Modules/HandleLibCXXABI.cmake
+index 4d2a869..9cd2b60 100644
+--- a/cmake/Modules/HandleLibCXXABI.cmake
++++ b/cmake/Modules/HandleLibCXXABI.cmake
+@@ -60,9 +60,12 @@ endmacro()
+ 
+ if ("${LIBCXX_CXX_ABI_LIBNAME}" STREQUAL "libstdc++" OR
+     "${LIBCXX_CXX_ABI_LIBNAME}" STREQUAL "libsupc++")
++# some headers were absent on older darwin libstdc++
+   set(_LIBSUPCXX_INCLUDE_FILES
+-    cxxabi.h bits/c++config.h bits/os_defines.h bits/cpu_defines.h
+-    bits/cxxabi_tweaks.h bits/cxxabi_forced.h
++    cxxabi.h bits/c++config.h bits/os_defines.h
++# bits/cpu_defines.h
++    bits/cxxabi_tweaks.h
++# bits/cxxabi_forced.h
+     )
+   if ("${LIBCXX_CXX_ABI_LIBNAME}" STREQUAL "libstdc++")
+     set(_LIBSUPCXX_DEFINES "-DLIBSTDCXX")
+@@ -95,4 +98,4 @@ elseif (NOT "${LIBCXX_CXX_ABI_LIBNAME}" STREQUAL "none")
+     "Currently libstdc++, libsupc++, libcxxabi, libcxxrt and none are "
+     "supported for c++ abi."
+     )
+-endif ()
+\ No newline at end of file
++endif ()
+diff --git a/include/__atomic_locked b/include/__atomic_locked
+new file mode 100644
+index 0000000..f10dd74
+--- /dev/null
++++ b/include/__atomic_locked
+@@ -0,0 +1,240 @@
++// -*- C++ -*-
++//===--------------------------- __atomic_locked --------------------------===//
++//
++//                     The LLVM Compiler Infrastructure
++//
++// This file is distributed under the University of Illinois Open Source
++// License. See LICENSE.TXT for details.
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef _LIBCPP_ATOMIC_LOCKED
++#define _LIBCPP_ATOMIC_LOCKED
++
++#include <__mutex_base>	// for mutex and lock_guard
++
++/**
++	This provides slow-but-usable lock-based atomic access to
++	structures for which atomic lock-free functions are missing.
++	This is motivated by the desire for 64b atomic operations
++	on 32b PowerPC architectures.  
++**/
++
++#if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
++#pragma GCC system_header
++#endif
++
++_LIBCPP_BEGIN_NAMESPACE_STD
++
++template <class _Tp, bool = is_integral<_Tp>::value && !is_same<_Tp, bool>::value>
++struct __atomic_mutex_locked  // false
++{
++    mutable _Atomic(_Tp) __a_;
++    mutable mutex __lock_;
++    typedef lock_guard<mutex>	lock_type;
++
++    _Tp& na(void) const { return reinterpret_cast<_Tp&>(__a_); }
++    volatile _Tp& na(void) const volatile { return reinterpret_cast<volatile _Tp&>(__a_); }
++
++    _LIBCPP_INLINE_VISIBILITY
++    bool is_lock_free() const volatile _NOEXCEPT
++        {return false;}
++    _LIBCPP_INLINE_VISIBILITY
++    bool is_lock_free() const _NOEXCEPT
++        {return false;}
++    _LIBCPP_INLINE_VISIBILITY
++    void store(_Tp __d, memory_order = memory_order_seq_cst) volatile _NOEXCEPT
++        { const lock_type g(const_cast<mutex&>(__lock_)); na() = __d; }
++    _LIBCPP_INLINE_VISIBILITY
++    void store(_Tp __d, memory_order = memory_order_seq_cst) _NOEXCEPT
++        { const lock_type g(__lock_); na() = __d; }
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp load(memory_order = memory_order_seq_cst) const volatile _NOEXCEPT
++        { const lock_type g(const_cast<mutex&>(__lock_)); return na(); }
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp load(memory_order = memory_order_seq_cst) const _NOEXCEPT
++        { const lock_type g(__lock_); return na(); }
++    _LIBCPP_INLINE_VISIBILITY
++    operator _Tp() const volatile _NOEXCEPT {return load();}
++    _LIBCPP_INLINE_VISIBILITY
++    operator _Tp() const _NOEXCEPT          {return load();}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp exchange(_Tp __d, memory_order = memory_order_seq_cst) volatile _NOEXCEPT
++        { const lock_type g(const_cast<mutex&>(__lock_));
++	// or use std::swap
++          const _Tp ret = na(); na() = __d; return ret; }
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp exchange(_Tp __d, memory_order = memory_order_seq_cst) _NOEXCEPT
++        { const lock_type g(__lock_);
++	// or use std::swap
++          const _Tp ret = na(); na() = __d; return ret; }
++    _LIBCPP_INLINE_VISIBILITY
++    bool compare_exchange_weak(_Tp& __e, _Tp __d,
++                               memory_order __s, memory_order __f) volatile _NOEXCEPT
++        { const lock_type g(const_cast<mutex&>(__lock_));
++	  if (na() == __e) { na() = __d; return true; }
++	  else { __e = na(); return false; }
++	}
++    _LIBCPP_INLINE_VISIBILITY
++    bool compare_exchange_weak(_Tp& __e, _Tp __d,
++                               memory_order __s, memory_order __f) _NOEXCEPT
++        { const lock_type g(__lock_);
++	  if (na() == __e) { na() = __d; return true; }
++	  else { __e = na(); return false; }
++	}
++
++    // for now, _weak inditinguishable from _strong
++    _LIBCPP_INLINE_VISIBILITY
++    bool compare_exchange_strong(_Tp& __e, _Tp __d,
++                                 memory_order __s, memory_order __f) volatile _NOEXCEPT
++        {return compare_exchange_weak(__e, __d, __s, __f);}
++    _LIBCPP_INLINE_VISIBILITY
++    bool compare_exchange_strong(_Tp& __e, _Tp __d,
++                                 memory_order __s, memory_order __f) _NOEXCEPT
++        {return compare_exchange_weak(__e, __d, __s, __f);}
++    _LIBCPP_INLINE_VISIBILITY
++    bool compare_exchange_weak(_Tp& __e, _Tp __d,
++                              memory_order __m = memory_order_seq_cst) volatile _NOEXCEPT
++        {return compare_exchange_weak(__e, __d, __m, __m);}
++    _LIBCPP_INLINE_VISIBILITY
++    bool compare_exchange_weak(_Tp& __e, _Tp __d,
++                               memory_order __m = memory_order_seq_cst) _NOEXCEPT
++        {return compare_exchange_weak(__e, __d, __m, __m);}
++    _LIBCPP_INLINE_VISIBILITY
++    bool compare_exchange_strong(_Tp& __e, _Tp __d,
++                              memory_order __m = memory_order_seq_cst) volatile _NOEXCEPT
++        {return compare_exchange_strong(__e, __d, __m, __m);}
++    _LIBCPP_INLINE_VISIBILITY
++    bool compare_exchange_strong(_Tp& __e, _Tp __d,
++                                 memory_order __m = memory_order_seq_cst) _NOEXCEPT
++        {return compare_exchange_strong(__e, __d, __m, __m);}
++
++    _LIBCPP_INLINE_VISIBILITY
++#ifndef _LIBCPP_HAS_NO_DEFAULTED_FUNCTIONS
++    __atomic_mutex_locked() _NOEXCEPT = default;
++#else
++    __atomic_mutex_locked() _NOEXCEPT : __a_() {}
++#endif // _LIBCPP_HAS_NO_DEFAULTED_FUNCTIONS
++
++    _LIBCPP_INLINE_VISIBILITY
++    _LIBCPP_CONSTEXPR __atomic_mutex_locked(_Tp __d) _NOEXCEPT : __a_(__d) {}
++#ifndef _LIBCPP_HAS_NO_DELETED_FUNCTIONS
++    __atomic_mutex_locked(const __atomic_mutex_locked&) = delete;
++    __atomic_mutex_locked& operator=(const __atomic_mutex_locked&) = delete;
++    __atomic_mutex_locked& operator=(const __atomic_mutex_locked&) volatile = delete;
++#else  // _LIBCPP_HAS_NO_DELETED_FUNCTIONS
++private:
++    __atomic_mutex_locked(const __atomic_mutex_locked&);
++    __atomic_mutex_locked& operator=(const __atomic_mutex_locked&);
++    __atomic_mutex_locked& operator=(const __atomic_mutex_locked&) volatile;
++#endif  // _LIBCPP_HAS_NO_DELETED_FUNCTIONS
++};	// end struct __atomic_mutex_locked
++
++// atomic<Integral>
++
++template <class _Tp>
++struct __atomic_mutex_locked<_Tp, true>
++    : public __atomic_mutex_locked<_Tp, false>
++{
++    typedef __atomic_mutex_locked<_Tp, false> __base;
++    typedef	typename __base::lock_type	lock_type;
++    using __base::__lock_;
++    using __base::na;
++
++    _LIBCPP_INLINE_VISIBILITY
++    __atomic_mutex_locked() _NOEXCEPT _LIBCPP_DEFAULT
++    _LIBCPP_INLINE_VISIBILITY
++    _LIBCPP_CONSTEXPR __atomic_mutex_locked(_Tp __d) _NOEXCEPT : __base(__d) {}
++
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp fetch_add(_Tp __op, memory_order __m = memory_order_seq_cst) volatile _NOEXCEPT
++        { const lock_type g(const_cast<mutex&>(__lock_));
++	  const _Tp ret = na(); na() += __op; return ret;
++	}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp fetch_add(_Tp __op, memory_order __m = memory_order_seq_cst) _NOEXCEPT
++        { const lock_type g(__lock_);
++	  const _Tp ret = na(); na() += __op; return ret;
++	}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp fetch_sub(_Tp __op, memory_order __m = memory_order_seq_cst) volatile _NOEXCEPT
++        { const lock_type g(const_cast<mutex&>(__lock_));
++	  const _Tp ret = na(); na() -= __op; return ret;
++	}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp fetch_sub(_Tp __op, memory_order __m = memory_order_seq_cst) _NOEXCEPT
++        { const lock_type g(__lock_);
++	  const _Tp ret = na(); na() -= __op; return ret;
++	}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp fetch_and(_Tp __op, memory_order __m = memory_order_seq_cst) volatile _NOEXCEPT
++        { const lock_type g(const_cast<mutex&>(__lock_));
++	  const _Tp ret = na(); na() &= __op; return ret;
++	}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp fetch_and(_Tp __op, memory_order __m = memory_order_seq_cst) _NOEXCEPT
++        { const lock_type g(__lock_);
++	  const _Tp ret = na(); na() &= __op; return ret;
++	}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp fetch_or(_Tp __op, memory_order __m = memory_order_seq_cst) volatile _NOEXCEPT
++        { const lock_type g(const_cast<mutex&>(__lock_));
++	  const _Tp ret = na(); na() |= __op; return ret;
++	}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp fetch_or(_Tp __op, memory_order __m = memory_order_seq_cst) _NOEXCEPT
++        { const lock_type g(__lock_);
++	  const _Tp ret = na(); na() |= __op; return ret;
++	}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp fetch_xor(_Tp __op, memory_order __m = memory_order_seq_cst) volatile _NOEXCEPT
++        { const lock_type g(const_cast<mutex&>(__lock_));
++	  const _Tp ret = na(); na() ^= __op; return ret;
++	}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp fetch_xor(_Tp __op, memory_order __m = memory_order_seq_cst) _NOEXCEPT
++        { const lock_type g(__lock_);
++	  const _Tp ret = na(); na() ^= __op; return ret;
++	}
++
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator++(int) volatile _NOEXCEPT      {return fetch_add(_Tp(1));}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator++(int) _NOEXCEPT               {return fetch_add(_Tp(1));}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator--(int) volatile _NOEXCEPT      {return fetch_sub(_Tp(1));}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator--(int) _NOEXCEPT               {return fetch_sub(_Tp(1));}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator++() volatile _NOEXCEPT         {return fetch_add(_Tp(1)) + _Tp(1);}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator++() _NOEXCEPT                  {return fetch_add(_Tp(1)) + _Tp(1);}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator--() volatile _NOEXCEPT         {return fetch_sub(_Tp(1)) - _Tp(1);}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator--() _NOEXCEPT                  {return fetch_sub(_Tp(1)) - _Tp(1);}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator+=(_Tp __op) volatile _NOEXCEPT {return fetch_add(__op) + __op;}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator+=(_Tp __op) _NOEXCEPT          {return fetch_add(__op) + __op;}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator-=(_Tp __op) volatile _NOEXCEPT {return fetch_sub(__op) - __op;}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator-=(_Tp __op) _NOEXCEPT          {return fetch_sub(__op) - __op;}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator&=(_Tp __op) volatile _NOEXCEPT {return fetch_and(__op) & __op;}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator&=(_Tp __op) _NOEXCEPT          {return fetch_and(__op) & __op;}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator|=(_Tp __op) volatile _NOEXCEPT {return fetch_or(__op) | __op;}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator|=(_Tp __op) _NOEXCEPT          {return fetch_or(__op) | __op;}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator^=(_Tp __op) volatile _NOEXCEPT {return fetch_xor(__op) ^ __op;}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator^=(_Tp __op) _NOEXCEPT          {return fetch_xor(__op) ^ __op;}
++};
++
++_LIBCPP_END_NAMESPACE_STD
++
++#endif  // _LIBCPP_ATOMIC_LOCKED
+diff --git a/include/atomic b/include/atomic
+index 0427a91..7710cd1 100644
+--- a/include/atomic
++++ b/include/atomic
+@@ -1793,6 +1793,51 @@ typedef atomic<uintmax_t> atomic_uintmax_t;
+ 
+ _LIBCPP_END_NAMESPACE_STD
+ 
++#if	defined(__ppc__) && !defined(__ppc64__)
++// specialize fallback implementation where 64b atomics are missing
++#include <__atomic_locked>
++
++_LIBCPP_BEGIN_NAMESPACE_STD
++
++template <>
++struct atomic<long long> : public __atomic_mutex_locked<long long>
++{
++    typedef long long		_Tp;
++    typedef __atomic_mutex_locked<_Tp> __base;
++    _LIBCPP_INLINE_VISIBILITY
++    atomic() _NOEXCEPT _LIBCPP_DEFAULT
++    _LIBCPP_INLINE_VISIBILITY
++    _LIBCPP_CONSTEXPR atomic(_Tp __d) _NOEXCEPT : __base(__d) {}
++
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator=(_Tp __d) volatile _NOEXCEPT
++        {__base::store(__d); return __d;}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator=(_Tp __d) _NOEXCEPT
++        {__base::store(__d); return __d;}
++};
++
++template <>
++struct atomic<unsigned long long> :
++	public __atomic_mutex_locked<unsigned long long>
++{
++    typedef unsigned long long		_Tp;
++    typedef __atomic_mutex_locked<_Tp> __base;
++    _LIBCPP_INLINE_VISIBILITY
++    atomic() _NOEXCEPT _LIBCPP_DEFAULT
++    _LIBCPP_INLINE_VISIBILITY
++    _LIBCPP_CONSTEXPR atomic(_Tp __d) _NOEXCEPT : __base(__d) {}
++
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator=(_Tp __d) volatile _NOEXCEPT
++        {__base::store(__d); return __d;}
++    _LIBCPP_INLINE_VISIBILITY
++    _Tp operator=(_Tp __d) _NOEXCEPT
++        {__base::store(__d); return __d;}
++};
++
++_LIBCPP_END_NAMESPACE_STD
++#endif	// defined(__ppc__) && !defined(__ppc64__)
+ #endif  // !_LIBCPP_HAS_NO_THREADS
+ 
+ #endif  // _LIBCPP_ATOMIC
+diff --git a/include/cmath b/include/cmath
+index d3aa4be..0298bd9 100644
+--- a/include/cmath
++++ b/include/cmath
+@@ -298,7 +298,27 @@ long double    truncl(long double x);
+ */
+ 
+ #include <__config>
++
++// The C++11 standard requires C99, but whether or not __STDC_VERSION__
++// is accordingly set is implementation-defined.
++// on darwin10: C99 is explicltly required to enable long long returning 
++// functions, like llrint and llround.
++// Alternatively, undefine __STRICT_ANSI__ for those symbols.
++// This is just a convenient, isolated workaround.
++// #if defined(__APPLE__) && (__cplusplus >= 201101L) && !defined(__STDC_VERSION__)
++#if defined(__APPLE__) && (__cplusplus >= 201101L) && !defined(__STDC_VERSION__) && defined(__STRICT_ANSI__)
++#define	__IMPLICIT_STDC_VERSION_C99__
++// #define	__STDC_VERSION__	199901L
++#undef	__STRICT_ANSI__
++#endif
+ #include <math.h>
++#ifdef	__IMPLICIT_STDC_VERSION_C99__
++// undo the abvoe
++// #undef	__STDC_VERSION__
++#define	__STRICT_ANSI__
++// __IMPLICIT_STDC_VERSION_C99__ remains defined as evidence of what happened
++#endif
++
+ #include <type_traits>
+ 
+ #ifdef _LIBCPP_MSVCRT
+diff --git a/include/iterator b/include/iterator
+index dc079b4..92c2e3b 100644
+--- a/include/iterator
++++ b/include/iterator
+@@ -346,7 +346,7 @@ template <class E> constexpr const E* data(initializer_list<E> il) noexcept;
+ #include <iosfwd>
+ #include <initializer_list>
+ #ifdef __APPLE__
+-#include <Availability.h>
++#include <AvailabilityMacros.h>
+ #endif
+ 
+ #include <__debug>
+@@ -920,8 +920,8 @@ public:
+     _LIBCPP_INLINE_VISIBILITY bool failed() const _NOEXCEPT {return __sbuf_ == 0;}
+ 
+ #if !defined(__APPLE__) || \
+-    (defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED > __MAC_10_8) || \
+-    (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && __IPHONE_OS_VERSION_MIN_REQUIRED > __IPHONE_6_0)
++    (defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && defined(__MAC_10_8) && __MAC_OS_X_VERSION_MIN_REQUIRED > __MAC_10_8) || \
++    (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && defined(__IPHONE_6_0) && __IPHONE_OS_VERSION_MIN_REQUIRED > __IPHONE_6_0)
+ 
+     template <class _Ch, class _Tr>
+     friend
+diff --git a/include/locale b/include/locale
+index 0d01002..ca130e2 100644
+--- a/include/locale
++++ b/include/locale
+@@ -203,7 +203,7 @@ template <class charT> class messages_byname;
+ #endif
+ 
+ #ifdef __APPLE__
+-#include <Availability.h>
++#include <AvailabilityMacros.h>
+ #endif
+ 
+ #include <__undef_min_max>
+@@ -1473,8 +1473,8 @@ __pad_and_output(_OutputIterator __s,
+ }
+ 
+ #if !defined(__APPLE__) || \
+-    (defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED > __MAC_10_8) || \
+-    (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && __IPHONE_OS_VERSION_MIN_REQUIRED > __IPHONE_6_0)
++    (defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && defined(__MAC_10_8) && __MAC_OS_X_VERSION_MIN_REQUIRED > __MAC_10_8) || \
++    (defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && defined(__IPHONE_6_0) && __IPHONE_OS_VERSION_MIN_REQUIRED > __IPHONE_6_0)
+ 
+ template <class _CharT, class _Traits>
+ _LIBCPP_HIDDEN
+diff --git a/lib/CMakeLists.txt b/lib/CMakeLists.txt
+index 02c80d9..1a3f25c 100644
+--- a/lib/CMakeLists.txt
++++ b/lib/CMakeLists.txt
+@@ -57,7 +57,22 @@ append_if(LIBCXX_COMPILE_FLAGS LIBCXX_HAS_FPIC_FLAG -fPIC)
+ append_if(LIBCXX_LINK_FLAGS LIBCXX_HAS_NODEFAULTLIBS_FLAG -nodefaultlibs)
+ 
+ if ( APPLE )
+-  if ( CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "10.6" )
++  if ( CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "10.6" )
++    # libc++ must be built with clang++
++    execute_process(COMMAND ${CMAKE_CXX_COMPILER} -print-search-dirs
++      COMMAND grep "libraries:"
++      COMMAND cut -d= -f2
++      OUTPUT_VARIABLE CXX_LIBDIR
++      OUTPUT_STRIP_TRAILING_WHITESPACE
++    )
++    list(APPEND LIBCXX_LINK_FLAGS
++      "-compatibility_version 1"
++      "-Wl,-unexported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/libc++unexp.exp"
++      "-lgcc_s.${CMAKE_OSX_DEPLOYMENT_TARGET}"
++      "${CXX_LIBDIR}/lib/darwin/libclang_rt.builtins-${CMAKE_OSX_ARCHITECTURES}.a"
++      "/usr/lib/libSystem.B.dylib"
++      "-lSystemStubs" )
++  elseif ( CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "10.6" )
+     list(APPEND LIBCXX_COMPILE_FLAGS "-U__STRICT_ANSI__")
+     list(APPEND LIBCXX_LINK_FLAGS
+       "-compatibility_version 1"
+@@ -65,6 +80,7 @@ if ( APPLE )
+       "-install_name /usr/lib/libc++.1.dylib"
+       "-Wl,-reexport_library,/usr/lib/libc++abi.dylib"
+       "-Wl,-unexported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/libc++unexp.exp"
++      "-lgcc_s.1"
+       "/usr/lib/libSystem.B.dylib")
+   else()
+     if ( ${CMAKE_OSX_SYSROOT} )
+@@ -78,6 +94,7 @@ if ( APPLE )
+           "-Wl,-reexport_library,${CMAKE_OSX_SYSROOT}/usr/lib/libc++abi.dylib")
+       endif()
+     else()
++      # FIXME: hard-coded libc++abi.dylib location doesn't work for me
+       set (OSX_RE_EXPORT_LINE "/usr/lib/libc++abi.dylib -Wl,-reexported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/libc++abi${LIBCXX_LIBCPPABI_VERSION}.exp")
+     endif()
+ 
+diff --git a/src/exception.cpp b/src/exception.cpp
+index b5c46c0..25dbf97 100644
+--- a/src/exception.cpp
++++ b/src/exception.cpp
+@@ -16,7 +16,8 @@
+ #define __has_include(inc) 0
+ #endif
+ 
+-#if defined(__APPLE__) && !defined(LIBCXXRT)
++// darwin8: there is no __cxxabiapple namespace anywhere
++#if defined(__APPLE__) && !defined(LIBCXXRT) && !defined(DARWIN_LIBSUPCXX)
+   #include <cxxabi.h>
+ 
+   using namespace __cxxabiv1;
+@@ -31,6 +32,12 @@
+   #endif  // _LIBCPPABI_VERSION
+ #elif defined(LIBCXXRT) || __has_include(<cxxabi.h>)
+   #include <cxxabi.h>
++  #if defined(DARWIN_LIBSUPCXX)
++  namespace __cxxabiv1 {
++    extern std::terminate_handler  __terminate_handler;
++    extern std::unexpected_handler __unexpected_handler;
++  }
++  #endif
+   using namespace __cxxabiv1;
+   #if defined(LIBCXXRT) || defined(_LIBCPPABI_VERSION)
+     #define HAVE_DEPENDENT_EH_ABI 1
+@@ -40,10 +47,18 @@
+   static std::unexpected_handler __unexpected_handler;
+ #endif // __has_include(<cxxabi.h>)
+ 
++#if defined(__APPLE__) && defined(DARWIN_LIBSUPCXX)
++// should clang provide -DPIC
++#define	PIC	1
++#include <bits/os_defines.h>
++// see https://www.opensource.apple.com/source/libstdcxx/libstdcxx-39/libstdcxx/libstdc++-v3/libsupc++/eh_terminate.cc
++#endif
++
+ namespace std
+ {
+ 
+-#if !defined(LIBCXXRT) && !defined(_LIBCPPABI_VERSION) && !defined(__GLIBCXX__)
++#define	__PRED__	!defined(LIBCXXRT) && !defined(_LIBCPPABI_VERSION) && !defined(__GLIBCXX__)
++#if __PRED__
+ 
+ // libcxxrt provides implementations of these functions itself.
+ unexpected_handler
+@@ -51,13 +66,22 @@ set_unexpected(unexpected_handler func) _NOEXCEPT
+ {
+     return __sync_lock_test_and_set(&__unexpected_handler, func);
+ }
+-
++#endif
++#if __PRED__ || defined(DARWIN_LIBSUPCXX)
+ unexpected_handler
+ get_unexpected() _NOEXCEPT
+ {
++#if defined(__APPLE__) && defined(__ppc__) && defined(PIC)
++    const std::unexpected_handler
++	old(reinterpret_cast<std::unexpected_handler>(
++		_keymgr_get_per_thread_data(KEYMGR_UNEXPECTED_HANDLER_KEY)));
++    return old ? old : __unexpected_handler;
++#else
+     return __sync_fetch_and_add(&__unexpected_handler, (unexpected_handler)0);
++#endif /* __APPLE__ etc. */
+ }
+-
++#endif
++#if __PRED__
+ _LIBCPP_NORETURN
+ void
+ unexpected()
+@@ -73,12 +97,23 @@ set_terminate(terminate_handler func) _NOEXCEPT
+     return __sync_lock_test_and_set(&__terminate_handler, func);
+ }
+ 
++#endif
++#if __PRED__ || defined(DARWIN_LIBSUPCXX)
+ terminate_handler
+ get_terminate() _NOEXCEPT
+ {
++// FIXME: see https://www.opensource.apple.com/source/libstdcxx/libstdcxx-39/libstdcxx/libstdc++-v3/libsupc++/eh_terminate.cc
++#if defined(__APPLE__) && defined(__ppc__) && defined(PIC)
++    const std::terminate_handler
++	old(reinterpret_cast<std::terminate_handler>(
++		_keymgr_get_per_thread_data(KEYMGR_TERMINATE_HANDLER_KEY)));
++    return old ? old : __terminate_handler;
++#else
+     return __sync_fetch_and_add(&__terminate_handler, (terminate_handler)0);
++#endif
+ }
+-
++#endif
++#if __PRED__
+ #ifndef __EMSCRIPTEN__ // We provide this in JS
+ _LIBCPP_NORETURN
+ void
+@@ -104,8 +139,10 @@ terminate() _NOEXCEPT
+ }
+ #endif // !__EMSCRIPTEN__
+ #endif // !defined(LIBCXXRT) && !defined(_LIBCPPABI_VERSION)
++#undef	__PRED__
+ 
+ #if !defined(LIBCXXRT) && !defined(__GLIBCXX__) && !defined(__EMSCRIPTEN__)
++#if !defined(DARWIN_LIBSUPCXX)
+ bool uncaught_exception() _NOEXCEPT
+ {
+ #if defined(__APPLE__) || defined(_LIBCPPABI_VERSION)
+@@ -121,6 +158,7 @@ bool uncaught_exception() _NOEXCEPT
+     ::abort();
+ #endif  // __APPLE__
+ }
++#endif
+ 
+ 
+ #ifndef _LIBCPPABI_VERSION
+@@ -141,7 +179,8 @@ const char* exception::what() const _NOEXCEPT
+ bad_exception::~bad_exception() _NOEXCEPT
+ {
+ }
+-
++#endif
++#if !defined(_LIBCPPABI_VERSION) && !defined(__GLIBCXX__) || (defined(DARWIN_LIBSUPCXX) && DARWIN_LIBSUPCXX < 10)
+ const char* bad_exception::what() const _NOEXCEPT
+ {
+   return "std::bad_exception";
+@@ -149,7 +188,9 @@ const char* bad_exception::what() const _NOEXCEPT
+ 
+ #endif
+ 
+-#if defined(__GLIBCXX__)
++#define	GLIBCXX_HAS___EXCEPTION_PTR		!defined(DARWIN_LIBSUPCXX)
++
++#if defined(__GLIBCXX__) && GLIBCXX_HAS___EXCEPTION_PTR
+ 
+ // libsupc++ does not implement the dependent EH ABI and the functionality
+ // it uses to implement std::exception_ptr (which it declares as an alias of
+@@ -182,7 +223,7 @@ exception_ptr::~exception_ptr() _NOEXCEPT
+ {
+ #if HAVE_DEPENDENT_EH_ABI
+     __cxa_decrement_exception_refcount(__ptr_);
+-#elif defined(__GLIBCXX__)
++#elif defined(__GLIBCXX__) && GLIBCXX_HAS___EXCEPTION_PTR
+     reinterpret_cast<__exception_ptr::exception_ptr*>(this)->~exception_ptr();
+ #else
+ #   if defined(_MSC_VER) && ! defined(__clang__)
+@@ -200,7 +241,7 @@ exception_ptr::exception_ptr(const exception_ptr& other) _NOEXCEPT
+ {
+ #if HAVE_DEPENDENT_EH_ABI
+     __cxa_increment_exception_refcount(__ptr_);
+-#elif defined(__GLIBCXX__)
++#elif defined(__GLIBCXX__) && GLIBCXX_HAS___EXCEPTION_PTR
+     new (reinterpret_cast<void*>(this)) __exception_ptr::exception_ptr(
+         reinterpret_cast<const __exception_ptr::exception_ptr&>(other));
+ #else
+@@ -224,7 +265,7 @@ exception_ptr& exception_ptr::operator=(const exception_ptr& other) _NOEXCEPT
+         __ptr_ = other.__ptr_;
+     }
+     return *this;
+-#elif defined(__GLIBCXX__)
++#elif defined(__GLIBCXX__) && GLIBCXX_HAS___EXCEPTION_PTR
+     *reinterpret_cast<__exception_ptr::exception_ptr*>(this) =
+         reinterpret_cast<const __exception_ptr::exception_ptr&>(other);
+     return *this;
+@@ -244,7 +285,7 @@ nested_exception::nested_exception() _NOEXCEPT
+ {
+ }
+ 
+-#if !defined(__GLIBCXX__)
++#if !defined(__GLIBCXX__) || defined(DARWIN_LIBSUPCXX)
+ 
+ nested_exception::~nested_exception() _NOEXCEPT
+ {
+@@ -261,7 +302,7 @@ nested_exception::rethrow_nested() const
+     rethrow_exception(__ptr_);
+ }
+ 
+-#if !defined(__GLIBCXX__)
++#if !defined(__GLIBCXX__) || defined(DARWIN_LIBSUPCXX)
+ 
+ exception_ptr current_exception() _NOEXCEPT
+ {
+@@ -292,7 +333,7 @@ void rethrow_exception(exception_ptr p)
+     __cxa_rethrow_primary_exception(p.__ptr_);
+     // if p.__ptr_ is NULL, above returns so we terminate
+     terminate();
+-#elif defined(__GLIBCXX__)
++#elif defined(__GLIBCXX__) && GLIBCXX_HAS___EXCEPTION_PTR
+     rethrow_exception(reinterpret_cast<__exception_ptr::exception_ptr&>(p));
+ #else
+ #   if defined(_MSC_VER) && ! defined(__clang__)
+diff --git a/src/new.cpp b/src/new.cpp
+index a88d4cc..e129b77 100644
+--- a/src/new.cpp
++++ b/src/new.cpp
+@@ -17,7 +17,7 @@
+ #define __has_include(inc) 0
+ #endif
+ 
+-#if defined(__APPLE__) && !defined(LIBCXXRT)
++#if defined(__APPLE__) && !defined(LIBCXXRT) && !defined(DARWIN_LIBSUPCXX)
+     #include <cxxabi.h>
+ 
+     #ifndef _LIBCPPABI_VERSION
+@@ -30,11 +30,21 @@
+     #if defined(LIBCXXRT) || __has_include(<cxxabi.h>)
+         #include <cxxabi.h>
+     #endif  // __has_include(<cxxabi.h>)
++    #if defined(DARWIN_LIBSUPCXX)
++        extern std::new_handler	__new_handler;
++    #endif
+     #if !defined(_LIBCPPABI_VERSION) && !defined(__GLIBCXX__)
+         static std::new_handler __new_handler;
+     #endif  // _LIBCPPABI_VERSION
+ #endif
+ 
++#if defined(__APPLE__) && defined(DARWIN_LIBSUPCXX)
++// should clang provide -DPIC
++#define	PIC	1
++#include <bits/os_defines.h>
++// see https://www.opensource.apple.com/source/libstdcxx/libstdcxx-39/libstdcxx/libstdc++-v3/libsupc++/new_handler.cc
++#endif
++
+ #ifndef __GLIBCXX__
+ 
+ // Implement all new and delete operators as weak definitions
+@@ -150,9 +160,11 @@ operator delete[] (void* ptr, const std::nothrow_t&) _NOEXCEPT
+ namespace std
+ {
+ 
++#if	!defined(DARWIN_LIBSUPCXX)
+ #ifndef __GLIBCXX__
+ const nothrow_t nothrow = {};
+ #endif
++#endif
+ 
+ #ifndef _LIBCPPABI_VERSION
+ 
+@@ -163,11 +175,20 @@ set_new_handler(new_handler handler) _NOEXCEPT
+ {
+     return __sync_lock_test_and_set(&__new_handler, handler);
+ }
+-
++#endif
++#if !defined(__GLIBCXX__) || defined(DARWIN_LIBSUPCXX)
+ new_handler
+ get_new_handler() _NOEXCEPT
+ {
++/* APPLE LOCAL begin keymgr */
++#if defined(__APPLE__) && defined(__ppc__) && defined(PIC)
++    const new_handler prev_handler(reinterpret_cast<new_handler>(
++	_keymgr_get_per_thread_data(KEYMGR_NEW_HANDLER_KEY)));
++    return prev_handler ? prev_handler : __new_handler;
++#else	/* __APPLE__ etc. */
+     return __sync_fetch_and_add(&__new_handler, nullptr);
++#endif	/* __APPLE__ etc. */
++/* APPLE LOCAL end keymgr */
+ }
+ 
+ #endif // !__GLIBCXX__
+@@ -183,7 +204,9 @@ bad_alloc::bad_alloc() _NOEXCEPT
+ bad_alloc::~bad_alloc() _NOEXCEPT
+ {
+ }
++#endif // !__GLIBCXX__
+ 
++#if !defined(__GLIBCXX__) || (defined(DARWIN_LIBSUPCXX) && DARWIN_LIBSUPCXX < 10)
+ const char*
+ bad_alloc::what() const _NOEXCEPT
+ {
+diff --git a/src/typeinfo.cpp b/src/typeinfo.cpp
+index b428120..4153372 100644
+--- a/src/typeinfo.cpp
++++ b/src/typeinfo.cpp
+@@ -35,23 +35,29 @@ std::bad_typeid::bad_typeid() _NOEXCEPT
+ std::bad_cast::~bad_cast() _NOEXCEPT
+ {
+ }
++#endif
+ 
++#if !defined(__GLIBCXX__) || (defined(DARWIN_LIBSUPCXX) && DARWIN_LIBSUPCXX < 10)
+ const char*
+ std::bad_cast::what() const _NOEXCEPT
+ {
+   return "std::bad_cast";
+ }
++#endif
+ 
++#ifndef __GLIBCXX__
+ std::bad_typeid::~bad_typeid() _NOEXCEPT
+ {
+ }
+-
++#endif
++#if !defined(__GLIBCXX__) || (defined(DARWIN_LIBSUPCXX) && DARWIN_LIBSUPCXX < 10)
+ const char*
+ std::bad_typeid::what() const _NOEXCEPT
+ {
+   return "std::bad_typeid";
+ }
+-
++#endif
++#ifndef __GLIBCXX__
+ #ifdef __APPLE__
+   // On Darwin, the cxa_bad_* functions cannot be in the lower level library
+   // because bad_cast and bad_typeid are defined in his higher level library
+diff --git a/test/libcxx/test/config.py b/test/libcxx/test/config.py
+index 55916f0..5a318d6 100644
+--- a/test/libcxx/test/config.py
++++ b/test/libcxx/test/config.py
+@@ -315,7 +315,21 @@ class Configuration(object):
+         compile_flags_str = self.get_lit_conf('compile_flags', '')
+         self.compile_flags += shlex.split(compile_flags_str)
+ 
++        # also grab library compile flags from libc++ build/configuration
++        cxx_flags = self.get_lit_conf('cxx_flags', '')
++        self.compile_flags += cxx_flags
++        self.lit_config.note(
++            "inferred cxx_flags as: %r" % cxx_flags)
++        self.lit_config.note(
++            "inferred compile_flags as: %r" % self.compile_flags)
++
+     def configure_link_flags(self):
++        # build configuration linker flags for executables
++        exe_linker_flags = self.get_lit_conf('exe_linker_flags')
++        lit_config.note("inferred exe_linker_flags as: %r" % (exe_linker_flags,))
++        self.link_flags += exe_linker_flags
++
++        # Configure library search paths
+         self.link_flags += ['-nodefaultlibs']
+         libcxx_library = self.get_lit_conf('libcxx_library')
+         # Configure libc++ library paths.
+@@ -373,7 +387,32 @@ class Configuration(object):
+ 
+     def configure_extra_library_flags(self):
+         if sys.platform == 'darwin':
++            # need libgcc_s for libunwind
++            darwin_vers = int(platform.release().split('.')[0])
++            osx_vers_maj = '.'.join(platform.mac_ver()[0].split('.')[0:2])
++            if darwin_vers < 10:
++                self.link_flags += ['.'.join(['-lgcc_s', osx_vers_maj])]
++            elif darwin_vers < 11:
++                self.link_flags += ['-lgcc_s.1']
++            # need libclang_rt for eprintf
++            arch = platform.processor()
++            if arch == 'powerpc':
++                arch = 'ppc'
++            libcrt = '.'.join(['libclang_rt', '-'.join(['builtins', arch]), 'a'])
++            cmd = [cxx_under_test, '-print-search-dirs']
++            p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
++            out,err = p.communicate()
++            exitCode = p.wait()
++            # should probably check exitCode
++            for l in out.splitlines():
++                ll = l.split(' ')
++                if ll[0] == 'libraries:':
++                    crt_libdir = ll[1][1:]
++            self.link_flags += [os.path.join(crt_libdir, 'lib', sys.platform, libcrt)]
+             self.link_flags += ['-lSystem']
++            # better yet, test existence of SystemStubs
++            if darwin_vers < 11:
++                self.link_flags += ['-lSystemStubs']
+         elif sys.platform.startswith('linux'):
+             self.link_flags += ['-lgcc_eh', '-lc', '-lm', '-lpthread',
+                                 '-lrt', '-lgcc_s']
+diff --git a/test/lit.cfg b/test/lit.cfg
+index 6f53638..04c5b2b 100644
+--- a/test/lit.cfg
++++ b/test/lit.cfg
+@@ -5,7 +5,6 @@ import site
+ 
+ site.addsitedir(os.path.dirname(__file__))
+ 
+-
+ # Tell pylint that we know config and lit_config exist somewhere.
+ if 'PYLINT_IMPORT' in os.environ:
+     config = object()
+diff --git a/test/lit.site.cfg.in b/test/lit.site.cfg.in
+index fa821bd..da44086 100644
+--- a/test/lit.site.cfg.in
++++ b/test/lit.site.cfg.in
+@@ -13,6 +13,9 @@ config.enable_monotonic_clock   = "@LIBCXX_ENABLE_MONOTONIC_CLOCK@"
+ config.cxx_abi                  = "@LIBCXX_CXX_ABI_LIBNAME@"
+ config.use_sanitizer            = "@LLVM_USE_SANITIZER@"
+ config.abi_library_path         = "@LIBCXX_CXX_ABI_LIBRARY_PATH@"
++# use same options used to build libc++
++config.exe_linker_flags         = "@CMAKE_EXE_LINKER_FLAGS@"
++config.cxx_flags                = "@CMAKE_CXX_FLAGS@"
+ 
+ # Let the main config do the real work.
+ lit_config.load_config(config, "@LIBCXX_SOURCE_DIR@/test/lit.cfg")
+diff --git a/test/std/atomics/atomics.types.generic/integral.pass.cpp b/test/std/atomics/atomics.types.generic/integral.pass.cpp
+index f9c7583..1cc26db 100644
+--- a/test/std/atomics/atomics.types.generic/integral.pass.cpp
++++ b/test/std/atomics/atomics.types.generic/integral.pass.cpp
+@@ -92,6 +92,8 @@
+ 
+ #include <cmpxchg_loop.h>
+ 
++#include "powerpc-darwin.h"
++
+ template <class A, class T>
+ void
+ do_test()
+@@ -164,7 +166,6 @@ void test()
+     do_test<volatile A, T>();
+ }
+ 
+-
+ int main()
+ {
+     test<std::atomic_char, char>();
+@@ -176,8 +177,10 @@ int main()
+     test<std::atomic_uint, unsigned int>();
+     test<std::atomic_long, long>();
+     test<std::atomic_ulong, unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<std::atomic_llong, long long>();
+     test<std::atomic_ullong, unsigned long long>();
++#endif
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<std::atomic_char16_t, char16_t>();
+     test<std::atomic_char32_t, char32_t>();
+@@ -193,8 +196,10 @@ int main()
+     test<volatile std::atomic_uint, unsigned int>();
+     test<volatile std::atomic_long, long>();
+     test<volatile std::atomic_ulong, unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<volatile std::atomic_llong, long long>();
+     test<volatile std::atomic_ullong, unsigned long long>();
++#endif
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<volatile std::atomic_char16_t, char16_t>();
+     test<volatile std::atomic_char32_t, char32_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_strong.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_strong.pass.cpp
+index f1cc993..8096698 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_strong.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_strong.pass.cpp
+@@ -24,6 +24,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -76,8 +78,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_strong_explicit.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_strong_explicit.pass.cpp
+index f667ab7..cdbf114 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_strong_explicit.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_strong_explicit.pass.cpp
+@@ -27,6 +27,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -83,8 +85,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_weak.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_weak.pass.cpp
+index 175c445..8a17bfd 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_weak.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_weak.pass.cpp
+@@ -23,6 +23,7 @@
+ #include <atomic>
+ #include <type_traits>
+ #include <cassert>
++#include "powerpc-darwin.h"
+ 
+ #include <cmpxchg_loop.h>
+ 
+@@ -78,8 +79,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_weak_explicit.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_weak_explicit.pass.cpp
+index 46f80bf..d0fa17a 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_weak_explicit.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_compare_exchange_weak_explicit.pass.cpp
+@@ -29,6 +29,8 @@
+ 
+ #include <cmpxchg_loop.h>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -85,8 +87,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_exchange.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_exchange.pass.cpp
+index 525e74a..c41fb21 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_exchange.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_exchange.pass.cpp
+@@ -24,6 +24,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -61,8 +63,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_exchange_explicit.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_exchange_explicit.pass.cpp
+index 9fe4ac8..bec0a51 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_exchange_explicit.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_exchange_explicit.pass.cpp
+@@ -24,6 +24,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -63,8 +65,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_add.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_add.pass.cpp
+index 3408def..a499dcf 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_add.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_add.pass.cpp
+@@ -32,6 +32,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -99,8 +101,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_add_explicit.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_add_explicit.pass.cpp
+index 9977bd4..5fecde4 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_add_explicit.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_add_explicit.pass.cpp
+@@ -32,6 +32,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -103,8 +105,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_and.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_and.pass.cpp
+index 4c7c043..c29093b 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_and.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_and.pass.cpp
+@@ -23,6 +23,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -54,8 +56,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_and_explicit.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_and_explicit.pass.cpp
+index d83bbf2..8f14b1d 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_and_explicit.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_and_explicit.pass.cpp
+@@ -23,6 +23,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -56,8 +58,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_or.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_or.pass.cpp
+index acf6d43..80ebebd 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_or.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_or.pass.cpp
+@@ -23,6 +23,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -54,8 +56,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_or_explicit.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_or_explicit.pass.cpp
+index 72685e4..f61acbd 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_or_explicit.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_or_explicit.pass.cpp
+@@ -23,6 +23,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -56,8 +58,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_sub.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_sub.pass.cpp
+index ed8b541..550a41c 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_sub.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_sub.pass.cpp
+@@ -32,6 +32,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -99,8 +101,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_sub_explicit.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_sub_explicit.pass.cpp
+index e6c92ea..555ef37 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_sub_explicit.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_sub_explicit.pass.cpp
+@@ -33,6 +33,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -104,8 +106,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_xor.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_xor.pass.cpp
+index fc6b97b..58873ab 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_xor.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_xor.pass.cpp
+@@ -23,6 +23,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -54,8 +56,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_xor_explicit.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_xor_explicit.pass.cpp
+index 58772aa..c4b5faa 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_xor_explicit.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_fetch_xor_explicit.pass.cpp
+@@ -23,6 +23,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -56,8 +58,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_init.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_init.pass.cpp
+index 137b6f6..264cf9a 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_init.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_init.pass.cpp
+@@ -24,6 +24,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -59,8 +61,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_load.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_load.pass.cpp
+index 66918c7..eef4a5b 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_load.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_load.pass.cpp
+@@ -24,6 +24,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -59,8 +61,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_load_explicit.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_load_explicit.pass.cpp
+index 5f402a9..8b03ae0 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_load_explicit.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_load_explicit.pass.cpp
+@@ -24,6 +24,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -59,8 +61,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_store.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_store.pass.cpp
+index 2b9582b..a92e919 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_store.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_store.pass.cpp
+@@ -24,6 +24,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -59,8 +61,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_store_explicit.pass.cpp b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_store_explicit.pass.cpp
+index 8fe0c7d..e7c7e9d 100644
+--- a/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_store_explicit.pass.cpp
++++ b/test/std/atomics/atomics.types.operations/atomics.types.operations.req/atomic_store_explicit.pass.cpp
+@@ -24,6 +24,8 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++#include "powerpc-darwin.h"
++
+ template <class T>
+ void
+ test()
+@@ -59,8 +61,10 @@ int main()
+     test<unsigned int>();
+     test<long>();
+     test<unsigned long>();
++#ifndef	MISSING_64B_ATOMIC_OPS
+     test<long long>();
+     test<unsigned long long>();
++#endif
+     test<wchar_t>();
+ #ifndef _LIBCPP_HAS_NO_UNICODE_CHARS
+     test<char16_t>();
+diff --git a/test/std/containers/associative/map/types.pass.cpp b/test/std/containers/associative/map/types.pass.cpp
+index d117def..80083c0 100644
+--- a/test/std/containers/associative/map/types.pass.cpp
++++ b/test/std/containers/associative/map/types.pass.cpp
+@@ -33,6 +33,7 @@
+ #include <type_traits>
+ 
+ #include "min_allocator.h"
++#include "powerpc-darwin.h"
+ 
+ int main()
+ {
+@@ -47,7 +48,11 @@ int main()
+     static_assert((std::is_same<C::const_reference, const std::pair<const int, double>&>::value), "");
+     static_assert((std::is_same<C::pointer, std::pair<const int, double>*>::value), "");
+     static_assert((std::is_same<C::const_pointer, const std::pair<const int, double>*>::value), "");
++#ifdef	PTRDIFF_T_VS_SIZE_T_DIFFER
++    static_assert(sizeof(C::size_type) == sizeof(std::size_t), "");
++#else
+     static_assert((std::is_same<C::size_type, std::size_t>::value), "");
++#endif
+     static_assert((std::is_same<C::difference_type, std::ptrdiff_t>::value), "");
+     }
+ #if __cplusplus >= 201103L
+diff --git a/test/std/containers/associative/multimap/types.pass.cpp b/test/std/containers/associative/multimap/types.pass.cpp
+index a0f4db0..dc86da1 100644
+--- a/test/std/containers/associative/multimap/types.pass.cpp
++++ b/test/std/containers/associative/multimap/types.pass.cpp
+@@ -33,6 +33,7 @@
+ #include <type_traits>
+ 
+ #include "min_allocator.h"
++#include "powerpc-darwin.h"
+ 
+ int main()
+ {
+@@ -47,7 +48,11 @@ int main()
+     static_assert((std::is_same<C::const_reference, const std::pair<const int, double>&>::value), "");
+     static_assert((std::is_same<C::pointer, std::pair<const int, double>*>::value), "");
+     static_assert((std::is_same<C::const_pointer, const std::pair<const int, double>*>::value), "");
++#ifdef	PTRDIFF_T_VS_SIZE_T_DIFFER
++    static_assert(sizeof(C::size_type) == sizeof(std::size_t), "");
++#else
+     static_assert((std::is_same<C::size_type, std::size_t>::value), "");
++#endif
+     static_assert((std::is_same<C::difference_type, std::ptrdiff_t>::value), "");
+     }
+ #if __cplusplus >= 201103L
+diff --git a/test/std/containers/associative/multiset/types.pass.cpp b/test/std/containers/associative/multiset/types.pass.cpp
+index e1e3ad9..f05a4c9 100644
+--- a/test/std/containers/associative/multiset/types.pass.cpp
++++ b/test/std/containers/associative/multiset/types.pass.cpp
+@@ -33,6 +33,7 @@
+ #include <type_traits>
+ 
+ #include "min_allocator.h"
++#include "powerpc-darwin.h"
+ 
+ int main()
+ {
+@@ -47,7 +48,11 @@ int main()
+     static_assert((std::is_same<C::const_reference, const int&>::value), "");
+     static_assert((std::is_same<C::pointer, int*>::value), "");
+     static_assert((std::is_same<C::const_pointer, const int*>::value), "");
++#ifdef	PTRDIFF_T_VS_SIZE_T_DIFFER
++    static_assert(sizeof(C::size_type) == sizeof(std::size_t), "");
++#else
+     static_assert((std::is_same<C::size_type, std::size_t>::value), "");
++#endif
+     static_assert((std::is_same<C::difference_type, std::ptrdiff_t>::value), "");
+     }
+ #if __cplusplus >= 201103L
+diff --git a/test/std/containers/associative/set/types.pass.cpp b/test/std/containers/associative/set/types.pass.cpp
+index 3362c42..f3664b2 100644
+--- a/test/std/containers/associative/set/types.pass.cpp
++++ b/test/std/containers/associative/set/types.pass.cpp
+@@ -33,6 +33,7 @@
+ #include <type_traits>
+ 
+ #include "min_allocator.h"
++#include "powerpc-darwin.h"
+ 
+ int main()
+ {
+@@ -47,7 +48,11 @@ int main()
+     static_assert((std::is_same<C::const_reference, const int&>::value), "");
+     static_assert((std::is_same<C::pointer, int*>::value), "");
+     static_assert((std::is_same<C::const_pointer, const int*>::value), "");
++#ifdef	PTRDIFF_T_VS_SIZE_T_DIFFER
++    static_assert(sizeof(C::size_type) == sizeof(std::size_t), "");
++#else
+     static_assert((std::is_same<C::size_type, std::size_t>::value), "");
++#endif
+     static_assert((std::is_same<C::difference_type, std::ptrdiff_t>::value), "");
+     }
+ #if __cplusplus >= 201103L
+diff --git a/test/std/containers/sequences/array/types.pass.cpp b/test/std/containers/sequences/array/types.pass.cpp
+index 065ade9..ff0a267 100644
+--- a/test/std/containers/sequences/array/types.pass.cpp
++++ b/test/std/containers/sequences/array/types.pass.cpp
+@@ -29,6 +29,8 @@
+ #include <iterator>
+ #include <type_traits>
+ 
++#include "powerpc-darwin.h"
++
+ int main()
+ {
+     {
+@@ -40,7 +42,11 @@ int main()
+         static_assert((std::is_same<C::const_iterator, const T*>::value), "");
+         static_assert((std::is_same<C::pointer, T*>::value), "");
+         static_assert((std::is_same<C::const_pointer, const T*>::value), "");
++#ifdef	PTRDIFF_T_VS_SIZE_T_DIFFER
++        static_assert(sizeof(C::size_type) == sizeof(std::size_t), "");
++#else
+         static_assert((std::is_same<C::size_type, std::size_t>::value), "");
++#endif
+         static_assert((std::is_same<C::difference_type, std::ptrdiff_t>::value), "");
+         static_assert((std::is_same<C::reverse_iterator, std::reverse_iterator<C::iterator> >::value), "");
+         static_assert((std::is_same<C::const_reverse_iterator, std::reverse_iterator<C::const_iterator> >::value), "");
+@@ -54,7 +60,11 @@ int main()
+         static_assert((std::is_same<C::const_iterator, const T*>::value), "");
+         static_assert((std::is_same<C::pointer, T*>::value), "");
+         static_assert((std::is_same<C::const_pointer, const T*>::value), "");
++#ifdef	PTRDIFF_T_VS_SIZE_T_DIFFER
++        static_assert(sizeof(C::size_type) == sizeof(std::size_t), "");
++#else
+         static_assert((std::is_same<C::size_type, std::size_t>::value), "");
++#endif
+         static_assert((std::is_same<C::difference_type, std::ptrdiff_t>::value), "");
+         static_assert((std::is_same<C::reverse_iterator, std::reverse_iterator<C::iterator> >::value), "");
+         static_assert((std::is_same<C::const_reverse_iterator, std::reverse_iterator<C::const_iterator> >::value), "");
+diff --git a/test/std/containers/sequences/forwardlist/types.pass.cpp b/test/std/containers/sequences/forwardlist/types.pass.cpp
+index c955487..7480f88 100644
+--- a/test/std/containers/sequences/forwardlist/types.pass.cpp
++++ b/test/std/containers/sequences/forwardlist/types.pass.cpp
+@@ -40,7 +40,11 @@ int main()
+     static_assert((std::is_same<C::const_reference, const char&>::value), "");
+     static_assert((std::is_same<C::pointer, char*>::value), "");
+     static_assert((std::is_same<C::const_pointer, const char*>::value), "");
++#ifdef	PTRDIFF_T_VS_SIZE_T_DIFFER
++    static_assert(sizeof(C::size_type) == sizeof(std::size_t), "");
++#else
+     static_assert((std::is_same<C::size_type, std::size_t>::value), "");
++#endif
+     static_assert((std::is_same<C::difference_type, std::ptrdiff_t>::value), "");
+     }
+ #if __cplusplus >= 201103L
+diff --git a/test/std/containers/unord/unord.map/types.pass.cpp b/test/std/containers/unord/unord.map/types.pass.cpp
+index b53ff8e..be5c890 100644
+--- a/test/std/containers/unord/unord.map/types.pass.cpp
++++ b/test/std/containers/unord/unord.map/types.pass.cpp
+@@ -32,6 +32,7 @@
+ #include <type_traits>
+ 
+ #include "min_allocator.h"
++#include "powerpc-darwin.h"
+ 
+ int main()
+ {
+@@ -47,7 +48,11 @@ int main()
+         static_assert((std::is_same<C::const_reference, const C::value_type&>::value), "");
+         static_assert((std::is_same<C::pointer, C::value_type*>::value), "");
+         static_assert((std::is_same<C::const_pointer, const C::value_type*>::value), "");
++#ifdef	PTRDIFF_T_VS_SIZE_T_DIFFER
++        static_assert(sizeof(C::size_type) == sizeof(std::size_t), "");
++#else
+         static_assert((std::is_same<C::size_type, std::size_t>::value), "");
++#endif
+         static_assert((std::is_same<C::difference_type, std::ptrdiff_t>::value), "");
+     }
+ #if __cplusplus >= 201103L
+diff --git a/test/std/containers/unord/unord.multimap/types.pass.cpp b/test/std/containers/unord/unord.multimap/types.pass.cpp
+index 55ae749..3a32612 100644
+--- a/test/std/containers/unord/unord.multimap/types.pass.cpp
++++ b/test/std/containers/unord/unord.multimap/types.pass.cpp
+@@ -32,6 +32,7 @@
+ #include <type_traits>
+ 
+ #include "min_allocator.h"
++#include "powerpc-darwin.h"
+ 
+ int main()
+ {
+@@ -47,7 +48,11 @@ int main()
+         static_assert((std::is_same<C::const_reference, const C::value_type&>::value), "");
+         static_assert((std::is_same<C::pointer, C::value_type*>::value), "");
+         static_assert((std::is_same<C::const_pointer, const C::value_type*>::value), "");
++#ifdef	PTRDIFF_T_VS_SIZE_T_DIFFER
++        static_assert(sizeof(C::size_type) == sizeof(std::size_t), "");
++#else
+         static_assert((std::is_same<C::size_type, std::size_t>::value), "");
++#endif
+         static_assert((std::is_same<C::difference_type, std::ptrdiff_t>::value), "");
+     }
+ #if __cplusplus >= 201103L
+diff --git a/test/std/containers/unord/unord.multiset/types.pass.cpp b/test/std/containers/unord/unord.multiset/types.pass.cpp
+index 5222222..338077c 100644
+--- a/test/std/containers/unord/unord.multiset/types.pass.cpp
++++ b/test/std/containers/unord/unord.multiset/types.pass.cpp
+@@ -31,6 +31,7 @@
+ #include <type_traits>
+ 
+ #include "min_allocator.h"
++#include "powerpc-darwin.h"
+ 
+ int main()
+ {
+@@ -45,7 +46,11 @@ int main()
+         static_assert((std::is_same<C::const_reference, const C::value_type&>::value), "");
+         static_assert((std::is_same<C::pointer, C::value_type*>::value), "");
+         static_assert((std::is_same<C::const_pointer, const C::value_type*>::value), "");
++#ifdef	PTRDIFF_T_VS_SIZE_T_DIFFER
++        static_assert(sizeof(C::size_type) == sizeof(std::size_t), "");
++#else
+         static_assert((std::is_same<C::size_type, std::size_t>::value), "");
++#endif
+         static_assert((std::is_same<C::difference_type, std::ptrdiff_t>::value), "");
+     }
+ #if __cplusplus >= 201103L
+diff --git a/test/std/containers/unord/unord.set/types.pass.cpp b/test/std/containers/unord/unord.set/types.pass.cpp
+index 7e752a4..a1f611c 100644
+--- a/test/std/containers/unord/unord.set/types.pass.cpp
++++ b/test/std/containers/unord/unord.set/types.pass.cpp
+@@ -31,6 +31,7 @@
+ #include <type_traits>
+ 
+ #include "min_allocator.h"
++#include "powerpc-darwin.h"
+ 
+ int main()
+ {
+@@ -45,7 +46,11 @@ int main()
+         static_assert((std::is_same<C::const_reference, const C::value_type&>::value), "");
+         static_assert((std::is_same<C::pointer, C::value_type*>::value), "");
+         static_assert((std::is_same<C::const_pointer, const C::value_type*>::value), "");
++#ifdef	PTRDIFF_T_VS_SIZE_T_DIFFER
++        static_assert(sizeof(C::size_type) == sizeof(std::size_t), "");
++#else
+         static_assert((std::is_same<C::size_type, std::size_t>::value), "");
++#endif
+         static_assert((std::is_same<C::difference_type, std::ptrdiff_t>::value), "");
+     }
+ #if __cplusplus >= 201103L
+diff --git a/test/std/depr/depr.c.headers/ctype_h.pass.cpp b/test/std/depr/depr.c.headers/ctype_h.pass.cpp
+index 042084e..1953664 100644
+--- a/test/std/depr/depr.c.headers/ctype_h.pass.cpp
++++ b/test/std/depr/depr.c.headers/ctype_h.pass.cpp
+@@ -13,6 +13,9 @@
+ #include <type_traits>
+ #include <cassert>
+ 
++// on darwin8, <ctype.h> defines these functions as:
++// #define isalpha(c)      __istype((c), _CTYPE_A)
++#if !defined(DARWIN_LIBSUPCXX) || (DARWIN_LIBSUPCXX >= 9)
+ #ifdef isalnum
+ #error isalnum defined
+ #endif
+@@ -68,6 +71,7 @@
+ #ifdef toupper
+ #error toupper defined
+ #endif
++#endif
+ 
+ int main()
+ {
+diff --git a/test/std/depr/depr.c.headers/inttypes_h.pass.cpp b/test/std/depr/depr.c.headers/inttypes_h.pass.cpp
+index 4adf82d..65f4d65 100644
+--- a/test/std/depr/depr.c.headers/inttypes_h.pass.cpp
++++ b/test/std/depr/depr.c.headers/inttypes_h.pass.cpp
+@@ -9,6 +9,13 @@
+ 
+ // test <inttypes.h>
+ 
++/* "C++ implementations should define these macros only when
++ *  __STDC_FORMAT_MACROS is defined before <inttypes.h> is included."
++ */
++#ifndef	__STDC_FORMAT_MACROS
++#define	__STDC_FORMAT_MACROS
++#endif
++
+ #include <inttypes.h>
+ #include <type_traits>
+ 
+diff --git a/test/std/depr/depr.c.headers/wctype_h.pass.cpp b/test/std/depr/depr.c.headers/wctype_h.pass.cpp
+index ad31071..23245f6 100644
+--- a/test/std/depr/depr.c.headers/wctype_h.pass.cpp
++++ b/test/std/depr/depr.c.headers/wctype_h.pass.cpp
+@@ -16,6 +16,9 @@
+ #error WEOF not defined
+ #endif
+ 
++// on darwin8, <_wctype.h> defines these functions as:
++// #define isalpha(c)      __istype((c), _CTYPE_A)
++#if !defined(DARWIN_LIBSUPCXX) || (DARWIN_LIBSUPCXX >= 9)
+ #ifdef iswalnum
+ #error iswalnum defined
+ #endif
+@@ -87,6 +90,7 @@
+ #ifdef wctrans
+ #error wctrans defined
+ #endif
++#endif
+ 
+ int main()
+ {
+diff --git a/test/std/input.output/file.streams/c.files/cinttypes.pass.cpp b/test/std/input.output/file.streams/c.files/cinttypes.pass.cpp
+index 4cb2c4c..fcf20b6 100644
+--- a/test/std/input.output/file.streams/c.files/cinttypes.pass.cpp
++++ b/test/std/input.output/file.streams/c.files/cinttypes.pass.cpp
+@@ -9,6 +9,13 @@
+ 
+ // test <cinttypes>
+ 
++/* "C++ implementations should define these macros only when
++ *  __STDC_FORMAT_MACROS is defined before <inttypes.h> is included."
++ */
++#ifndef	__STDC_FORMAT_MACROS
++#define	__STDC_FORMAT_MACROS
++#endif
++
+ #include <cinttypes>
+ #include <type_traits>
+ 
+diff --git a/test/std/language.support/support.dynamic/new.delete/new.delete.array/new_array_nothrow_replace.pass.cpp b/test/std/language.support/support.dynamic/new.delete/new.delete.array/new_array_nothrow_replace.pass.cpp
+index 3e3a00c..03114ec 100644
+--- a/test/std/language.support/support.dynamic/new.delete/new.delete.array/new_array_nothrow_replace.pass.cpp
++++ b/test/std/language.support/support.dynamic/new.delete/new.delete.array/new_array_nothrow_replace.pass.cpp
+@@ -19,7 +19,10 @@
+ 
+ int new_called = 0;
+ 
+-void* operator new(std::size_t s) throw(std::bad_alloc)
++void* operator new(std::size_t s)
++#if !__has_feature(cxx_noexcept)
++	throw(std::bad_alloc)
++#endif
+ {
+     ++new_called;
+     return std::malloc(s);
+diff --git a/test/support/powerpc-darwin.h b/test/support/powerpc-darwin.h
+new file mode 100644
+index 0000000..fd8228f
+--- /dev/null
++++ b/test/support/powerpc-darwin.h
+@@ -0,0 +1,28 @@
++#ifndef	__LIBCXX_TEST_SUPPORT_POWERPC_DARWIN_H__
++#define	__LIBCXX_TEST_SUPPORT_POWERPC_DARWIN_H__
++
++#if defined(__APPLE__) && defined(__ppc__)
++#define	__powerpc_darwin__		1
++#endif
++// control certain workarounds for the powerpc-darwin8 port
++
++/**
++	On PowerPC-darwin, ptrdiff_t is int, but size_t is unsigned long.
++	Tests that rely on is_same<make_unsigned<ptrdiff_t>, size_t>
++	will fail, but as long as the underlying integer types are
++	the same size (which is true on PPC32), then it is still safe.
++ */
++#if defined(__powerpc_darwin__)
++#define	PTRDIFF_T_VS_SIZE_T_DIFFER
++#endif
++
++/**
++	PPC32 doesn't have native 64b atomic operations.
++	Thus, they must be emulated using mutex or lock.
++	TODO: provide specializations of struct atomic using std::mutex.
++	TODO: implement in compiler front-end
++	Undefine the following to enable mutex-based emulated 64b atomics.
++ */
++// #define	MISSING_64B_ATOMIC_OPS
++
++#endif	// __LIBCXX_TEST_SUPPORT_POWERPC_DARWIN_H__
+diff --git a/test/testit b/test/testit
+index 821292e..6b0d505 100755
+--- a/test/testit
++++ b/test/testit
+@@ -24,6 +24,7 @@ done
+ 
+ cd ..
+ LIBCXX_ROOT=`pwd`
++cpd=`echo "$LIBCXX_ROOT" | awk 'BEGIN{FS="/";}{print NF+1;}'`
+ cd $origpath
+ 
+ if [ -z "$CC" ]
+@@ -36,6 +37,10 @@ then
+ 	fi
+ fi
+ 
++if [ -z "$KEEP_EXE" ]
++then
++	KEEP_EXE=1
++fi
+ if [ -z "$CXX_LANG" ]
+ then
+     CXX_LANG=c++11
+@@ -56,6 +61,7 @@ then
+        SOURCE_LIB="-L$LIBCXX_ROOT/lib"
+ fi
+ 
++# use distinct test executables (parallelizable)
+ case $TRIPLE in
+   *-*-mingw* | *-*-cygwin* | *-*-win*)
+ 	TEST_EXE=test.exe
+@@ -78,14 +84,16 @@ IMPLEMENTED_FAIL=0
+ IMPLEMENTED_PASS=0
+ 
+ afunc() {
++	rwd=`pwd | cut -d/ -f$cpd-`
+ 	fail=0
+ 	pass=0
+ 	if (ls ${TEST_PREFIX}*fail.cpp > /dev/null 2>&1)
+ 	then
+ 		for FILE in $(ls ${TEST_PREFIX}*fail.cpp); do
+-			if $CC $OPTIONS $HEADER_INCLUDE $SOURCE_LIB $FILE $LIBS -o ./$TEST_EXE > /dev/null 2>&1
++			t_exe=`basename $FILE .cpp`
++			if $CC $OPTIONS $HEADER_INCLUDE $SOURCE_LIB $FILE $LIBS -o ./$t_exe > /dev/null 2>&1
+ 			then
+-				rm ./$TEST_EXE
++				test "$KEEP_EXE" = 1 || rm ./$t_exe
+ 				echo "$FILE should not compile"
+ 				fail=$(($fail+1))
+ 			else
+@@ -97,24 +105,25 @@ afunc() {
+ 	if (ls ${TEST_PREFIX}*pass.cpp > /dev/null 2>&1)
+ 	then
+ 		for FILE in $(ls ${TEST_PREFIX}*pass.cpp); do
++		t_exe=`basename $FILE .cpp`
+             if [ "$VERBOSE" ]
+             then
+              	echo "Running test: " $FILE
+             fi
+-			if $CC $OPTIONS $HEADER_INCLUDE $SOURCE_LIB $FILE $LIBS $(test $1 = no || echo $THREAD_FLAGS) -o ./$TEST_EXE
++			if $CC $OPTIONS $HEADER_INCLUDE $SOURCE_LIB $FILE $LIBS $(test $1 = no || echo $THREAD_FLAGS) -o ./$t_exe
+ 			then
+-				if ./$TEST_EXE
++				if ./$t_exe
+ 				then
+-					rm ./$TEST_EXE
++					test "$KEEP_EXE" = 1 || rm ./$t_exe
+ 					pass=$(($pass+1))
+ 				else
+-					echo "`pwd`/$FILE failed at run time"
++					echo "$rwd/$FILE failed at run time"
+ 					echo "Compile line was:" $CC $OPTIONS $HEADER_INCLUDE $SOURCE_LIB $FILE $LIBS $(test $1 = no || echo $THREAD_FLAGS)
+ 					fail=$(($fail+1))
+-					rm ./$TEST_EXE
++					test "$KEEP_EXE" = 1 || rm ./$t_exe
+ 				fi
+ 			else
+-				echo "`pwd`/$FILE failed to compile"
++				echo "$rwd/$FILE failed to compile"
+ 				echo "Compile line was:" $CC $OPTIONS $HEADER_INCLUDE $SOURCE_LIB $FILE $LIBS $(test $1 = no || echo $THREAD_FLAGS)
+ 				fail=$(($fail+1))
+ 			fi
+@@ -123,12 +132,12 @@ afunc() {
+ 
+ 	if [ $fail -gt 0 ]
+ 	then
+-		echo "failed $fail tests in `pwd`"
++		echo "failed $fail tests in $rwd"
+ 		IMPLEMENTED_FAIL=$(($IMPLEMENTED_FAIL+1))
+ 	fi
+ 	if [ $pass -gt 0 ]
+ 	then
+-		echo "passed $pass tests in `pwd`"
++		echo "passed $pass tests in $rwd"
+ 		if [ $fail -eq 0 ]
+ 		then
+ 			IMPLEMENTED_PASS=$((IMPLEMENTED_PASS+1))
+@@ -136,7 +145,7 @@ afunc() {
+ 	fi
+ 	if [ $fail -eq 0 -a $pass -eq 0 ]
+ 	then
+-		echo "not implemented:  `pwd`"
++		echo "not implemented:  $rwd"
+ 		UNIMPLEMENTED=$(($UNIMPLEMENTED+1))
+ 	fi
+ 
+@@ -163,6 +172,7 @@ afunc no
+ echo "****************************************************"
+ echo "Results for `pwd`:"
+ echo "using `$CC --version`"
++echo "  (`which $CC`)"
+ echo "with $OPTIONS $HEADER_INCLUDE $SOURCE_LIB"
+ echo "----------------------------------------------------"
+ echo "sections without tests   : $UNIMPLEMENTED"

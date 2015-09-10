@@ -1,0 +1,226 @@
+diff -ruN mtasc-1.14.orig/fink/patches/exe_in_usage.patch mtasc-1.14/fink/patches/exe_in_usage.patch
+--- mtasc-1.14.orig/fink/patches/exe_in_usage.patch	1969-12-31 17:00:00.000000000 -0700
++++ mtasc-1.14/fink/patches/exe_in_usage.patch	2013-05-06 10:33:20.000000000 -0600
+@@ -0,0 +1,16 @@
++01_exe_in_usage.patch
++Paul Wise <pabs@debian.org>
++Only show .exe in the usage on Win32
++Applied in upstream CVS
++--- a/ocaml/mtasc/main.ml
+++++ b/ocaml/mtasc/main.ml
++@@ -112,7 +112,8 @@
++ 	if do_exit then exit 1
++ ;;
++ try	
++-	let usage = "Motion-Twin ActionScript2 Compiler 1.14 - (c)2004-2008 Motion-Twin\n Usage : mtasc.exe [options] <files...>\n Options :" in
+++	let exe_ext = match Sys.os_type with "Win32" | "Cygwin" -> ".exe" | _ -> "" in
+++	let usage = "Motion-Twin ActionScript2 Compiler 1.14 - (c)2004-2008 Motion-Twin\n Usage : mtasc" ^ exe_ext ^ " [options] <files...>\n Options :" in
++ 	let base_path = normalize_path (try Extc.executable_path() with _ -> ".") in
++ 	let files = ref [] in
++ 	let time = Sys.time() in
+diff -ruN mtasc-1.14.orig/fink/patches/extc-fixes.patch mtasc-1.14/fink/patches/extc-fixes.patch
+--- mtasc-1.14.orig/fink/patches/extc-fixes.patch	1969-12-31 17:00:00.000000000 -0700
++++ mtasc-1.14/fink/patches/extc-fixes.patch	2013-05-06 10:35:50.000000000 -0600
+@@ -0,0 +1,68 @@
++Patch: extc-fixes.patch
++Author: Paul Wise <pabs@debian.org>
++Description: fix issues with extc (hurd, env stuff)
++--- a/ocaml/extc/extc_stubs.c
+++++ b/ocaml/extc/extc_stubs.c
++@@ -26,6 +26,7 @@
++ #else
++ #	include <limits.h>
++ #	include <unistd.h>
+++#	include <caml/memory.h>
++ #endif
++ #ifdef __APPLE__
++ #	include <sys/param.h>
++@@ -137,17 +138,27 @@
++ 		failwith("executable_path");
++ 	return caml_copy_string(path);
++ #else
++-	const char *p = getenv("_");
++-	if( p != NULL )
++-		return caml_copy_string(p);
++-	{
++-		char path[200];
++-		int length = readlink("/proc/self/exe", path, sizeof(path));
++-		if( length < 0 || length >= 200 )
++-			failwith("executable_path");
++-	    path[length] = '\0';
++-		return caml_copy_string(path);
+++	CAMLparam1 (u);
+++	CAMLlocal1 (caml_path);
+++	char exe_link_path[200];
+++	int length = readlink("/proc/self/exe", exe_link_path, sizeof(exe_link_path));
+++	if( length < 0 || length >= 200 ){
+++		char* argv0_path = realpath(String_val(u),NULL);
+++		if( NULL != argv0_path ){
+++			caml_path = caml_copy_string(argv0_path);
+++			free(argv0_path); argv0_path = NULL;
+++		} else {
+++			const char *shell_path = getenv("_");
+++			if( shell_path != NULL )
+++				caml_path = caml_copy_string(shell_path);
+++			else
+++				failwith("executable_path");
+++		}
+++	} else {
+++		exe_link_path[length] = '\0';
+++		caml_path = caml_copy_string(exe_link_path);
++ 	}
+++	CAMLreturn(caml_path);
++ #endif
++ }
++ 
++@@ -158,9 +169,12 @@
++ 		failwith("get_full_path");
++ 	return caml_copy_string(path);
++ #else
++-	char path[PATH_MAX];
++-	if( realpath(String_val(f),path) == NULL )
++-		failwith("get_full_path");
++-	return caml_copy_string(path);
+++	CAMLparam1 (f);
+++	CAMLlocal1 (path_caml);
+++	char* path = realpath(String_val(f),NULL);
+++	if( NULL == path ) failwith("get_full_path");
+++	path_caml = caml_copy_string(path);
+++	free(path);
+++	CAMLreturn(path_caml);
++ #endif
++ }
+diff -ruN mtasc-1.14.orig/fink/patches/fix_mtasc_for_camlp4_3.11.0.patch mtasc-1.14/fink/patches/fix_mtasc_for_camlp4_3.11.0.patch
+--- mtasc-1.14.orig/fink/patches/fix_mtasc_for_camlp4_3.11.0.patch	1969-12-31 17:00:00.000000000 -0700
++++ mtasc-1.14/fink/patches/fix_mtasc_for_camlp4_3.11.0.patch	2013-05-06 10:36:23.000000000 -0600
+@@ -0,0 +1,44 @@
++Patch: fix_mtasc_for_camlp4_3.11.0.patch
++Author: Stefano Zacchiroli <zack@debian.org>
++Description: allow parser.ml to compile with camlp4 from ocaml 3.11.0
++Status: applied to upstream CVS
++--- a/ocaml/mtasc/parser.ml
+++++ b/ocaml/mtasc/parser.ml
++@@ -166,8 +166,8 @@
++ 	| [< '(Kwd For,p); '(POpen,_); c = parse_expr_opt; e = parse_for p c >] -> e
++ 	| [< '(Kwd If,p); cond = parse_eval; e = parse_expr_opt; e2 , p2 = parse_else (pos e) >] -> EIf (cond,wrap_var e,e2), punion p p2
++ 	| [< '(Kwd Return,p); v , p2 = parse_eval_option p; >] -> EReturn v , punion p p2
++-	| [< '(Kwd Break,p); >] -> EBreak , p
++-	| [< '(Kwd Continue,p); >] -> EContinue , p
+++	| [< '(Kwd Break,p) >] -> EBreak , p
+++	| [< '(Kwd Continue,p) >] -> EContinue , p
++ 	| [< '(Kwd While,p1); v = parse_eval; e = parse_expr_opt >] -> EWhile (v,wrap_var e,NormalWhile) , punion p1 (pos e)
++ 	| [< '(Kwd Do,p1); e = parse_expr; '(Kwd While,_); v = parse_eval; >] -> EWhile (v,wrap_var e,DoWhile) , punion p1 (pos v)
++ 	| [< '(Kwd Switch,p1); v = parse_eval; '(BrOpen,_); el, p2 = parse_switch false >] -> ESwitch (v,el) , punion p1 p2
++@@ -278,7 +278,7 @@
++ 
++ and parse_expr_opt = parser
++ 	| [< e = parse_expr >] -> e
++-	| [< '(Next,p); >] -> EBlock [] , p
+++	| [< '(Next,p) >] -> EBlock [] , p
++ 
++ and parse_for p c = parser
++ 	| [< '(Kwd In,_); v = parse_eval; '(PClose,p2); e = parse_expr_opt >] -> EForIn(c,v,wrap_var e) , punion p p2
++@@ -324,7 +324,7 @@
++ and parse_block callb sp = parser
++ 	| [< e = callb; el,p = parse_block callb sp >] -> e :: el , p
++ 	| [< '(Next,_); el = parse_block callb sp >] -> el
++-	| [< '(BrClose,p); >] -> [] , p
+++	| [< '(BrClose,p) >] -> [] , p
++ 	| [< '(Eof,_) >] -> error Unclosed_parenthesis sp
++ 
++ and parse_expr_list p = parser
++@@ -351,7 +351,7 @@
++ 
++ and parse_import = parser
++ 	| [< '(Const (Ident name),_); p = parse_import2 name >] -> p
++-	| [< '(Binop OpMult,_); >] -> [] , None
+++	| [< '(Binop OpMult,_) >] -> [] , None
++ 
++ and parse_import2 name = parser
++ 	| [< '(Dot,_); p , n = parse_import >] -> name :: p , n
+diff -ruN mtasc-1.14.orig/fink/patches/include_dirs.patch mtasc-1.14/fink/patches/include_dirs.patch
+--- mtasc-1.14.orig/fink/patches/include_dirs.patch	1969-12-31 17:00:00.000000000 -0700
++++ mtasc-1.14/fink/patches/include_dirs.patch	2013-05-06 13:37:58.000000000 -0600
+@@ -0,0 +1,27 @@
++04_include_dirs.patch
++Paul Wise <pabs@debian.org>
++Add a couple of paths to the default classpath
++Keep the default path, needed during the test build
++--- a/ocaml/mtasc/main.ml
+++++ b/ocaml/mtasc/main.ml
++@@ -117,7 +117,8 @@
++ 	let base_path = normalize_path (try Extc.executable_path() with _ -> ".") in
++ 	let files = ref [] in
++ 	let time = Sys.time() in
++-	Plugin.class_path := [base_path;"";"/"];
+++	let prefix = "@FINKPREFIX@/share/mtasc/" in
+++	Plugin.class_path := [base_path;prefix;"";"/"];
++ 	let args_spec = [
++ 		("-pack",Arg.String (fun path -> files := read_package path @ !files),"<path> : compile all files in target package");
++ 		("-cp",Arg.String (fun path -> Plugin.class_path := parse_class_path base_path path @ !Plugin.class_path),"<paths> : add classpath");
++@@ -133,8 +135,8 @@
++ 		),": use precompiled mx package");
++ 	] @ !Plugin.options in
++ 	Arg.parse args_spec (fun file -> files := file :: !files) usage;
++-	Plugin.class_path := (base_path ^ "std/") :: !Plugin.class_path;
++-	if (match !GenSwf.version with Some x -> x >= 8 | None -> false) then Plugin.class_path := (base_path ^ "std8/") :: !Plugin.class_path;
+++	Plugin.class_path := (base_path ^ "std/") :: (prefix ^ "std/") :: !Plugin.class_path;
+++	if (match !GenSwf.version with Some x -> x >= 8 | None -> false) then Plugin.class_path := (base_path ^ "std8/") :: (prefix ^ "std8/") :: !Plugin.class_path;
++ 	Hashtbl.remove Lexer.keywords "add";
++ 	Parser.warning := (fun msg pos -> report ~do_exit:false (msg,pos) "Warning" (fun msg -> msg));
++ 	if !files = [] then begin
+diff -ruN mtasc-1.14.orig/fink/patches/makefile_kludges.patch mtasc-1.14/fink/patches/makefile_kludges.patch
+--- mtasc-1.14.orig/fink/patches/makefile_kludges.patch	1969-12-31 17:00:00.000000000 -0700
++++ mtasc-1.14/fink/patches/makefile_kludges.patch	2013-05-06 10:34:53.000000000 -0600
+@@ -0,0 +1,51 @@
++02_makefile_kludges.patch
++Paul Wise <pabs@debian.org>
++Kludge the Makefile so it is useful for Debian
++--- a/ocaml/mtasc/doc/Makefile
+++++ b/ocaml/mtasc/doc/Makefile
++@@ -1,14 +1,24 @@
++ DESTDIR=
++-PREFIX=/usr/local
+++PREFIX=@FINKPREFIX@
++-ZLIB=/usr/lib/libz.so
+++ZLIB=-lz
+++C=ocamlopt
+++O=cmx
+++A=cmxa
+++CU=
+++CP=camlp4o
+++#C=ocamlc
+++#O=cmo
+++#A=cma
+++#CU=-custom
+++#CP=camlp4
++ 
++ build:
++-	( cd ocaml/extc ; ocamlc extc_stubs.c ;\
++-	ocamlfind ocamlopt -package extlib -a -o extc.cmxa -cclib ../extc/extc_stubs.o -cclib $(ZLIB) extc.mli extc.ml )
++-	cd ocaml/swflib ; ocamlfind ocamlopt -package extlib -a -o swflib.cmxa -I .. -I ../extc swf.ml swfZip.ml actionScript.ml swfParser.ml
++-	( cd ocaml/mtasc ; ocamllex lexer.mll ;	ocamlopt -c expr.ml lexer.ml ; ocamlopt -c -pp camlp4o parser.ml ;\
++-	ocamlfind ocamlopt -package extlib -c -I .. -I ../extc -I ../swflib typer.ml class.ml plugin.ml genSwf.ml main.ml ;\
++-	ocamlfind ocamlopt -package extlib -linkpkg -o mtasc -cclib $(ZLIB) extLib.cmxa ../extc/extc.cmxa ../swflib/swflib.cmxa expr.cmx lexer.cmx parser.cmx typer.cmx class.cmx plugin.cmx genSwf.cmx main.cmx )
+++	( cd ocaml/extc ; $(C) extc_stubs.c ;\
+++	ocamlfind $(C) -package extlib -a -o extc.$(A) -cclib ../extc/extc_stubs.o -cclib $(ZLIB) extc.mli extc.ml )
+++	cd ocaml/swflib ; ocamlfind $(C) -package extlib -a -o swflib.$(A) -I .. -I ../extc as3.mli as3code.ml as3parse.ml swf.ml swfZip.ml actionScript.ml swfParser.ml
+++	( cd ocaml/mtasc ; ocamllex lexer.mll ; ocamlfind $(C) -c expr.ml lexer.ml ; ocamlfind $(C) -c -pp $(CP) parser.ml ;\
+++	ocamlfind $(C) -package extlib -c -I .. -I ../extc -I ../swflib typer.ml class.ml plugin.ml genSwf.ml main.ml ;\
+++	ocamlfind $(C) -package extlib -linkpkg $(CU) -o mtasc -cclib $(ZLIB) ../extc/extc.$(A) ../swflib/swflib.$(A) expr.$(O) lexer.$(O) parser.$(O) typer.$(O) class.$(O) plugin.$(O) genSwf.$(O) main.$(O) )
++ 
++ clean:
++ 	rm -f ocaml/*/*.cma ocaml/*/*.cmi ocaml/*/*.cmo ocaml/*/*.cmx
++@@ -16,9 +26,9 @@
++ 	rm -f ocaml/mtasc/lexer.ml ocaml/mtasc/mtasc
++ 
++ install:
++-	mkdir -p $(DESTDIR)$(PREFIX)/bin/ $(DESTDIR)$(PREFIX)/share/
+++	mkdir -p $(DESTDIR)$(PREFIX)/bin/ $(DESTDIR)$(PREFIX)/share/mtasc/
++ 	cp ocaml/mtasc/mtasc $(DESTDIR)$(PREFIX)/bin/
++-	cp -r ocaml/mtasc/std $(DESTDIR)$(PREFIX)/share/
++-	cp -r ocaml/mtasc/std8 $(DESTDIR)$(PREFIX)/share/
+++	cp -r ocaml/mtasc/std $(DESTDIR)$(PREFIX)/share/mtasc/
+++	cp -r ocaml/mtasc/std8 $(DESTDIR)$(PREFIX)/share/mtasc/
++ 
++ .PHONY: build install clean

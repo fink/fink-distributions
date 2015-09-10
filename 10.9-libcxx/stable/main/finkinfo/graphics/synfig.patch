@@ -1,0 +1,493 @@
+diff -Nurd -x'*~' synfig-0.64.0.orig/configure.ac synfig-0.64.0/configure.ac
+--- synfig-0.64.0.orig/configure.ac	2013-05-09 12:32:41.000000000 -0400
++++ synfig-0.64.0/configure.ac	2014-07-15 13:11:27.000000000 -0400
+@@ -159,28 +159,14 @@
+ 	with_magickpp="yes"
+ ])
+ if test $with_magickpp = "yes" ; then {
+-  AC_CHECK_HEADER([Magick++.h],[
+-  	MAGICKPP_LIBS="-lMagick++"
+-  	AC_DEFINE(HAVE_MAGICKPP,[], [ Define if Magick++ library is available ] )
+-  	AC_SUBST(MAGICKPP_LIBS)
+-  	AM_CONDITIONAL(HAVE_LIBMAGICKPP,true)
+-	AC_CHECK_LIB(Magick,OptimizeImageTransparency,[
+-		AC_DEFINE(HAVE_MAGICK_OPTIMIZE,[], [ Define if Magick++ defines OptimizeImageTransparency() ] )
+-		AM_CONDITIONAL(HAVE_MAGICK_OPTIMIZE,true)
++	PKG_CHECK_MODULES(MAGICKPP, Magick++ >= 6.4.2,[
++		with_magickpp="yes"
++                AM_CONDITIONAL(HAVE_LIBMAGICKPP,true)
+ 	],[
+-		AC_MSG_RESULT([ *** OptimizeImageTransparency() not available - need ImageMagick 6.3 or newer ])
+-		AM_CONDITIONAL(HAVE_MAGICK_OPTIMIZE,false)
++                with_magickpp="no"
++                AC_MSG_RESULT([ *** Magick++ Output target disabled])
++                AM_CONDITIONAL(HAVE_LIBMAGICKPP,false)
+ 	])
+-  ],[
+-	with_magickpp="no"
+-  	AC_MSG_RESULT([ *** Magick++ Output target disabled])
+-  	TARGET_MAGICKPP="no"
+-  	AM_CONDITIONAL(HAVE_LIBMAGICKPP,false)
+-	AM_CONDITIONAL(HAVE_MAGICK_OPTIMIZE,false)
+-  ])
+-} else {
+-	AM_CONDITIONAL(HAVE_LIBMAGICKPP,false)
+-	AM_CONDITIONAL(HAVE_MAGICK_OPTIMIZE,false)
+ } ; fi
+ 
+ 
+@@ -407,13 +393,13 @@
+ CONFIG_DEPS="$CONFIG_DEPS ETL"
+ 
+ 
+-PKG_CHECK_MODULES(LIBXMLPP, libxml++-2.6,[
+-	CONFIG_DEPS="$CONFIG_DEPS libxml++-2.6"
++PKG_CHECK_MODULES(LIBXMLPP, libxml++-2.6 libxml-2.0,[
++	CONFIG_DEPS="$CONFIG_DEPS libxml++-2.6 libxml-2.0"
+ ],[
+-	PKG_CHECK_MODULES(LIBXMLPP, libxml++-1.0,[
+-		CONFIG_DEPS="$CONFIG_DEPS libxml++-1.0"
++	PKG_CHECK_MODULES(LIBXMLPP, libxml++-1.0 libxml-2.0,[
++		CONFIG_DEPS="$CONFIG_DEPS libxml++-1.0 libxml-2.0"
+ 	],[
+-		AC_MSG_ERROR([ ** You need to install libxml++, either verison 2.6 or 1.0.])
++		AC_MSG_ERROR([ ** You need to install libxml++, either verison 2.6 or 1.0, and libxml.])
+ 	])
+ ])
+ 
+@@ -665,8 +651,8 @@
+ AC_SUBST(CONFIG_DEPS)
+ AC_SUBST(ETL_CFLAGS)
+ 
+-SYNFIG_LIBS="$VIMAGE_LIBS $LIBXMLPP_LIBS $LIBCAIRO_LIBS $LIBCAIROMM_LIBS $LIBPANGO_LIBS $ETL_LIBS $LIBSIGC_LIBS $LTLIBINTL"
+-SYNFIG_CFLAGS="$LIBXMLPP_CFLAGS $LIBCAIRO_CFLAGS $LIBCAIROMM_CFLAGS $LIBPANGO_CFLAGS $ETL_CFLAGS $LIBSIGC_CFLAGS $CONFIG_CFLAGS -DSYNFIG_NO_DEPRECATED -DLOCALEDIR=\\\"$localedir\\\""
++SYNFIG_LIBS="$VIMAGE_LIBS $LIBXMLPP_LIBS $MAGICKPP_LIBS $LIBCAIRO_LIBS $LIBCAIROMM_LIBS $LIBPANGO_LIBS $ETL_LIBS $LIBSIGC_LIBS $LTLIBINTL"
++SYNFIG_CFLAGS="$LIBXMLPP_CFLAGS $MAGICKPP_CFLAGS $LIBCAIRO_CFLAGS $LIBCAIROMM_CFLAGS $LIBPANGO_CFLAGS $ETL_CFLAGS $LIBSIGC_CFLAGS $CONFIG_CFLAGS -DSYNFIG_NO_DEPRECATED -DLOCALEDIR=\\\"$localedir\\\""
+ 
+ CONFIG_CFLAGS="`echo $CONFIG_CFLAGS | sed s/-mno-cygwin//g | sed s/-mwindows//g`"
+ SYNFIG_CFLAGS="`echo $SYNFIG_CFLAGS | sed s/-mno-cygwin//g | sed s/-mwindows//g`"
+@@ -760,6 +746,7 @@
+ "'$'"CXXFLAGS ------------------------> '$CXXFLAGS'
+ "'$'"SYNFIG_LIBS ---------------------> '$SYNFIG_LIBS'
+ "'$'"LIBXMLPP_LIBS -------------------> '$LIBXMLPP_LIBS'
++"'$'"MAGICKPP_LIBS -------------------> '$MAGICKPP_LIBS'
+ "'$'"LIBCAIRO_LIBS -------------------> '$LIBCAIRO_LIBS'
+ "'$'"LIBCAIROMM_LIBS -----------------> '$LIBCAIROMM_LIBS'
+ "'$'"LIBPANGO_LIBS -------------------> '$LIBPANGO_LIBS'
+diff -Nurd -x'*~' synfig-0.64.0.orig/src/modules/mod_magickpp/trgt_magickpp.cpp synfig-0.64.0/src/modules/mod_magickpp/trgt_magickpp.cpp
+--- synfig-0.64.0.orig/src/modules/mod_magickpp/trgt_magickpp.cpp	2013-05-09 12:32:41.000000000 -0400
++++ synfig-0.64.0/src/modules/mod_magickpp/trgt_magickpp.cpp	2014-07-15 12:49:35.000000000 -0400
+@@ -53,16 +53,16 @@
+ /* === M E T H O D S ======================================================= */
+ 
+ template <class Container>
+-MagickLib::Image* copy_image_list(Container& container)
++MagickCore::Image* copy_image_list(Container& container)
+ {
+ 	typedef typename Container::iterator Iter;
+-	MagickLib::Image* previous = 0;
+-	MagickLib::Image* first = NULL;
+-	MagickLib::ExceptionInfo exceptionInfo;
+-	MagickLib::GetExceptionInfo(&exceptionInfo);
++	MagickCore::Image* previous = 0;
++	MagickCore::Image* first = NULL;
++	MagickCore::ExceptionInfo exceptionInfo;
++	MagickCore::GetExceptionInfo(&exceptionInfo);
+ 	for (Iter iter = container.begin(); iter != container.end(); ++iter)
+ 	{
+-		MagickLib::Image* current;
++		MagickCore::Image* current;
+ 
+ 		try
+ 		{
+@@ -86,8 +86,8 @@
+ 
+ magickpp_trgt::~magickpp_trgt()
+ {
+-	MagickLib::ExceptionInfo exceptionInfo;
+-	MagickLib::GetExceptionInfo(&exceptionInfo);
++	MagickCore::ExceptionInfo exceptionInfo;
++	MagickCore::GetExceptionInfo(&exceptionInfo);
+ 
+ 	try
+ 	{
+@@ -118,7 +118,6 @@
+ 			for_each(images.begin(), images.end(), Magick::animationDelayImage(delay));
+ 
+ 			// optimize the images (only write the pixels that change from frame to frame
+-#ifdef HAVE_MAGICK_OPTIMIZE
+ 			// make a completely new image list
+ 			// this is required because:
+ 			//   RemoveDuplicateLayers wants a linked list of images, and removes some of them
+@@ -126,7 +125,7 @@
+ 			//   when we destroy our container, the image is re-freed, failing an assertion
+ 
+ 			synfig::info("copying image list");
+-			MagickLib::Image *image_list = copy_image_list(images);
++			MagickCore::Image *image_list = copy_image_list(images);
+ 
+ 			synfig::info("clearing old image list");
+ 			images.clear();
+@@ -169,18 +168,6 @@
+ 
+ 			synfig::info("recreating image list");
+ 			insertImages(&images, image_list);
+-#else
+-			synfig::info("not optimizing images");
+-			// DeconstructImages is available in ImageMagic 6.2.* but it doesn't take
+-			// the 'dispose' method into account, so for frames with transparency where
+-			// nothing is moving, we end up with objects disappearing when they shouldn't
+-
+-			// linkImages(images.begin(), images.end());
+-			// MagickLib::Image* new_images = DeconstructImages(images.begin()->image(),&exceptionInfo);
+-			// unlinkImages(images.begin(), images.end());
+-			// images.clear();
+-			// insertImages(&images, new_images);
+-#endif
+ 		}
+ 		else if (multiple_images)
+ 		{
+diff --git a/configure b/configure
+index cce948a..2c6bf01 100755
+--- a/configure
++++ b/configure
+@@ -22449,13 +22449,13 @@ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
+ 
+ 
+-		#include <tr1/unordered_map>
++		#include <unordered_map>
+ 
+ int
+ main ()
+ {
+ 
+-		std::tr1::unordered_map<int,int>::const_iterator iter;
++		std::unordered_map<int,int>::const_iterator iter;
+ 
+   ;
+   return 0;
+@@ -22469,6 +22469,48 @@ $as_echo "yes" >&6; }
+ $as_echo "#define HASH_MAP_CLASS HASH_MAP_NAMESPACE::unordered_map" >>confdefs.h
+ 
+ 
++$as_echo "#define HASH_MAP_H <unordered_map>" >>confdefs.h
++
++
++$as_echo "#define HASH_MAP_NAMESPACE std" >>confdefs.h
++
++
++$as_echo "#define FUNCTIONAL_H <functional>" >>confdefs.h
++
++
++$as_echo "#define FUNCTIONAL_HASH_ON_STRING 1" >>confdefs.h
++
++
++else
++
++	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
++$as_echo "no" >&6; }
++	{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for tr1/unordered_map<int,int>::const_iterator" >&5
++$as_echo_n "checking for tr1/unordered_map<int,int>::const_iterator... " >&6; }
++	cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++
++			#include <tr1/unordered_map>
++
++int
++main ()
++{
++
++			std::tr1::unordered_map<int,int>::const_iterator iter;
++
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_cxx_try_compile "$LINENO"; then :
++
++		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
++$as_echo "yes" >&6; }
++
++$as_echo "#define HASH_MAP_CLASS HASH_MAP_NAMESPACE::unordered_map" >>confdefs.h
++
++
+ $as_echo "#define HASH_MAP_H <tr1/unordered_map>" >>confdefs.h
+ 
+ 
+@@ -22483,9 +22525,9 @@ $as_echo "#define FUNCTIONAL_HASH_ON_STRING 1" >>confdefs.h
+ 
+ else
+ 
+-	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
++		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+ $as_echo "no" >&6; }
+-	for ac_header in ext/hash_map
++		for ac_header in ext/hash_map
+ do :
+   ac_fn_cxx_check_header_mongrel "$LINENO" "ext/hash_map" "ac_cv_header_ext_hash_map" "$ac_includes_default"
+ if test "x$ac_cv_header_ext_hash_map" = xyes; then :
+@@ -22508,7 +22550,7 @@ $as_echo "#define FUNCTIONAL_H <ext/functional>" >>confdefs.h
+ 
+ else
+ 
+-		as_fn_error $? "C++ compiler does not seem to support unordered containers" "$LINENO" 5
++			as_fn_error $? "C++ compiler does not seem to support unordered containers" "$LINENO" 5
+ 
+ fi
+ 
+@@ -22518,6 +22560,9 @@ done
+ fi
+ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+ 
++fi
++rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
++
+ # Check for unordered_set or hash_set headers
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking for unordered_set<int,int>::const_iterator" >&5
+ $as_echo_n "checking for unordered_set<int,int>::const_iterator... " >&6; }
+@@ -22525,13 +22570,13 @@ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+ /* end confdefs.h.  */
+ 
+ 
+-		#include <tr1/unordered_set>
++		#include <unordered_set>
+ 
+ int
+ main ()
+ {
+ 
+-		std::tr1::unordered_set<int,int>::const_iterator iter;
++		std::unordered_set<int,int>::const_iterator iter;
+ 
+   ;
+   return 0;
+@@ -22545,6 +22590,42 @@ $as_echo "yes" >&6; }
+ $as_echo "#define HASH_SET_CLASS HASH_SET_NAMESPACE::unordered_set" >>confdefs.h
+ 
+ 
++$as_echo "#define HASH_SET_H <unordered_set>" >>confdefs.h
++
++
++$as_echo "#define HASH_SET_NAMESPACE std" >>confdefs.h
++
++
++else
++
++	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
++$as_echo "no" >&6; }
++	{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for tr1/unordered_set<int,int>::const_iterator" >&5
++$as_echo_n "checking for tr1/unordered_set<int,int>::const_iterator... " >&6; }
++	cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++
++
++			#include <tr1/unordered_set>
++
++int
++main ()
++{
++
++			std::tr1::unordered_set<int,int>::const_iterator iter;
++
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_cxx_try_compile "$LINENO"; then :
++
++		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
++$as_echo "yes" >&6; }
++
++$as_echo "#define HASH_SET_CLASS HASH_SET_NAMESPACE::unordered_set" >>confdefs.h
++
++
+ $as_echo "#define HASH_SET_H <tr1/unordered_set>" >>confdefs.h
+ 
+ 
+@@ -22553,9 +22634,9 @@ $as_echo "#define HASH_SET_NAMESPACE std::tr1" >>confdefs.h
+ 
+ else
+ 
+-	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
++		{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+ $as_echo "no" >&6; }
+-	for ac_header in ext/hash_set
++		for ac_header in ext/hash_set
+ do :
+   ac_fn_cxx_check_header_mongrel "$LINENO" "ext/hash_set" "ac_cv_header_ext_hash_set" "$ac_includes_default"
+ if test "x$ac_cv_header_ext_hash_set" = xyes; then :
+@@ -22575,7 +22656,7 @@ $as_echo "#define HASH_SET_NAMESPACE __gnu_cxx" >>confdefs.h
+ 
+ else
+ 
+-		as_fn_error $? "C++ compiler does not seem to support unordered containers" "$LINENO" 5
++			as_fn_error $? "C++ compiler does not seem to support unordered containers" "$LINENO" 5
+ 
+ fi
+ 
+@@ -22585,6 +22666,9 @@ done
+ fi
+ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+ 
++fi
++rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
++
+ 
+ 
+ 
+diff --git a/configure.ac b/configure.ac
+index ea18b96..58b3593 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -514,25 +514,41 @@ AC_SUBST(SYNFIGLIB_DIR)
+ AC_MSG_CHECKING([for unordered_map<int,int>::const_iterator])
+ AC_COMPILE_IFELSE([
+ 	AC_LANG_PROGRAM([
+-		[#include <tr1/unordered_map>]
++		[#include <unordered_map>]
+ 	],[
+-		[std::tr1::unordered_map<int,int>::const_iterator iter;]
++		[std::unordered_map<int,int>::const_iterator iter;]
+ 	])],[
+ 	AC_MSG_RESULT([yes])
+ 	AC_DEFINE([HASH_MAP_CLASS],[HASH_MAP_NAMESPACE::unordered_map],[The template name for unordered maps.])
+-	AC_DEFINE([HASH_MAP_H],[<tr1/unordered_map>],[The header file to include for unordered maps.])
+-	AC_DEFINE([HASH_MAP_NAMESPACE],[std::tr1],[The namespace for unordered maps.])
+-	AC_DEFINE([FUNCTIONAL_H],[<tr1/functional>],[The header file for hash<T>.])
++	AC_DEFINE([HASH_MAP_H],[<unordered_map>],[The header file to include for unordered maps.])
++	AC_DEFINE([HASH_MAP_NAMESPACE],[std],[The namespace for unordered maps.])
++	AC_DEFINE([FUNCTIONAL_H],[<functional>],[The header file for hash<T>.])
+ 	AC_DEFINE([FUNCTIONAL_HASH_ON_STRING],[1],[Define to 1 if hash<T> needs to use T=String rather than T=char* to hash strings.])
+ ],[
+ 	AC_MSG_RESULT([no])
+-	AC_CHECK_HEADERS([ext/hash_map],[
+-		AC_DEFINE([HASH_MAP_CLASS],[HASH_MAP_NAMESPACE::hash_map],[The template name for unordered maps.])
+-		AC_DEFINE([HASH_MAP_H],[<ext/hash_map>],[The header file to include for unordered maps.])
+-		AC_DEFINE([HASH_MAP_NAMESPACE],[__gnu_cxx],[The namespace for unordered maps.])
+-		AC_DEFINE([FUNCTIONAL_H],[<ext/functional>],[The header file for hash<T>.])
++	AC_MSG_CHECKING([for tr1/unordered_map<int,int>::const_iterator])
++	AC_COMPILE_IFELSE([
++		AC_LANG_PROGRAM([
++			[#include <tr1/unordered_map>]
++		],[
++			[std::tr1::unordered_map<int,int>::const_iterator iter;]
++		])],[
++		AC_MSG_RESULT([yes])
++		AC_DEFINE([HASH_MAP_CLASS],[HASH_MAP_NAMESPACE::unordered_map],[The template name for unordered maps.])
++		AC_DEFINE([HASH_MAP_H],[<tr1/unordered_map>],[The header file to include for unordered maps.])
++		AC_DEFINE([HASH_MAP_NAMESPACE],[std::tr1],[The namespace for unordered maps.])
++		AC_DEFINE([FUNCTIONAL_H],[<tr1/functional>],[The header file for hash<T>.])
++		AC_DEFINE([FUNCTIONAL_HASH_ON_STRING],[1],[Define to 1 if hash<T> needs to use T=String rather than T=char* to hash strings.])
+ 	],[
+-		AC_MSG_ERROR([C++ compiler does not seem to support unordered containers])
++		AC_MSG_RESULT([no])
++		AC_CHECK_HEADERS([ext/hash_map],[
++			AC_DEFINE([HASH_MAP_CLASS],[HASH_MAP_NAMESPACE::hash_map],[The template name for unordered maps.])
++			AC_DEFINE([HASH_MAP_H],[<ext/hash_map>],[The header file to include for unordered maps.])
++			AC_DEFINE([HASH_MAP_NAMESPACE],[__gnu_cxx],[The namespace for unordered maps.])
++			AC_DEFINE([FUNCTIONAL_H],[<ext/functional>],[The header file for hash<T>.])
++		],[
++			AC_MSG_ERROR([C++ compiler does not seem to support unordered containers])
++		])
+ 	])
+ ])
+ 
+@@ -540,22 +556,36 @@ AC_COMPILE_IFELSE([
+ AC_MSG_CHECKING([for unordered_set<int,int>::const_iterator])
+ AC_COMPILE_IFELSE([
+ 	AC_LANG_PROGRAM([
+-		[#include <tr1/unordered_set>]
++		[#include <unordered_set>]
+ 	],[
+-		[std::tr1::unordered_set<int,int>::const_iterator iter;]
++		[std::unordered_set<int,int>::const_iterator iter;]
+ 	])],[
+ 	AC_MSG_RESULT([yes])
+ 	AC_DEFINE([HASH_SET_CLASS],[HASH_SET_NAMESPACE::unordered_set],[The template name for unordered sets.])
+-	AC_DEFINE([HASH_SET_H],[<tr1/unordered_set>],[The header file to include for unordered sets.])
+-	AC_DEFINE([HASH_SET_NAMESPACE],[std::tr1],[The namespace for unordered sets.])
++	AC_DEFINE([HASH_SET_H],[<unordered_set>],[The header file to include for unordered sets.])
++	AC_DEFINE([HASH_SET_NAMESPACE],[std],[The namespace for unordered sets.])
+ ],[
+ 	AC_MSG_RESULT([no])
+-	AC_CHECK_HEADERS([ext/hash_set],[
+-		AC_DEFINE([HASH_SET_CLASS],[HASH_SET_NAMESPACE::hash_set],[The template name for unordered sets.])
+-		AC_DEFINE([HASH_SET_H],[<ext/hash_set>],[The header file to include for unordered sets.])
+-		AC_DEFINE([HASH_SET_NAMESPACE],[__gnu_cxx],[The namespace for unordered sets.])
++	AC_MSG_CHECKING([for tr1/unordered_set<int,int>::const_iterator])
++	AC_COMPILE_IFELSE([
++		AC_LANG_PROGRAM([
++			[#include <tr1/unordered_set>]
++		],[
++			[std::tr1::unordered_set<int,int>::const_iterator iter;]
++		])],[
++		AC_MSG_RESULT([yes])
++		AC_DEFINE([HASH_SET_CLASS],[HASH_SET_NAMESPACE::unordered_set],[The template name for unordered sets.])
++		AC_DEFINE([HASH_SET_H],[<tr1/unordered_set>],[The header file to include for unordered sets.])
++		AC_DEFINE([HASH_SET_NAMESPACE],[std::tr1],[The namespace for unordered sets.])
+ 	],[
+-		AC_MSG_ERROR([C++ compiler does not seem to support unordered containers])
++		AC_MSG_RESULT([no])
++		AC_CHECK_HEADERS([ext/hash_set],[
++			AC_DEFINE([HASH_SET_CLASS],[HASH_SET_NAMESPACE::hash_set],[The template name for unordered sets.])
++			AC_DEFINE([HASH_SET_H],[<ext/hash_set>],[The header file to include for unordered sets.])
++			AC_DEFINE([HASH_SET_NAMESPACE],[__gnu_cxx],[The namespace for unordered sets.])
++		],[
++			AC_MSG_ERROR([C++ compiler does not seem to support unordered containers])
++		])
+ 	])
+ ])
+ 
+diff --git a/src/synfig/exception.h b/src/synfig/exception.h
+index 2132c16..2d3e06a 100644
+--- a/src/synfig/exception.h
++++ b/src/synfig/exception.h
+@@ -28,7 +28,7 @@
+ /* === H E A D E R S ======================================================= */
+ 
+ #include <stdexcept>
+-#include "string_decl.h"
++#include "string.h"
+ 
+ /* === M A C R O S ========================================================= */
+ 
+diff --git a/src/synfig/layer.h b/src/synfig/layer.h
+index 926f09c..f154f44 100644
+--- a/src/synfig/layer.h
++++ b/src/synfig/layer.h
+@@ -29,7 +29,6 @@
+ 
+ /* === H E A D E R S ======================================================= */
+ 
+-#include "string_decl.h"
+ #include <map>
+ #include <ETL/handle>
+ #include "real.h"
+diff --git a/src/synfig/target.h b/src/synfig/target.h
+index ab61c79..6843285 100644
+--- a/src/synfig/target.h
++++ b/src/synfig/target.h
+@@ -30,7 +30,7 @@
+ /* === H E A D E R S ======================================================= */
+ 
+ #include <sigc++/signal.h>
+-#include "string_decl.h"
++#include "string.h"
+ #include <utility>
+ #include <map>
+ #include <ETL/handle>
+diff --git a/src/synfig/time.h b/src/synfig/time.h
+index 5acc15e..dfcb1e1 100644
+--- a/src/synfig/time.h
++++ b/src/synfig/time.h
+@@ -28,7 +28,7 @@
+ 
+ /* === H E A D E R S ======================================================= */
+ 
+-#include "string_decl.h"
++#include "string.h"
+ 
+ /* === M A C R O S ========================================================= */
+ 

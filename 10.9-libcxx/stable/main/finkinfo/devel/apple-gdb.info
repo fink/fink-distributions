@@ -1,0 +1,169 @@
+Package: apple-gdb
+Version: 1824
+Revision: 3
+Maintainer: Jack Howarth <howarth.at.fink@gmail.com>
+License: GPL2
+Source: http://opensource.apple.com/tarballs/gdb/gdb-%v.tar.gz
+Source-MD5: d9522c29269de8c432a4886c498956db
+PatchFile: %n.patch
+PatchFile-MD5: 9e3c33d80289abaf1502d7c107a400c8 
+SourceDirectory: gdb-%v/src
+UseMaxBuildJobs: false
+SetCFLAGS: -O2 -g -I%p/include
+Conflicts: gdb (<= 7.6-1)
+Replaces: gdb (<= 7.6-1)
+Depends: <<
+	libgettext8-shlibs,
+	libncurses5-shlibs,
+	readline6-shlibs,
+	sqlite3-shlibs,
+	xcode (>= 4.7)
+<<
+BuildDepends: <<
+	fink (>= 0.24.12),
+	flex,
+	gettext-tools,
+	libgettext8-dev,
+	libncurses5,
+	readline6,
+	sqlite3-dev,
+	texinfo-legacy,
+	xcode (>= 4.7)
+<<
+ConfigureParams: <<
+	--disable-werror \
+	--datarootdir=%p/share \
+	--infodir=%p/share/info \
+	--mandir=%p/share/man  \
+	--with-docdir=%p/share/doc \
+	--with-libiconv-prefix=%p
+<<
+Architecture: x86_64, i386
+Distribution: 10.8, 10.9, 10.10, 10.11
+DocFiles: COPYING README
+InfoDocs: apple-gdb.info apple-gdbint.info
+Homepage: http://opensource.apple.com/source/gdb
+Description: The GNU Project Debugger with Apple mods
+DescDetail: <<
+Apple's GDB, the GNU Project debugger, allows you to see what is going on
+`inside' another program while it executes -- or what another program
+was doing at the moment it crashed.
+<<
+PatchScript: <<
+	#!/bin/sh -ev
+	if [ "`uname -r | cut -d. -f1`" -gt "13" ]; then
+		perl -pi -e 's|machine/setjmp.h|setjmp.h|g' gdb/macosx/macosx-nat-inferior.c
+	fi
+	perl -pi -e 's|-mmacosx-version-min=10.7||g' gdb/config/i386/macosx.mh libiberty/config/mh-macosx bfd/configure.host
+	# hack around non-functional --with-included-gettext=no to not use bundled intl
+	perl -pi -e 's|INTL = \@INTLLIBS\@|INTL = -L%p/lib -lintl|g' gdb/Makefile.in
+	perl -pi -e 's|INTL_DEP = \@INTLDEPS\@|INTL_DEP =|g' gdb/Makefile.in
+	perl -pi -e 's|INTL_DIR = ../intl|INTL_DIR =|g' gdb/Makefile.in
+	# hack Makefile.in's to build or use bundled readline except for creating gdb.info
+	perl -pi -e 's|READLINE = \$\(READLINE_DIR\)/libreadline.a|READLINE = -L%p/lib -lreadline|g' gdb/Makefile.in
+	perl -pi -e 's|READLINE_DEP = ../readline/libreadline.a|READLINE_DEP =|g' gdb/Makefile.in
+	perl -pi -e 's|READLINE_DIR = ../readline|READLINE_DIR =|g' gdb/Makefile.in
+	perl -pi -e 's|\$\(readline_h\)||g' gdb/Makefile.in
+	perl -pi -e 's|\$\(readline_history_h\)||g' gdb/Makefile.in
+	perl -pi -e 's|\$\(readline_tilde_h\)||g' gdb/Makefile.in
+	perl -pi -e 's|if readline|if 0||g' Makefile.in
+	rm -fr intl readline/*.h readline/*.c
+
+	# add wrapper script to detect required plist change for non-root use on darwin12 or later
+	sed 's|@FINKPREFIX@|%p|g' < %{PatchFile} | patch -p1
+<<
+CompileScript: <<
+	#!/bin/bash -ev
+	./configure %c
+	make all-gdb MAKEINFO=%p/opt/texinfo-legacy/bin/makeinfo LEXLIB=%p/lib/libfl.a
+<<
+InstallScript:<<
+	#!/bin/bash -ev
+	cd gdb
+	# hack around incorrectly set Makefile
+	perl -pi -e 's|prefix = /usr/local|prefix = %p|g' Makefile
+	make install DESTDIR=%d MAKEINFO=%p/opt/texinfo-legacy/bin/makeinfo LEXLIB=%p/lib/libfl.a
+	cd %i/share/info
+	rm annotate.info stabs.info 
+	infofiles="1 2 3 4"
+	for infofile in $infofiles ; do
+		mv gdb.info-$infofile apple-gdb.info-$infofile
+	done
+	mv gdb.info apple-gdb.info
+	mv gdbint.info apple-gdbint.info
+	mv gdbint.info-1 apple-gdbint.info-1
+	mv gdbint.info-2 apple-gdbint.info-2
+
+	# It seems likely that the libbfd, libopcodes, libiberty and their headers may
+	# also exist in some other packages
+	rm -rf %i/lib %i/include
+
+	# Rename installed gdb and install wrapper
+	mkdir -p %i/lib/apple-gdb
+	mv %i/bin/gdb %i/lib/apple-gdb/gdb
+	/usr/bin/install -m 755 %b/gdb-wrapper %i/bin/gdb
+<<
+PostInstScript: <<
+	# Make the executables sgid procmod
+	chgrp procmod %p/lib/apple-gdb/gdb
+	chmod g+s %p/lib/apple-gdb/gdb
+	update-alternatives --install %p/share/info/gdb.info gdb.info %p/share/info/apple-gdb.info 40 
+	update-alternatives --install %p/share/info/gdbint.info gdbint.info %p/share/info/apple-gdbint.info 40
+<<
+PreRmScript: <<
+	if [ $1 != "upgrade" ]; then
+		infofiles="gdb.info gdbint.info"
+		for infofile in $infofiles ; do
+			update-alternatives --remove $infofile %p/share/info/apple-$infofile
+		done
+	fi
+<<
+DescPackaging: <<
+Set UseMaxBuildJobs false as xm.h can be created out of order.
+<<
+DescUsage: <<
+To execute gdb without using sudo, the binary needs to be codesigned
+on each machine that it is installed on. This requires the creation
+of a certificate and signing of the gdb binary with the following
+steps.
+
+1) Open the application 'Keychain Access' from the Utilities folder.
+2) In the Keychain Access application, select the 'Create a 
+   Certificate...' submenu item from the 'Keychain Access' menu and
+   the 'Certificate Assistant' submenu.
+3) In the 'Certificate Assistant' panel, enter 'gdb-cert' for the name
+   of the certificate and leave the Identity Type as 'Self Signed Root'.
+   Set the Certificate Type to 'Code Signing' and enable the 'Let me
+   override defaults' checkbox. Click the 'Continue'  button. You may
+   wish to lengthen the default 365 day lifespan of the certificate
+   to 3650 days.
+4) Continue clicking the 'Continue' buttons that appear until you see
+   the panel to 'Specify a Location For The Certificate'. Set the
+   Keychain to 'System' at this point. If you can't store the
+   certificate in the 'System' keychain, create it in the 'login'
+   keychain, then export it. You can then import it into the 'System'
+   keychain.
+5) Select the 'System' entry in the Keychains listing of the Keychain
+   Access window. Select your newly created 'gdb-cert' certificate and
+   select the 'Get Info' contextual menu item, expand the 'Trust'
+   item and set 'Code Signing' to '"Always Trust'. 
+6) Quit the 'Keychain Access' application.
+7) On darwin12 or later, you must edit the line in the file
+   /System/Library/LaunchDaemons/com.apple.taskgated.plist from
+
+                   <string>-s</string>
+
+   to
+
+                   <string>-sp</string>
+
+   adding the '-p' option. Due to kernel caching, a restart is needed
+   for the changes to take effect.
+8) After the restart, the actual codesigning should be done with the
+   command 'sudo codesign -s gdb-cert %p/lib/apple-gdb/gdb'. Note it 
+   can take over five minutes for the codesigning to complete.
+<<
+DescPort: <<
+This packaging provides the deprecated Apple gdb for use with Xcode 4.7 or later.
+It both BuildDepends and Depends on xcode (>= 4.7) to prevent displacing the system gdb.
+<<
