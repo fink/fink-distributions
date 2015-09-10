@@ -1,0 +1,204 @@
+Info4: <<
+Package: squid-unified
+Version: 3.4.13
+Revision: 1
+Epoch: 1
+Description: Proxy caching server
+License: GPL
+Maintainer: Benjamin Reed <squid@fink.raccoonfink.com>
+
+Depends: <<
+	cyrus-sasl2-shlibs,
+	daemonic,
+	db53-aes-shlibs,
+	libtool2-shlibs,
+	nettle4a-shlibs,
+	openldap24-shlibs,
+	openssl100-shlibs
+<<
+BuildDepends: <<
+	cyrus-sasl2-dev,
+	db53-aes,
+	fink (>= 0.32),
+	fink-package-precedence,
+	libtool2,
+	nettle4a,
+	openldap24-dev,
+	openssl100-dev,
+	pkgconfig
+<<
+Replaces: <<
+	squid (<< %v-%r),
+	squid-ssl (<< %v-%r)
+<<
+
+Source: http://www.squid-cache.org/Versions/v3/3.4/squid-%v.tar.xz
+Source-MD5: a5f6c978b2d7a99b161c8275e1acb470
+Source-Checksum: SHA1(a8f6760fd21f27a17f91db2777d26cbca7bd888e)
+PatchFile: squid-unified.patch
+PatchFile-MD5: dce93b3c9f242bb4c7cac45d7a9e6926
+PatchScript: <<
+	patch -p1 < %{PatchFile}
+	# Remove 'getconf' commands that are broken on Xcode5
+	perl -pi  -e 's/(.*L.*getconf.*buildmodel.*)/#\1/g' configure
+<<
+
+SetLIBS: -L%p/lib -lresolv
+# rock is removed from storeio list due to test failure:
+# http://bugs.squid-cache.org/show_bug.cgi?id=3805
+ConfigureParams: <<
+--enable-dependency-tracking \
+--disable-shared \
+--enable-static \
+--enable-storeio="aufs diskd ufs" \
+\
+--enable-async-io \
+--enable-auth \
+--enable-basic-auth-helpers \
+--enable-disk-io \
+--enable-carp \
+--enable-delay-pools \
+--enable-digest-auth-helpers \
+--enable-external-acl-helpers \
+--enable-htcp \
+--enable-icap-client \
+--enable-icmp \
+--enable-ipfw-transparent \
+--enable-kqueue \
+--enable-negotiate-auth-helpers \
+--enable-ntlm-auth-helpers \
+--enable-referer-log \
+--enable-removal-policies \
+--enable-snmp \
+--enable-ssl \
+--enable-useragent-log \
+--enable-x-accelerator-vary \
+\
+--disable-poll \
+--disable-arp-acl \
+\
+--with-aio \
+--with-large-files \
+--with-openssl=%p \
+--with-pthreads \
+\
+--mandir=%p/share/man \
+--libexecdir=%p/sbin \
+--with-krb5-config=no
+<<
+GCC: 4.0
+CompileScript: <<
+	#!/bin/sh -ex
+
+	perl -pi -e "s,newLength < 0 \|\| ,," src/String.cci
+	perl -pi -e "s,class AuthUserHashPointer,struct AuthUserHashPointer," src/auth/Gadgets.h
+	perl -pi -e "s,class AuthUserHashPointer,struct AuthUserHashPointer," src/auth/User.h
+	perl -pi -e "s,s->s = host,(s->s = host)," src/cache_cf.cc
+#	perl -pi -e "s,if (crlfBeg > 0),// if (crlfBeg > 0)," src/ChunkedCodingParser.cc
+#	perl -pi -e "s|; //theTrailer.append|// ; //theTrailer.append|" src/ChunkedCodingParser.cc
+
+	export lt_cv_sys_max_cmd_len=65536
+	./configure %c
+	make DEFAULT_SWAP_DIR=%p/var/cache/squid DEFAULT_LOG_PREFIX=%p/var/log/squid DEFAULT_MIB_PATH=%p/share/doc/%n DEFAULT_PID_FILE=%p/var/run/squid.pid
+	fink-package-precedence .
+<<
+
+InfoTest: <<
+	TestDepends: <<
+		cppunit1.12.1
+	<<
+	TestScript: <<
+		#!/bin/sh -ev
+		make -j1 check || exit 2
+		fink-package-precedence .
+	<<
+<<
+InstallScript: <<
+make -j1 install DESTDIR=%d DEFAULT_SWAP_DIR=%p/var/cache/squid DEFAULT_LOG_PREFIX=%p/var/log/squid DEFAULT_MIB_PATH=%p/share/doc/%n DEFAULT_PID_FILE=%p/var/run/squid.pid
+install -d -m 755 %i/var/cache/squid
+install -d -m 755 %i/var/log/squid
+install -d -m 755 %i/share/doc/%n
+mv %i/share/mib.txt %i/share/doc/%n/mib.txt
+install -d -m 755 %i/etc
+cp src/squid.conf.default %i/etc/squid.conf
+cp src/mime.conf.default %i/etc/mime.conf
+cp tools/cachemgr.conf %i/etc/cachemgr.conf
+<<
+DocFiles: CO* CREDITS ChangeLog QUICKSTART README* RELEASENOTES*
+SplitOff: <<
+	Package: squid
+	Depends: %N (= %e:%v-%r)
+	RuntimeDepends: fink-obsolete-packages
+	Description: OBSOLETE use package 'squid-unified' instead
+	DocFiles: CONTRIBUTORS COPYING COPYRIGHT CREDITS ChangeLog INSTALL QUICKSTART README RELEASENOTES.html
+<<
+SplitOff2: <<
+	Package: squid-ssl
+	Depends: %N (= %e:%v-%r)
+	RuntimeDepends: fink-obsolete-packages
+	Description: OBSOLETE use package 'squid-unified' instead
+	DocFiles: CONTRIBUTORS COPYING COPYRIGHT CREDITS ChangeLog INSTALL QUICKSTART README RELEASENOTES.html
+<<
+
+PostInstScript: <<
+if [ ! -d %p/var/cache/squid/00 ]; then
+	chown -R nobody "%p/var/cache/squid" "%p/var/log/squid"
+	%p/sbin/squid -z || :
+fi
+<<
+PreRmScript: <<
+# clean up the old one
+daemonic remove squid >/dev/null 2>&1 || :
+
+if [ $1 != "upgrade" ]; then
+	# remove the daemonic entry if we're uninstalling
+	daemonic remove squid-unified
+fi
+<<
+ConfFiles: <<
+	%p/etc/cachemgr.conf
+	%p/etc/mime.conf
+	%p/etc/squid.conf
+<<
+DaemonicFile: <<
+<service>
+<description>Squid proxy cache</description>
+<message>Squid proxy cache</message>
+
+<daemon name="squid">
+<executable checkexit="true">%p/sbin/squid</executable>
+<configfile>%p/etc/squid.conf</configfile>
+<pidfile>%p/var/run/squid.pid</pidfile>
+</daemon>
+
+</service>
+<<
+
+Homepage: http://www.squid-cache.org/
+DescDetail: <<
+Squid is a high-performance proxy caching server for Web clients,
+supporting FTP, gopher, and HTTP data objects. Unlike traditional
+caching software, Squid handles all requests in a single,
+non-blocking, I/O-driven process. Squid keeps meta data and especially
+hot objects cached in RAM, caches DNS lookups, supports non-blocking
+DNS lookups, and implements negative caching of failed requests.
+<<
+DescPackaging: <<
+The only changes made to the default configuration is to enable local
+access to the squid proxy (ie, connections from localhost).  By
+default, squid is configured to listen on port 3128 for proxy
+connections.  To change this, add or change the http_port line to the
+port you want squid to listen on.
+<<
+DescPort: <<
+nieder: bumped to 3.4.2 to deal with clang compiler errors.
+
+tests/testRock fails:
+http://bugs.squid-cache.org/show_bug.cgi?id=3805
+so turn off 'rock' as an allowed storeio.
+
+turn off kerberos since it fails on 10.9
+http://bugs.squid-cache.org/show_bug.cgi?id=4023
+<<
+<<
+
