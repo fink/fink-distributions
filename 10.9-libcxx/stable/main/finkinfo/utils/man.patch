@@ -1,0 +1,394 @@
+diff -Naur man-1.6e.orig/configure man-1.6e/configure
+--- man-1.6e.orig/configure	2006-05-01 17:56:14.000000000 +0000
++++ man-1.6e/configure	2007-04-28 01:08:05.000000000 +0000
+@@ -827,6 +827,8 @@
+ then
+   DEF_NLSPATH="/usr/share/locale/%L/%N:/usr/lib/locale/%N/%L"
+   deflocalepath=`echo $NLSPATH:$DEF_NLSPATH | sed 's/:/ /g'`
++  # Let the builder override it.
++  deflocale=$NLSPATHNAME
+   for i in $deflocalepath; do
+     if [ x$deflocale = x ]; then
+       tstdir=`echo $i | sed -e 's/%N//; s/%L//'`
+@@ -876,7 +878,7 @@
+     locale=$deflocale
+   fi
+   echo
+-  echo "Using localedir $locale"
++  echo "Installing NLS catalog at $locale"
+ fi
+ 
+ if [ x$suid = x -a x$sgid = x ]; then
+@@ -1281,6 +1283,7 @@
+   echo "$ce"                                                    >> $infile
+   echo "Creating $infile from $infile.in"
+   sed -e '
++s,@prefix@,$prefix,
+ s,@version@,$version,
+ s,@CC@,$CC,
+ s,@BUILD_CC@,$BUILD_CC,
+diff -Naur man-1.6e.orig/gencat/gencat.c man-1.6e/gencat/gencat.c
+--- man-1.6e.orig/gencat/gencat.c	2006-08-02 18:11:44.000000000 +0000
++++ man-1.6e/gencat/gencat.c	2007-04-28 01:53:58.000000000 +0000
+@@ -43,6 +43,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <sys/types.h>
++#ifdef NOT_POSIX
+ #ifdef SYSV
+ #include <sys/fcntl.h>
+ #include <string.h>
+@@ -54,6 +55,11 @@
+ #include <unistd.h>
+ #endif
+ #include <sys/file.h>
++#else /* ! NOT_POSIX */
++#include <string.h>
++#include <fcntl.h>
++#include <unistd.h>
++#endif /* ! NOT_POSIX */
+ #include <sys/stat.h>
+ #include "gencat.h"
+ 
+diff -Naur man-1.6e.orig/gencat/genlib.c man-1.6e/gencat/genlib.c
+--- man-1.6e.orig/gencat/genlib.c	2006-08-02 18:11:44.000000000 +0000
++++ man-1.6e/gencat/genlib.c	2007-04-28 02:00:35.000000000 +0000
+@@ -49,6 +49,7 @@
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
++#ifdef NOT_POSIX
+ #ifdef SYSV
+ #include <sys/types.h>
+ #include <unistd.h>
+@@ -73,6 +74,11 @@
+ #endif
+ 
+ #include <sys/file.h>
++#else /* ! NOT_POSIX */
++#include <sys/types.h>
++#include <unistd.h>
++#include <string.h>
++#endif /* ! NOT_POSIX */
+ #include <ctype.h>
+ #include "msgcat.h"
+ #include "gencat.h"
+@@ -85,6 +91,15 @@
+ #define L_INCR SEEK_CUR
+ #endif
+ 
++#ifndef NOT_POSIX
++#ifndef bcopy
++#define bcopy(src, dst, length) memmove(dst, src, length)
++#endif
++#ifndef bzero
++#define bzero(b, length) memset(b, '\0', length)
++#endif
++#endif /* ! NOT_POSIX */
++
+ static char *curline = NULL;
+ static long lineno = 0;
+ 
+@@ -92,7 +107,7 @@
+ char *cptr;
+ char *msg;
+ {
+-    fprintf(stderr, "gencat: %s on line %d\n", msg, lineno);
++    fprintf(stderr, "gencat: %s on line %ld\n", msg, lineno);
+     fprintf(stderr, "%s\n", curline);
+     if (cptr) {
+ 	char	*tptr;
+diff -Naur man-1.6e.orig/man2html/Makefile.in man-1.6e/man2html/Makefile.in
+--- man-1.6e.orig/man2html/Makefile.in	2006-04-25 06:44:15.000000000 +0000
++++ man-1.6e/man2html/Makefile.in	2007-04-28 01:08:05.000000000 +0000
+@@ -1,7 +1,7 @@
+ CC = @CC@
+ CFLAGS += -Wall -Wstrict-prototypes -Wmissing-prototypes
+ OBJECTS = man2html.o cgibase.o abbrev.o strdefs.o
+-bindir = $(DESTDIR)$(PREFIX)/usr/bin
++bindir = $(DESTDIR)$(PREFIX)@bindir@
+ mandir = $(DESTDIR)$(PREFIX)@mandir@
+ vardir = $(DESTDIR)$(PREFIX)/var
+ httpdir = $(DESTDIR)$(PREFIX)/home/httpd
+diff -Naur man-1.6e.orig/manpager.in man-1.6e/manpager.in
+--- man-1.6e.orig/manpager.in	1970-01-01 00:00:00.000000000 +0000
++++ man-1.6e/manpager.in	2006-03-15 23:07:55.000000000 +0000
+@@ -0,0 +1,13 @@
++#! /bin/sh
++# Fink specific script to convert Japanese texts
++set -e
++pager=${FINK_MANPAGER-${MANPAGER-${PAGER-'less -isr'}}}
++case ${LC_ALL-${LANG}} in
++    ja*.SJIS|ja*.sjis|ja*.PCK) filter='@prefix@/bin/nkf -Es';;
++    ja*.UTF-8|ja*.utf-8) filter='@prefix@/bin/nkf -Ew';;
++    *) exec $pager "$@";;
++esac
++case $# in
++    0) $filter | $pager;;
++    *) for f in "$@"; do $filter "$f" | $pager; done;;
++esac
+diff -Naur man-1.6e.orig/msgs/Makefile.in man-1.6e/msgs/Makefile.in
+--- man-1.6e.orig/msgs/Makefile.in	2006-06-09 21:55:08.000000000 +0000
++++ man-1.6e/msgs/Makefile.in	2007-04-28 01:19:58.000000000 +0000
+@@ -1,6 +1,8 @@
++GENERATED = mess.ja_JP.SJIS mess.ja_JP.UTF-8 mess.zh_TW
+ 
+-all:	../src/makemsg gencat
+-	@for i in mess.??; do ../src/makemsg -c $$i $$i.catin; \
++all:	../src/makemsg gencat $(GENERATED)
++	@set -ex; for cs in mess.*.codeset; do i=`expr "$$cs" : '\\(mess\..*\\)\\.codeset'`; \
++	../src/makemsg -c $$i $$i.catin; \
+ 	cat $$i.codeset $$i.catin > $$i.catin2; \
+ 	echo "==== Making $$i.cat ====" ;\
+ 	LC_ALL=en_US.UTF-8 ./gencat $$i.cat $$i.catin2; done; \
+@@ -10,7 +12,7 @@
+ 	sh ./inst.sh "@languages@" "$(DESTDIR)@locale@"
+ 
+ clean:
+-	rm -f gencat gencat.out core *~ *.cat *.catin *.catin2
++	rm -f gencat gencat.out core *~ *.cat *.catin *.catin2 $(GENERATED) *.tmp*
+ 
+ spotless:
+ 	rm -f Makefile
+@@ -21,7 +23,7 @@
+ # The source in ../gencat is OK for libc4 and libc5, not for glibc.
+ gencat:
+ 	if [ -f /usr/bin/gencat ]; then \
+-		if gencat gencat.out gencat.in 2>/dev/null; then \
++		if /usr/bin/gencat gencat.out gencat.in 2>/dev/null; then \
+ 			ln -s /usr/bin/gencat gencat; \
+ 		else \
+ 			cp gencat207fix.sh gencat; \
+@@ -32,3 +34,12 @@
+ 		make; \
+ 	fi
+ 
++mess.ja_JP.SJIS: mess.ja gencat
++	$(SHELL) ./mksjismess.sh
++
++mess.ja_JP.UTF-8: mess.ja
++	iconv -f euc-jp -t utf-8 $< > $@.tmp && mv $@.tmp $@
++
++mess.zh_TW: mess.zh_TW.UTF-8 gencat
++	$(SHELL) ./mkbig5mess.sh
++
+diff -Naur man-1.6e.orig/msgs/big5test.in man-1.6e/msgs/big5test.in
+--- man-1.6e.orig/msgs/big5test.in	1970-01-01 00:00:00.000000000 +0000
++++ man-1.6e/msgs/big5test.in	2006-03-17 12:29:11.000000000 +0000
+@@ -0,0 +1,6 @@
++$ codeset=big5
++$quote "
++$set 1
++1 "¥\\""
++2 "¥\a"
++3 "¥\"
+diff -Naur man-1.6e.orig/msgs/mess.ja_JP.SJIS.codeset man-1.6e/msgs/mess.ja_JP.SJIS.codeset
+--- man-1.6e.orig/msgs/mess.ja_JP.SJIS.codeset	1970-01-01 00:00:00.000000000 +0000
++++ man-1.6e/msgs/mess.ja_JP.SJIS.codeset	2006-03-17 10:50:25.000000000 +0000
+@@ -0,0 +1 @@
++$ codeset=shift_jis
+diff -Naur man-1.6e.orig/msgs/mess.ja_JP.UTF-8.codeset man-1.6e/msgs/mess.ja_JP.UTF-8.codeset
+--- man-1.6e.orig/msgs/mess.ja_JP.UTF-8.codeset	1970-01-01 00:00:00.000000000 +0000
++++ man-1.6e/msgs/mess.ja_JP.UTF-8.codeset	2006-03-17 10:18:37.000000000 +0000
+@@ -0,0 +1 @@
++$ codeset=utf-8
+diff -Naur man-1.6e.orig/msgs/mess.zh_TW.UTF-8.codeset man-1.6e/msgs/mess.zh_TW.UTF-8.codeset
+--- man-1.6e.orig/msgs/mess.zh_TW.UTF-8.codeset	1970-01-01 00:00:00.000000000 +0000
++++ man-1.6e/msgs/mess.zh_TW.UTF-8.codeset	2006-03-17 12:15:19.000000000 +0000
+@@ -0,0 +1 @@
++$ codeset=utf-8
+diff -Naur man-1.6e.orig/msgs/mess.zh_TW.codeset man-1.6e/msgs/mess.zh_TW.codeset
+--- man-1.6e.orig/msgs/mess.zh_TW.codeset	1970-01-01 00:00:00.000000000 +0000
++++ man-1.6e/msgs/mess.zh_TW.codeset	2006-03-17 12:31:01.000000000 +0000
+@@ -0,0 +1 @@
++$ codeset=big5
+diff -Naur man-1.6e.orig/msgs/mkbig5mess.sh man-1.6e/msgs/mkbig5mess.sh
+--- man-1.6e.orig/msgs/mkbig5mess.sh	1970-01-01 00:00:00.000000000 +0000
++++ man-1.6e/msgs/mkbig5mess.sh	2006-03-17 12:30:19.000000000 +0000
+@@ -0,0 +1,13 @@
++#! /bin/sh
++set -e
++LANG=C; export LANG
++LC_ALL=C; export LC_ALL
++trap 'rm -f mess.zh_TW.tmp* big5test.err big5test.out' 0
++
++sed 's/@/@a/g;s/\\/@b/g' mess.zh_TW.UTF-8 > mess.zh_TW.tmp1
++iconv -f utf-8 -t big5 mess.zh_TW.tmp1 > mess.zh_TW.tmp2
++if ./gencat big5test.out big5test.in 2> big5test.err && test ! -s big5test.err; then
++    sed 's/@b/\\/g;s/@a/@/g' mess.zh_TW.tmp2 > mess.zh_TW
++else
++    sed 's/\\/\\\\/g;s/@b/\\/g;s/@a/@/g' mess.zh_TW.tmp2 > mess.zh_TW
++fi
+diff -Naur man-1.6e.orig/msgs/mksjismess.sh man-1.6e/msgs/mksjismess.sh
+--- man-1.6e.orig/msgs/mksjismess.sh	1970-01-01 00:00:00.000000000 +0000
++++ man-1.6e/msgs/mksjismess.sh	2006-03-17 11:55:35.000000000 +0000
+@@ -0,0 +1,13 @@
++#! /bin/sh
++set -e
++LANG=C; export LANG
++LC_ALL=C; export LC_ALL
++trap 'rm -f mess.ja.tmp* sjistest.err sjistest.out' 0
++
++sed 's/@/@a/g;s/\\/@b/g' mess.ja > mess.ja.tmp1
++iconv -f euc-jp -t shift_jis mess.ja.tmp1 > mess.ja.tmp2
++if ./gencat sjistest.out sjistest.in 2> sjistest.err && test ! -s sjistest.err; then
++    sed 's/@b/\\/g;s/@a/@/g' mess.ja.tmp2 > mess.ja_JP.SJIS
++else
++    sed 's/\\/\\\\/g;s/@b/\\/g;s/@a/@/g' mess.ja.tmp2 > mess.ja_JP.SJIS
++fi
+diff -Naur man-1.6e.orig/msgs/sjistest.in man-1.6e/msgs/sjistest.in
+--- man-1.6e.orig/msgs/sjistest.in	1970-01-01 00:00:00.000000000 +0000
++++ man-1.6e/msgs/sjistest.in	2006-03-17 11:22:59.000000000 +0000
+@@ -0,0 +1,6 @@
++$ codeset=shift_jis
++$quote "
++$set 1
++1 "•\\""
++2 "•\a"
++3 "•\"
+diff -Naur man-1.6e.orig/src/man.conf.fink.in man-1.6e/src/man.conf.fink.in
+--- man-1.6e.orig/src/man.conf.fink.in	1970-01-01 00:00:00.000000000 +0000
++++ man-1.6e/src/man.conf.fink.in	2006-03-15 23:05:38.000000000 +0000
+@@ -0,0 +1,142 @@
++# man.conf from @version@
++#
++# For more information about this file, see the man pages man(1)
++# and man.conf(5).
++#
++# This file is read by man to configure the default manpath (also used
++# when MANPATH contains an empty substring), to find out where the cat
++# pages corresponding to given man pages should be stored,
++# and to map each PATH element to a manpath element.
++# It may also record the pathname of the man binary. [This is unused.]
++# The format is:
++#
++# MANBIN		pathname
++# MANPATH		manpath_element	[corresponding_catdir]
++# MANPATH_MAP		path_element	manpath_element
++#
++# If no catdir is given, it is assumed to be equal to the mandir
++# (so that this dir has both man1 etc. and cat1 etc. subdirs).
++# This is the traditional Unix setup.
++# Certain versions of the FSSTND recommend putting formatted versions
++# of /usr/.../man/manx/page.x into /var/catman/.../catx/page.x.
++# The keyword FSSTND will cause this behaviour.
++# Certain versions of the FHS recommend putting formatted versions of
++# /usr/.../share/man/[locale/]manx/page.x into
++# /var/cache/man/.../[locale/]catx/page.x.
++# The keyword FHS will cause this behaviour (and overrides FSSTND).
++# Explicitly given catdirs override.
++#
++@fsstnd@FSSTND
++@fhs@FHS
++#
++# This file is also read by man in order to find how to call nroff, less, etc.,
++# and to determine the correspondence between extensions and decompressors.
++#
++# MANBIN		/usr/local/bin/man
++#
++# Every automatically generated MANPATH includes these fields
++#
++MANPATH /usr/share/man
++MANPATH	/usr/local/man
++MANPATH	/usr/X11R6/man
++#
++# Uncomment if you want to include one of these by default
++#
++#MANPATH /opt/teTeX/man
++#MANPATH /usr/lib/perl5/man
++#MANPATH /usr/share/perl5/man
++#MANPATH /usr/share/tcl-8.0/man
++#MANPATH /usr/share/tk-8.0/man
++#MANPATH /usr/share/tix-4.1/man
++#MANPATH /usr/share/coas/man
++#MANPATH /usr/kerberos/man
++#
++# Set up PATH to MANPATH mapping
++#
++# If people ask for "man foo" and have "/dir/bin/foo" in their PATH
++# and the docs are found in "/dir/man", then no mapping is required.
++#
++# The below mappings are superfluous when the right hand side is
++# in the mandatory manpath already, but will keep man from statting
++# lots of other nearby files and directories.
++#
++MANPATH_MAP	/bin			/usr/share/man
++MANPATH_MAP	/sbin			/usr/share/man
++MANPATH_MAP	/usr/bin		/usr/share/man
++MANPATH_MAP	/usr/sbin		/usr/share/man
++MANPATH_MAP	/usr/local/bin		/usr/local/man
++MANPATH_MAP	/usr/local/sbin		/usr/local/man
++MANPATH_MAP	/usr/X11R6/bin		/usr/X11R6/man
++MANPATH_MAP	/usr/bin/X11		/usr/X11R6/man
++MANPATH_MAP	/usr/bin/mh		/usr/share/man
++#
++# NOAUTOPATH keeps man from automatically adding directories that look like
++# manual page directories to the path.
++#
++#NOAUTOPATH
++#
++# NOCACHE keeps man from creating cache pages ("cat pages")
++# (generally one enables/disable cat page creation by creating/deleting
++# the directory they would live in - man never does mkdir)
++# 
++#NOCACHE
++#
++# Useful paths - note that COL should not be defined when
++# NROFF is defined as "groff -Tascii" or "groff -Tlatin1";
++# not only is it superfluous, but it actually damages the output.
++# For use with utf-8, NROFF should be "nroff -mandoc" without -T option.
++# (Maybe - but today I need -Tlatin1 to prevent double conversion to utf8.)
++#
++# If you have a new troff (version 1.18.1?) and its colored output
++# causes problems, add the -c option to TROFF, NROFF, JNROFF.
++#
++TROFF		groff -Tps -mandoc
++NROFF		groff -Wall -mtty-char -Tlatin1 -mandoc -c
++JNROFF		LC_ALL=ja_JP.eucJP jgroff -Wall -mtty-char -Tnippon -mandocj -c
++EQN		eqn -Tps
++NEQN		eqn -Tlatin1
++JNEQN		LC_ALL=ja_JP.eucJP jeqn -Tnippon
++TBL		tbl
++@nocol@COL		col
++REFER		refer
++PIC		pic
++VGRIND		vgrind
++GRAP		
++PAGER		@prefix@/bin/manpager
++#BROWSER		@prefix@/bin/w3m -T text/html
++BROWSER		@prefix@/bin/manpager
++#HTMLPAGER	@prefix@/bin/w3m -T text/html -dump
++HTMLPAGER	/bin/cat
++CAT		/bin/cat
++#
++# The command "man -a xyzzy" will show all man pages for xyzzy.
++# When CMP is defined man will try to avoid showing the same
++# text twice. (But compressed pages compare unequal.)
++#
++CMP		/usr/bin/cmp -s
++#
++# Compress cat pages
++#
++COMPRESS	@prefix@/bin/bzip2
++COMPRESS_EXT	.bz2
++#
++# Default manual sections (and order) to search if -S is not specified
++# and the MANSECT environment variable is not set.
++#
++MANSECT		1:8:2:3:4:5:6:7:9:0p:1p:3p:tcl:n:l:p:o
++#
++# Default options to use when man is invoked without options
++# This is mainly for the benefit of those that think -a should be the default
++# Note that some systems have /usr/man/allman, causing pages to be shown twice.
++#
++#MANDEFOPTIONS	-a
++#
++# Decompress with given decompressor when input file has given extension
++# The command given must act as a filter.
++#
++.gz		@prefix@/bin/gzip -cd
++.bz2		@prefix@/bin/bzip2 -cd
++.z		
++.Z		@prefix@/bin/gzip -cd
++.F		
++.Y		
