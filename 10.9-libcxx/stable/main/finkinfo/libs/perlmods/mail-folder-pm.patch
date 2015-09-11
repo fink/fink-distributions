@@ -1,0 +1,135 @@
+diff -Naur MailFolder-0.07/Mail/Folder/Emaul.pm MailFolder-new/Mail/Folder/Emaul.pm
+--- MailFolder-0.07/Mail/Folder/Emaul.pm	Sun Apr  5 13:22:16 1998
++++ MailFolder-new/Mail/Folder/Emaul.pm	Tue Dec 30 23:23:09 2003
+@@ -499,7 +499,7 @@
+ 	  or carp "link return: $!\n";
+ 	my @statary = stat($lockfile);
+ 	unlink $lockfile;
+-	if (!defined(@statary) || $statary[3] != 2) { # failed to link?
++        if ((!@statary) || $statary[3] != 2) { # failed to link?
+ 	  goto RETRY;
+ 	}
+       }
+diff -Naur MailFolder-0.07/Mail/Folder/Maildir.pm MailFolder-new/Mail/Folder/Maildir.pm
+--- MailFolder-0.07/Mail/Folder/Maildir.pm	Sun Apr  5 13:22:18 1998
++++ MailFolder-new/Mail/Folder/Maildir.pm	Tue Dec 30 23:23:09 2003
+@@ -546,7 +546,9 @@
+ 
+   my $dir = new DirHandle "$folder_dir/cur"
+     or croak "can't open $folder_dir/cur: $!";
+-  my @files = sort map { "cur/$_" } grep((!/^\./ &&
++  my @files = map { "cur/$_->[0]" } sort { $a->[1] <=> $b->[1] }
++  			  map { /^(\d+)\./; [ $_, $1 ] }
++  					grep((!/^\./ &&
+ 					  !/^RCS$/ &&
+ 					  -f "$folder_dir/cur/$_"),
+ 					 $dir->read);
+@@ -554,7 +556,9 @@
+   if (0) {
+     $dir = new DirHandle "$folder_dir/new"
+       or croak "can't open $folder_dir/new: $!";
+-    push @files, sort map { "new/$_" } grep((!/^\./ &&
++    push @files, map { "cur/$_->[0]" } sort { $a->[1] <=> $b->[1] }
++  				 map { /^(\d+)\./; [ $_, $1 ] }
++  					grep((!/^\./ &&
+ 					     !/^RCS$/ &&
+ 					     -f "$folder_dir/new/$_"),
+ 					    $dir->read);
+diff -Naur MailFolder-0.07/Mail/Folder/Mbox.pm MailFolder-new/Mail/Folder/Mbox.pm
+--- MailFolder-0.07/Mail/Folder/Mbox.pm	Sun Apr  5 13:22:32 1998
++++ MailFolder-new/Mail/Folder/Mbox.pm	Tue Dec 30 23:23:09 2003
+@@ -544,6 +544,10 @@
+ 
+   my $tmpdir = $ENV{TMPDIR} ? $ENV{TMPDIR} : "/tmp";
+ 
++  if ( defined( $self->{MBOX_WorkingDir})) {
++        warn "Working dir is already set!\n";
++  }
++
+   $self->{MBOX_WorkingDir} = undef;
+   $folder_id++;
+   for my $i ($folder_id .. ($folder_id + 10)) {
+@@ -555,6 +559,7 @@
+   }
+   croak "can't seem to be able to create a working directory\n"
+     unless (defined($self->{MBOX_WorkingDir}));
++
+   $self->set_option('DotLock', 1)
+     unless defined($self->get_option('DotLock'));
+ 
+@@ -617,7 +622,7 @@
+   # the appropriate methods should have removed them already...
+   if ($self->{Creator} == $$) {
+     $self->_unlock_folder;
+-    $self->_clean_working_dir;
++    $self->_clean_working_dir if ( -d $self->{MBOX_WorkingDir} );
+   }
+ }
+ ###############################################################################
+@@ -733,7 +738,7 @@
+   # unlink(glob("$self->{MBOX_WorkingDir}/*"));
+   # maybe this should filter out directories, just to be safe...
+   my $dir = DirHandle->new($self->{MBOX_WorkingDir})
+-    or croak "yeep! can't read $self->{MBOX_WorkingDir} disappeared: $!\n";
++    or croak "yeep! can't read $self->{MBOX_WorkingDir}: $!\n";
+   for my $file ($dir->read) {
+     next if (($file eq '.') || ($file eq '..'));
+     next if (-d "$self->{MBOX_WorkingDir}/$file");
+@@ -779,7 +784,7 @@
+ 	    or carp "link return: $!\n";
+ 	  my @statary = stat($lockfile);
+ 	  unlink $lockfile;
+-	  if (!defined(@statary) || $statary[3] != 2) { # failed to link?
++          if ((!@statary) || $statary[3] != 2) { # failed to link?
+ 	    goto RETRY;
+ 	  }
+ 	}
+diff -Naur MailFolder-0.07/Mail/Folder.pm MailFolder-new/Mail/Folder.pm
+--- MailFolder-0.07/Mail/Folder.pm	Sun Apr  5 13:22:22 1998
++++ MailFolder-new/Mail/Folder.pm	Tue Dec 30 23:24:18 2003
+@@ -413,7 +413,7 @@
+ If C<parserobject> is specified it will be used instead of an
+ internally created parser object.  The parser object is expected to a
+ class instance and a subcless (however far removed) of
+-C<MIME::ParserBase>.
++C<MIME::Parser>.
+ 
+ Options are specified as hash items using key and value pairs.
+ 
+@@ -441,8 +441,8 @@
+   my %options = @_;
+   
+   $parser ||= new MIME::Parser or return undef;
+-  croak "$parser isn't a subclass of MIME::ParserBase"
+-    unless $parser->isa('MIME::ParserBase');
++  croak "$parser isn't a subclass of MIME::Parser"
++    unless $parser->isa('MIME::Parser');
+   
+   my $file = $self->get_message_file($msg) or return undef;
+   
+@@ -762,7 +762,7 @@
+ 
+ =cut
+ 
+-sub message_list { return(keys %{$_[0]->{Messages}}); }
++sub message_list { return(sort keys %{$_[0]->{Messages}}); }
+ 
+ =head2 qty
+ 
+@@ -977,10 +977,13 @@
+ 
+ sub sort {
+   my $self = shift;
+-  my $sort_func_ref = shift;
++  my $user_sort_func_ref = shift;
+ 
+-  return sort {&$sort_func_ref($self->get_header($a),
+-			       $self->get_header($b))} $self->message_list;
++  # this is truly disgusting. also, it works.
++  my $sort_func_ref = sub { &$user_sort_func_ref( $self->get_header( $a ),
++                                                                                                  $self->get_header( $b )) };
++
++  return sort $sort_func_ref $self->message_list;
+ }
+ 
+ =head2 select($func_ref)
