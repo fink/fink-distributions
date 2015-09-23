@@ -1,7 +1,7 @@
 Info3: <<
 Package: llvm37
 Version: 3.7.0
-Revision: 1
+Revision: 2
 Description: Modular and reusable compiler
 License: BSD
 Maintainer: David Fang <fangism@users.sourceforge.net>
@@ -65,8 +65,8 @@ PatchFile4-MD5: 3667aedcd5a76805c7209b469030cc26
 #PatchFile6-MD5: 8067f4cc1f58030f7746521d58c776c2 
 PatchFile7: %n-clang-iomp5.patch
 PatchFile7-MD5: e5e0216c5190bb07e75179c20ac8a574
-PatchFile8: %n-openmp-testsuite.patch
-PatchFile8-MD5: 98bde19e3d84e052404c1c8a3dd72202
+PatchFile8: %n-openmp-r248211.patch
+PatchFile8-MD5: a951247b2c33adef832858661e7615c7
 
 PatchScript: <<
 	#!/bin/sh -ev
@@ -186,14 +186,10 @@ if ($1 == "cmd.append(exec_path)") {
 
 	# add experimental cmake support to openmp
 	pushd ../openmp-%v.src
-	  # revert testsuite to compile and run
-	  $patch_filter %{PatchFile8} | patch -p1
-	  rm -f testsuite/bin/Makefile
-	  sed -i.orig -e '/message-converter/s|--enum=|--enum-file=|' \
-		-e '/message-converter/s|--default=|--default-file=|' \
-		runtime/CMakeLists.txt
-	  sed -i.orig -e "s|= gcc|= $build_root/last/bin/clang-3.7|g" testsuite/Makefile
-	  sed -i.orig -e "s|CFLAGS = -fopenmp -lm -O3|CFLAGS = -fopenmp -lm -O3 -Wl,-rpath,%b/../build/last/lib|g" testsuite/Makefile
+	  # backport openmp lit testsuite support
+	  $patch_filter %{PatchFile8} | patch -p0
+	  # open tolerances on runtime/test/api/omp_get_wtime.c for 10.11
+	  sed -i -e 's|0.99|0.97|g' -e 's|1.01|1.03|g' runtime/test/api/omp_get_wtime.c
 	popd
 	
 # needed for gcc-fsf-4.x only
@@ -239,6 +235,7 @@ CompileScript: <<
 	LLVM_CMAKE_OPTIONS=( -DLLVM_ENABLE_ASSERTIONS:BOOL=$enable_assertions )
 	# test "$darwin_vers" -ge 10 ||
 	LLVM_CMAKE_OPTIONS=( "${LLVM_CMAKE_OPTIONS[@]}" \
+		-DLIBOMP_TEST_CFLAGS="-Wl,-rpath,%b/../build/last/lib" \
 		-DCMAKE_OSX_SYSROOT:STRING=/ \
 		-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING= )
 
@@ -975,14 +972,9 @@ EOF
 	esac
 	if test "$build_clang_omp" = 1
 	then
-	( pushd %b/../openmp-%v.src/testsuite
-	  export LIBRARY_PATH="%b/../build/last/lib:%p/lib"
-	  export DYLD_LIBRARY_PATH="%b/../build/last/lib:%p/lib"
-	  export C_INCLUDE_PATH="%b/../build/last/projects/openmp/runtime/src:%b/../build/last/lib/clang/%v/include:%p/include:/usr/include"
-	  # manually prune the ld warnings
-	  make -j1 -k ctest 2>&1 | grep -v "ld: warning: directory not found for option '-L%p/lib" | grep -v "ld: warning: directory not found for option '-L%p/opt/llvm-3.7/lib" || :
-	popd
-	) 2>&1 | tee openmp-%v-check.log
+	  ( pushd projects/openmp/runtime/test
+	  make -k check-libomp 2>&1 || : popd 
+	  ) | tee openmp-%v-check.log
 	fi
 
 #	echo "******** Running massive test-suite ... ********"
