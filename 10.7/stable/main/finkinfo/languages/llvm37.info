@@ -233,6 +233,7 @@ CompileScript: <<
 	LLVM_CMAKE_OPTIONS=( -DLLVM_ENABLE_ASSERTIONS:BOOL=$enable_assertions )
 	# test "$darwin_vers" -ge 10 ||
 	LLVM_CMAKE_OPTIONS=( "${LLVM_CMAKE_OPTIONS[@]}" \
+		-DCOMPILER_RT_INCLUDE_TESTS=ON \
 		-DCMAKE_OSX_SYSROOT:STRING=/ \
 		-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING= )
 
@@ -913,30 +914,18 @@ InfoTest: <<
 	echo "******** Running included clang-tools tests ... ********"
 	{ make -k TESTARGS=-v check-clang-tools 2>&1 || : ;} | tee clang-tools-%v-check.log
 
-	echo "******** Running included polly tests ... ********"
-	( cd tools/polly/test ; make -k TESTARGS=-v polly-test 2>&1 || : ;) | tee polly-%v-check.log
-
 	echo "******** Running included compiler-rt/libclang_rt tests ... ********"
-	CC=`grep "CMAKE_C_COMPILER:FILEPATH" CMakeCache.txt | cut -d= -f2`
-	( mkdir -p projects/compiler-rt/test
-	cd projects/compiler-rt/test
-	syslib="-lSystem"
-	clang_arch=%m
-	case "%m" in
-	powerpc) clang_arch=ppc ;;
-	powerpc64) clang_arch=ppc64 ;;
-	esac
-	test $darwin_vers -gt 10 || syslib="$syslib -lSystemStubs"
-	cat >Makefile.custom <<EOF
-ARCH = $clang_arch
-OS = darwin
-CC = $CC
-LIBS = $syslib
-LLVM_SRCDIR = %b
-VERSION = %v
-include \$(LLVM_SRCDIR)/projects/compiler-rt/test/builtins/Unit/test.mk
-EOF
-	make -k && make -f Makefile.custom check 2>&1 || : ;) | tee compiler-rt-%v-check.log
+#	allow  tests to find c++ headers
+	sed -i -e 's|config.cxx_mode_flags = \[\"--driver-mode=g++\"\]|config.cxx_mode_flags = \[\"--driver-mode=g++\", \"-I%b/../build/last-libcxx/include/c\+\+/v1\", \"-Wl,-rpath,%b/../build/last-libcxx/lib\"\]|g' %b/projects/compiler-rt/test/lit.common.cfg	
+	{ make -k TESTARGS=-v check-asan 2>&1 || : ;}| tee compiler-rt-%v-check.log
+	{ make -k TESTARGS=-v check-profile 2>&1 || : ;}| tee -a compiler-rt-%v-check.log
+	{ make -k TESTARGS=-v check-sanitizer 2>&1 || : ;}| tee -a compiler-rt-%v-check.log
+	{ make -k TESTARGS=-v check-ubsan 2>&1 || : ;}| tee -a compiler-rt-%v-check.log
+	{ make -k TESTARGS=-v check-cfi-and-supported 2>&1 || : ;}| tee -a compiler-rt-%v-check.log
+	{ make -k TESTARGS=-v check-safestack 2>&1 || : ;}| tee -a compiler-rt-%v-check.log
+
+	echo "******** Running included polly tests ... ********"
+	( make -k TESTARGS=-v check-polly 2>&1 || : ;) | tee polly-%v-check.log
 
 	echo "******** Running included libc++ tests ... ********"
 	pushd ../last-libcxx
