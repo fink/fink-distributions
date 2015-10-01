@@ -1,8 +1,8 @@
 Package: firefox8
 Version: 8.0.1
 Revision: 4
-# Don't carry past 10.8
-Distribution: 10.7, 10.8
+## Don't carry past 10.8
+#Distribution: 10.7, 10.8
 Description: Lightweight browser from mozilla.org
 License: OSI-Approved
 Maintainer: Hanspeter Niederstrasser <nieder@users.sourceforge.net>
@@ -32,6 +32,7 @@ BuildDepends: <<
 	dbus-glib1.2-dev,
 	dbus1.3-dev,
 	fink (>= 0.30.0-1),
+	fink-buildenv-modules,
 	fink-package-precedence,
 	fontconfig2-dev (>= 2.8.0-6),
 	freetype219 (>= 2.4.4-2),
@@ -56,7 +57,7 @@ Source: http://releases.mozilla.org/pub/mozilla.org/firefox/releases/%v/source/f
 SourceDirectory: mozilla-release
 Source-MD5: b7d09b082e88a74860a51a8e04e29333
 PatchFile: %n.patch
-PatchFile-MD5: 66d80ded5ca33b9eec770b6bd7927904
+PatchFile-MD5: 0e18e07f105c3747f7ae8bd3bf248832
 ## Use internal nspr/nss
 ## Apply after PatchFile to remove external nspr/nss config settings
 ## nspr/configure* fixes from bug 702997, fixed for firefox11
@@ -82,7 +83,23 @@ PatchFile4-MD5: 8bdd94ab09617c588b778c4f91d1e12d
 ### Bug 775405: Build fails with "arch: posix_spawnp: egrep: Bad CPU type in executable" when MacPorts egrep is on $PATH
 ### Fixed in mozilla17
 PatchFile5: %n-egrep.patch
-PatchFile5-MD5: 38acd72d7bdd19e77ce6d2ee462660b5
+PatchFile5-MD5: 55bc86dec6828a1510d2b5cbf8a20ce0
+### fix for new xcode6/7
+### Bug 1135344: Error if build after installing Xcode 6.3: nullability specifier '__nullable' cannot be applied to non-pointer type 'bool'
+### based on its patch 8340415e7b27
+PatchFile6: %n-xcode6.patch
+PatchFile6-MD5: 07f306ea7b099112051907133eebb325
+### Bug 778980: Enable gcc -Werror=conversion-null for gcc >= 4.5 
+###   patch 4a from bug 778980
+###   e4f8e6f86c8b
+###   fccaadf8161c
+###   and similar fixes in other places
+PatchFile7: firefox8-conversion-null.patch
+PatchFile7-MD5: 9b89f307b0805ac12b3dff1604f41bdf
+### Bug 725655: gcc 4.7 build failures (missing headers) 
+### and similar fixes in other places
+PatchFile8: firefox8-headers.patch
+PatchFile8-MD5: b1438e9a72565d3318b9bfeaf7b5714c
 PatchScript: <<
   ### apply the patch
   /usr/bin/sed -e 's|@FINKPREFIX@|%p|g' -e 's|@FINK_ARCH_TARGET@|%m|g' -e 's|@FIREFOX_MAJOR_VERSION@|8|g' <%{PatchFile} | /usr/bin/patch -p1
@@ -90,6 +107,9 @@ PatchScript: <<
   /usr/bin/patch -p1 < %{PatchFile3}
   /usr/bin/patch -p1 < %{PatchFile4}
   /usr/bin/patch -p1 < %{PatchFile5}
+  /usr/bin/patch -p1 < %{PatchFile6}
+  /usr/bin/patch -p1 < %{PatchFile7}
+  /usr/bin/patch -p1 < %{PatchFile8}
   ### hardcode paths inside dylibs so that programs linking to them can see them
   /usr/bin/perl -pi -e 's,\@executable_path,%p/lib/%n,g' `/usr/bin/grep -lr @executable_path .`
   ### -DXP_MACOSX is not always getting defined, so force __APPLE__ in those instances :
@@ -101,17 +121,31 @@ PatchScript: <<
   ### gfx/cairo/cairo/src/cairo-ft-font.c includes x11/fontconfig w/ no external way to use %p/fontconfig first,
   ### so add the proper -I flag to put %p/include first
   /usr/bin/perl -pi -e 's|OS_INCLUDES \+\= \$\(XCFLAGS\)|OS_INCLUDES \+\= \$\(FT2_CFLAGS\) \$\(XCFLAGS\)|g' gfx/cairo/cairo/src/Makefile.in
+  # patch *ancient* darwin-ignorant autoconf
+  perl -pi -e 's/(a so sl)/dylib \1/' configure
+  # autoconf2.6ish patch for modern XQuartz paths
+  perl -pi -e "s|/usr/lpp/Xamples|/opt/X11|" configure
+  # avoid redefining based on obsolete logic/obsolete platforms
+  perl -pi -e 's/_MACOSX_DEPLOYMENT_TARGET/MACOSX_DEPLOYMENT_TARGET/g' configure js/src/configure nsprpub/configure
+  # https://hg.mozilla.org/mozilla-central/rev/77cd258827fd
+  perl -pi -e 's/time\(\(time_t\)NULL\)/time(nullptr)/' intl/locale/src/unix/nsDateTimeFormatUnix.cpp
 <<
-### force X11 to the end
-NoSetLDFLAGS: true
-SetLDFLAGS: -L%p/lib/libjpeg8-turbo/lib -L%p/lib -L/usr/X11R6/lib
-NoSetCPPFLAGS: true
-SetCPPFLAGS: -I%p/include -I/usr/X11R6/include
+SetLDFLAGS: -L%p/lib/libjpeg8-turbo/lib
+SetCC: gcc
+SetCXX: g++
 GCC: 4.0
 CompileScript: <<
 #!/bin/sh -ev
-/usr/bin/make -w -f client.mk build
-%p/bin/fink-package-precedence --depfile-ext='\.pp' --libs --prohibit-bdep=%n-dev .
+	## test broken because it's part of x11 but x11 -I not used
+	#export ac_add_options ac_cv_header_GL_glx_h=yes
+	# meh, just put the x11 flags into standard env vars
+	# be sure to keep them at the end (for f-p-p reasons)
+	. %p/sbin/fink-buildenv-helper.sh 
+	export CPPFLAGS="$CPPFLAGS -I$X11_BASE_DIR/include"
+	export LDFLAGS="$LDFLAGS -L$X11_BASE_DIR/lib"
+
+	/usr/bin/make -k -w -f client.mk build
+	%p/bin/fink-package-precedence --depfile-ext='\.pp' --libs --prohibit-bdep=%n-dev .
 <<
 InstallScript: <<
 #!/bin/sh -ev
