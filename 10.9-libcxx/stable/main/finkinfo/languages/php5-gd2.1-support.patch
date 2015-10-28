@@ -1,0 +1,132 @@
+diff -Nurd -x'*~' php-5.4.4.orig/ext/gd/config.m4 php-5.4.4/ext/gd/config.m4
+--- php-5.4.4.orig/ext/gd/config.m4	2012-06-13 00:54:23.000000000 -0400
++++ php-5.4.4/ext/gd/config.m4	2015-10-19 23:26:32.000000000 -0400
+@@ -283,6 +283,8 @@
+   PHP_CHECK_LIBRARY(gd, gdFreeFontCache,        [AC_DEFINE(HAVE_GD_FREEFONTCACHE,    1, [ ])], [], [ -L$GD_LIB $GD_SHARED_LIBADD ])
+   PHP_CHECK_LIBRARY(gd, gdFontCacheMutexSetup,  [AC_DEFINE(HAVE_GD_FONTMUTEX,        1, [ ])], [], [ -L$GD_LIB $GD_SHARED_LIBADD ])
+   PHP_CHECK_LIBRARY(gd, gdNewDynamicCtxEx,      [AC_DEFINE(HAVE_GD_DYNAMIC_CTX_EX,   1, [ ])], [], [ -L$GD_LIB $GD_SHARED_LIBADD ])
++  PHP_CHECK_LIBRARY(gd, gdImageConvolution,     [AC_DEFINE(HAVE_GD_IMAGE_CONVOLUTION,      1, [ ])], [], [ -L$GD_LIB $GD_SHARED_LIBADD ])
++  PHP_CHECK_LIBRARY(gd, gdImagePixelate,        [AC_DEFINE(HAVE_GD_IMAGE_PIXELATE,         1, [ ])], [], [ -L$GD_LIB $GD_SHARED_LIBADD ])
+ ])
+ 
+ dnl
+diff -Nurd -x'*~' php-5.4.4.orig/ext/gd/gd.c php-5.4.4/ext/gd/gd.c
+--- php-5.4.4.orig/ext/gd/gd.c	2012-06-13 00:54:23.000000000 -0400
++++ php-5.4.4/ext/gd/gd.c	2015-10-19 23:28:47.000000000 -0400
+@@ -1261,9 +1261,13 @@
+ /* }}} */
+ 
+ #if HAVE_GD_BUNDLED
+-#define PHP_GD_VERSION_STRING "bundled (2.0.34 compatible)"
++#define PHP_GD_VERSION_STRING "bundled (2.1.0 compatible)"
+ #else
+-#define PHP_GD_VERSION_STRING "2.0"
++# ifdef GD_VERSION_STRING
++#  define PHP_GD_VERSION_STRING GD_VERSION_STRING
++# else
++#  define PHP_GD_VERSION_STRING "2.0"
++# endif
+ #endif
+ 
+ /* {{{ PHP_MINFO_FUNCTION
+@@ -2274,7 +2278,7 @@
+ 		gdIOCtx *io_ctx;
+ 		io_ctx = gdNewDynamicCtxEx(8, data, 0);
+ 		if (io_ctx) {
+-			if (getmbi((int(*)(void *)) gdGetC, io_ctx) == 0 && skipheader((int(*)(void *)) gdGetC, io_ctx) == 0 ) {
++			if (getmbi((int(*)(void *)) io_ctx->getC, io_ctx) == 0 && skipheader((int(*)(void *)) io_ctx->getC, io_ctx) == 0 ) {
+ #if HAVE_LIBGD204
+ 				io_ctx->gd_free(io_ctx);
+ #else
+diff -Nurd -x'*~' php-5.4.4.orig/ext/gd/libgd/gd_compat.c php-5.4.4/ext/gd/libgd/gd_compat.c
+--- php-5.4.4.orig/ext/gd/libgd/gd_compat.c	2012-06-13 00:54:23.000000000 -0400
++++ php-5.4.4/ext/gd/libgd/gd_compat.c	2015-10-19 23:41:04.000000000 -0400
+@@ -33,3 +33,49 @@
+ }
+ #endif
+ 
++/* Not exported by libgd, copied from gdhelpers.h */
++int overflow2(int a, int b)
++{
++  if(a <= 0 || b <= 0) {
++    return 1;
++  }
++  if(a > INT_MAX / b) {
++    return 1;
++  }
++  return 0;
++}
++
++/* Not exported by libgd, copied from wbmp.c */
++int
++getmbi (int (*getin) (void *in), void *in)
++{
++  int i, mbi = 0;
++
++  do
++    {
++      i = getin (in);
++      if (i < 0)
++      return (-1);
++      mbi = (mbi << 7) | (i & 0x7f);
++    }
++  while (i & 0x80);
++
++  return (mbi);
++}
++
++/* Not exported by libgd, copied from wbmp.c */
++int
++skipheader (int (*getin) (void *in), void *in)
++{
++  int i;
++
++  do
++    {
++      i = getin (in);
++      if (i < 0)
++      return (-1);
++    }
++  while (i & 0x80);
++
++  return (0);
++}
+diff -Nurd -x'*~' php-5.4.4.orig/ext/gd/libgd/gd_compat.h php-5.4.4/ext/gd/libgd/gd_compat.h
+--- php-5.4.4.orig/ext/gd/libgd/gd_compat.h	2012-06-13 00:54:23.000000000 -0400
++++ php-5.4.4/ext/gd/libgd/gd_compat.h	2015-10-19 23:39:04.000000000 -0400
+@@ -11,6 +11,8 @@
+ const char * gdJpegGetVersionString();
+ int gdJpegGetVersionInt();
+ int overflow2(int a, int b);
++int getmbi (int (*getin) (void *in), void *in);
++int skipheader (int (*getin) (void *in), void *in);
+ 
+ /* filters section
+  *
+@@ -32,6 +34,7 @@
+ /* Simply adds or substracts respectively red, green or blue to a pixel */
+ int gdImageColor(gdImagePtr src, const int red, const int green, const int blue, const int alpha);
+ 
++#if !defined(HAVE_GD_IMAGE_CONVOLUTION)
+ /* Image convolution by a 3x3 custom matrix */
+ int gdImageConvolution(gdImagePtr src, float ft[3][3], float filter_div, float offset);
+ int gdImageEdgeDetectQuick(gdImagePtr src);
+@@ -40,12 +43,18 @@
+ int gdImageEmboss(gdImagePtr im);
+ int gdImageMeanRemoval(gdImagePtr im);
+ int gdImageSmooth(gdImagePtr im, float weight);
++#endif
++
++#if !defined(HAVE_GD_IMAGE_PIXELATE)
+ enum gdPixelateMode {
+ 	GD_PIXELATE_UPPERLEFT,
+ 	GD_PIXELATE_AVERAGE
+ };
+ 
+ int gdImagePixelate(gdImagePtr im, int block_size, const unsigned int mode);
++#endif
++
++int gdImagePixelate(gdImagePtr im, int block_size, const unsigned int mode);
+ 
+ #if !HAVE_GD_IMAGEELLIPSE
+ void gdImageEllipse(gdImagePtr im, int cx, int cy, int w, int h, int c);
