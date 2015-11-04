@@ -2,7 +2,7 @@ Info2: <<
 Package: octave%type_pkg[-blas]%type_pkg[-x11]%type_pkg[-qtui]
 Type: -blas (. -atlas -ref), oct (3.8.2), gcc (5), -x11 (boolean), lapack (3.5.0), java (1.6), -qtui (. -qtmac -qtx11)
 Version: 3.8.2
-Revision: 8
+Revision: 9
 Distribution: ( %type_raw[-x11] = -x11 ) 10.9, ( %type_raw[-x11] = -x11 ) 10.10
 
 Description: MATLAB-like language for computations
@@ -12,6 +12,8 @@ Homepage: http://www.gnu.org/software/octave/
 
 # package metadata
 BuildDepends: <<
+	autoconf2.6,
+	automake1.15,
 	fftw3 (>= 3.1.1-7), 
 	fontconfig2-dev,
 	freetype219 (>= 2.5.5-1), 
@@ -120,9 +122,31 @@ PatchFile2: %{ni}-3.8-manpages.patch
 PatchFile2-MD5: faaecde613b4a87833b0e82a9b8939d4
 PatchFile3: %{ni}-%v-clang-libcxx.patch
 PatchFile3-MD5: 83a27afacaae69f6b00ec4e677a00927
+PatchFile4: %{ni}-%v-xbackslash-texinfo.diff
+PatchFile4-MD5: 835421dac7a1217e9bbee8437d9aae63
+PatchFile5: %{ni}-%v-dont-use-included-texinfo-texmfcnf.patch
+PatchFile5-MD5: a72fed2655902d004b52fd93a8fe3987
+#PatchFile6: %{ni}-%v-escape-backslash-for-texinfo-in-source.patch
+#PatchFile6-MD5: badc9ddc64ac9818a86abda9954458fc
 PatchScript: <<
 	#!/bin/sh -ev
 
+	#Fink-specific structural changes
+	sed -e 's/@OCTVERSION@/%v/g' -e 's|@FINKPREFIX@|%p|g' %{PatchFile} | patch -p1 
+	# Put in the Fink tree.
+	sed -i -e 's|@FINKPREFIX@|%p|g' doc/interpreter/*.1 src/mkoctfile*in.cc
+
+	# fix build under libc++
+	patch -p1 < %{PatchFile3}
+
+	#Additional patches from Debian for docs
+	patch -p1 < %{PatchFile4}
+	patch -p1 < %{PatchFile5}
+#	patch -p1 < %{PatchFile6}
+
+	# Patch configure not to link like Puma on Yosemite
+	perl -pi -e 's/(10\.\[012\])\*/\1\,.\*/' configure
+	
 	# add /opt/X11/include to the legal header directories
 	perl -pi -e "s|(/usr/X11R4/include)|\1\n/opt/X11/include|" configure
 
@@ -131,15 +155,10 @@ PatchScript: <<
 	cp doc/interpreter/%{Ni}-config.1 doc/interpreter/%{Ni}-config-%v.1
 	cp doc/interpreter/%{Ni}-cli.1 doc/interpreter/%{Ni}-cli-%v.1
 	cp doc/interpreter/mkoctfile.1 doc/interpreter/mkoctfile-%v.1
-	
+
 	# fix executable names in versioned manpages
 	sed -e 's/@OCTVERSION@/%v/g' %{PatchFile2} | patch -p1 
-
-	#Fink-specific structural changes
-	sed -e 's/@OCTVERSION@/%v/g' -e 's|@FINKPREFIX@|%p|g' %{PatchFile} | patch -p1 
-	# Put in the Fink tree.
-	sed -i -e 's|@FINKPREFIX@|%p|g' doc/interpreter/*.1 src/mkoctfile*in.cc
-
+	
 	# instead of using flag-sort, ensure that the right sysdep.h is used
 	grep -lr '#include "sysdep.h"' * | xargs perl -pi.orig -e 's,sysdep.h,%b/libinterp/corefcn/sysdep.h,'
 
@@ -149,11 +168,6 @@ PatchScript: <<
 		perl -pi -e 's/HAVE_X_WINDOWS/HAVE_X_BINDOWS/g' libinterp/dldfcn/__init_fltk__.cc
 	fi
 
-	# fix build under libc++
-	patch -p1 < %{PatchFile3}
-
-	# Patch configure not to link like Puma on Yosemite
-	perl -pi -e 's/(10\.\[012\])\*/\1\,.\*/' configure
 <<
 
 GCC: 4.0
@@ -230,6 +244,8 @@ if [ ! -x %p/bin/oct-cc -o ! -x %p/bin/oct-cxx ] ; then
 	# QtCore is inherited
 	export LDFLAGS=`pkg-config QtNetwork --libs`" "`pkg-config QtGui --libs`" -L%p/lib/qt4-$qt_type/lib $LDFLAGS"
  fi
+ 
+ autoreconf -fi
  
  ./configure %c
  # don't just use top-level Makefile so that we can do a multi-core build.
@@ -391,25 +407,22 @@ Thanks to Per Persson for most (if not all) of the work on the macos X port.
 
 The Accelerate variant is built with -ff2c in the FFLAGS, 
 because this appears to be necessary when using the Accelerate framework.
+
+Revision 7 -- update X11 detection
 <<
 
 DescPackaging:  <<
-Revision 7 --
-Switch to gcc5, which changes the virtual packages.
-Switch to glpk36.  Thanks to dmacks for the update.
-Switch to graphicsmagick1322.
-Update X11 linkage.
-Switch to texinfo-legacy to solve a vexing problem with the doc build:  
+Revision 9 -- Apply relevant patches from https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=790626
+to try to solve
 
 ./octave.cps:56: Argument of \\ has an extra }.
 
-Most people don't trigger this (or we would have fixed it earlier),
-and the Debian patch from https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=790626
-which is supposed to fix the problem _triggers_ it for me.  Applying the patch to 
-trigger the error and then using the texinfo executables from texinfo-legacy instead
-of texinfo appears to work.
-Addendum:  reverted the change but I'll keep a note here.  This didn't solve the problem
-for someone else, and I figured that there's no use in holding to texinfo-legacy.
+Requires rerunning the autotools system, so added BDeps on autoconf2.6 and automake1.15.
+
+Revision 7 -- Switch to gcc5, which changes the virtual packages.
+Switch to glpk36.  Thanks to dmacks for the update.
+Switch to graphicsmagick1322.
+Update X11 linkage.
 
 Revision 6 -- Test suite crashes when built against fltk13-aqua and run as fink-bld.
 Fix some sketchy flag ordering to ensure that Fink's freetype2 headers get brought
