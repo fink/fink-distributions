@@ -57,6 +57,8 @@ PatchScript: <<
 	# on OS X. That's fine except it can cause tests in some packages to
 	# fail since '/tmp' != '/private/tmp'. Default to using /private/tmp.
 	perl -pi -e "s|'/tmp', '/var/tmp'|'/private/tmp', '/private/var/tmp'|" Lib/tempfile.py
+	perl -pi -e 's/ -lSystemStubs//' ./configure
+	perl -pi -e 's/-O3/-fwrapv -O3/' ./configure
 <<
 
 UseMaxBuildJobs: true
@@ -70,29 +72,24 @@ ConfigureParams: <<
 	--with-dbmliborder=gdbm \
 	--with-system-expat \
 	--with-system-ffi \
-	--with-tcltk-includes="-I%p/include -I$X11DIR/include" \
+	--with-tcltk-includes="-I%p/include -I/opt/X11/include" \
 	--with-tcltk-libs="-L%p/libs -ltcl -ltk" \
 	--without-ensurepip
-<<
-CompileScript: <<
-#!/bin/sh -ex
-	darwin_vers=`uname -r | cut -d. -f1`
-	if [ "$darwin_vers" -ge 11 ]; then
-		perl -pi -e 's/ -lSystemStubs//' ./configure
-		perl -pi -e 's/-O3/-fwrapv -O3/' ./configure
-	fi
-	if [ "$darwin_vers" -ge 12 ]; then
-		X11DIR=/opt/X11
-	else
-		X11DIR=/usr/X11
-	fi
-	%{default_script}
 <<
 
 InfoTest: <<
 	TestScript: <<
+		# Change install_name of lib during tests since DYLD_LIBRARY_PATH doesn't work on 10.11+.
+		install_name_tool -change %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib %b/libpython%type_raw[python]m.dylib python.exe
+		install_name_tool -id %b/libpython%type_raw[python]m.dylib libpython%type_raw[python]m.dylib
+		
 		# test_socket can fail with some DNS settings.
 		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS='-w -unone -x test_socket' || exit 2
+		
+		# Put install_name back.
+		install_name_tool -change %b/libpython%type_raw[python]m.dylib %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib python.exe
+		install_name_tool -id %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib libpython%type_raw[python]m.dylib
+		
 		# Remove stray .pyc that get made during tests to keep validator happy.
 		find ./Tools -name "*.pyc" -delete
 		find ./Tools -name "__pycache__" -delete
@@ -101,6 +98,8 @@ InfoTest: <<
 
 InstallScript: <<
 #!/bin/sh -ex
+	# Rebuild _sysconfigdata.py if we ran tests.
+	make
 	# _sysconfigdata.py contains build-time variables that point to %b.
 	# This is harmless but upsets fink's validator.
 	# Change to %p/lib to make fink happy.
