@@ -1,0 +1,187 @@
+--- compiler/generic/symcpu.pas	(Revision 32644)
++++ compiler/generic/symcpu.pas	(Arbeitskopie)
+@@ -115,6 +115,10 @@
+   end;
+   tcpuunitsymclass = class of tcpuunitsym;
+ 
++  tcpuprogramparasym = class(tprogramparasym)
++  end;
++  tcpuprogramparasymclass = class(tprogramparasym);
++ 
+   tcpunamespacesym = class(tnamespacesym)
+   end;
+   tcpunamespacesymclass = class of tcpunamespacesym;
+@@ -195,6 +199,7 @@
+   { used tsym classes }
+   clabelsym:=tcpulabelsym;
+   cunitsym:=tcpuunitsym;
++  cprogramparasym:=tcpuprogramparasym;
+   cnamespacesym:=tcpunamespacesym;
+   cprocsym:=tcpuprocsym;
+   ctypesym:=tcputypesym;
+--- compiler/pmodules.pas	(Revision 32644)
++++ compiler/pmodules.pas	(Arbeitskopie)
+@@ -1907,7 +1907,7 @@
+          resources_used : boolean;
+          program_name : ansistring;
+          consume_semicolon_after_uses : boolean;
+-         ps : tstaticvarsym;
++         ps : tprogramparasym;
+          paramnum : longint;
+          textsym : ttypesym;
+          sc : array of TProgramParam;
+@@ -2062,10 +2062,8 @@
+                internalerror(2013011201);
+              for i:=0 to high(sc) do
+                begin
+-                 ps:=cstaticvarsym.create(sc[i].name,vs_value,textsym.typedef,[]);
+-                 ps.isoindex:=sc[i].nr;
++                 ps:=cprogramparasym.create(sc[i].name,sc[i].nr);
+                  current_module.localsymtable.insert(ps,true);
+-                 cnodeutils.insertbssdata(tstaticvarsym(ps));
+                end;
+            end;
+ 
+--- compiler/symconst.pas	(Revision 32644)
++++ compiler/symconst.pas	(Arbeitskopie)
+@@ -577,7 +577,7 @@
+     staticvarsym,localvarsym,paravarsym,fieldvarsym,
+     typesym,procsym,unitsym,constsym,enumsym,
+     errorsym,syssym,labelsym,absolutevarsym,propertysym,
+-    macrosym,namespacesym,undefinedsym
++    macrosym,namespacesym,undefinedsym,programparasym
+   );
+ 
+   { State of the variable:
+@@ -696,11 +696,11 @@
+    pushleftright_pocalls : tproccalloptions = [pocall_register,pocall_pascal];
+ {$endif}
+ 
+-     SymTypeName : array[tsymtyp] of string[12] = (
++     SymTypeName : array[tsymtyp] of string[14] = (
+        'abstractsym','globalvar','localvar','paravar','fieldvar',
+        'type','proc','unit','const','enum',
+        'errorsym','system sym','label','absolutevar','property',
+-       'macrosym','namespace','undefinedsym'
++       'macrosym','namespace','undefinedsym','programparasym'
+      );
+ 
+      typName : array[tdeftyp] of string[12] = (
+--- compiler/symsym.pas	(Revision 32644)
++++ compiler/symsym.pas	(Arbeitskopie)
+@@ -89,6 +89,17 @@
+        end;
+        tunitsymclass = class of tunitsym;
+ 
++       tprogramparasym = class(Tstoredsym)
++         isoindex : dword;
++         constructor create(const n : string;i : dword);virtual;
++         constructor ppuload(ppufile:tcompilerppufile);
++         destructor destroy;override;
++         { do not override this routine in platform-specific subclasses,
++           override ppuwrite_platform instead }
++         procedure ppuwrite(ppufile:tcompilerppufile);override;final;
++       end;
++       tprogramparasymclass = class of tprogramparasym;
++ 
+        tnamespacesym = class(Tstoredsym)
+           unitsym:tsym;
+           unitsymderef:tderef;
+@@ -448,6 +459,7 @@
+ 
+        clabelsym: tlabelsymclass;
+        cunitsym: tunitsymclass;
++       cprogramparasym: tprogramparasymclass;
+        cnamespacesym: tnamespacesymclass;
+        cprocsym: tprocsymclass;
+        ctypesym: ttypesymclass;
+@@ -682,6 +694,34 @@
+       end;
+ 
+ {****************************************************************************
++                             TPROGRAMPARASYM
++****************************************************************************}
++
++    constructor tprogramparasym.create(const n : string; i : dword);
++      begin
++         inherited create(programparasym,n);
++         isoindex:=i;
++      end;
++
++    constructor tprogramparasym.ppuload(ppufile : tcompilerppufile);
++      begin
++        { program parameter syms (iso pascal style) might be never written to a ppu }
++        internalerror(2015050102);
++      end;
++
++    destructor tprogramparasym.destroy;
++      begin
++       inherited destroy;
++      end;
++
++    procedure tprogramparasym.ppuwrite(ppufile : tcompilerppufile);
++      begin
++        { program parameter syms (iso pascal style) might be never written to a ppu }
++        internalerror(2015050101);
++      end;
++
++
++{****************************************************************************
+                                 TNAMESPACESYM
+ ****************************************************************************}
+ 
+--- compiler/symtable.pas	(Revision 32644)
++++ compiler/symtable.pas	(Arbeitskopie)
+@@ -1705,6 +1705,14 @@
+                 if sym.typ=symconst.namespacesym then
+                   tnamespacesym(sym).unitsym:=tsym(hsym);
+               end
++            { iso mode program parameters: staticvarsyms might have the same name as a program parameters,
++              in this case, copy the isoindex and make the original symbol invisible }
++            else if (m_iso in current_settings.modeswitches) and (hsym.typ=programparasym) and (sym.typ=staticvarsym)
++              and (tprogramparasym(hsym).isoindex<>0) then
++              begin
++                HideSym(hsym);
++                tstaticvarsym(sym).isoindex:=tprogramparasym(hsym).isoindex;
++              end
+             else
+               DuplicateSym(hashedid,sym,hsym,false);
+             result:=true;
+--- compiler/x86_64/symcpu.pas	(Revision 32644)
++++ compiler/x86_64/symcpu.pas	(Arbeitskopie)
+@@ -114,6 +114,10 @@
+   tcpuunitsym = class(tunitsym)
+   end;
+   tcpuunitsymclass = class of tcpuunitsym;
++	
++	 tcpuprogramparasym = class(tprogramparasym)
++	 end;
++	 tcpuprogramparasymclass = class(tprogramparasym);
+ 
+   tcpunamespacesym = class(tnamespacesym)
+   end;
+@@ -195,6 +199,7 @@
+   { used tsym classes }
+   clabelsym:=tcpulabelsym;
+   cunitsym:=tcpuunitsym;
++  cprogramparasym:=tcpuprogramparasym;
+   cnamespacesym:=tcpunamespacesym;
+   cprocsym:=tcpuprocsym;
+   ctypesym:=tcputypesym;
+--- rtl/inc/text.inc	(Revision 32644)
++++ rtl/inc/text.inc	(Arbeitskopie)
+@@ -646,12 +646,10 @@
+   assign(t,paramstr(nr));
+ {$else FPC_HAS_FEATURE_COMMANDARGS}
+   { primitive workaround for targets supporting no command line arguments,
+-    invent some file name, this will be fixed later on anways because
+-    the current way of handling iso program parameters is apparently
+-    wrong }
++    invent some file name, try to avoid complex procedures like concating
++    strings which might pull-in bigger parts of the rtl }
+   assign(t,chr((nr mod 16)+65));
+ {$endif FPC_HAS_FEATURE_COMMANDARGS}
+-  reset(t);
+ end;
+ 
+ 
