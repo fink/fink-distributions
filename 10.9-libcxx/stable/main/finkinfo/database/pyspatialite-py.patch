@@ -1,24 +1,60 @@
 diff -ruN pyspatialite-3.0.1-orig/setup.py pyspatialite-3.0.1/setup.py
---- pyspatialite-3.0.1-orig/setup.py	2012-12-31 11:16:40.000000000 +0900
-+++ pyspatialite-3.0.1/setup.py	2013-01-01 10:41:27.000000000 +0900
-@@ -113,24 +113,24 @@
+--- pyspatialite-3.0.1-orig/setup.py	2016-03-16 22:35:42.000000000 +0900
++++ pyspatialite-3.0.1/setup.py	2016-03-17 11:08:25.000000000 +0900
+@@ -44,7 +44,7 @@
+ 
+ include_dirs = []
+ library_dirs = []
+-libraries = ['geos','geos_c','proj']
++libraries = ['geos','geos_c','proj', 'spatialite', 'sqlite3']
+ runtime_library_dirs = []
+ extra_objects = []
+ define_macros = []
+@@ -84,53 +84,20 @@
+ 
+ AMALGAMATION_ROOT = "amalgamation"
+ 
+-def get_amalgamation():
+-    """Download the Spatialite amalgamation if it isn't there, already."""
+-    if os.path.exists(AMALGAMATION_ROOT):
+-        return
+-    os.mkdir(AMALGAMATION_ROOT)
+-    print "Downloading amalgation."
+-
+-    # find out what's current amalgamation ZIP file
+-    download_page = urllib.urlopen("https://www.gaia-gis.it/fossil/libspatialite/index").read()
+-    pattern = re.compile("(libspatialite-amalgamation.*?\.zip)")
+-    download_file = pattern.findall(download_page)[0]
+-    amalgamation_url = "http://www.gaia-gis.it/gaia-sins/" + download_file
+-    zip_dir = string.replace(download_file,'.zip','')
+-    # and download it
+-    urllib.urlretrieve(amalgamation_url, "tmp.zip")
+-
+-    zf = zipfile.ZipFile("tmp.zip")
+-    files = ["sqlite3.c", "headers/spatialite/sqlite3.h", "spatialite.c", "headers/spatialite/sqlite3ext.h","headers/spatialite/spatialite.h","headers/spatialite/gaiaaux.h","headers/spatialite/gaiaexif.h","headers/spatialite/gaiageo.h"]
+-    for fn in files:
+-        print "Extracting", fn
+-        outf = open(AMALGAMATION_ROOT + os.sep + string.split(fn,'/')[-1], "wb")
+-        outf.write(zf.read(zip_dir + '/' + fn))
+-        outf.close()
+-    zf.close()
+-    os.unlink("tmp.zip")
+-
  class MyBuildExt(build_ext):
  
      def build_extension(self, ext):
 -        get_amalgamation()
-+        # get_amalgamation()
          # sometimes iconv is built in, sometimes it isn't
-         if not self.compiler.has_function("iconv"):
-           ext.libraries.append("iconv")
+-        if not self.compiler.has_function("iconv"):
+-          ext.libraries.append("iconv")
++        ext.libraries.append("iconv")
  
          #Default locations for Mac
 -        ext.include_dirs.append("/Library/Frameworks/GEOS.framework/unix/include/")
 -        ext.include_dirs.append("/Library/Frameworks/PROJ.framework/unix/include/")
 -        ext.library_dirs.append("/Library/Frameworks/GEOS.framework/unix/lib")
 -        ext.library_dirs.append("/Library/Frameworks/PROJ.framework/unix/lib")
-+        ext.include_dirs.append("@PREFIX@/opt/libgeos3.5.0/include/")
 +        ext.include_dirs.append("@PREFIX@/include/")
-+        ext.library_dirs.append("@PREFIX@/opt/libgeos3.5.0/lib")
 +        ext.library_dirs.append("@PREFIX@/lib")
  
          ext.define_macros.append(("SQLITE_ENABLE_FTS3", "1"))   # build with fulltext search enabled
@@ -28,21 +64,68 @@ diff -ruN pyspatialite-3.0.1-orig/setup.py pyspatialite-3.0.1/setup.py
 -        ext.sources.append(os.path.join(AMALGAMATION_ROOT, "sqlite3.c"))
 -        ext.sources.append(os.path.join(AMALGAMATION_ROOT, "spatialite.c"))
 -        ext.include_dirs.append(AMALGAMATION_ROOT)
-+        ext.sources.append(os.path.join("sqlite/", "sqlite3.c"))
-+        ext.sources.append(os.path.join("spatialite/", "spatialite.c"))
-+        ext.include_dirs.append("@PREFIX@/include/")
          build_ext.build_extension(self, ext)
          
  
+diff -ruN pyspatialite-3.0.1-orig/src/connection.c pyspatialite-3.0.1/src/connection.c
+--- pyspatialite-3.0.1-orig/src/connection.c	2016-03-16 22:35:42.000000000 +0900
++++ pyspatialite-3.0.1/src/connection.c	2016-03-16 22:49:22.000000000 +0900
+@@ -29,6 +29,7 @@
+ #include "prepare_protocol.h"
+ #include "util.h"
+ #include "sqlitecompat.h"
++#include "spatialite.h"
+ 
+ #include "pythread.h"
+ 
+@@ -81,7 +82,6 @@
+     }
+ 
+     self->initialized = 1;
+-    spatialite_init(0);
+     self->begin_statement = NULL;
+ 
+     self->statement_cache = NULL;
+@@ -106,7 +106,9 @@
+         }
+ 
+         Py_BEGIN_ALLOW_THREADS
++        self->slconn = spatialite_alloc_connection();
+         rc = sqlite3_open(PyString_AsString(database_utf8), &self->db);
++        spatialite_init_ex( self->db, self->slconn, 0 );
+         Py_END_ALLOW_THREADS
+ 
+         Py_DECREF(database_utf8);
+@@ -272,6 +274,7 @@
+     if (self->db) {
+         Py_BEGIN_ALLOW_THREADS
+         sqlite3_close(self->db);
++        spatialite_cleanup_ex( self->slconn );
+         Py_END_ALLOW_THREADS
+     } else if (self->apsw_connection) {
+         ret = PyObject_CallMethod(self->apsw_connection, "close", "");
+@@ -372,6 +375,7 @@
+         } else {
+             Py_BEGIN_ALLOW_THREADS
+             rc = sqlite3_close(self->db);
++            spatialite_cleanup_ex( self->slconn );
+             Py_END_ALLOW_THREADS
+ 
+             if (rc != SQLITE_OK) {
 diff -ruN pyspatialite-3.0.1-orig/src/connection.h pyspatialite-3.0.1/src/connection.h
---- pyspatialite-3.0.1-orig/src/connection.h	2012-12-31 11:16:40.000000000 +0900
-+++ pyspatialite-3.0.1/src/connection.h	2012-12-31 11:31:59.000000000 +0900
-@@ -33,7 +33,7 @@
+--- pyspatialite-3.0.1-orig/src/connection.h	2016-03-16 22:35:42.000000000 +0900
++++ pyspatialite-3.0.1/src/connection.h	2016-03-16 22:50:15.000000000 +0900
+@@ -33,12 +33,11 @@
  #include "sqlite3.h"
  #include "spatialite.h"
  
 -int spatialite_init(int verbose);
-+void spatialite_init(int verbose);
- 
+-
  typedef struct
  {
+     PyObject_HEAD
+     sqlite3* db;
++    void *slconn;
+ 
+     /* 1 if we are currently within a transaction, i. e. if a BEGIN has been
+      * issued */
