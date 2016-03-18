@@ -1,7 +1,7 @@
 Info2: <<
 Package: vtk510
 Version: 5.10.1
-Revision: 3
+Revision: 4
 Source: http://www.vtk.org/files/release/5.10/vtk-%v.tar.gz
 Source-MD5: 264b0052e65bd6571a84727113508789
 SourceDirectory: VTK%v
@@ -45,7 +45,7 @@ CompileScript: <<
        -DCMAKE_INSTALL_PREFIX:PATH=%p \
        -DBUILD_SHARED_LIBS:BOOL=ON \
        -DCMAKE_INSTALL_NAME_DIR:STRING=%p/lib/%N \
-       -DCMAKE_BUILD_WITH_INSTALL_RPATH:BOOL=ON \
+       -DCMAKE_BUILD_WITH_INSTALL_RPATH:BOOL=OFF \
        -DCMAKE_INSTALL_RPATH:STRING="${CMAKE_INSTALL_NAME_DIR}" \
        -DVTK_USE_RPATH=ON \
        -DVTK_USE_CARBON:BOOL=OFF \
@@ -69,7 +69,8 @@ CompileScript: <<
        -DOPENGL_gl_LIBRARY:STRING="-L$X11_BASE_DIR/lib -lGL" \
        -DOPENGL_glu_LIBRARY:STRING="-L$X11_BASE_DIR/lib -lGLU" \
        -DOPENGL_INCLUDE_DIR:PATH="$X11_BASE_DIR/include" \
-       -DOPENGL_xmesa_INCLUDE_DIR:PATH=$X11_BASE_DIR/include \
+       -DCMAKE_C_FLAGS=-DGLX_GLXEXT_LEGACY \
+       -DCMAKE_CXX_FLAGS=-DGLX_GLXEXT_LEGACY \       -DOPENGL_xmesa_INCLUDE_DIR:PATH=$X11_BASE_DIR/include \
        -DVTK_USE_SYSTEM_EXPAT:BOOL=OFF \
        -DVTK_USE_SYSTEM_JPEG:BOOL=OFF \
        -DVTK_USE_SYSTEM_PNG:BOOL=OFF \
@@ -82,10 +83,6 @@ CompileScript: <<
        -DVTK_HAVE_GETSOCKNAME_WITH_SOCKLEN_T:BOOL=ON \
        -DIOKit:FILEPATH=/System/Library/Frameworks/IOKit.framework \
        ../VTK%v
-# Hack for finding not-yet-installed dylibs during making.
-# Cmake's method via CMAKE_BUILD_WITH_INSTALL_RPATH=OFF is still 
-# half-baked; doesn't work for python modules
- export DYLD_LIBRARY_PATH=`pwd`/bin
 #
 # cmake is broken even after setting DYLD_LIBRARY_PATH and needs help
 # finding libvtkDICOMParser.5.10.dylib when linking vtkpython.  So let's
@@ -103,6 +100,19 @@ CompileScript: <<
 InstallScript: <<
 #!/bin/sh -ex
  cd ../VTKBuild
+# When using CMAKE_BUILD_WITH_INSTALL_RPATH=OFF, cmake correctly uses
+# install_name_tool to change the intall_names of the dylibs and
+# executables from the build dir to the final install dir %p/lib/%N.
+# But it still does not do this for bundles, i.e. *.so.
+# Since the DYLD_LIBRARY_PATH hack does not work on 10.11 any more,
+# we have to fix all the python modules by hand.
+for bundle in `find . -name vtk\*.so`
+ do
+    for lib in `otool -L $bundle |egrep -o "$PWD.*dylib" | egrep -o '/libvtk.*dylib'`
+    do
+      install_name_tool -change $PWD/bin$lib %p/lib/%N$lib $bundle
+    done
+ done
  make install DESTDIR=%d
  /usr/bin/install -d %i/share/doc/%n
  /bin/cp -R ../VTK%v/Examples %i/share/doc/%n/
