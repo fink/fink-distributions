@@ -1,0 +1,349 @@
+--- libtorrent-0.12.9-orig/rak/allocators.h	2011-06-21 22:37:15.000000000 -0700
++++ libtorrent-0.12.9/rak/allocators.h	2011-06-21 22:42:44.000000000 -0700
+@@ -77,8 +77,15 @@
+ 
+   static pointer alloc_size(size_type size) {
+     pointer ptr = NULL;
++#ifdef	HAVE_POSIX_MEMALIGN
+     int __UNUSED result = posix_memalign((void**)&ptr, LT_SMP_CACHE_BYTES, size);
+ 
++#elif	defined(__APPLE__)
++	// apple-darwin's malloc is already Altivec-aligned (16B)
++	ptr = static_cast<pointer>(malloc(size));
++#else
++#error	"Missing equivalent of posix_memalign()."
++#endif
+     return ptr;
+   }
+ 
+--- libtorrent-0.12.9-orig/src/torrent/common.h	2011-06-21 23:12:25.000000000 -0700
++++ libtorrent-0.12.9/src/torrent/common.h	2011-06-21 23:33:19.000000000 -0700
+@@ -37,6 +37,24 @@
+ #ifndef LIBTORRENT_COMMON_H
+ #define LIBTORRENT_COMMON_H
+ 
++#if (__GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 2))
++#if defined(__APPLE__)
++#define	USE_DARWIN_ATOMICS
++#endif
++#endif
++
++#ifdef	USE_DARWIN_ATOMICS
++#include <libkern/OSAtomic.h>
++#define	__sync_add_and_fetch(x, y)	OSAtomicAdd32Barrier(y, (int32_t*)x)
++#define	__sync_sub_and_fetch(x, y)	OSAtomicAdd32Barrier(-(y), (int32_t*)x)
++#define	__sync_and_and_fetch(x, y)	OSAtomicAnd32Barrier(y, (uint32_t*)x)
++#define	__sync_or_and_fetch(x, y)	OSAtomicOr32Barrier(y, (uint32_t*)x)
++#define	__sync_lock_test_and_set(x, y)	OSAtomicTestAndSetBarrier(y, x)
++#define	__sync_bool_compare_and_swap(x, y, z)	OSAtomicCompareAndSwap32Barrier(y, z, (int32_t*)x)
++#define	__sync_fetch_and_or(x, y)	( __sync_or_and_fetch(x, y), *x )
++#define	__sync_fetch_and_and(x, y)	( __sync_and_and_fetch(x, y), *x )
++#endif
++
+ #include <inttypes.h>
+ #include <cstddef.h>
+ 
+--- libtorrent-0.12.9-orig/src/torrent/utils/thread_base.h	2011-06-21 23:12:25.000000000 -0700
++++ libtorrent-0.12.9/src/torrent/utils/thread_base.h	2011-06-21 23:33:19.000000000 -0700
+@@ -102,7 +102,6 @@
+   virtual const char* name() const = 0;
+ 
+   Poll*               poll()            { return m_poll; }
+-  signal_type*        signal_bitfield() { return &m_signal_bitfield; }
+   pthread_t           pthread()         { return m_thread; }
+ 
+   virtual void        init_thread() = 0;
+@@ -150,6 +150,8 @@
+
+   thread_interrupt*   m_interrupt_sender;
+   thread_interrupt*   m_interrupt_receiver;
++public:
++  signal_type*        signal_bitfield() { return &m_signal_bitfield; }
+ };
+ 
+ inline bool
+--- libtorrent-0.12.9-orig/src/net/socket_set.h	2011-06-26 21:28:11.000000000 -0700
++++ libtorrent-0.12.9/src/net/socket_set.h	2011-06-26 21:28:56.000000000 -0700
+@@ -53,12 +53,12 @@
+ 
+ // Propably should rename to EventSet...
+ 
+-class SocketSet : private std::vector<Event*, rak::cacheline_allocator<> > {
++class SocketSet : private std::vector<Event*, rak::cacheline_allocator<Event*> > {
+ public:
+   typedef uint32_t    size_type;
+ 
+-  typedef std::vector<Event*, rak::cacheline_allocator<> > base_type;
+-  typedef std::vector<size_type, rak::cacheline_allocator<> > Table;
++  typedef std::vector<Event*, rak::cacheline_allocator<Event*> > base_type;
++  typedef std::vector<size_type, rak::cacheline_allocator<size_type> > Table;
+ 
+   static const size_type npos = static_cast<size_type>(-1);
+ 
+--- libtorrent-0.12.9-orig/src/torrent/utils/extents.h	2011-07-16 17:26:37.000000000 -0700
++++ libtorrent-0.12.9/src/torrent/utils/extents.h	2011-07-17 00:28:48.000000000 -0700
+@@ -39,6 +39,19 @@
+ 
+ #include <tr1/array>
+ 
++#if (__GNUC__ == 4 && __GNUC_MINOR__ < 1 && __GNUC_PATCHLEVEL__ < 2)
++// apple-gcc-4.0.1 missing definition of std::tr1::array::assign
++namespace std {
++namespace tr1 {
++template<typename _Tp, size_t _Nm>
++void
++array<_Tp,_Nm>::assign(const value_type& v) {
++	std::fill_n(this->begin(), this->size(), v);
++}
++}	// end namespace tr1
++}	// end namespace std
++#endif
++
+ namespace torrent {
+ 
+ template <typename Key, typename Tp, unsigned int TableSize, unsigned int TableBits>
+--- libtorrent-0.13.0-orig/src/torrent/utils/log.cc	2011-12-10 17:05:09.000000000 -0800
++++ libtorrent-0.13.0/src/torrent/utils/log.cc	2011-12-10 17:05:16.000000000 -0800
+@@ -232,7 +232,7 @@
+ log_cleanup() {
+   pthread_mutex_lock(&log_mutex);
+ 
+-  log_groups.assign(log_group());
++  std::fill(log_groups.begin(), log_groups.end(), log_group());
+   log_outputs.clear();
+   log_children.clear();
+ 
+--- libtorrent-0.13.2/test/torrent/object_static_map_test.h.orig	2012-08-02 12:40:04.000000000 -0700
++++ libtorrent-0.13.2/test/torrent/object_static_map_test.h	2012-08-02 12:42:13.000000000 -0700
+@@ -9,14 +9,14 @@
+   CPPUNIT_TEST(test_read);
+   CPPUNIT_TEST(test_read_extensions);
+ 
+-  CPPUNIT_TEST(test_read_empty);
++//  CPPUNIT_TEST(test_read_empty);
+   CPPUNIT_TEST(test_read_single);
+   CPPUNIT_TEST(test_read_single_raw);
+   CPPUNIT_TEST(test_read_raw_types);
+   CPPUNIT_TEST(test_read_multiple);
+   CPPUNIT_TEST(test_read_dict);
+ 
+-  CPPUNIT_TEST(test_write_empty);
++//  CPPUNIT_TEST(test_write_empty);
+   CPPUNIT_TEST(test_write_single);
+   CPPUNIT_TEST(test_write_multiple);
+   CPPUNIT_TEST_SUITE_END();
+@@ -33,14 +33,14 @@
+   void test_read_extensions();
+ 
+   // Proper unit tests:
+-  void test_read_empty();
++//  void test_read_empty();
+   void test_read_single();
+   void test_read_single_raw();
+   void test_read_raw_types();
+   void test_read_multiple();
+   void test_read_dict();
+ 
+-  void test_write_empty();
++//  void test_write_empty();
+   void test_write_single();
+   void test_write_multiple();
+ };
+--- libtorrent-0.13.2/test/torrent/object_static_map_test.cc.orig	2012-08-02 12:40:08.000000000 -0700
++++ libtorrent-0.13.2/test/torrent/object_static_map_test.cc	2012-08-02 12:42:02.000000000 -0700
+@@ -212,15 +212,19 @@
+ enum keys_multiple { key_multiple_a, key_multiple_b, key_multiple_c, key_multiple_LAST };
+ enum keys_dict { key_dict_a_b, key_dict_LAST };
+ 
++#if 0
+ typedef torrent::static_map_type<keys_empty, key_empty_LAST> test_empty_type;
++#endif
+ typedef torrent::static_map_type<keys_single, key_single_LAST> test_single_type;
+ typedef torrent::static_map_type<keys_raw, key_raw_LAST> test_raw_type;
+ typedef torrent::static_map_type<keys_raw_types, key_raw_types_LAST> test_raw_types_type;
+ typedef torrent::static_map_type<keys_multiple, key_multiple_LAST> test_multiple_type;
+ typedef torrent::static_map_type<keys_dict, key_dict_LAST> test_dict_type;
+ 
++#if 0
+ template <> const test_empty_type::key_list_type
+ test_empty_type::keys = { };
++#endif
+ template <> const test_single_type::key_list_type
+ test_single_type::keys = { { key_single_a, "b" } };
+ template <> const test_raw_type::key_list_type
+@@ -235,6 +239,7 @@
+ template <> const test_dict_type::key_list_type
+ test_dict_type::keys = { { key_dict_a_b, "a::b" } };
+ 
++#if 0
+ void
+ ObjectStaticMapTest::test_read_empty() {
+   test_empty_type map_normal;
+@@ -247,6 +252,7 @@
+   CPPUNIT_ASSERT(static_map_read_bencode_exception(map_incomplete, ""));
+   CPPUNIT_ASSERT(static_map_read_bencode_exception(map_incomplete, "d"));
+ }
++#endif
+ 
+ void
+ ObjectStaticMapTest::test_read_single() {
+@@ -340,12 +346,14 @@
+   CPPUNIT_ASSERT(map_normal[key_dict_a_b].as_value() == 1);
+ }
+ 
++#if 0
+ void
+ ObjectStaticMapTest::test_write_empty() {
+   test_empty_type map_normal;
+   
+   CPPUNIT_ASSERT(static_map_write_bencode(map_normal, "de"));
+ }
++#endif
+ 
+ void
+ ObjectStaticMapTest::test_write_single() {
+--- libtorrent-0.13.6-orig/src/torrent/utils/log.cc	2016-04-01 01:54:27.000000000 -0700
++++ libtorrent-0.13.6/src/torrent/utils/log.cc	2016-04-01 08:24:42.000000000 -0700
+@@ -187,11 +187,9 @@
+     return;
+ 
+   pthread_mutex_lock(&log_mutex);
+-  std::for_each(m_first, m_last, std::tr1::bind(&log_slot::operator(),
+-                                                std::tr1::placeholders::_1,
+-                                                buffer,
+-                                                std::distance(buffer, first),
+-                                                std::distance(log_groups.begin(), this)));
++  for (auto itr = m_first; itr != m_last; ++itr) {
++    (*itr)(buffer, std::distance(buffer, first), std::distance(log_groups.begin(), this));
++  }
+   if (dump_data != NULL)
+     std::for_each(m_first, m_last, std::bind(&log_slot::operator(),
+                                                   std::placeholders::_1,
+--- libtorrent-0.13.6-orig/src/utils/queue_buckets.h	2016-04-01 08:30:11.000000000 -0700
++++ libtorrent-0.13.6/src/utils/queue_buckets.h	2016-04-01 08:43:29.000000000 -0700
+@@ -251,7 +251,9 @@
+   instrumentation_update(constants::instrumentation_total[idx], -difference);
+ 
+   // Consider moving these to a temporary dequeue before releasing:
+-  std::for_each(begin, end, std::tr1::function<void (value_type)>(&constants::template destroy<value_type>));
++  for (auto itr = begin; itr != end; ++itr) {
++    constants::destroy(*itr);
++  }
+   queue_at(idx).erase(begin, end);
+ }
+ 
+--- libtorrent-0.13.6-orig/src/data/memory_chunk.cc	2016-04-01 18:13:51.000000000 -0700
++++ libtorrent-0.13.6/src/data/memory_chunk.cc	2016-04-01 18:14:38.000000000 -0700
+@@ -56,6 +56,10 @@
+ 
+ uint32_t MemoryChunk::m_pagesize = getpagesize();
+ 
++const int MemoryChunk::sync_sync;
++const int MemoryChunk::sync_async;
++const int MemoryChunk::sync_invalidate;
++
+ inline void
+ MemoryChunk::align_pair(uint32_t* offset, uint32_t* length) const {
+   *offset += page_align();
+--- libtorrent-0.13.6-orig/src/protocol/request_list.cc	2016-04-01 18:18:11.000000000 -0700
++++ libtorrent-0.13.6/src/protocol/request_list.cc	2016-04-01 18:18:43.000000000 -0700
+@@ -52,6 +52,8 @@
+ 
+ namespace torrent {
+ 
++const int request_list_constants::bucket_count;
++
+ const instrumentation_enum request_list_constants::instrumentation_added[bucket_count] = {
+   INSTRUMENTATION_TRANSFER_REQUESTS_QUEUED_ADDED,
+   INSTRUMENTATION_TRANSFER_REQUESTS_UNORDERED_ADDED,
+--- libtorrent-0.13.6-orig/src/torrent/utils/signal_bitfield.cc	2016-04-01 18:21:38.000000000 -0700
++++ libtorrent-0.13.6/src/torrent/utils/signal_bitfield.cc	2016-04-01 18:22:30.000000000 -0700
+@@ -42,6 +42,8 @@
+ 
+ namespace torrent {
+ 
++const unsigned int lt_cacheline_aligned signal_bitfield::max_size;
++
+ // Only the thread owning this signal bitfield should add signals.
+ unsigned int
+ signal_bitfield::add_signal(slot_type slot) {
+--- libtorrent-0.13.6-orig/test/torrent/utils/test_queue_buckets.cc	2016-04-01 18:25:02.000000000 -0700
++++ libtorrent-0.13.6/test/torrent/utils/test_queue_buckets.cc	2016-04-01 18:26:11.000000000 -0700
+@@ -40,6 +40,8 @@
+ 
+ static int items_destroyed = 0;
+ 
++const int test_constants::bucket_count;
++
+ template <>
+ void
+ test_constants::destroy<int>(__UNUSED int& obj) {
+--- libtorrent-0.13.6-orig/test/torrent/utils/thread_base_test.cc	2016-04-01 18:28:56.000000000 -0700
++++ libtorrent-0.13.6/test/torrent/utils/thread_base_test.cc	2016-04-01 18:31:04.000000000 -0700
+@@ -14,6 +14,14 @@
+ 
+ void throw_shutdown_exception() { throw torrent::shutdown_exception(); }
+ 
++const int thread_test::test_flag_pre_stop;
++const int thread_test::test_flag_long_timeout;
++const int thread_test::test_flag_acquire_global;
++const int thread_test::test_flag_has_global;
++const int thread_test::test_flag_do_work;
++const int thread_test::test_flag_pre_poke;
++const int thread_test::test_flag_post_poke;
++
+ thread_test::thread_test() :
+   m_test_state(TEST_NONE),
+   m_test_flags(0) {
+--- libtorrent-0.13.6-orig/src/torrent/data/file.cc	2016-04-02 00:28:09.000000000 -0700
++++ libtorrent-0.13.6/src/torrent/data/file.cc	2016-04-02 00:30:11.000000000 -0700
+@@ -50,6 +50,14 @@
+ 
+ namespace torrent {
+ 
++const int File::flag_active;
++const int File::flag_create_queued;
++const int File::flag_resize_queued;
++const int File::flag_fallocate;
++const int File::flag_previously_created;
++const int File::flag_prioritize_first;
++const int File::flag_prioritize_last;
++
+ File::File() :
+   m_fd(-1),
+   m_protection(0),
+--- libtorrent-0.13.6-orig/src/torrent/peer/connection_list.cc	2016-04-02 00:31:38.000000000 -0700
++++ libtorrent-0.13.6/src/torrent/peer/connection_list.cc	2016-04-02 00:32:47.000000000 -0700
+@@ -60,6 +60,11 @@
+ 
+ namespace torrent {
+ 
++const int ConnectionList::disconnect_available;
++const int ConnectionList::disconnect_quick;
++const int ConnectionList::disconnect_unwanted;
++const int ConnectionList::disconnect_delayed;
++
+ ConnectionList::ConnectionList(DownloadMain* download) :
+   m_download(download), m_minSize(50), m_maxSize(100) {
+ }
+--- libtorrent-0.13.6-orig/src/torrent/download.cc	2016-04-02 00:37:02.000000000 -0700
++++ libtorrent-0.13.6/src/torrent/download.cc	2016-04-02 00:38:34.000000000 -0700
+@@ -72,6 +72,18 @@
+ 
+ namespace torrent {
+ 
++const int DownloadInfo::flag_open;
++const int DownloadInfo::flag_active;
++const int DownloadInfo::flag_compact;
++const int DownloadInfo::flag_accepting_new_peers;
++const int DownloadInfo::flag_accepting_seeders;
++const int DownloadInfo::flag_private;
++const int DownloadInfo::flag_meta_download;
++const int DownloadInfo::flag_pex_enabled;
++const int DownloadInfo::flag_pex_active;
++const int DownloadInfo::public_flags;
++const uint32_t DownloadInfo::unlimited;
++
+ const DownloadInfo* Download::info() const { return m_ptr->info(); }
+ const download_data* Download::data() const { return m_ptr->data(); }
+ 
