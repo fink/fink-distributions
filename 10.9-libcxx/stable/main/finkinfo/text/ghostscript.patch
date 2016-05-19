@@ -1,179 +1,32 @@
-diff -uNr ghostscript-9.18.orig/Makefile.in ghostscript-9.18/Makefile.in
---- ghostscript-9.18.orig/Makefile.in	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/Makefile.in	2016-01-29 08:14:37.000000000 -0500
-@@ -279,6 +279,7 @@
- # and source location and configuration flags for compiling in
- JPX_LIB=@JPX_DECODER@
- SHARE_JPX=@SHARE_JPX@
-+SHARE_JPX_LIB=@SHARE_JPX_LIB@
- JPXSRCDIR=@JPXDIR@
- JPX_CFLAGS=@JPX_AUTOCONF_CFLAGS@
- 
-diff -uNr ghostscript-9.18.orig/Resource/Init/gs_fonts.ps ghostscript-9.18/Resource/Init/gs_fonts.ps
---- ghostscript-9.18.orig/Resource/Init/gs_fonts.ps	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/Resource/Init/gs_fonts.ps	2016-01-29 08:17:32.000000000 -0500
-@@ -183,7 +183,7 @@
-     } if
-     {           % Stack: key file
-                 % Protect ourselves against syntax errors here.
--      dup { token } stopped { pop //false exit } if
-+      dup { token } stopped { //false exit } if
-       not { //false exit } if               % end of file
-       dup /eexec eq { pop //false exit } if       % reached eexec section
-       dup /Subrs eq { pop //false exit } if       % Subrs without eexec
-@@ -410,7 +410,7 @@
-             pop
-           }
-           {
--            3 -1 roll pop
-+            counttomark 1 add -1 roll pop
-             not { dup 0 get } if  % stack: (newname) [ (name) (path) ]
-             % DEBUG { (  found ) print dup print (\n) print flush } if
-             % add entry to the fontmap
-diff -uNr ghostscript-9.18.orig/base/gdevdgbr.c ghostscript-9.18/base/gdevdgbr.c
---- ghostscript-9.18.orig/base/gdevdgbr.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/base/gdevdgbr.c	2016-01-29 08:14:37.000000000 -0500
-@@ -82,7 +82,7 @@
-                  dev->color_info.depth : dev->color_info.num_components);
- 
-         if (!(requested->options & GB_SELECT_PLANES) ||
--            !(both & (GB_PACKING_PLANAR || GB_PACKING_BIT_PLANAR))
-+            !(both & (GB_PACKING_PLANAR | GB_PACKING_BIT_PLANAR))
-             )
-             return false;
-         for (i = 0; i < n; ++i)
-diff -uNr ghostscript-9.18.orig/base/gscspace.c ghostscript-9.18/base/gscspace.c
---- ghostscript-9.18.orig/base/gscspace.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/base/gscspace.c	2016-01-29 08:14:37.000000000 -0500
-@@ -166,7 +166,7 @@
- gs_cspace_new_ICC(gs_memory_t *pmem, gs_state * pgs, int components)
- {
-     gsicc_manager_t *icc_manage = pgs->icc_manager;
--    int code;
-+    int code = 0;
-     gs_color_space *pcspace = gs_cspace_alloc(pmem, &gs_color_space_type_ICC);
- 
-     switch (components) {
-diff -uNr ghostscript-9.18.orig/base/gsicc.c ghostscript-9.18/base/gsicc.c
---- ghostscript-9.18.orig/base/gsicc.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/base/gsicc.c	2016-01-29 08:14:37.000000000 -0500
-@@ -468,6 +468,8 @@
-     cmm_dev_profile_t *dev_profile;
- 
-     code = dev_proc(dev, get_profile)(dev, &dev_profile);
-+    if (dev_profile == NULL)
-+        return gs_throw(gs_error_Fatal, "Attempting to do ICC remap with no profile");
-     num_des_comps = gsicc_get_device_profile_comps(dev_profile);
-     rendering_params.black_point_comp = pis->blackptcomp;
-     rendering_params.graphics_type_tag = dev->graphics_type_tag;
-diff -uNr ghostscript-9.18.orig/base/gsptype1.c ghostscript-9.18/base/gsptype1.c
---- ghostscript-9.18.orig/base/gsptype1.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/base/gsptype1.c	2016-01-29 08:14:37.000000000 -0500
-@@ -2010,7 +2010,7 @@
-     int64_t offset1 = offset;
-     gx_color_tile *ptile;
-     int code, l;
--    tile_trans_clist_info_t trans_info = { 0 };
-+    tile_trans_clist_info_t trans_info = {{{0}}};
-     int cache_space_needed;
- 
-     if (offset == 0) {
-diff -uNr ghostscript-9.18.orig/base/gxiscale.c ghostscript-9.18/base/gxiscale.c
---- ghostscript-9.18.orig/base/gxiscale.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/base/gxiscale.c	2016-01-29 08:14:37.000000000 -0500
-@@ -929,8 +929,8 @@
-     }
-     /* Go ahead and take apart any indexed color space or do the decode
-        so that we can then perform the interpolation or color management */
--    need_decode = !((penum->device_color || penum->icc_setup.is_lab) &&
--                     (penum->icc_setup.need_decode == 0) ||
-+    need_decode = !(((penum->device_color || penum->icc_setup.is_lab) &&
-+                     (penum->icc_setup.need_decode == 0)) ||
-                      gs_color_space_is_CIE(pcs));
-     initial_decode(penum, buffer, data_x, h, need_decode, &stream_r, true);
-     /*
-@@ -1338,8 +1338,8 @@
-      * OR gs_color_space_is_CIE(pcs) == 0 (i.e. we have indexed/sep or devn)
-      * FIXME: Understand this! Michael says change the second || to && maybe.
-      */
--    need_decode = !((penum->device_color || penum->icc_setup.is_lab) &&
--                     (penum->icc_setup.need_decode == 0) ||
-+    need_decode = !(((penum->device_color || penum->icc_setup.is_lab) &&
-+                     (penum->icc_setup.need_decode == 0)) ||
-                      gs_color_space_is_CIE(pcs));
-     initial_decode(penum, buffer, data_x, h, need_decode, &stream_r, true);
-     /*
-diff -uNr ghostscript-9.18.orig/base/gxpcolor.h ghostscript-9.18/base/gxpcolor.h
---- ghostscript-9.18.orig/base/gxpcolor.h	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/base/gxpcolor.h	2016-01-29 08:14:37.000000000 -0500
-@@ -20,6 +20,7 @@
- #ifndef gxpcolor_INCLUDED
- #  define gxpcolor_INCLUDED
- 
-+#include "gxdcolor.h"
- #include "gspcolor.h"
- #include "gxcspace.h"
- #include "gxdevice.h"
-diff -uNr ghostscript-9.18.orig/base/gxstroke.c ghostscript-9.18/base/gxstroke.c
---- ghostscript-9.18.orig/base/gxstroke.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/base/gxstroke.c	2016-01-29 08:14:37.000000000 -0500
-@@ -1715,8 +1715,8 @@
-              * line segments generated from arcs to be round. This would
-              * solve some flatness issues, but makes some pathological
-              * cases incredibly slow. */
--            if ((join == gs_join_round)
--                /* || (flags & nf_all_from_arc) */) {
-+            if (join == gs_join_round)
-+                /* || (flags & nf_all_from_arc) ) */ {
-                 code = add_pie_join_fast_ccw(ppath, plp, nplp, reflected);
-             } else { /* non-round join */
-                 code = line_join_points_fast_ccw(pgs_lp, plp, nplp,
-@@ -1755,8 +1755,8 @@
-              * line segments generated from arcs to be round. This would
-              * solve some flatness issues, but makes some pathological
-              * cases incredibly slow. */
--            if ((join == gs_join_round)
--                /* || (flags & nf_all_from_arc) */) {
-+            if (join == gs_join_round)
-+                /* || (flags & nf_all_from_arc) ) */ {
-                 code = add_pie_join_fast_cw(rpath, plp, nplp, reflected);
-             } else { /* non-round join */
-                 code = line_join_points_fast_cw(pgs_lp, plp, nplp,
-diff -uNr ghostscript-9.18.orig/base/mkromfs.c ghostscript-9.18/base/mkromfs.c
---- ghostscript-9.18.orig/base/mkromfs.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/base/mkromfs.c	2016-01-29 08:14:37.000000000 -0500
-@@ -2329,7 +2329,7 @@
+diff -uNr ghostscript-9.19.orig/base/mkromfs.c ghostscript-9.19/base/mkromfs.c
+--- ghostscript-9.19.orig/base/mkromfs.c	2016-03-23 04:22:48.000000000 -0400
++++ ghostscript-9.19/base/mkromfs.c	2016-03-30 19:29:54.000000000 -0400
+@@ -2324,7 +2324,7 @@
  #endif
      fprintf(out,"\n#include \"stdint_.h\"\n");
      fprintf(out,"\n#include \"time_.h\"\n\n");
 -    fprintf(out,"    time_t gs_romfs_buildtime = %ld;\n\n", time(NULL));
-+    fprintf(out,"    time_t gs_romfs_buildtime = %lld;\n\n", (long long)time(NULL));
++    fprintf(out,"    time_t gs_romfs_buildtime = %lld;\n\n", time(NULL));
  
      /* process the remaining arguments (options interspersed with paths) */
      for (; atarg < argc; atarg++) {
-diff -uNr ghostscript-9.18.orig/base/openjpeg.mak ghostscript-9.18/base/openjpeg.mak
---- ghostscript-9.18.orig/base/openjpeg.mak	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/base/openjpeg.mak	2016-01-29 08:14:37.000000000 -0500
-@@ -16,6 +16,7 @@
- # makefile for Luratech lwf_jp2 library code.
- # Users of this makefile must define the following:
- #       SHARE_JPX - whether to compile in or link to the library
-+#       SHARE_JPX_LIB - name of external library to link to
- #       JPXSRCDIR - the library source directory
- #
- # gs.mak and friends define the following:
-@@ -105,7 +106,7 @@
- # external link .dev
- $(OPEN_JPEG_GEN)openjpeg_1.dev : $(TOP_MAKEFILES) $(OPEN_JPEG_MAK) $(ECHOGS_XE) \
-  $(MAKEDIRS)
--	$(SETMOD) $(OPEN_JPEG_GEN)openjpeg_1 -lib lib_openjpeg
-+	$(SETMOD) $(OPEN_JPEG_GEN)openjpeg_1 -lib $(SHARE_JPX_LIB)
- 
- # compile our own .dev
- $(OPEN_JPEG_GEN)openjpeg_0.dev : $(TOP_MAKEFILES) $(OPEN_JPEG_MAK) $(ECHOGS_XE) $(open_jpeg_OBJS) \
-diff -uNr ghostscript-9.18.orig/base/unistd_.h ghostscript-9.18/base/unistd_.h
---- ghostscript-9.18.orig/base/unistd_.h	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/base/unistd_.h	2016-01-29 08:14:37.000000000 -0500
+diff -uNr ghostscript-9.19.orig/base/stdpre.h ghostscript-9.19/base/stdpre.h
+--- ghostscript-9.19.orig/base/stdpre.h	2016-03-23 04:22:48.000000000 -0400
++++ ghostscript-9.19/base/stdpre.h	2016-03-30 19:50:15.000000000 -0400
+@@ -268,7 +268,9 @@
+  * header file that includes sys/types.h.
+  *
+  */
+-#define bool bool_		/* (maybe not needed) */
++#if !defined(bool)
++#    define bool bool_		/* (maybe not needed) */
++#endif
+ #define uchar uchar_
+ #define uint uint_
+ #define ushort ushort_
+diff -uNr ghostscript-9.19.orig/base/unistd_.h ghostscript-9.19/base/unistd_.h
+--- ghostscript-9.19.orig/base/unistd_.h	2016-03-23 04:22:48.000000000 -0400
++++ ghostscript-9.19/base/unistd_.h	2016-03-30 17:09:01.000000000 -0400
 @@ -53,7 +53,9 @@
     /* _XOPEN_SOURCE 500 define is needed to get
      * access to pread and pwrite */
@@ -185,18 +38,10 @@ diff -uNr ghostscript-9.18.orig/base/unistd_.h ghostscript-9.18/base/unistd_.h
  #  include <unistd.h>
  #endif
  
-diff -uNr ghostscript-9.18.orig/configure ghostscript-9.18/configure
---- ghostscript-9.18.orig/configure	2015-10-05 04:22:04.000000000 -0400
-+++ ghostscript-9.18/configure	2016-01-29 08:14:37.000000000 -0500
-@@ -864,6 +864,7 @@
- LIBS
- CPPFLAGS
- CPP
-+CPPFLAGS
- XMKMF'
- 
- 
-@@ -6463,7 +6464,7 @@
+diff -uNr ghostscript-9.19.orig/configure ghostscript-9.19/configure
+--- ghostscript-9.19.orig/configure	2016-03-23 04:37:09.000000000 -0400
++++ ghostscript-9.19/configure	2016-03-30 19:31:12.000000000 -0400
+@@ -6740,7 +6740,7 @@
  $as_echo_n "checking for local zlib source... " >&6; }
  # we must define ZLIBDIR regardless because png.mak does a -I$(ZLIBDIR)
  # this seems a harmless default
@@ -205,10 +50,10 @@ diff -uNr ghostscript-9.18.orig/configure ghostscript-9.18/configure
  AUX_SHARED_ZLIB=
  
  if test -d $srcdir/zlib; then
-diff -uNr ghostscript-9.18.orig/configure.ac ghostscript-9.18/configure.ac
---- ghostscript-9.18.orig/configure.ac	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/configure.ac	2016-01-29 08:14:37.000000000 -0500
-@@ -917,7 +917,7 @@
+diff -uNr ghostscript-9.19.orig/configure.ac ghostscript-9.19/configure.ac
+--- ghostscript-9.19.orig/configure.ac	2016-03-23 04:22:48.000000000 -0400
++++ ghostscript-9.19/configure.ac	2016-03-30 19:31:24.000000000 -0400
+@@ -892,7 +892,7 @@
  dnl zlib is needed for language level 3, and libpng
  # we must define ZLIBDIR regardless because png.mak does a -I$(ZLIBDIR)
  # this seems a harmless default
@@ -217,35 +62,9 @@ diff -uNr ghostscript-9.18.orig/configure.ac ghostscript-9.18/configure.ac
  AUX_SHARED_ZLIB=
  
  if test -d $srcdir/zlib; then
-@@ -1517,6 +1517,17 @@
-       JPXDEVS='$(PSD)jpx.dev'
-     else
-       AC_MSG_RESULT([no])
-+      AC_MSG_CHECKING([for system OpenJPEG library])
-+      if $PKGCONFIG --exists libopenjp2; then
-+        AC_MSG_RESULT(yes)
-+        JPX_DECODER=openjpeg
-+        SHARE_JPX=1
-+        SHARE_JPX_LIB="`$PKGCONFIG libopenjp2 --libs-only-l | sed -e 's,^-l,,'`"
-+        JPX_AUTOCONF_CFLAGS="-DUSE_OPENJPEG_JP2 `$PKGCONFIG libopenjp2 --cflags`"
-+        JPXDEVS='$(PSD)jpx.dev'
-+      else
-+        AC_MSG_RESULT(no)
-+      fi
-     fi
-   fi
- fi
-@@ -1525,6 +1536,7 @@
- AC_SUBST(JPX_AUTOCONF_CFLAGS)
- AC_SUBST(JPXDIR)
- AC_SUBST(SHARE_JPX)
-+AC_SUBST(SHARE_JPX_LIB)
- AC_SUBST(JPXDEVS)
- 
- dnl check if we can/should build the gtk loader
-diff -uNr ghostscript-9.18.orig/contrib/gdevhl12.c ghostscript-9.18/contrib/gdevhl12.c
---- ghostscript-9.18.orig/contrib/gdevhl12.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/contrib/gdevhl12.c	2016-01-29 08:14:37.000000000 -0500
+diff -uNr ghostscript-9.19.orig/contrib/gdevhl12.c ghostscript-9.19/contrib/gdevhl12.c
+--- ghostscript-9.19.orig/contrib/gdevhl12.c	2016-03-23 04:22:48.000000000 -0400
++++ ghostscript-9.19/contrib/gdevhl12.c	2016-03-30 19:32:08.000000000 -0400
 @@ -481,7 +481,7 @@
          break;
      }
@@ -255,152 +74,21 @@ diff -uNr ghostscript-9.18.orig/contrib/gdevhl12.c ghostscript-9.18/contrib/gdev
          put_be16(prn_stream, s->out_count * sizeof(u16) + 7);
          put_be16(prn_stream, s->xl * 16);
          put_be16(prn_stream, band + ytop);
-diff -uNr ghostscript-9.18.orig/contrib/japanese/gdevlbp3.c ghostscript-9.18/contrib/japanese/gdevlbp3.c
---- ghostscript-9.18.orig/contrib/japanese/gdevlbp3.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/contrib/japanese/gdevlbp3.c	2016-01-29 08:14:37.000000000 -0500
-@@ -82,7 +82,7 @@
+diff -uNr ghostscript-9.19.orig/contrib/japanese/gdevp201.c ghostscript-9.19/contrib/japanese/gdevp201.c
+--- ghostscript-9.19.orig/contrib/japanese/gdevp201.c	2016-03-23 04:22:48.000000000 -0400
++++ ghostscript-9.19/contrib/japanese/gdevp201.c	2016-03-30 19:42:38.000000000 -0400
+@@ -241,7 +241,7 @@
+                 out_beg -= (out_beg - out) % bytes_per_column;
  
-         /* ----==== Set size ====---- */
-         gs_sprintf((char *)Buf, "0%ld", DataSize);
--        i = (DataSize+strlen(Buf)+1)&1;
-+        i = (DataSize+strlen((const char *)Buf)+1)&1;
-         /* ----==== escape to LIPS ====---- */
-         fprintf(fp, "\x80%s\x80\x80\x80\x80\x0c",Buf+i);
-         fprintf(fp, "\x1bP0J\x1b\\");
-@@ -111,7 +111,7 @@
+                 /* Dot addressing */
+-                fprintf(pdev->file, "\033F%04d",
++                fprintf(pdev->file, "\033F%04ld",
+                         (out_beg - out) / bytes_per_column);
  
-         /* ----==== Set size ====---- */
-         gs_sprintf((char *)Buf, "000%ld", DataSize);
--        i = (DataSize+strlen(Buf)+1)&3;
-+        i = (DataSize+strlen((const char *)Buf)+1)&3;
-         /* ----==== escape to LIPS ====---- */
-         fprintf(fp, "\x80%s\x80\x80\x80\x80\x0c",Buf+i);
-         fprintf(fp, "\x1bP0J\x1b\\");
-diff -uNr ghostscript-9.18.orig/contrib/pcl3/eprn/eprnfs.c ghostscript-9.18/contrib/pcl3/eprn/eprnfs.c
---- ghostscript-9.18.orig/contrib/pcl3/eprn/eprnfs.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/contrib/pcl3/eprn/eprnfs.c	2016-01-29 08:14:37.000000000 -0500
-@@ -255,7 +255,7 @@
- 
-     /* Distribute the approximation over the bit planes */
-     for (plane = 0; plane < planes; plane++) {
--      *ptr[plane] = (*ptr[plane] << 1) | approx & 0x01;
-+      *ptr[plane] = (*ptr[plane] << 1) | (approx & 0x01);
-       approx >>= 1;
-     }
- 
-@@ -527,7 +527,7 @@
-     plane = 0;
-     for (colorant = last_colorant; colorant >= 0; colorant--) {
-       while (plane < next_plane[colorant]) {
--        *ptr[plane] = (*ptr[plane] << 1) | approx[colorant] & 0x01;
-+        *ptr[plane] = (*ptr[plane] << 1) | (approx[colorant] & 0x01);
-         approx[colorant] >>= 1;
-         plane++;
-       }
-diff -uNr ghostscript-9.18.orig/contrib/pcl3/eprn/eprnparm.c ghostscript-9.18/contrib/pcl3/eprn/eprnparm.c
---- ghostscript-9.18.orig/contrib/pcl3/eprn/eprnparm.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/contrib/pcl3/eprn/eprnparm.c	2016-01-29 08:14:37.000000000 -0500
-@@ -1196,7 +1196,7 @@
- 
-   /* RGBLevels */
-   if ((rc = param_read_int(plist, (pname = "RGBLevels"), &temp)) == 0) {
--    if (temp == 0 || 2 <= temp && temp <= 256) {
-+    if (temp == 0 || (2 <= temp && temp <= 256)) {
-       if (eprn->non_black_levels != temp && dev->is_open) gs_closedevice(dev);
-       eprn->non_black_levels = temp;
-     }
-@@ -1246,7 +1246,7 @@
- 
-   /* Process parameters defined by base classes (should occur after treating
-      parameters defined for the derived class, see gsparam.h) */
--  if ((rc = gdev_prn_put_params(dev, plist)) < 0 || rc > 0 && last_error >= 0)
-+  if ((rc = gdev_prn_put_params(dev, plist)) < 0 || (rc > 0 && last_error >= 0))
-     last_error = rc;
- 
-   if (last_error < 0) return_error(last_error);
-diff -uNr ghostscript-9.18.orig/contrib/pcl3/eprn/eprnrend.c ghostscript-9.18/contrib/pcl3/eprn/eprnrend.c
---- ghostscript-9.18.orig/contrib/pcl3/eprn/eprnrend.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/contrib/pcl3/eprn/eprnrend.c	2016-01-29 08:14:37.000000000 -0500
-@@ -730,13 +730,13 @@
-        */
-       comp = pixel & comp_mask;	/* black */
-       for (j = 0; j < black_planes; j++) {
--        *ptr[j] = (*ptr[j] << 1) | comp & 1;
-+        *ptr[j] = (*ptr[j] << 1) | (comp & 1);
-         comp >>= 1;
-       }
-       if (non_black_planes > 0) for (l = 1; l < 4; l++) {
-         comp = (pixel >> l*dev->eprn.bits_per_colorant) & comp_mask;
-         for (m = 0; m < non_black_planes; m++, j++) {
--          *ptr[j] = (*ptr[j] << 1) | comp & 1;
-+          *ptr[j] = (*ptr[j] << 1) | (comp & 1);
-           comp >>= 1;
-         }
-       }
-@@ -819,13 +819,13 @@
-     /* Split and distribute over planes */
-     comp = pixel & comp_mask;	/* black */
-     for (j = 0; j < black_planes; j++) {
--      *ptr[j] = (*ptr[j] << 1) | comp & 1;
-+      *ptr[j] = (*ptr[j] << 1) | (comp & 1);
-       comp >>= 1;
-     }
-     for (l = 1; l < 4; l++) {
-       comp = (pixel >> l*dev->eprn.bits_per_colorant) & comp_mask;
-       for (m = 0; m < non_black_planes; m++, j++) {
--        *ptr[j] = (*ptr[j] << 1) | comp & 1;
-+        *ptr[j] = (*ptr[j] << 1) | (comp & 1);
-         comp >>= 1;
-       }
-     }
-@@ -953,7 +953,7 @@
-     pixel = line[k];
- 
-     /* Split and distribute over planes */
--    *ptr[0] = (*ptr[0] << 1) | pixel & 0x01;
-+    *ptr[0] = (*ptr[0] << 1) | (pixel & 0x01);
- #define assign_bit(index) \
-         *ptr[index] = (*ptr[index] << 1) | (pixel >> index) & 0x01
-     assign_bit(1);
-diff -uNr ghostscript-9.18.orig/contrib/pcl3/src/gdevpcl3.c ghostscript-9.18/contrib/pcl3/src/gdevpcl3.c
---- ghostscript-9.18.orig/contrib/pcl3/src/gdevpcl3.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/contrib/pcl3/src/gdevpcl3.c	2016-01-29 08:14:37.000000000 -0500
-@@ -1233,7 +1233,7 @@
-   /* Process parameters defined by base classes (should occur after treating
-      parameters defined for the derived class, see gsparam.h) */
-   if ((rc = eprn_put_params(device, plist)) < 0 ||
--    rc > 0 && last_error >= 0) last_error = rc;
-+    (rc > 0 && last_error >= 0)) last_error = rc;
- 
-   /* Act if the colour model was changed */
-   if (previous_colour_model != dev->eprn.colour_model) set_palette(dev);
-diff -uNr ghostscript-9.18.orig/contrib/pcl3/src/pclgen.c ghostscript-9.18/contrib/pcl3/src/pclgen.c
---- ghostscript-9.18.orig/contrib/pcl3/src/pclgen.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/contrib/pcl3/src/pclgen.c	2016-01-29 08:14:37.000000000 -0500
-@@ -308,7 +308,7 @@
- 
-         /* Permissible characters are HT and the octets 32-255 with the
-            exception of '"' (PJLTRM, with some corrections). */
--        while (*s != '\0' && (*s == '\t' || 32 <= *s && *s != '"')) s++;
-+        while (*s != '\0' && (*s == '\t' || (32 <= *s && *s != '"'))) s++;
-         if (*s != '\0') {
-           fprintf(stderr,
-             ERRPREF "Illegal character in PJL job name (code 0x%02X).\n", *s);
-diff -uNr ghostscript-9.18.orig/contrib/pcl3/src/pclsize.c ghostscript-9.18/contrib/pcl3/src/pclsize.c
---- ghostscript-9.18.orig/contrib/pcl3/src/pclsize.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/contrib/pcl3/src/pclsize.c	2016-01-29 08:14:37.000000000 -0500
-@@ -126,7 +126,7 @@
-     initialized = TRUE;
-   }
- 
--  key.mc = ms_without_flags(code) | code & PCL_CARD_FLAG;
-+  key.mc = ms_without_flags(code) | (code & PCL_CARD_FLAG);
-   result = (const CodeEntry *)bsearch(&key, code_map, array_size(code_map),
-     sizeof(CodeEntry), cmp_by_size);
- 
-diff -uNr ghostscript-9.18.orig/devices/gdevlp8k.c ghostscript-9.18/devices/gdevlp8k.c
---- ghostscript-9.18.orig/devices/gdevlp8k.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/devices/gdevlp8k.c	2016-01-29 08:14:37.000000000 -0500
+                 /* Dot graphics */
+diff -uNr ghostscript-9.19.orig/devices/gdevlp8k.c ghostscript-9.19/devices/gdevlp8k.c
+--- ghostscript-9.19.orig/devices/gdevlp8k.c	2016-03-23 04:22:48.000000000 -0400
++++ ghostscript-9.19/devices/gdevlp8k.c	2016-03-30 19:33:04.000000000 -0400
 @@ -358,8 +358,8 @@
          fwrite("\035",1,1,prn_stream);
          fprintf(prn_stream,"%d",lnum-60);
@@ -412,10 +100,10 @@ diff -uNr ghostscript-9.18.orig/devices/gdevlp8k.c ghostscript-9.18/devices/gdev
          fwrite("1;0bi{I",1,7,prn_stream);
          fwrite(out,1,(outp - out),prn_stream);
  
-diff -uNr ghostscript-9.18.orig/devices/gdevpng.c ghostscript-9.18/devices/gdevpng.c
---- ghostscript-9.18.orig/devices/gdevpng.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/devices/gdevpng.c	2016-01-29 08:14:37.000000000 -0500
-@@ -722,6 +722,7 @@
+diff -uNr ghostscript-9.19.orig/devices/gdevpng.c ghostscript-9.19/devices/gdevpng.c
+--- ghostscript-9.19.orig/devices/gdevpng.c	2016-03-23 04:22:48.000000000 -0400
++++ ghostscript-9.19/devices/gdevpng.c	2016-03-30 19:34:22.000000000 -0400
+@@ -711,6 +711,7 @@
  
  #if PNG_LIBPNG_VER_MINOR < 5
  
@@ -423,7 +111,7 @@ diff -uNr ghostscript-9.18.orig/devices/gdevpng.c ghostscript-9.18/devices/gdevp
  /*
   * Patch around a static reference to a never-used procedure.
   * This could be avoided if we were willing to edit pngconf.h to
-@@ -742,6 +743,7 @@
+@@ -731,6 +732,7 @@
  }
  #endif
  #endif
@@ -431,48 +119,3 @@ diff -uNr ghostscript-9.18.orig/devices/gdevpng.c ghostscript-9.18/devices/gdevp
  
  static int
  pngalpha_open(gx_device * pdev)
-diff -uNr ghostscript-9.18.orig/devices/rinkj/rinkj-screen-eb.c ghostscript-9.18/devices/rinkj/rinkj-screen-eb.c
---- ghostscript-9.18.orig/devices/rinkj/rinkj-screen-eb.c	2015-10-05 04:21:11.000000000 -0400
-+++ ghostscript-9.18/devices/rinkj/rinkj-screen-eb.c	2016-01-29 08:14:37.000000000 -0500
-@@ -83,7 +83,7 @@
-   int strengths4[] = { 128, 50, 50, 10 };
-   int strengths6[] = { 128, 50, 50, 25, 25, 10 };
-   int strengths7[] = { 128, 80, 50, 50, 25, 26, 10 };
--  int *strengths;
-+  int *strengths = NULL;
- 
-   RinkjDeviceParams out_params;
- 
-diff -uNr ghostscript-9.18.orig/psi/imainarg.c ghostscript-9.18/psi/imainarg.c
---- ghostscript-9.18.orig/psi/imainarg.c	2015-10-05 04:21:12.000000000 -0400
-+++ ghostscript-9.18/psi/imainarg.c	2016-01-29 08:14:37.000000000 -0500
-@@ -217,6 +217,11 @@
- #endif
-         }
-     }
-+
-+	code = gs_main_init1(minst);
-+	if (code < 0)
-+		return code;
-+
-     while ((arg = arg_next(&args, &code, minst->heap)) != 0) {
-         switch (*arg) {
-             case '-':
-diff -uNr ghostscript-9.18.orig/psi/iutil.c ghostscript-9.18/psi/iutil.c
---- ghostscript-9.18.orig/psi/iutil.c	2015-10-05 04:21:12.000000000 -0400
-+++ ghostscript-9.18/psi/iutil.c	2016-01-29 08:14:37.000000000 -0500
-@@ -438,12 +438,12 @@
-                 if (truncate) {
-                     if (len - *prlen < 4 - skip)
-                         return 1;
--                    memcpy(w.ptr + 1, "...)" + skip, 4 - skip);
-+                    memcpy(w.ptr + 1, &"...)"[skip], 4 - skip);
-                     *prlen += 4 - skip;
-                 } else {
-                     if (len - *prlen < 1 - skip)
-                         return 1;
--                    memcpy(w.ptr + 1, ")" + skip, 1 - skip);
-+                    memcpy(w.ptr + 1, &")"[skip], 1 - skip);
-                     *prlen += 1 - skip;
-                 }
-             }
