@@ -1,42 +1,50 @@
 Package: libxml2-32bit
-Version: 2.9.1
+Version: 2.9.4
 Architecture: x86_64
-
-Revision: 5
+Revision: 1
 Maintainer: None <fink-devel@lists.sourceforge.net>
 Depends: %N-bin (= %v-%r) | libxml2-bin (>= %v-1), %N-shlibs (= %v-%r), pkgconfig (>= 0.23)
 BuildDepends: <<
-	fink (>= 0.24.12-1),
+	fink (>= 0.30.0),
 	fink-package-precedence,
 	libiconv-dev,
+	pykg-config,
 	readline6
 <<
 Conflicts: libxml2
 Replaces: libxml2
 Source: http://xmlsoft.org/sources/libxml2-%v.tar.gz
-Source-MD5: 9c0cfef285d5c4a5c80d00904ddab380
+Source-MD5: ae249165c173b1ff386ee8ad676815f5
 PatchFile: %n.patch
-PatchFile-MD5: f41c70a417a901b023936dd4fc6a0672
+PatchFile-MD5: 1f4a2b26b9cf287478af24c43ab01273
+PatchFile2: %n-bug766834.patch
+PatchFile2-MD5: 1ffe473b945d026811b18c02dacc78b8
 PatchScript: <<
-#!/bin/sh -ev
 	sed 's|@PREFIX@|%p|g' <%{PatchFile} | patch -p1
+	patch -p1 <%{PatchFile2}
 	perl -pi -e 's|/etc|%p/etc|g' *.[ch] doc/*.html doc/*.1 doc/*.xml
 	rm test/ebcdic_566012.xml
-	# Patch configure to not link like Puma on Yosemite
-	perl -pi.bak -e 's|10\.\[012\]\*|10.[012][,.]*|g' configure
 <<
-ConfigureParams: --mandir=%p/share/man --with-iconv=%p --without-python --enable-dependency-tracking --with-html-dir=%p/share/doc --with-html-subdir=%n --with-history --disable-silent-rules --libdir=%p/lib/i386 --without-history --without-lzma
+ConfigureParams: <<
+	--libdir=%p/lib/i386 \
+	--with-iconv=%p \
+	--without-lzma \
+	--without-history \
+	--disable-static \
+	--without-python \
+	--with-html-dir=%p/share/doc \
+	--with-html-subdir=%n \
+	--enable-dependency-tracking \
+	--disable-silent-rules \
+	PKG_CONFIG=%p/bin/pykg-config \
+	XMLLINT=/usr/bin/true \
+	XSLTPROC=/usr/bin/true
+<<
 CompileScript: <<
-	## Work around a missing xhtml-dtd in catalog
-	## which obviously cannot be in
-	## and xmllint --nonet to rebuild the doc which
-	## makes vanish index.html
-	cp doc/index.html doc/index1.html
+#!/bin/sh -ev
 	CFLAGS="-arch i386" CXXFLAGS="-arch i386" LDFLAGS="-arch i386" \
-		XMLLINT=/usr/bin/true XSLTPROC=/usr/bin/true ./configure %c
+		./configure %c
 	make
-	rm -f doc/index.html
-	mv doc/index1.html doc/index.html
 	fink-package-precedence --prohibit-bdep=%n .
 <<
 InfoTest: TestScript: make check || exit 2
@@ -68,7 +76,14 @@ SplitOff2: <<
 	<<
 	Conflicts: libxml2-bin
 	Replaces: libxml2-bin
-	Files: bin/xmlcatalog bin/xmllint sbin share/man/man1/xmlcatalog.1 share/man/man1/xmllint.1 etc/xml
+	Files: <<
+		bin/xmlcatalog
+		bin/xmllint
+		sbin
+		share/man/man1/xmlcatalog.1
+		share/man/man1/xmllint.1
+		etc/xml
+	<<
 	DocFiles: Copyright README
 	RuntimeVars: <<
 		SGML_CATALOG_FILES: %p/etc/sgml/catalog
@@ -98,46 +113,55 @@ DescDetail: <<
 	This set of packages does *not* contain the python bindings. Those
 	are in libxml2-pyXX for various pythonX.X versions.
 <<
+DescUsage: <<
+libxml2 uses XML/SGML super catalog to know location of DTDs installed
+on the local system. They are managed by update-xml-catalog and
+update-sgml-catalog scripts. Each package that provides DTDs should
+also provide configuration file(s) for these scripts and call them
+within Pre/PostInstScript.
+
+When update-xml-catalog is called, it reads every configuration file
+in the %p/etc/xml/catalog.d/ directory. Each line of them contains 3
+fields, TYPE, ORIG and REPLACE, corresponding to arguments of
+`xmlcatalog --add'. See xmlcatalog(1) for detail.
+
+When update-sgml-catalog is called, it reads every configuration file
+in the %p/etc/sgml/catalog.d/ directory. Each line of them contains
+only 1 field, a reference to other SGML catalog file.
+<<
 DescPort: <<
+	disable the self-test of ebcdic handling because GNU
+	libiconv doesn't support ebcdic. See:
+	https://bugzilla.gnome.org/show_bug.cgi?id=603432
+	Should we switch to libicu support?
+<<
+DescPackaging: <<
+	Previous versions by Christoph Pfisterer <chrisp@users.sourceforge.net>
+
+	-32bit former maintainer: Sjors Gielen <fink-libxml2-32bit@sjorsgielen.nl>
+
 	Hide xmllint and xsltproc executables from ./configure to avoid
-	circular dependencies (on libxml2-bin (build here) and libxslt-bin
+	circular dependencies (on libxml2-bin (built here) and libxslt-bin
 	(depends on libxml2)) and network access during build. Fortunately,
 	these executables are only used to build docs that already come
 	prebuilt (we patch the targets instead of patching sources and
 	rebuilding).
 
-	Packages prior to 2.6.22-1 did not use --with-history, so they did
-	not need readline or ncurses. Now it does, but these libs are only
-	used for the -bin programs not the -shlibs libs. So no new flags in
-	.la or .pc, so no dependency and rebuilding nightmare for dependent
-	packages. Hooray!
+	Fix installation of some missing files. See:
+	https://mail.gnome.org/archives/xml/2012-September/msg00062.html
 
-	Rebuild the doc/examples/index.html not present in the tarball
 	Changed the installation to avoid examples overriding top level
 	of doc.
-<<
-DescPackaging: <<
-libxml2 uses XML/SGML super catalog to know location of DTDs installed on
-local system. They are managed by update-xml-catalog and update-sgml-catalog
-script. Each package that provides DTDs should also provide configuration
-file(s) for these script and call them within Pre/PostInstScript.
 
-When update-xml-catalog is called, it reads every configuration file belongs
-to %p/etc/xml/catalog.d/. Each line of them contain 3 fields, TYPE, ORIG and
-REPLACE, correspond to arguments of `xmlcatalog --add'. See xmlcatalog(1) for
-detail.
+	As of 2.9.4-1, scrap static lib, which means we can avoid
+	publishing any internal-implementation flags. See also
+	Debian's 0001-modify-xml2-config-and-pkgconfig-behaviour.patch
 
-Also, update-sgml-catalog reads every configuration file belongs to %p/etc/
-sgml/catalog.d/ when it is called. Each line of them contain only 1 field,
-reference to other SGML catalog file.
+	Use pykg-config to avoid having glib2 as a BDep (and possible
+	circular, because new glib might have libxml2 deps)
 
-Previous versions by Christoph Pfisterer <chrisp@users.sourceforge.net>
-
-	-32bit former maintainer: Sjors Gielen <fink-libxml2-32bit@sjorsgielen.nl>
-
-	disable the self-test of ebcdic handling because GNU
-	libiconv doesn't support ebcdic. See:
-	https://bugzilla.gnome.org/show_bug.cgi?id=603432
+	Patch to include upstream fix for attribute decoding during
+	XML schema validation
 <<
 License: BSD
 Homepage: http://www.xmlsoft.org/
