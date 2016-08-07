@@ -1,7 +1,7 @@
-diff -Nurd -x'*~' fink-package-precedence-0.18.orig/fink-package-precedence fink-package-precedence-0.18/fink-package-precedence
---- fink-package-precedence-0.18.orig/fink-package-precedence	1969-12-31 19:00:00.000000000 -0500
-+++ fink-package-precedence-0.18/fink-package-precedence	2013-12-05 03:58:45.000000000 -0500
-@@ -0,0 +1,338 @@
+diff -Nurd -x'*~' fink-package-precedence-0.19.orig/fink-package-precedence fink-package-precedence-0.19/fink-package-precedence
+--- fink-package-precedence-0.19.orig/fink-package-precedence	1969-12-31 19:00:00.000000000 -0500
++++ fink-package-precedence-0.19/fink-package-precedence	2016-08-06 23:28:28.000000000 -0400
+@@ -0,0 +1,367 @@
 +#!/usr/bin/perl
 +# -*- mode: Perl; tab-width: 4; -*-
 +
@@ -131,6 +131,8 @@ diff -Nurd -x'*~' fink-package-precedence-0.18.orig/fink-package-precedence fink
 +	while ( defined ( $_ = <$plo> ) ) {
 +		next if /^\s*$/;		# usually lots of blank lines
 +		s/^[^:]*://;				# only care deps; filename is key dependant
++		# FIXME: breaks if .h's pathname contains whitespace
++		# (gcc -MD uses backslash-protection)
 +		foreach (split) {
 +			next unless /^\//;		# skip continuation markers and
 +									# build-dir local files
@@ -212,7 +214,10 @@ diff -Nurd -x'*~' fink-package-precedence-0.18.orig/fink-package-precedence fink
 +	die "Please fix build process to get consistent use of fink's headers.\n";
 +}
 +
-+
++my %dir_symlinks = map {$_, 0} ( # value is flag for having seen it
++	"$fink_prefix/lib/system-openssl/include/openssl",
++	"$fink_prefix/include/boost",
++);
 +my %fink_pkgs;
 +my @not_found;
 +my $dpkg_S = "$fink_prefix/bin/dpkg -S";
@@ -231,8 +236,29 @@ diff -Nurd -x'*~' fink-package-precedence-0.18.orig/fink-package-precedence fink
 +			# relative spaghetti to them (foo/bar/../bar.h)
 +			$_ = abs_path($_);
 +		}
++
++		# Handle some known special-cases where files are accessed via
++		# symlinks to directories. If foo -> bar/, dpkg doesn't know
++		# foo/bar.h at all; we need to track both foo and bar/bar.h.
++		foreach my $dir_symlink (sort keys %dir_symlinks) {
++			if (/^\Q$dir_symlink\E\// && -l $dir_symlink) {
++				my $target_file = abs_path($_);
++				if ($target_file =~ /$fink_prefix_regex/) {
++					# look up the actual file via fink
++					$_ = $target_file;
++				} else {
++					# actual file is not in fink's world
++					$_ = '';
++				}
++				# NB: makes the progress counter exceed the initially
++				# reported total
++				push @fink_headers, $dir_symlink if not $dir_symlinks{$dir_symlink}++;
++			}
++		}
 +	}
 +
++	# @chunk could contain null strings, would need to filter them out if
++	# using 3+ argument form of open()
 +	open my $dpkg_S_fh, "$dpkg_S @chunk 2>&1 |" or die "Could not fork $dpkg_S: $!\n";
 +	while (<$dpkg_S_fh>) {
 +		if (/^dpkg: (.*\.)$/) {
@@ -264,9 +290,12 @@ diff -Nurd -x'*~' fink-package-precedence-0.18.orig/fink-package-precedence fink
 +}
 +
 +if ($opts{'libs'}) {
-+	my $otool = '/usr/bin/otool';
++	my $otool = '/usr/bin/otool-classic';
 +	if (!-x $otool) {
-+		die "Cannot scan binary linking without $otool\n";
++		$otool = '/usr/bin/otool';
++	}
++	if (!-x $otool) {
++		die "Cannot scan binary linking without /usr/bin/otool-classic or /usr/bin/otool\n";
 +	}
 +
 +print "Scanning binaries for incorrect dyld linking...\n";
