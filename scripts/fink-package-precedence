@@ -129,11 +129,41 @@ find sub {
 		s/^[^:]*://;				# only care deps; filename is key dependant
 		# FIXME: breaks if .h's pathname contains whitespace
 		# (gcc -MD uses backslash-protection)
-		foreach (split) {
-			next unless /^\//;		# skip continuation markers and
-									# build-dir local files
-			next if /$argv_abs_dir_regex/; # alt format of build-dir local
-			$deps{$_} = $File::Find::name if ! exists $deps{$_};
+		foreach my $file (split) {
+			next unless $file =~ /^\//;	# skip continuation markers
+										# and build-dir local files
+			next if $file =~ /$argv_abs_dir_regex/; # alt format of
+													# build-dir local
+
+			# dpkg's files database only tracks canonical paths, but
+			# headers could be accessed via other paths:
+			#  * simple symlinks (foo.h->bar.h; need to look up both
+			#    foo.h and bar.h)
+			#  * directory symlinks (foo1->foo2; need to look up foo1
+			#    and foo2/bar.h for foo1/bar.h)
+			#  * superfluous "/." components foo/./bar.h; need to look
+			#    up foo/bar.h)
+			#  * backtracking (foo1/foo2/../bar.h; need to look up
+			#    foo1/foo2 (?)  and foo1/bar.h
+			$file =~ s/\/\.(?=\/)//g;  # foo/./././bar/./quux -> foo/bar/quux
+			my $abs = abs_path($file); # all other types of spaghetti
+			# always want the actual file
+			$deps{$abs} = $File::Find::name if ! exists $deps{$abs};
+			# FIXME: not sure how to handle levels of ../ yet!
+			if ($file ne $abs and $file !~ /\/\.\.\//) {
+				# there's a link in here somewhere, need linknames and
+				# targets
+				my $path; # grows dir by dir for $file's full path
+				foreach (split /\//, $file) {
+					next if ! length $_;
+					$path .= "/$_";
+					if (-l $path) {
+						$deps{$path} = $File::Find::name if ! exists $deps{$path};
+						# too confusing to disentangle multiple symlinks
+						last;
+					}
+				}
+			}
 		}
 	}
 	close $plo;
@@ -210,10 +240,6 @@ EOMSG
 	die "Please fix build process to get consistent use of fink's headers.\n";
 }
 
-my %dir_symlinks = map {$_, 0} ( # value is flag for having seen it
-	"$fink_prefix/lib/system-openssl/include/openssl",
-	"$fink_prefix/include/boost",
-);
 my %fink_pkgs;
 my @not_found;
 my $dpkg_S = "$fink_prefix/bin/dpkg -S";
@@ -224,34 +250,6 @@ while (@fink_headers) {
 	# ('dpkg -S' is expensive!)
 	my @chunk = splice @fink_headers, 0, 100;
 	print "\t$progress - ", ($progress+=@chunk)-1, "\n";
-
-	foreach (@chunk) {
-		s/\/\.(?=\/)//g;		# foo/./././bar/./quux -> foo/bar/quux
-		if (/\.\./) {
-			# dpkg only knows actual filenames (foo/bar.h) not
-			# relative spaghetti to them (foo/bar/../bar.h)
-			$_ = abs_path($_);
-		}
-
-		# Handle some known special-cases where files are accessed via
-		# symlinks to directories. If foo -> bar/, dpkg doesn't know
-		# foo/bar.h at all; we need to track both foo and bar/bar.h.
-		foreach my $dir_symlink (sort keys %dir_symlinks) {
-			if (/^\Q$dir_symlink\E\// && -l $dir_symlink) {
-				my $target_file = abs_path($_);
-				if ($target_file =~ /$fink_prefix_regex/) {
-					# look up the actual file via fink
-					$_ = $target_file;
-				} else {
-					# actual file is not in fink's world
-					$_ = '';
-				}
-				# NB: makes the progress counter exceed the initially
-				# reported total
-				push @fink_headers, $dir_symlink if not $dir_symlinks{$dir_symlink}++;
-			}
-		}
-	}
 
 	# @chunk could contain null strings, would need to filter them out if
 	# using 3+ argument form of open()
