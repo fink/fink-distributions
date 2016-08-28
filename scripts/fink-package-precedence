@@ -9,6 +9,7 @@ use strict;
 use File::Find;
 use Getopt::Long;
 use Cwd qw/ abs_path /;
+use File::Basename;
 
 my %opts = (
 	'headers' => 1,				# scan .h in -M dependency files?
@@ -134,31 +135,46 @@ find sub {
 										# and build-dir local files
 			next if $file =~ /$argv_abs_dir_regex/; # alt format of
 													# build-dir local
-
-			# dpkg's files database only tracks canonical paths, but
-			# headers could be accessed via other paths:
-			#  * simple symlinks (foo.h->bar.h; need to look up both
-			#    foo.h and bar.h)
-			#  * directory symlinks (foo1->foo2; need to look up foo1
-			#    and foo2/bar.h for foo1/bar.h)
-			#  * superfluous "/." components foo/./bar.h; need to look
-			#    up foo/bar.h)
-			#  * backtracking (foo1/foo2/../bar.h; need to look up
-			#    foo1/foo2 (?)  and foo1/bar.h
 			$file =~ s/\/\.(?=\/)//g;  # foo/./././bar/./quux -> foo/bar/quux
-			my $abs = abs_path($file); # all other types of spaghetti
+			$deps{$file} = $File::Find::name if ! exists $deps{$file};
+		}
+	}
+	close $plo;
+}, $argv;
+}
+
+{
+	# dpkg's files database only tracks canonical paths, but headers
+	# could be accessed via other paths:
+	#  * simple symlinks (foo.h->bar.h; need to look up both foo.h and
+	#    bar.h)
+	#  * directory symlinks (foo1->foo2; need to look up foo1 and
+	#    foo2/bar.h for foo1/bar.h)
+	#  * superfluous "/." components foo/./bar.h; need to look up
+	#    foo/bar.h)
+	#  * backtracking (foo1/foo2/../bar.h; need to look up foo1/foo2
+	#    (?)  and foo1/bar.h
+
+	# need to stash original keys() so iterator doesn't get confused
+	# if we add/delete entries while iterating
+	my @inc_files = keys %deps;
+	foreach my $file (@inc_files) {
+		my $src = $deps{$file};     # value (in case we delete key)
+		my $abs = abs_path($file);  # clean up all sorts of spaghetti
+		if ($file ne $abs) {
+			# link in here somewhere, need linknames and targets
 			# always want the actual file
-			$deps{$abs} = $File::Find::name if ! exists $deps{$abs};
-			# FIXME: not sure how to handle levels of ../ yet!
-			if ($file ne $abs and $file !~ /\/\.\.\//) {
-				# there's a link in here somewhere, need linknames and
-				# targets
+			$deps{$abs} = $src if ! exists $deps{$abs};
+			# dpkg knows file-links, but not files via dir-links
+			delete $deps{$file} unless dirname($file) eq dirname($abs);
+			if ($file !~ /\/\.\.\//) {  # FIXME: not sure how to
+										# handle levels of ../ yet!
 				my $path; # grows dir by dir for $file's full path
 				foreach (split /\//, $file) {
 					next if ! length $_;
 					$path .= "/$_";
 					if (-l $path) {
-						$deps{$path} = $File::Find::name if ! exists $deps{$path};
+						$deps{$path} = $src if ! exists $deps{$path};
 						# too confusing to disentangle multiple symlinks
 						last;
 					}
@@ -166,8 +182,6 @@ find sub {
 			}
 		}
 	}
-	close $plo;
-}, $argv;
 }
 
 if (! $plo_count) {
