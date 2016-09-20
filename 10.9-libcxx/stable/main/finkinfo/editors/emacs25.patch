@@ -1,0 +1,198 @@
+diff -uNr emacs-25.1.orig/configure emacs-25.1/configure
+--- emacs-25.1.orig/configure	2016-09-16 05:20:23.000000000 -0400
++++ emacs-25.1/configure	2016-09-18 16:00:30.000000000 -0400
+@@ -4640,7 +4640,7 @@
+ etcdir='${datadir}/emacs/${version}/etc'
+ archlibdir='${libexecdir}/emacs/${version}/${configuration}'
+ etcdocdir='${datadir}/emacs/${version}/etc'
+-gamedir='${localstatedir}/games/emacs'
++gamedir='${localstatedir}/games/emacs25'
+ 
+ 
+ # Check whether --with-all was given.
+diff -uNr emacs-25.1.orig/fix-info emacs-25.1/fix-info
+--- emacs-25.1.orig/fix-info	1969-12-31 19:00:00.000000000 -0500
++++ emacs-25.1/fix-info	2016-09-18 16:00:30.000000000 -0400
+@@ -0,0 +1,11 @@
++#!/bin/sh
++
++THE_INFO_PREFIX=$1
++
++for file in $(basename ${THE_INFO_PREFIX}/*.info.gz)
++do
++    gzip -d ${THE_INFO_PREFIX}/${file}
++    ./mangle-info ${THE_INFO_PREFIX}/${file%.gz}
++    gzip -9 ${THE_INFO_PREFIX}/${file%.gz}
++done
++
+diff -uNr emacs-25.1.orig/lib/utimens.c emacs-25.1/lib/utimens.c
+--- emacs-25.1.orig/lib/utimens.c	2016-06-29 05:49:18.000000000 -0400
++++ emacs-25.1/lib/utimens.c	2016-09-18 16:02:48.000000000 -0400
+@@ -86,6 +86,7 @@
+ {
+   int result = 0;
+   int utime_omit_count = 0;
++  # if __linux__
+   if ((timespec[0].tv_nsec != UTIME_NOW
+        && timespec[0].tv_nsec != UTIME_OMIT
+        && ! (0 <= timespec[0].tv_nsec
+@@ -118,6 +119,7 @@
+       if (timespec[1].tv_nsec == UTIME_OMIT)
+         utime_omit_count++;
+     }
++# endif /* __linux__ */
+   return result + (utime_omit_count == 1);
+ }
+ 
+@@ -131,6 +133,7 @@
+ update_timespec (struct stat const *statbuf, struct timespec *ts[2])
+ {
+   struct timespec *timespec = *ts;
++# if __linux__
+   if (timespec[0].tv_nsec == UTIME_OMIT
+       && timespec[1].tv_nsec == UTIME_OMIT)
+     return true;
+@@ -150,6 +153,7 @@
+     timespec[1] = get_stat_mtime (statbuf);
+   else if (timespec[1].tv_nsec == UTIME_NOW)
+     gettime (&timespec[1]);
++# endif /* __linux__ */
+ 
+   return false;
+ }
+diff -uNr emacs-25.1.orig/lib-src/Makefile.in emacs-25.1/lib-src/Makefile.in
+--- emacs-25.1.orig/lib-src/Makefile.in	2016-06-29 05:49:18.000000000 -0400
++++ emacs-25.1/lib-src/Makefile.in	2016-09-18 16:05:36.000000000 -0400
+@@ -258,9 +258,6 @@
+ 
+ ## Install the internal utilities.  Until they are installed, we can
+ ## just run them directly from lib-src.
+-## If the chown/chmod commands fail, that is not a big deal.
+-## update-game-score will detect at runtime that it is not setuid,
+-## and handle things accordingly.
+ $(DESTDIR)${archlibdir}: all
+ 	@echo
+ 	@echo "Installing utilities run internally by Emacs."
+@@ -275,25 +272,6 @@
+ 	umask 022 && ${MKDIR_P} "$(DESTDIR)${gamedir}" && \
+ 	touch "$(DESTDIR)${gamedir}/snake-scores" \
+ 	      "$(DESTDIR)${gamedir}/tetris-scores"
+-ifneq ($(gameuser),)
+-	if chown ${gameuser} \
+-	     "$(DESTDIR)${archlibdir}/update-game-score${EXEEXT}" && \
+-	   chmod u+s,go-r \
+-	     "$(DESTDIR)${archlibdir}/update-game-score${EXEEXT}"; \
+-	then \
+-	  chown ${gameuser} "$(DESTDIR)${gamedir}" && \
+-	  chmod u=rwx,g=rx,o=rx "$(DESTDIR)${gamedir}"; \
+-	fi
+-else ifneq ($(gamegroup),)
+-	if chgrp ${gamegroup} \
+-	     "$(DESTDIR)${archlibdir}/update-game-score${EXEEXT}" && \
+-	   chmod g+s,o-r \
+-	     "$(DESTDIR)${archlibdir}/update-game-score${EXEEXT}"; \
+-	then \
+-	  chgrp ${gamegroup} "$(DESTDIR)${gamedir}" && \
+-	  chmod u=rwx,g=rwx,o=rx "$(DESTDIR)${gamedir}"; \
+-	fi
+-endif
+ 	exp_archlibdir=`cd "$(DESTDIR)${archlibdir}" && /bin/pwd` && \
+ 	if [ "$$exp_archlibdir" != "`cd ${srcdir} && /bin/pwd`" ]; then \
+ 	  for file in ${SCRIPTS}; do \
+diff -uNr emacs-25.1.orig/lisp/startup.el emacs-25.1/lisp/startup.el
+--- emacs-25.1.orig/lisp/startup.el	2016-06-29 05:49:18.000000000 -0400
++++ emacs-25.1/lisp/startup.el	2016-09-18 16:00:30.000000000 -0400
+@@ -422,6 +422,10 @@
+ 
+ (defvar normal-top-level-add-subdirs-inode-list nil)
+ 
++(defconst fink-emacs-flavor 'emacs25
++  "A symbol representing the particular fink flavor of emacs running.
++Something like 'emacs20, 'xemacs20, etc.")
++
+ (defvar no-blinking-cursor nil)
+ 
+ (defvar pure-space-overflow nil
+@@ -1124,8 +1128,17 @@
+     ;; be loaded from site-run-file and wants to test if -q was given
+     ;; should check init-file-user instead, since that is already set.
+     ;; See cus-edit.el for an example.
++    ;; (if site-run-file
++    ;;     (load site-run-file t t))
++    ;; Fink version of site-start
+     (if site-run-file
+-	(load site-run-file t t))
++      (progn
++    ;; Load all the fink package snippets.
++    ;; It's in here because we want -q to kill it too.
++    (if (load "fink-startup" t t nil)
++      (fink-startup fink-emacs-flavor))
++    ;; Now the normal site file...
++    (load site-run-file t t nil)))
+ 
+     ;; Sites should not disable this.  Only individuals should disable
+     ;; the startup screen.
+diff -uNr emacs-25.1.orig/mangle-info emacs-25.1/mangle-info
+--- emacs-25.1.orig/mangle-info	1969-12-31 19:00:00.000000000 -0500
++++ emacs-25.1/mangle-info	2016-09-18 16:00:30.000000000 -0400
+@@ -0,0 +1,18 @@
++#!/usr/bin/perl -w -i
++
++use English;
++use strict;
++
++$RS = undef;
++
++my $prefix = "emacs-25";
++
++my $x = <>;
++if(!($x =~ m/^(\s*START-INFO-DIR-ENTRY\s+\*\s*[^:]+:\s*)\(([^\)]+)\)/mo)) {
++  die "Couldn't find START-INFO-DIR-ENTRY.";
++}
++   
++print ${PREMATCH};
++print "$1($prefix/$2)";
++print ${POSTMATCH};
++
+diff -uNr emacs-25.1.orig/src/Makefile.in emacs-25.1/src/Makefile.in
+--- emacs-25.1.orig/src/Makefile.in	2016-06-29 05:49:20.000000000 -0400
++++ emacs-25.1/src/Makefile.in	2016-09-18 16:12:21.000000000 -0400
+@@ -362,13 +362,13 @@
+ ## FIXME? MYCPPFLAGS only referenced in etc/DEBUG.
+ ALL_CFLAGS=-Demacs $(MYCPPFLAGS) -I. -I$(srcdir) \
+   -I$(lib) -I$(top_srcdir)/lib \
+-  $(C_SWITCH_MACHINE) $(C_SWITCH_SYSTEM) $(C_SWITCH_X_SITE) \
++  $(C_SWITCH_MACHINE) $(C_SWITCH_SYSTEM) $(FREETYPE_CFLAGS) $(FONTCONFIG_CFLAGS) \
+   $(GNUSTEP_CFLAGS) $(CFLAGS_SOUND) $(RSVG_CFLAGS) $(IMAGEMAGICK_CFLAGS) \
+   $(PNG_CFLAGS) $(LIBXML2_CFLAGS) $(DBUS_CFLAGS) \
+   $(XRANDR_CFLAGS) $(XINERAMA_CFLAGS) $(XFIXES_CFLAGS) \
+   $(WEBKIT_CFLAGS) \
+-  $(SETTINGS_CFLAGS) $(FREETYPE_CFLAGS) $(FONTCONFIG_CFLAGS) \
+-  $(LIBOTF_CFLAGS) $(M17N_FLT_CFLAGS) $(DEPFLAGS) \
++  $(SETTINGS_CFLAGS) \
++  $(LIBOTF_CFLAGS) $(M17N_FLT_CFLAGS) $(C_SWITCH_X_SITE) $(DEPFLAGS) \
+   $(LIBGNUTLS_CFLAGS) $(NOTIFY_CFLAGS) $(CAIRO_CFLAGS) \
+   $(WARN_CFLAGS) $(WERROR_CFLAGS) $(CFLAGS)
+ ALL_OBJC_CFLAGS=$(ALL_CFLAGS) $(GNU_OBJC_CFLAGS)
+diff -uNr emacs-25.1.orig/src/callproc.c emacs-25.1/src/callproc.c
+--- emacs-25.1.orig/src/callproc.c	2016-08-22 05:17:46.000000000 -0400
++++ emacs-25.1/src/callproc.c	2016-09-18 16:00:30.000000000 -0400
+@@ -24,6 +24,7 @@
+ #include <stdio.h>
+ #include <sys/types.h>
+ #include <unistd.h>
++extern char **environ;
+ 
+ #include <sys/file.h>
+ #include <fcntl.h>
+diff -uNr emacs-25.1.orig/src/editfns.c emacs-25.1/src/editfns.c
+--- emacs-25.1.orig/src/editfns.c	2016-08-22 05:17:47.000000000 -0400
++++ emacs-25.1/src/editfns.c	2016-09-18 16:00:30.000000000 -0400
+@@ -28,6 +28,7 @@
+ #endif
+ 
+ #include <unistd.h>
++extern char **environ;
+ 
+ #ifdef HAVE_SYS_UTSNAME_H
+ #include <sys/utsname.h>
