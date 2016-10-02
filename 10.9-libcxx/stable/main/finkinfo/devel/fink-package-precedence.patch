@@ -1,7 +1,7 @@
-diff -Nurd -x'*~' fink-package-precedence-0.20.orig/fink-package-precedence fink-package-precedence-0.20/fink-package-precedence
---- fink-package-precedence-0.20.orig/fink-package-precedence	1969-12-31 19:00:00.000000000 -0500
-+++ fink-package-precedence-0.20/fink-package-precedence	2016-08-10 01:52:48.000000000 -0400
-@@ -0,0 +1,367 @@
+diff -Nurd -x'*~' fink-package-precedence-0.30.orig/fink-package-precedence fink-package-precedence-0.30/fink-package-precedence
+--- fink-package-precedence-0.30.orig/fink-package-precedence	1969-12-31 19:00:00.000000000 -0500
++++ fink-package-precedence-0.30/fink-package-precedence	2016-10-02 00:23:35.000000000 -0400
+@@ -0,0 +1,379 @@
 +#!/usr/bin/perl
 +# -*- mode: Perl; tab-width: 4; -*-
 +
@@ -13,6 +13,7 @@ diff -Nurd -x'*~' fink-package-precedence-0.20.orig/fink-package-precedence fink
 +use File::Find;
 +use Getopt::Long;
 +use Cwd qw/ abs_path /;
++use File::Basename;
 +
 +my %opts = (
 +	'headers' => 1,				# scan .h in -M dependency files?
@@ -133,15 +134,58 @@ diff -Nurd -x'*~' fink-package-precedence-0.20.orig/fink-package-precedence fink
 +		s/^[^:]*://;				# only care deps; filename is key dependant
 +		# FIXME: breaks if .h's pathname contains whitespace
 +		# (gcc -MD uses backslash-protection)
-+		foreach (split) {
-+			next unless /^\//;		# skip continuation markers and
-+									# build-dir local files
-+			next if /$argv_abs_dir_regex/; # alt format of build-dir local
-+			$deps{$_} = $File::Find::name if ! exists $deps{$_};
++		foreach my $file (split) {
++			next unless $file =~ /^\//;	# skip continuation markers
++										# and build-dir local files
++			next if $file =~ /$argv_abs_dir_regex/; # alt format of
++													# build-dir local
++			$file =~ s/\/\.(?=\/)//g;  # foo/./././bar/./quux -> foo/bar/quux
++			$deps{$file} = $File::Find::name if ! exists $deps{$file};
 +		}
 +	}
 +	close $plo;
 +}, $argv;
++}
++
++{
++	# dpkg's files database only tracks canonical paths, but headers
++	# could be accessed via other paths:
++	#  * simple symlinks (foo.h->bar.h; need to look up both foo.h and
++	#    bar.h)
++	#  * directory symlinks (foo1->foo2; need to look up foo1 and
++	#    foo2/bar.h for foo1/bar.h)
++	#  * superfluous "/." components foo/./bar.h; need to look up
++	#    foo/bar.h)
++	#  * backtracking (foo1/foo2/../bar.h; need to look up foo1/foo2
++	#    (?)  and foo1/bar.h
++
++	# need to stash original keys() so iterator doesn't get confused
++	# if we add/delete entries while iterating
++	my @inc_files = keys %deps;
++	foreach my $file (@inc_files) {
++		my $src = $deps{$file};     # value (in case we delete key)
++		my $abs = abs_path($file);  # clean up all sorts of spaghetti
++		if ($file ne $abs) {
++			# link in here somewhere, need linknames and targets
++			# always want the actual file
++			$deps{$abs} = $src if ! exists $deps{$abs};
++			# dpkg knows file-links, but not files via dir-links
++			delete $deps{$file} unless dirname($file) eq dirname($abs);
++			if ($file !~ /\/\.\.\//) {  # FIXME: not sure how to
++										# handle levels of ../ yet!
++				my $path; # grows dir by dir for $file's full path
++				foreach (split /\//, $file) {
++					next if ! length $_;
++					$path .= "/$_";
++					if (-l $path) {
++						$deps{$path} = $src if ! exists $deps{$path};
++						# too confusing to disentangle multiple symlinks
++						last;
++					}
++				}
++			}
++		}
++	}
 +}
 +
 +if (! $plo_count) {
@@ -214,10 +258,6 @@ diff -Nurd -x'*~' fink-package-precedence-0.20.orig/fink-package-precedence fink
 +	die "Please fix build process to get consistent use of fink's headers.\n";
 +}
 +
-+my %dir_symlinks = map {$_, 0} ( # value is flag for having seen it
-+	"$fink_prefix/lib/system-openssl/include/openssl",
-+	"$fink_prefix/include/boost",
-+);
 +my %fink_pkgs;
 +my @not_found;
 +my $dpkg_S = "$fink_prefix/bin/dpkg -S";
@@ -229,37 +269,9 @@ diff -Nurd -x'*~' fink-package-precedence-0.20.orig/fink-package-precedence fink
 +	my @chunk = splice @fink_headers, 0, 100;
 +	print "\t$progress - ", ($progress+=@chunk)-1, "\n";
 +
-+	foreach (@chunk) {
-+		s/\/\.(?=\/)//g;		# foo/./././bar/./quux -> foo/bar/quux
-+		if (/\.\./) {
-+			# dpkg only knows actual filenames (foo/bar.h) not
-+			# relative spaghetti to them (foo/bar/../bar.h)
-+			$_ = abs_path($_);
-+		}
-+
-+		# Handle some known special-cases where files are accessed via
-+		# symlinks to directories. If foo -> bar/, dpkg doesn't know
-+		# foo/bar.h at all; we need to track both foo and bar/bar.h.
-+		foreach my $dir_symlink (sort keys %dir_symlinks) {
-+			if (/^\Q$dir_symlink\E\// && -l $dir_symlink) {
-+				my $target_file = abs_path($_);
-+				if ($target_file =~ /$fink_prefix_regex/) {
-+					# look up the actual file via fink
-+					$_ = $target_file;
-+				} else {
-+					# actual file is not in fink's world
-+					$_ = '';
-+				}
-+				# NB: makes the progress counter exceed the initially
-+				# reported total
-+				push @fink_headers, $dir_symlink if not $dir_symlinks{$dir_symlink}++;
-+			}
-+		}
-+	}
-+
 +	# @chunk could contain null strings, would need to filter them out if
 +	# using 3+ argument form of open()
-+	open my $dpkg_S_fh, "$dpkg_S @chunk 2>&1 |" or die "Could not fork $dpkg_S: $!\n";
++	open my $dpkg_S_fh, "$dpkg_S -- @chunk 2>&1 |" or die "Could not fork $dpkg_S: $!\n";
 +	while (<$dpkg_S_fh>) {
 +		if (/^dpkg: (.*\.)$/) {
 +			# 'dpkg: $filename not found.' but "not found" may be localized
@@ -306,7 +318,7 @@ diff -Nurd -x'*~' fink-package-precedence-0.20.orig/fink-package-precedence fink
 +find sub {
 +	return unless -f;
 +	return if /\.class$/;
-+	open my $otool_L_fh, '-|', $otool, '-L', $_ or die "Could not fork $otool -L $_: $!\n";
++	open my $otool_L_fh, '-|', $otool, '-L', '-', $_ or die "Could not fork $otool -L $_: $!\n";  # otool uses "-" not "--" to end flag-list!
 +	while ( defined ( $_ = <$otool_L_fh> ) ) {
 +		next unless /^\t(.+) \(/;	# only read dyld links
 +		$deps{$1} = $File::Find::name if ! exists $deps{$1};
