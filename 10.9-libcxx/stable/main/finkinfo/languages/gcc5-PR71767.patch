@@ -1,0 +1,781 @@
+From 16159b9cc8026cd25d43051177095353efcec9c2 Mon Sep 17 00:00:00 2001
+From: Iain Sandoe <iain@codesourcery.com>
+Date: Mon, 19 Sep 2016 13:55:05 +0100
+Subject: [PATCH 1/4] [Darwin, ld64 atoms] Make PIC indirections and constant
+ labels linker-visible.
+
+Indirections:
+
+  If we have a situation like:
+
+global_weak_symbol:
+  ....
+Lnon_weak_local:
+  ....
+
+  ld64 will be unable to split this into two atoms (because the "L" makes
+  the second symbol 'invisible').  This means that legitimate direct accesses
+  to the second symbol will appear to be non-allowed direct accesses to an
+  atom of type weak, global which are not allowed.
+
+  To avoid this, we make the indirections have a leading 'l' (lower-case L)
+  which has a special meaning: linker can see this and use it to determine
+  atoms, but it is not placed into the final symbol table.
+
+  The implementation here is somewhat heavy-handed in that it will also mark
+  indirections to the __IMPORT,__pointers section the same way which is
+  really unnecessary, since ld64 _can_ split those into atoms as they are
+  fixed size.  FIXME: determine if this is a penalty worth extra code to
+  fix.
+
+Similarly, with:
+
+  .const
+weak_global_constant:
+  ....
+
+LCxx:
+  ...
+
+ ld64 can't split the second, causing a warning when it's directly
+accessed.
+---
+ gcc/config/darwin.c | 37 +++++++++++++++++++++++++++++++++----
+ gcc/config/darwin.h |  9 ++++++++-
+ 2 files changed, 41 insertions(+), 5 deletions(-)
+
+diff --git a/gcc/config/darwin.c b/gcc/config/darwin.c
+index f8da959..9929e2f 100644
+--- a/gcc/config/darwin.c
++++ b/gcc/config/darwin.c
+@@ -473,7 +473,31 @@ indirection_hasher::equal (machopic_indirection *s, const char *k)
+ }
+ 
+ /* Return the name of the non-lazy pointer (if STUB_P is false) or
+-   stub (if STUB_B is true) corresponding to the given name.  */
++   stub (if STUB_B is true) corresponding to the given name.
++
++  If we have a situation like:
++
++global_weak_symbol:
++  ....
++Lnon_weak_local:
++  ....
++
++  ld64 will be unable to split this into two atoms (because the "L" makes
++  the second symbol 'invisible').  This means that legitimate direct accesses
++  to the second symbol will appear to be non-allowed direct accesses to an
++  atom of type weak, global which are not allowed.
++
++  To avoid this, we make the indirections have a leading 'l' (lower-case L)
++  which has a special meaning: linker can see this and use it to determine
++  atoms, but it is not placed into the final symbol table.
++
++  The implementation here is somewhat heavy-handed in that it will also mark
++  indirections to the __IMPORT,__pointers section the same way which is
++  really unnecessary, since ld64 _can_ split those into atoms as they are
++  fixed size.  FIXME: determine if this is a penalty worth extra code to
++  fix.
++
++*/
+ 
+ const char *
+ machopic_indirection_name (rtx sym_ref, bool stub_p)
+@@ -484,6 +508,7 @@ machopic_indirection_name (rtx sym_ref, bool stub_p)
+   machopic_indirection *p;
+   bool needs_quotes;
+   const char *suffix;
++  char L_or_l = 'L';
+   const char *prefix = user_label_prefix;
+   const char *quote = "";
+   tree id;
+@@ -518,9 +543,13 @@ machopic_indirection_name (rtx sym_ref, bool stub_p)
+   if (stub_p)
+     suffix = STUB_SUFFIX;
+   else
+-    suffix = NON_LAZY_POINTER_SUFFIX;
++    {
++      suffix = NON_LAZY_POINTER_SUFFIX;
++      /* Let the linker see this.  */
++      L_or_l = 'l';
++    }
+ 
+-  buffer = XALLOCAVEC (char, strlen ("&L")
++  buffer = XALLOCAVEC (char, 2  /* strlen ("&L") or ("&l") */
+ 		   + strlen (prefix)
+ 		   + namelen
+ 		   + strlen (suffix)
+@@ -528,7 +557,7 @@ machopic_indirection_name (rtx sym_ref, bool stub_p)
+ 		   + 1 /* '\0' */);
+ 
+   /* Construct the name of the non-lazy pointer or stub.  */
+-  sprintf (buffer, "&%sL%s%s%s%s", quote, prefix, name, suffix, quote);
++  sprintf (buffer, "&%s%c%s%s%s%s", quote, L_or_l, prefix, name, suffix, quote);
+ 
+   if (!machopic_indirections)
+     machopic_indirections = hash_table<indirection_hasher>::create_ggc (37);
+diff --git a/gcc/config/darwin.h b/gcc/config/darwin.h
+index 3782eb3..08fd959 100644
+--- a/gcc/config/darwin.h
++++ b/gcc/config/darwin.h
+@@ -718,9 +718,16 @@ extern GTY(()) section * darwin_sections[NUM_DARWIN_SECTIONS];
+   { "weak_import", 0, 0, true, false, false,				     \
+     darwin_handle_weak_import_attribute, false }
+ 
++/* Make local constant labels linker-visible, so that if one follows a
++   weak_global constant, ld64 will be able to separate the atoms.  */
+ #undef ASM_GENERATE_INTERNAL_LABEL
+ #define ASM_GENERATE_INTERNAL_LABEL(LABEL,PREFIX,NUM)	\
+-  sprintf (LABEL, "*%s%ld", PREFIX, (long)(NUM))
++  do {							\
++    if (strcmp ("LC", PREFIX) == 0)			\
++      sprintf (LABEL, "*%s%ld", "lC", (long)(NUM));	\
++    else						\
++      sprintf (LABEL, "*%s%ld", PREFIX, (long)(NUM));	\
++  } while (0)
+ 
+ #undef TARGET_ASM_MARK_DECL_PRESERVED
+ #define TARGET_ASM_MARK_DECL_PRESERVED darwin_mark_decl_preserved
+-- 
+2.8.1
+
+From 7058cdb902cd48c9467ad324023a7f85ac32c6b4 Mon Sep 17 00:00:00 2001
+From: Iain Sandoe <iain@codesourcery.com>
+Date: Tue, 20 Sep 2016 11:57:18 +0100
+Subject: [PATCH 2/4] [Darwin, config] Arrange for ld64 to be detected as
+ Darwin's linker.
+
+This is an initial patch in a series that converts Darwin's configury to detect ld64 features, rather than the current process of hard-coding them on target system version.
+
+This detects the use of ld64, its version and as a starting case, determines support for -export_dynamic (implements -rdynamic).
+
+gcc/
+	* configure.ac (with-ld64): New arg-with.  gcc_ld64_version: New,
+	new test.  gcc_cv_ld64_export_dynamic: New, New test.
+	* darwin.h: Use LD64_HAS_DYNAMIC export. DEF_LD64: New, define.
+	* darwin10.h(DEF_LD64): Update for this target version.
+	* darwin12.h(LINK_GCC_C_SEQUENCE_SPEC): Remove rdynamic test.
+	(DEF_LD64): Update for this target version.
+---
+ gcc/config/darwin.h   | 16 +++++++++++++++-
+ gcc/config/darwin10.h |  5 +++++
+ gcc/config/darwin12.h |  7 ++++++-
+ gcc/configure.ac      | 36 ++++++++++++++++++++++++++++++++++++
+ 4 files changed, 62 insertions(+), 2 deletions(-)
+
+diff --git a/gcc/config/darwin.h b/gcc/config/darwin.h
+index 08fd959..6940794 100644
+--- a/gcc/config/darwin.h
++++ b/gcc/config/darwin.h
+@@ -165,6 +165,12 @@ extern GTY(()) int darwin_ms_struct;
+    specifying the handling of options understood by generic Unix
+    linkers, and for positional arguments like libraries.  */
+ 
++#if LD64_HAS_EXPORT_DYNAMIC
++#define DARWIN_EXPORT_DYNAMIC " %{rdynamic:-export_dynamic}"
++#else
++#define DARWIN_EXPORT_DYNAMIC " %{rdynamic: %nrdynamic is not supported}"
++#endif
++
+ #define LINK_COMMAND_SPEC_A \
+    "%{!fdump=*:%{!fsyntax-only:%{!c:%{!M:%{!MM:%{!E:%{!S:\
+     %(linker)" \
+@@ -185,7 +191,9 @@ extern GTY(()) int darwin_ms_struct;
+     %{!nostdlib:%{!nodefaultlibs:\
+       %{%:sanitize(address): -lasan } \
+       %{%:sanitize(undefined): -lubsan } \
+-      %(link_ssp) %(link_gcc_c_sequence)\
++      %(link_ssp) \
++      " DARWIN_EXPORT_DYNAMIC " %<rdynamic \
++      %(link_gcc_c_sequence) \
+     }}\
+     %{!nostdlib:%{!nostartfiles:%E}} %{T*} %{F*} }}}}}}}"
+ 
+@@ -937,4 +945,10 @@ extern void darwin_driver_init (unsigned int *,struct cl_decoded_option **);
+    fall-back default.  */
+ #define DEF_MIN_OSX_VERSION "10.5"
+ 
++#ifndef LD64_VERSION
++#define LD64_VERSION "85.2"
++#else
++#define DEF_LD64 LD64_VERSION
++#endif
++
+ #endif /* CONFIG_DARWIN_H */
+diff --git a/gcc/config/darwin10.h b/gcc/config/darwin10.h
+index 5829d78..a81fbdc 100644
+--- a/gcc/config/darwin10.h
++++ b/gcc/config/darwin10.h
+@@ -32,3 +32,8 @@ along with GCC; see the file COPYING3.  If not see
+ 
+ #undef DEF_MIN_OSX_VERSION
+ #define DEF_MIN_OSX_VERSION "10.6"
++
++#ifndef LD64_VERSION
++#undef DEF_LD64
++#define DEF_LD64 "97.7"
++#endif
+diff --git a/gcc/config/darwin12.h b/gcc/config/darwin12.h
+index e366982..f88e2a4 100644
+--- a/gcc/config/darwin12.h
++++ b/gcc/config/darwin12.h
+@@ -21,7 +21,12 @@ along with GCC; see the file COPYING3.  If not see
+ #undef  LINK_GCC_C_SEQUENCE_SPEC
+ #define LINK_GCC_C_SEQUENCE_SPEC \
+ "%:version-compare(>= 10.6 mmacosx-version-min= -no_compact_unwind) \
+-   %{rdynamic:-export_dynamic} %{!static:%{!static-libgcc: \
++   %{!static:%{!static-libgcc: \
+       %:version-compare(>= 10.6 mmacosx-version-min= -lSystem) } } \
+    %{fno-pic|fno-PIC|fno-pie|fno-PIE|fapple-kext|mkernel|static|mdynamic-no-pic: \
+       %:version-compare(>= 10.7 mmacosx-version-min= -no_pie) } %G %L"
++
++#ifndef LD64_VERSION
++#undef DEF_LD64
++#define DEF_LD64 "236.4"
++#endif
+diff --git a/gcc/configure.ac b/gcc/configure.ac
+index 93af766..07bd8d3 100644
+--- a/gcc/configure.ac
++++ b/gcc/configure.ac
+@@ -274,6 +274,12 @@ AC_ARG_WITH(gnu-ld,
+ gnu_ld_flag="$with_gnu_ld",
+ gnu_ld_flag=no)
+ 
++# With ld64
++AC_ARG_WITH(ld64,
++[AS_HELP_STRING([--with-ld64], [arrange to work with ld64])],
++ld64_flag="$with_ld64",
++ld64_flag=unset)
++
+ # With pre-defined ld
+ AC_ARG_WITH(ld,
+ [AS_HELP_STRING([--with-ld], [arrange to use the specified ld (full pathname)])],
+@@ -283,11 +289,21 @@ if test x"${DEFAULT_LINKER+set}" = x"set"; then
+     AC_MSG_ERROR([cannot execute: $DEFAULT_LINKER: check --with-ld or env. var. DEFAULT_LINKER])
+   elif $DEFAULT_LINKER -v < /dev/null 2>&1 | grep GNU > /dev/null; then
+     gnu_ld_flag=yes
++  elif $DEFAULT_LINKER -v < /dev/null 2>&1 | grep ld64- > /dev/null; then
++    ld64_flag=yes
+   fi
+   AC_DEFINE_UNQUOTED(DEFAULT_LINKER,"$DEFAULT_LINKER",
+ 	[Define to enable the use of a default linker.])
+ fi
+ 
++case $target in
++    *darwin*)
++        if test x"${ld64_flag}" = x"unset"; then
++            ld64_flag=yes
++        fi
++        ;;
++esac
++
+ AC_MSG_CHECKING([whether a default linker was specified])
+ if test x"${DEFAULT_LINKER+set}" = x"set"; then
+   if test x"$gnu_ld_flag" = x"no"; then
+@@ -5251,6 +5267,26 @@ AC_DEFINE_UNQUOTED(LD_COMPRESS_DEBUG_OPTION, "$gcc_cv_ld_compress_debug_option",
+ [Define to the linker option to enable compressed debug sections.])
+ AC_MSG_RESULT($gcc_cv_ld_compress_debug)
+ 
++if test x"$ld64_flag" = x"yes"; then
++  # Test for ld64 features, we assume that there's a meaningful value to gcc_cv_ld.
++  AC_MSG_CHECKING(linker version)
++  gcc_cv_ld64_version=`$gcc_cv_ld -v 2>&1 | sed s/.*ld64-// | head -n1 |awk '{print $1}'`
++
++  AC_DEFINE_UNQUOTED(LD64_VERSION, "${gcc_cv_ld64_version}",
++  [Define to ld64 version.])
++  AC_MSG_RESULT($gcc_cv_ld64_version)
++
++  AC_MSG_CHECKING(linker for -export_dynamic support)
++  gcc_cv_ld64_export_dynamic=1
++  if $gcc_cv_ld -export_dynamic < /dev/null 2>&1 | grep 'unknown option' > /dev/null; then
++    gcc_cv_ld64_export_dynamic=0
++  fi
++
++  AC_DEFINE_UNQUOTED(LD64_HAS_EXPORT_DYNAMIC, $gcc_cv_ld64_export_dynamic,
++  [Define to 1 if ld64 supports '-export_dynamic'.])
++  AC_MSG_RESULT($gcc_cv_ld64_export_dynamic)
++fi
++
+ # --------
+ # UNSORTED
+ # --------
+-- 
+2.8.1
+
+From 1fec8c9a75477f0c3e49e1c682444618e0a975be Mon Sep 17 00:00:00 2001
+From: Iain Sandoe <iain@codesourcery.com>
+Date: Tue, 20 Sep 2016 12:27:13 +0100
+Subject: [PATCH 3/4] [darwin, config] Regenerated files for ld64 config.
+
+---
+ gcc/config.in | 12 ++++++++++++
+ gcc/configure | 56 ++++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 66 insertions(+), 2 deletions(-)
+
+diff --git a/gcc/config.in b/gcc/config.in
+index a736de3..a7ff3ee 100644
+--- a/gcc/config.in
++++ b/gcc/config.in
+@@ -1934,6 +1934,18 @@
+ #endif
+ 
+ 
++/* Define to 1 if ld64 supports '-export_dynamic'. */
++#ifndef USED_FOR_TARGET
++#undef LD64_HAS_EXPORT_DYNAMIC
++#endif
++
++
++/* Define to ld64 version. */
++#ifndef USED_FOR_TARGET
++#undef LD64_VERSION
++#endif
++
++
+ /* Define to the linker option to ignore unused dependencies. */
+ #ifndef USED_FOR_TARGET
+ #undef LD_AS_NEEDED_OPTION
+diff --git a/gcc/configure b/gcc/configure
+index 0eeee94..2bb7e7e 100755
+--- a/gcc/configure
++++ b/gcc/configure
+@@ -887,6 +887,7 @@ with_gxx_include_dir
+ with_cpp_install_dir
+ enable_generated_files_in_srcdir
+ with_gnu_ld
++with_ld64
+ with_ld
+ with_demangler_in_ld
+ with_gnu_as
+@@ -1708,6 +1709,7 @@ Optional Packages:
+                           install the user visible C preprocessor in DIR
+                           (relative to PREFIX) as well as PREFIX/bin
+   --with-gnu-ld           arrange to work with GNU ld
++  --with-ld64             arrange to work with ld64
+   --with-ld               arrange to use the specified ld (full pathname)
+   --with-demangler-in-ld  try to use demangler in GNU ld
+   --with-gnu-as           arrange to work with GNU as
+@@ -3639,6 +3641,16 @@ else
+ fi
+ 
+ 
++# With ld64
++
++# Check whether --with-ld64 was given.
++if test "${with_ld64+set}" = set; then :
++  withval=$with_ld64; ld64_flag="$with_ld64"
++else
++  ld64_flag=unset
++fi
++
++
+ # With pre-defined ld
+ 
+ # Check whether --with-ld was given.
+@@ -3651,6 +3663,8 @@ if test x"${DEFAULT_LINKER+set}" = x"set"; then
+     as_fn_error "cannot execute: $DEFAULT_LINKER: check --with-ld or env. var. DEFAULT_LINKER" "$LINENO" 5
+   elif $DEFAULT_LINKER -v < /dev/null 2>&1 | grep GNU > /dev/null; then
+     gnu_ld_flag=yes
++  elif $DEFAULT_LINKER -v < /dev/null 2>&1 | grep ld64- > /dev/null; then
++    ld64_flag=yes
+   fi
+ 
+ cat >>confdefs.h <<_ACEOF
+@@ -3659,6 +3673,14 @@ _ACEOF
+ 
+ fi
+ 
++case $target in
++    *darwin*)
++        if test x"${ld64_flag}" = x"unset"; then
++            ld64_flag=yes
++        fi
++        ;;
++esac
++
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking whether a default linker was specified" >&5
+ $as_echo_n "checking whether a default linker was specified... " >&6; }
+ if test x"${DEFAULT_LINKER+set}" = x"set"; then
+@@ -18476,7 +18498,7 @@ else
+   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
+   lt_status=$lt_dlunknown
+   cat > conftest.$ac_ext <<_LT_EOF
+-#line 18165 "configure"
++#line 18187 "configure"
+ #include "confdefs.h"
+ 
+ #if HAVE_DLFCN_H
+@@ -18582,7 +18604,7 @@ else
+   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
+   lt_status=$lt_dlunknown
+   cat > conftest.$ac_ext <<_LT_EOF
+-#line 18271 "configure"
++#line 18293 "configure"
+ #include "confdefs.h"
+ 
+ #if HAVE_DLFCN_H
+@@ -28225,6 +28247,36 @@ _ACEOF
+ { $as_echo "$as_me:${as_lineno-$LINENO}: result: $gcc_cv_ld_compress_debug" >&5
+ $as_echo "$gcc_cv_ld_compress_debug" >&6; }
+ 
++if test x"$ld64_flag" = x"yes"; then
++  # Test for ld64 features, we assume that there's a meaningful value to gcc_cv_ld.
++  { $as_echo "$as_me:${as_lineno-$LINENO}: checking linker version" >&5
++$as_echo_n "checking linker version... " >&6; }
++  gcc_cv_ld64_version=`$gcc_cv_ld -v 2>&1 | sed s/.*ld64-// | head -n1 |awk '{print $1}'`
++
++
++cat >>confdefs.h <<_ACEOF
++#define LD64_VERSION "${gcc_cv_ld64_version}"
++_ACEOF
++
++  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $gcc_cv_ld64_version" >&5
++$as_echo "$gcc_cv_ld64_version" >&6; }
++
++  { $as_echo "$as_me:${as_lineno-$LINENO}: checking linker for -export_dynamic support" >&5
++$as_echo_n "checking linker for -export_dynamic support... " >&6; }
++  gcc_cv_ld64_export_dynamic=1
++  if $gcc_cv_ld -export_dynamic < /dev/null 2>&1 | grep 'unknown option' > /dev/null; then
++    gcc_cv_ld64_export_dynamic=0
++  fi
++
++
++cat >>confdefs.h <<_ACEOF
++#define LD64_HAS_EXPORT_DYNAMIC $gcc_cv_ld64_export_dynamic
++_ACEOF
++
++  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $gcc_cv_ld64_export_dynamic" >&5
++$as_echo "$gcc_cv_ld64_export_dynamic" >&6; }
++fi
++
+ # --------
+ # UNSORTED
+ # --------
+-- 
+2.8.1
+
+From cc8935c5cfbe4e9f9019b82caa85e4ea6dc69523 Mon Sep 17 00:00:00 2001
+From: Iain Sandoe <iain@codesourcery.com>
+Date: Mon, 19 Sep 2016 14:00:38 +0100
+Subject: [PATCH 4/4] [Darwin, sections] Fix PR71767 - adjust the sections used
+ in response to ld64 version.
+
+(much) Older Darwin linkers needed separate sections marked "coalesce" to
+allow for weak symbol coalescing.  This has not been needed for some time
+and is now deprecated, newer assemblers warn if the old coalesced sections
+are used.
+---
+ gcc/config/darwin-sections.def |  5 ++++
+ gcc/config/darwin.c            | 61 +++++++++++++++++++++++++++++-------------
+ gcc/config/darwin.h            |  5 ++++
+ gcc/config/darwin.opt          |  6 +++++
+ gcc/config/i386/i386.c         |  2 +-
+ 5 files changed, 59 insertions(+), 20 deletions(-)
+
+diff --git a/gcc/config/darwin-sections.def b/gcc/config/darwin-sections.def
+index cbf3e41..8a7e985 100644
+--- a/gcc/config/darwin-sections.def
++++ b/gcc/config/darwin-sections.def
+@@ -31,6 +31,11 @@ along with GCC; see the file COPYING3.  If not see
+ DEF_SECTION (text_coal_section, SECTION_CODE|SECTION_NO_ANCHOR,
+ 	     ".section __TEXT,__textcoal_nt,coalesced,pure_instructions", 0)
+ 
++/* We define a picbase thunks section separately, so that we can override the
++   def to be '.text' for versions of ld64 that handle coalescing.  */
++DEF_SECTION (picbase_thunk_section, SECTION_CODE|SECTION_NO_ANCHOR,
++	     ".section __TEXT,__textcoal_nt,coalesced,pure_instructions", 0)
++
+ DEF_SECTION (text_hot_section, SECTION_CODE,
+ 	     ".section __TEXT,__text_hot,regular,pure_instructions", 0)
+ DEF_SECTION (text_cold_section, SECTION_CODE,
+diff --git a/gcc/config/darwin.c b/gcc/config/darwin.c
+index 9929e2f..67764f6 100644
+--- a/gcc/config/darwin.c
++++ b/gcc/config/darwin.c
+@@ -96,6 +96,10 @@ int darwin_running_cxx;
+ /* Some code-gen now depends on OS major version numbers (at least).  */
+ int generating_for_darwin_version ;
+ 
++/* For older linkers we need to emit special sections (marked 'coalesced') for
++   for weak or single-definition items.  */
++static bool ld_uses_coal_sects = false;
++
+ /* Section names.  */
+ section * darwin_sections[NUM_DARWIN_SECTIONS];
+ 
+@@ -219,6 +223,11 @@ darwin_init_sections (void)
+   readonly_data_section = darwin_sections[const_section];
+   exception_section = darwin_sections[darwin_exception_section];
+   eh_frame_section = darwin_sections[darwin_eh_frame_section];
++
++  /* If our linker is new enough to coalesce weak symbols, then we
++     can just put picbase_thunks into the text section.  */
++  if (! ld_uses_coal_sects )
++    darwin_sections[picbase_thunk_section] = text_section;
+ }
+ 
+ int
+@@ -1246,9 +1255,9 @@ darwin_mark_decl_preserved (const char *name)
+ }
+ 
+ static section *
+-darwin_rodata_section (int weak, bool zsize)
++darwin_rodata_section (int use_coal, bool zsize)
+ {
+-  return (weak
++  return (use_coal
+ 	  ? darwin_sections[const_coal_section]
+ 	  : (zsize ? darwin_sections[zobj_const_section]
+ 		   : darwin_sections[const_section]));
+@@ -1417,7 +1426,8 @@ darwin_objc2_section (tree decl ATTRIBUTE_UNUSED, tree meta, section * base)
+     return darwin_sections[objc2_image_info_section];
+ 
+   else if (!strncmp (p, "V2_EHTY", 7))
+-    return darwin_sections[data_coal_section];
++    return ld_uses_coal_sects ? darwin_sections[data_coal_section]
++                              : data_section;
+ 
+   else if (!strncmp (p, "V2_CSTR", 7))
+     return darwin_sections[objc2_constant_string_object_section];
+@@ -1516,21 +1526,23 @@ machopic_select_section (tree decl,
+ 			 int reloc,
+ 			 unsigned HOST_WIDE_INT align)
+ {
+-  bool zsize, one, weak, ro;
++  bool zsize, one, weak, use_coal, ro;
+   section *base_section = NULL;
+ 
+   weak = (DECL_P (decl)
+ 	  && DECL_WEAK (decl)
+ 	  && !lookup_attribute ("weak_import", DECL_ATTRIBUTES (decl)));
+ 
+-  zsize = (DECL_P (decl) 
++  zsize = (DECL_P (decl)
+ 	   && (TREE_CODE (decl) == VAR_DECL || TREE_CODE (decl) == CONST_DECL) 
+ 	   && tree_to_uhwi (DECL_SIZE_UNIT (decl)) == 0);
+ 
+-  one = DECL_P (decl) 
++  one = DECL_P (decl)
+ 	&& TREE_CODE (decl) == VAR_DECL 
+ 	&& DECL_COMDAT_GROUP (decl);
+ 
++  use_coal = (weak || one) && ld_uses_coal_sects;
++
+   ro = TREE_READONLY (decl) || TREE_CONSTANT (decl) ;
+ 
+   switch (categorize_decl_for_section (decl, reloc))
+@@ -1541,7 +1553,7 @@ machopic_select_section (tree decl,
+ 
+     case SECCAT_RODATA:
+     case SECCAT_SRODATA:
+-      base_section = darwin_rodata_section (weak, zsize);
++      base_section = darwin_rodata_section (use_coal, zsize);
+       break;
+ 
+     case SECCAT_RODATA_MERGE_STR:
+@@ -1563,7 +1575,7 @@ machopic_select_section (tree decl,
+     case SECCAT_DATA_REL_RO_LOCAL:
+     case SECCAT_SDATA:
+     case SECCAT_TDATA:
+-      if (weak || one)
++      if (use_coal)
+ 	{
+ 	  if (ro)
+ 	    base_section = darwin_sections[const_data_coal_section];
+@@ -1592,7 +1604,7 @@ machopic_select_section (tree decl,
+     case SECCAT_BSS:
+     case SECCAT_SBSS:
+     case SECCAT_TBSS:
+-      if (weak || one) 
++      if (use_coal)
+ 	base_section = darwin_sections[data_coal_section];
+       else
+ 	{
+@@ -2288,14 +2300,18 @@ darwin_asm_declare_constant_name (FILE *file, const char *name,
+ static void
+ darwin_emit_weak_or_comdat (FILE *fp, tree decl, const char *name,
+ 				  unsigned HOST_WIDE_INT size, 
++				  bool use_coal,
+ 				  unsigned int align)
+ {
+-  /* Since the sections used here are coalesed, they will not be eligible
+-     for section anchors, and therefore we don't need to break that out.  */
++  /* Since the sections used here are coalesced, they will not be eligible
++     for section anchors, and therefore we don't need to break that out.
++     CHECKME: for modern linker on PowerPC.  */
+  if (TREE_READONLY (decl) || TREE_CONSTANT (decl))
+-    switch_to_section (darwin_sections[const_data_coal_section]);
++    switch_to_section (use_coal ? darwin_sections[const_data_coal_section]
++				: darwin_sections[const_data_section]);
+   else
+-    switch_to_section (darwin_sections[data_coal_section]);
++    switch_to_section (use_coal ? darwin_sections[data_coal_section]
++				: data_section);
+ 
+   /* To be consistent, we'll allow darwin_asm_declare_object_name to assemble
+      the align info for zero-sized items... but do it here otherwise.  */
+@@ -2514,7 +2530,7 @@ fprintf (fp, "# albss: %s (%lld,%d) ro %d cst %d stat %d com %d"
+     {
+       /* Weak or COMDAT objects are put in mergeable sections.  */
+       darwin_emit_weak_or_comdat (fp, decl, name, size, 
+-					DECL_ALIGN (decl));
++				  ld_uses_coal_sects, DECL_ALIGN (decl));
+       return;
+     } 
+ 
+@@ -2628,7 +2644,7 @@ fprintf (fp, "# adcom: %s (%lld,%d) ro %d cst %d stat %d com %d pub %d"
+     {
+       /* Weak or COMDAT objects are put in mergable sections.  */
+       darwin_emit_weak_or_comdat (fp, decl, name, size, 
+-					DECL_ALIGN (decl));
++				  ld_uses_coal_sects, DECL_ALIGN (decl));
+       return;
+     } 
+ 
+@@ -2698,7 +2714,7 @@ fprintf (fp, "# adloc: %s (%lld,%d) ro %d cst %d stat %d one %d pub %d"
+     {
+       /* Weak or COMDAT objects are put in mergable sections.  */
+       darwin_emit_weak_or_comdat (fp, decl, name, size, 
+-					DECL_ALIGN (decl));
++				  ld_uses_coal_sects, DECL_ALIGN (decl));
+       return;
+     } 
+ 
+@@ -3083,6 +3099,12 @@ darwin_override_options (void)
+       /* Earlier versions are not specifically accounted, until required.  */
+     }
+ 
++  /* Older Darwin ld could not coalesce weak entities without them being
++     placed in special sections.  */
++  if (darwin_target_linker
++      && (strverscmp (darwin_target_linker, MIN_LD64_NO_COAL_SECTS) < 0))
++    ld_uses_coal_sects = true;
++
+   /* In principle, this should be c-family only.  However, we really need to
+      set sensible defaults for LTO as well, since the section selection stuff
+      should check for correctness re. the ABI.  TODO: check and provide the
+@@ -3608,12 +3630,13 @@ darwin_function_section (tree decl, enum node_frequency freq,
+ 			  bool startup, bool exit)
+ {
+   /* Decide if we need to put this in a coalescable section.  */
+-  bool weak = (decl 
++  bool weak = (decl
+ 	       && DECL_WEAK (decl)
+ 	       && (!DECL_ATTRIBUTES (decl)
+ 		   || !lookup_attribute ("weak_import", 
+ 					  DECL_ATTRIBUTES (decl))));
+ 
++  bool use_coal = weak && ld_uses_coal_sects;
+   /* If there is a specified section name, we should not be trying to
+      override.  */
+   if (decl && DECL_SECTION_NAME (decl) != NULL)
+@@ -3647,8 +3670,8 @@ darwin_function_section (tree decl, enum node_frequency freq,
+ 
+   /* Otherwise, default to the 'normal' non-reordered sections.  */
+ default_function_sections:
+-  return (weak) ? darwin_sections[text_coal_section]
+-		: text_section;
++  return (use_coal) ? darwin_sections[text_coal_section]
++		    : text_section;
+ }
+ 
+ /* When a function is partitioned between sections, we need to insert a label
+diff --git a/gcc/config/darwin.h b/gcc/config/darwin.h
+index 6940794..b37184b 100644
+--- a/gcc/config/darwin.h
++++ b/gcc/config/darwin.h
+@@ -945,6 +945,11 @@ extern void darwin_driver_init (unsigned int *,struct cl_decoded_option **);
+    fall-back default.  */
+ #define DEF_MIN_OSX_VERSION "10.5"
+ 
++/* Later versions of ld64 support coalescing weak code/data without requiring
++   that they be placed in specially identified sections.  This is the earliest
++   _tested_ version known to support this so far.  */
++#define MIN_LD64_NO_COAL_SECTS "236.4"
++
+ #ifndef LD64_VERSION
+ #define LD64_VERSION "85.2"
+ #else
+diff --git a/gcc/config/darwin.opt b/gcc/config/darwin.opt
+index 5093731..7f2e394 100644
+--- a/gcc/config/darwin.opt
++++ b/gcc/config/darwin.opt
+@@ -391,5 +391,11 @@ Driver Separate
+ sub_umbrella
+ Driver Separate
+ 
++; Certain aspects of code-gen may be improved / adjusted if the version of ld64
++; is sufficiently modern.
++mtarget-linker
++Target RejectNegative Joined Separate Report Var(darwin_target_linker) Init(LD64_VERSION)
++The version of ld64 in use for this toolchain.
++
+ undefined
+ Driver Separate
+diff --git a/gcc/config/i386/i386.c b/gcc/config/i386/i386.c
+index 60b81bb..4eaf43e 100644
+--- a/gcc/config/i386/i386.c
++++ b/gcc/config/i386/i386.c
+@@ -11813,7 +11813,7 @@ ix86_code_end (void)
+ #if TARGET_MACHO
+       if (TARGET_MACHO)
+ 	{
+-	  switch_to_section (darwin_sections[text_coal_section]);
++	  switch_to_section (darwin_sections[picbase_thunk_section]);
+ 	  fputs ("\t.weak_definition\t", asm_out_file);
+ 	  assemble_name (asm_out_file, name);
+ 	  fputs ("\n\t.private_extern\t", asm_out_file);
+-- 
+2.8.1
+
+Index: gcc/testsuite/g++.dg/abi/key2.C
+===================================================================
+--- a/gcc/testsuite/g++.dg/abi/key2.C	(revision 240693)
++++ b/gcc/testsuite/g++.dg/abi/key2.C	(working copy)
+@@ -2,6 +2,7 @@
+ // PR darwin/25908
+ 
+ // { dg-do compile { target *-*-darwin* } }
++// { dg-options "-mtarget-linker 85.2" }
+ // { dg-final { scan-assembler ".globl __ZTV1f\\n	.weak_definition __ZTV1f(\\n	.section __DATA,__const_coal,coalesced)?\\n	.align" } }
+ // { dg-final { scan-assembler ".globl __ZTS1f\\n	.weak_definition __ZTS1f\\n	.section __TEXT,__const_coal,coalesced" } }
+ // { dg-final { scan-assembler ".globl __ZTI1f\\n	.weak_definition __ZTI1f(\\n	.section __DATA,__const_coal,coalesced)?\\n	.align" } }
+Index: gcc/testsuite/g++.dg/torture/darwin-cfstring-3.C
+===================================================================
+--- a/gcc/testsuite/g++.dg/torture/darwin-cfstring-3.C	(revision 240693)
++++ b/gcc/testsuite/g++.dg/torture/darwin-cfstring-3.C	(working copy)
+@@ -24,7 +24,7 @@
+   s0 = s1;
+ }
+ 
+-/* { dg-final { scan-assembler "\\.long\[ \\t\]+___CFConstantStringClassReference\n\[ \\t\]*\\.long\[ \\t\]+1992\n\[ \\t\]*\\.long\[ \\t\]+LC.*\n\[ \\t\]*\\.long\[ \\t\]+4\n" { target { *-*-darwin* && { ! lp64 } } } } } */
+-/* { dg-final { scan-assembler "\\.long\[ \\t\]+___CFConstantStringClassReference\n\[ \\t\]*\\.long\[ \\t\]+1992\n\[ \\t\]*\\.long\[ \\t\]+LC.*\n\[ \\t\]*\\.long\[ \\t\]+10\n" { target { *-*-darwin* && { ! lp64 } } } } } */
++/* { dg-final { scan-assembler "\\.long\[ \\t\]+___CFConstantStringClassReference\n\[ \\t\]*\\.long\[ \\t\]+1992\n\[ \\t\]*\\.long\[ \\t\]+\[lL\]C.*\n\[ \\t\]*\\.long\[ \\t\]+4\n" { target { *-*-darwin* && { ! lp64 } } } } } */
++/* { dg-final { scan-assembler "\\.long\[ \\t\]+___CFConstantStringClassReference\n\[ \\t\]*\\.long\[ \\t\]+1992\n\[ \\t\]*\\.long\[ \\t\]+\[lL\]C.*\n\[ \\t\]*\\.long\[ \\t\]+10\n" { target { *-*-darwin* && { ! lp64 } } } } } */
+ /* { dg-final { scan-assembler ".quad\t___CFConstantStringClassReference\n\t.long\t1992\n\t.space 4\n\t.quad\t.*\n\t.quad\t4\n" { target { *-*-darwin* && {  lp64 } } } } } */
+ /* { dg-final { scan-assembler ".quad\t___CFConstantStringClassReference\n\t.long\t1992\n\t.space 4\n\t.quad\t.*\n\t.quad\t10\n" { target { *-*-darwin* && {  lp64 } } } } } */
+Index: gcc/testsuite/gcc.dg/torture/darwin-cfstring-3.c
+===================================================================
+--- a/gcc/testsuite/gcc.dg/torture/darwin-cfstring-3.c	(revision 240693)
++++ b/gcc/testsuite/gcc.dg/torture/darwin-cfstring-3.c	(working copy)
+@@ -24,7 +24,7 @@
+   s0 = s1;
+ }
+ 
+-/* { dg-final { scan-assembler "\\.long\[ \\t\]+___CFConstantStringClassReference\n\[ \\t\]*\\.long\[ \\t\]+1992\n\[ \\t\]*\\.long\[ \\t\]+LC.*\n\[ \\t\]*\\.long\[ \\t\]+4\n" { target { *-*-darwin* && { ! lp64 } } } } } */
+-/* { dg-final { scan-assembler "\\.long\[ \\t\]+___CFConstantStringClassReference\n\[ \\t\]*\\.long\[ \\t\]+1992\n\[ \\t\]*\\.long\[ \\t\]+LC.*\n\[ \\t\]*\\.long\[ \\t\]+10\n" { target { *-*-darwin* && { ! lp64 } } } } } */
++/* { dg-final { scan-assembler "\\.long\[ \\t\]+___CFConstantStringClassReference\n\[ \\t\]*\\.long\[ \\t\]+1992\n\[ \\t\]*\\.long\[ \\t\]+\[lL\]C.*\n\[ \\t\]*\\.long\[ \\t\]+4\n" { target { *-*-darwin* && { ! lp64 } } } } } */
++/* { dg-final { scan-assembler "\\.long\[ \\t\]+___CFConstantStringClassReference\n\[ \\t\]*\\.long\[ \\t\]+1992\n\[ \\t\]*\\.long\[ \\t\]+\[lL\]C.*\n\[ \\t\]*\\.long\[ \\t\]+10\n" { target { *-*-darwin* && { ! lp64 } } } } } */
+ /* { dg-final { scan-assembler ".quad\t___CFConstantStringClassReference\n\t.long\t1992\n\t.space 4\n\t.quad\t.*\n\t.quad\t4\n" { target { *-*-darwin* && {  lp64 } } } } } */
+ /* { dg-final { scan-assembler ".quad\t___CFConstantStringClassReference\n\t.long\t1992\n\t.space 4\n\t.quad\t.*\n\t.quad\t10\n" { target { *-*-darwin* && {  lp64 } } } } } */
+Index: gcc/testsuite/gcc.dg/const-uniq-1.c
+===================================================================
+--- a/gcc/testsuite/gcc.dg/const-uniq-1.c	(revision 240694)
++++ b/gcc/testsuite/gcc.dg/const-uniq-1.c	(working copy)
+@@ -20,5 +20,5 @@
+   return a[i+1];
+ }
+ 
+-/* { dg-final { scan-tree-dump-times "L\\\$?C\\\.*0" 2 "gimple" } } */
++/* { dg-final { scan-tree-dump-times "\[lL\]\\\$?C\\\.*0" 2 "gimple" } } */
+ /* { dg-final { cleanup-tree-dump "gimple" } } */
