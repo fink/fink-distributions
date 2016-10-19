@@ -1,0 +1,302 @@
+Package: nodejs
+Version: 4.6.0
+Revision: 2.1
+### hardcoded for now, would be nice to set this at the end of hte InstallScript
+### if I could inject it into the DEBIAN/control file.
+Provides: %n-abi-46
+###
+BuildConflicts: <<
+	libcares2 (<< 5.6.0),
+	libv8-dev
+<<
+BuildDepends: <<
+	fink (>= 0.32),
+	pkgconfig,
+	python27,
+	curl,
+	gyp-py27,
+	openssl100-dev,
+	libicu55-dev,
+	libuv1
+<<
+Depends: <<
+	openssl100-shlibs,
+	libicu55-shlibs,
+	libuv1-shlibs
+<<
+###
+Source: http://%n.org/dist/v%v/node-v%v.tar.gz
+Source-Checksum: SHA1(6a5e2e733bf306414b5958e38ac365aa7dc17ca4)
+Source2: mirror:debian:pool/main/n/%n/%n_%v~dfsg-2.debian.tar.xz
+Source2-Checksum: SHA1(f24e45d6e87009bc2ddc5a1741ed5b325d450dde)
+Source2ExtractDir: node-v%v
+###
+DocFiles: AUTHORS CHANGELOG.md LICENSE README.md debian/README.Fink
+###
+PatchFile: %n.patch
+PatchFile-MD5: d16202f1fe0e5cd45f336003500ededc
+# 10.9+ only
+SetCXXFLAGS:-std=c++11 -stdlib=libc++
+PatchScript: <<
+### From macports
+patch -p1 < %{PatchFile}
+# 10.9+ only
+# https://github.com/nodejs/node/commit/7292a1e954e0db348ff78c704df9e105ba5667ad
+perl -pi -e "s;-std=gnu\+\+0x$;-std=gnu\+\+0x\n              'CLANG_CXX_LIBRARY': 'libc\+\+',;g" common.gypi deps/v8/build/standalone.gypi
+
+# For darwin12+
+perl -pi -e 's,__APPLE__,__NOAPPLE__,g' src/util.h
+
+### Fix for fink's older gyp, once at >= 0.1~svn1773, I can vdep and remove this
+perl -pi -e "s;sys.executable, 'tools\/gyp_node.py', '--no-parallel';sys.executable, 'tools\/gyp_node.py';g" configure
+
+### Fix debian patch for fink
+perl -pi -e 's,\/usr\/lib\/%n,\%p\/lib\/%n,g' debian/patches/2001_FHS_and_rename_to_%n.patch
+
+## Deps that shouldn't be included
+rm -rf \
+	./doc/api_assets/sh_javascript.min.js \
+	./deps/npm/ \
+	./deps/openssl/ \
+	./deps/uv/ \
+	./deps/zlib/ \
+	./test/gc/node_modules/ \
+	./tools/gyp/ \
+	./tools/msvs/genfiles/
+perl -pi -e 's,\/etc,\%p\/etc,g' debian/patches/2014_donotinclude_root_certs.patch
+
+patch -p1 < debian/patches/s390.patch
+patch -p1 < debian/patches/use_system_node_gyp.patch
+patch -p1 < debian/patches/privacy_breach.patch
+patch -p1 < debian/patches/shared_can_build_without_gyp.patch
+patch -p1 < debian/patches/2001_FHS_and_rename_to_%n.patch
+patch -p1 < debian/patches/2012_kfreebsd.patch
+patch -p1 < debian/patches/1005_restore_sh_javascript_nonminified.patch
+patch -p1 < debian/patches/2014_donotinclude_root_certs.patch
+patch -p1 < debian/patches/2016_mips64el.patch
+patch -p1 < debian/patches/2017_mips_configure_fpu.patch
+patch -p1 < debian/patches/test_ci_buildd.patch
+patch -p1 < debian/patches/dest_cpu_x87.patch
+# this would require node-yamlish which would cause a circ dep
+#patch -p1 < debian/patches/doctool-yaml.patch
+
+# fix dh for fink
+sed -i '2iBEGIN \{ push\(\@INC, "\%p\/lib\/perl5"\) \};' debian/dh*
+BASE=$(echo %p | sed -e 's,^/,,'); perl -pi -e "s,etc\/,${BASE}\/etc\/,g" debian/dh*
+perl -pi -e 's,\/usr\/share,\%p\/share,g' debian/dh* debian/*.doc-base
+
+perl -pi -e 's,10\.5,10\.9,g' common.gypi deps/v8/build/standalone.gypi 
+#perl -pi -e 's,MACOSX_DEPLOYMENT_TARGET,NO_DEPLOYMENT_TARGET,g' common.gypi deps/v8/build/standalone.gypi
+perl -pi -e 's,\/usr,\%p,g' common.gypi
+for i in `find deps -type f`; do \
+	perl -pi -e 's,\/usr,\%p,g' $i; perl -pi -e 's,\%p\/bin\/env,\/usr\/bin\/env,g' $i; \
+done
+
+# Force fink's python 2.7
+for i in $(grep -r "env python" * | cut -f1 -d":"); do \
+	perl -pi -e 's,env python,env python2.7,g' $i; \
+done
+for i in `find . -type f -name \*.gyp\*`; do \
+	perl -pi -e "s,'python','python2.7',g" $i; \
+done
+
+# Fix test, OSX ulimit -n = 256 so lower files to bellow 250 in test
+perl -pi -e 's,256,128,g' test/parallel/test-memory-usage-emfile.js
+<<
+###
+UseMaxBuildJobs: false
+###
+InstallScript: <<
+make install DESTDIR=%d
+
+rm -rf %i/include
+rm -rf %i/lib
+rm -rf %i/share/systemtap
+
+mv %i/bin/node %i/bin/%n
+mv %i/share/man/man1/node.1 %i/share/man/man1/%n.1
+
+install -d -m0755 %i/share/doc/%n
+mv %i/share/doc/node/* %i/share/doc/%n/
+cp -R %b/doc/api %i/share/doc/%n
+find %i/share/doc/%n -name \*.json -delete
+rm -rf %i/share/doc/node
+
+# Forget why I had this, comment it out for now
+#sed -i -n '1h; 1!H; ${g; s/<script[^><]*>[^><]*<.script[^><]*>//g; p;}' %i/share/doc/%n/api/*.html
+
+install -d -m0755 %i/include/%n/src
+cp src/*.h %i/include/%n/src/
+install -d -m0755 %i/include/%n/deps/v8/include/
+cp deps/v8/include/*.h %i/include/%n/deps/v8/include/
+cp -R deps/v8/include/libplatform %i/include/%n/deps/v8/include/
+cp common.gypi %i/include/%n
+install -d -m0755 %i/bin
+install -m0755 debian/dh_%n %i/bin/dh_%n
+install -d -m0755 %i/lib/perl5/Debian/Debhelper/Sequence
+install -m0644 debian/%n.pm %i/lib/perl5/Debian/Debhelper/Sequence/
+install -d -m0755 %i/share/doc-base
+install -m0644 debian/%n.doc-base %i/share/doc-base/%n-api
+
+install -d -m0755 %i/include/%n/deps/uv/include
+ln -s %p/include/uv.h %i/include/%n/deps/uv/include/uv.h
+ln -s %p/include/uv-unix.h %i/include/%n/deps/uv/include/uv-unix.h
+ln -s %p/include/uv-version.h %i/include/%n/deps/uv/include/uv-version.h
+ln -s %p/include/uv-threadpool.h %i/include/%n/deps/uv/include/uv-threadpool.h
+ln -s %p/include/uv-errno.h %i/include/%n/deps/uv/include/uv-errno.h
+ln -s %p/include/uv-linux.h %i/include/%n/deps/uv/include/uv-linux.h
+ln -s %p/bin/%n %i/bin/node
+ln -s %p/share/man/man1/%n.1 %i/share/man/man1/node.1
+
+mv debian/%n.README.Debian debian/README.Fink
+
+pod2man --release "" --center "" debian/dh_%n > %i/share/man/man1/dh_%n.1
+
+# source equivalent of nodejs -e 'console.log(process.versions.modules)'
+install -d -m0755 %i/share/%n
+abi=$(awk '/^\#define NODE_MODULE_VERSION/ {print $3}' src/node_version.h); \
+abideps="%n-dev (>= %v~), %n-abi-${abi}"; \
+echo ${abideps} > %i/share/%n/pluginsdep
+#perl -pi -e "s,%n-abi-abi,%n-abi-${abideps},g" %i/../DEBIAN/control
+<<
+###
+InfoTest: <<
+	TestDepends: curl, python27
+	TestScript: <<
+#!/bin/sh -ev
+#  relax regression tests when targeted experimental suite
+export HOME = %b/test/tmp
+export FLAKY_TESTS = dontcare
+export TEST_CI_ARGS = --timeout=3000
+export CI_NATIVE_SUITES =
+export CI_JS_SUITES = message parallel sequential
+
+echo "test-child-process-customfd-bounded still fails due to ulimit...";
+make test-ci || exit 2
+	<<
+<<
+###
+### Forcing x64 since it's all we support now, but backports might need
+### --dest-cpu=ia32 as an option
+ConfigureParams: <<
+	--dest-cpu=x64 \
+	--without-dtrace \
+	--without-npm \
+	--shared-libuv \
+	--shared-libuv-includes=%p/include \
+	--shared-libuv-libpath=%p/lib \
+	--shared-openssl \
+	--shared-openssl-includes=%p/include/openssl \
+	--shared-openssl-libpath=%p/lib \
+	--shared-zlib \
+	--shared-zlib-libname=z \
+	--with-intl=system-icu
+<<
+###
+Description: Evented I/O for V8 javascript
+DescDetail: <<
+Node.js is a platform built on Chrome's JavaScript runtime for easily
+building fast, scalable network applications. Node.js uses an
+event-driven, non-blocking I/O model that makes it lightweight and
+efficient, perfect for data-intensive real-time applications that run
+across distributed devices.
+.
+Node.js is bundled with several useful libraries to handle server
+tasks:
+.
+System, Events, Standard I/O, Modules, Timers, Child Processes, POSIX,
+HTTP, Multipart Parsing, TCP, DNS, Assert, Path, URL, Query Strings.
+<<
+DescUsage: <<
+  OSX ulimit is 256... Below was found online, breaks fink policy and I can not
+  recommend it as I have not tested it.  That being said I thought I'd include
+  it as documention to help others.
+
+  Solution on Superuser.com: http://superuser.com/a/514049
+
+    echo 'kern.maxfiles=20480' | sudo tee -a /etc/sysctl.conf
+    echo -e 'limit maxfiles 8192 20480\nlimit maxproc 1000 2000' \
+            | sudo tee -a /etc/launchd.conf
+    echo 'ulimit -n 4096' | sudo tee -a /etc/profile
+
+  After rebooting, everything worked fine.
+<<
+###
+PostInstScript: <<
+if [ "$1" = "configure" ]; then
+	if dpkg --compare-versions "$2" le 0.6.19~dfsg1-2; then
+		update-alternatives --remove js %p/bin/node
+	fi
+
+	update-alternatives --install %p/bin/js js %p/bin/%n 200 \
+			    --slave %p/share/man/man1/js.1 js.1 %p/share/man/man1/%n.1
+fi
+<<
+PreRmScript: <<
+if [ "$1" = "remove" ]; then
+	update-alternatives --remove js %p/bin/%n
+fi
+<<
+###
+SplitOff: <<
+	Package: %N-dev
+	Depends: <<
+		%N (= %v-%r),
+		python27
+	<<
+	Recommends: <<
+		ca-certificates
+	<<
+	Replaces: <<
+		%N (<< 0.10.25-1)
+	<<
+	Files: <<
+		bin/dh_%N
+		include/%N
+		share/man/man1/dh_%N.1
+		share/%N/pluginsdep
+		lib/perl5
+	<<
+	DocFiles:  AUTHORS CHANGELOG.md LICENSE
+	Description: Evented I/O for V8 javascript (dev files)
+	DescDetail: <<
+Node.js is a platform built on Chrome's JavaScript runtime for easily
+building fast, scalable network applications. Node.js uses an
+event-driven, non-blocking I/O model that makes it lightweight and
+efficient, perfect for data-intensive real-time applications that run
+across distributed devices.
+.
+This package is needed to build plugins.
+	<<
+<<
+SplitOff2: <<
+	Package: %N-legacy
+	Depends: <<
+		%N (>= %v-%r)
+	<<
+	Replaces: <<
+		%N (<< 0.10.25-1)
+	<<
+	Files: <<
+		bin/node
+		share/man/man1/node.1
+	<<
+	DocFiles: AUTHORS CHANGELOG.md LICENSE
+	Description: Evented I/O for V8 javascript (legacy)
+	DescDetail: <<
+Node.js is a platform built on Chrome's JavaScript runtime for easily
+building fast, scalable network applications. Node.js uses an
+event-driven, non-blocking I/O model that makes it lightweight and
+efficient, perfect for data-intensive real-time applications that run
+across distributed devices.
+.
+This package contains a symlink for legacy Node.js code requiring
+binary to be %p/bin/node (not %p/bin/nodejs as provided in Fink).
+.
+No other Debian packages should depend on this package.
+	<<
+<<
+###
+License: BSD
+Homepage: http://nodejs.org/
+Maintainer: Justin F. Hallett <thesin@users.sourceforge.net>
