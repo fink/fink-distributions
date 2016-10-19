@@ -1,9 +1,10 @@
+Info4: <<
+# 10.9+ only, as it requires libc++
 Package: nodejs
 Version: 4.6.0
 Revision: 2.1
-### hardcoded for now, would be nice to set this at the end of hte InstallScript
-### if I could inject it into the DEBIAN/control file.
-Provides: %n-abi-46
+Type: abi (46)
+Provides: %n-abi-%type_raw[abi]
 ###
 BuildConflicts: <<
 	libcares2 (<< 5.6.0),
@@ -35,12 +36,17 @@ DocFiles: AUTHORS CHANGELOG.md LICENSE README.md debian/README.Fink
 ###
 PatchFile: %n.patch
 PatchFile-MD5: d16202f1fe0e5cd45f336003500ededc
-# 10.9+ only
 SetCXXFLAGS:-std=c++11 -stdlib=libc++
 PatchScript: <<
+### Make sure abi hasn't changed
+# source equivalent of nodejs -e 'console.log(process.versions.modules)'
+abi=$(awk '/^\#define NODE_MODULE_VERSION/ {print $3}' src/node_version.h); \
+if [ "%type_raw[abi]" != "${abi}" ]; then \
+	echo "ABI changed from %type_raw[abi] to ${abi}, take evasive measures"; \
+	exit 1; \
+fi
 ### From macports
 patch -p1 < %{PatchFile}
-# 10.9+ only
 # https://github.com/nodejs/node/commit/7292a1e954e0db348ff78c704df9e105ba5667ad
 perl -pi -e "s;-std=gnu\+\+0x$;-std=gnu\+\+0x\n              'CLANG_CXX_LIBRARY': 'libc\+\+',;g" common.gypi deps/v8/build/standalone.gypi
 
@@ -86,6 +92,7 @@ BASE=$(echo %p | sed -e 's,^/,,'); perl -pi -e "s,etc\/,${BASE}\/etc\/,g" debian
 perl -pi -e 's,\/usr\/share,\%p\/share,g' debian/dh* debian/*.doc-base
 
 perl -pi -e 's,10\.5,10\.9,g' common.gypi deps/v8/build/standalone.gypi 
+# Macports does this I'm not sure it's really required
 #perl -pi -e 's,MACOSX_DEPLOYMENT_TARGET,NO_DEPLOYMENT_TARGET,g' common.gypi deps/v8/build/standalone.gypi
 perl -pi -e 's,\/usr,\%p,g' common.gypi
 for i in `find deps -type f`; do \
@@ -105,6 +112,23 @@ perl -pi -e 's,256,128,g' test/parallel/test-memory-usage-emfile.js
 <<
 ###
 UseMaxBuildJobs: false
+###
+### Forcing x64 since it's all we support now, but backports might need
+### --dest-cpu=ia32 as an option
+ConfigureParams: <<
+	--dest-cpu=x64 \
+	--without-dtrace \
+	--without-npm \
+	--shared-libuv \
+	--shared-libuv-includes=%p/include \
+	--shared-libuv-libpath=%p/lib \
+	--shared-openssl \
+	--shared-openssl-includes=%p/include/openssl \
+	--shared-openssl-libpath=%p/lib \
+	--shared-zlib \
+	--shared-zlib-libname=z \
+	--with-intl=system-icu
+<<
 ###
 InstallScript: <<
 make install DESTDIR=%d
@@ -152,12 +176,9 @@ mv debian/%n.README.Debian debian/README.Fink
 
 pod2man --release "" --center "" debian/dh_%n > %i/share/man/man1/dh_%n.1
 
-# source equivalent of nodejs -e 'console.log(process.versions.modules)'
 install -d -m0755 %i/share/%n
-abi=$(awk '/^\#define NODE_MODULE_VERSION/ {print $3}' src/node_version.h); \
-abideps="%n-dev (>= %v~), %n-abi-${abi}"; \
-echo ${abideps} > %i/share/%n/pluginsdep
-#perl -pi -e "s,%n-abi-abi,%n-abi-${abideps},g" %i/../DEBIAN/control
+# Should use %v~ but fink and current dpkg don't understand ~ yet
+echo "%n-dev (>= %v), %n-abi-%type_raw[abi]" > %i/share/%n/pluginsdep
 <<
 ###
 InfoTest: <<
@@ -174,23 +195,6 @@ export CI_JS_SUITES = message parallel sequential
 echo "test-child-process-customfd-bounded still fails due to ulimit...";
 make test-ci || exit 2
 	<<
-<<
-###
-### Forcing x64 since it's all we support now, but backports might need
-### --dest-cpu=ia32 as an option
-ConfigureParams: <<
-	--dest-cpu=x64 \
-	--without-dtrace \
-	--without-npm \
-	--shared-libuv \
-	--shared-libuv-includes=%p/include \
-	--shared-libuv-libpath=%p/lib \
-	--shared-openssl \
-	--shared-openssl-includes=%p/include/openssl \
-	--shared-openssl-libpath=%p/lib \
-	--shared-zlib \
-	--shared-zlib-libname=z \
-	--with-intl=system-icu
 <<
 ###
 Description: Evented I/O for V8 javascript
@@ -254,8 +258,8 @@ SplitOff: <<
 		bin/dh_%N
 		include/%N
 		share/man/man1/dh_%N.1
-		share/%N/pluginsdep
-		lib/perl5
+		share/%N
+		lib
 	<<
 	DocFiles:  AUTHORS CHANGELOG.md LICENSE
 	Description: Evented I/O for V8 javascript (dev files)
@@ -300,3 +304,4 @@ No other Debian packages should depend on this package.
 License: BSD
 Homepage: http://nodejs.org/
 Maintainer: Justin F. Hallett <thesin@users.sourceforge.net>
+<<
