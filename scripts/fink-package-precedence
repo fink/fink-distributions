@@ -10,6 +10,7 @@ use File::Find;
 use Getopt::Long;
 use Cwd qw/ abs_path /;
 use File::Basename;
+use File::Temp qw(tempdir);
 
 my %opts = (
 	'headers' => 1,				# scan .h in -M dependency files?
@@ -114,8 +115,12 @@ $dep_re = qr/$dep_re/;
 my %deps;						# key=included file
 								# value=first dependencies file where it's listed
 
-my $plo_count = 0;
+my $plo_count; # undef has sentinel meaning that we have not even found a dir to scan
+
 foreach my $argv (@ARGV) {
+	next if $argv =~ /\.deb$/;  # binary archives have no compile-time header data
+	$plo_count += 0; # unset sentinel; defined because we have something to scan
+
 	my $argv_abs_dir_regex = abs_path($argv);
 	$argv_abs_dir_regex = qr/^\Q$argv_abs_dir_regex\E/;
 
@@ -184,7 +189,10 @@ find sub {
 	}
 }
 
-if (! $plo_count) {
+if (! defined $plo_count) {
+	print "Only .deb binary archives requested.\n";
+	$plo_count = 0;  # sentinel has done its job
+} elsif (! $plo_count) {
 	die "No dependency files found.\n";
 }
 
@@ -311,6 +319,22 @@ print "Scanning binaries for incorrect dyld linking...\n";
 my %deps;						# key=linked lib
 								# value=first binary that links against it
 
+	{
+		my @binary_dirs = @ARGV;
+		map {
+			if (/\.deb$/) {
+				# unpack .deb (keep its filename visible in unpacked
+				# dir so that reports about it include archivename).
+				# TODO: remember .deb name for later reports
+				my $destdir = tempdir("$_.XXXXXXXXXX", TMPDIR=>1, CLEANUP=>1 );
+				if (system('dpkg', '-x', $_, $destdir)) {
+					die "Error: could not unpack .deb\n";
+				}
+				# scan unpacked dir instead of the archive's filename
+				$_ = $destdir;
+			}
+		} @binary_dirs;
+
 find sub {
 	return unless -f;
 	return if /\.class$/;
@@ -320,8 +344,9 @@ find sub {
 		$deps{$1} = $File::Find::name if ! exists $deps{$1};
 	}
 	close $otool_L_fh or die "Error reading $otool -L: $! $?\n";
-}, @ARGV;
-
+}, @binary_dirs;
+	}
+	
 # regexes for libraries to disallow.
 # * /usr/local is bad news!
 # * OSX or X11 files for which fink has replacements
