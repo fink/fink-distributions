@@ -1,7 +1,7 @@
-diff -Nurd -x'*~' fink-package-precedence-0.30.orig/fink-package-precedence fink-package-precedence-0.30/fink-package-precedence
---- fink-package-precedence-0.30.orig/fink-package-precedence	1969-12-31 19:00:00.000000000 -0500
-+++ fink-package-precedence-0.30/fink-package-precedence	2016-10-02 00:23:35.000000000 -0400
-@@ -0,0 +1,379 @@
+diff -Nurd -x'*~' fink-package-precedence-0.31.orig/fink-package-precedence fink-package-precedence-0.31/fink-package-precedence
+--- fink-package-precedence-0.31.orig/fink-package-precedence	1969-12-31 19:00:00.000000000 -0500
++++ fink-package-precedence-0.31/fink-package-precedence	2016-10-28 16:32:53.000000000 -0400
+@@ -0,0 +1,411 @@
 +#!/usr/bin/perl
 +# -*- mode: Perl; tab-width: 4; -*-
 +
@@ -14,6 +14,7 @@ diff -Nurd -x'*~' fink-package-precedence-0.30.orig/fink-package-precedence fink
 +use Getopt::Long;
 +use Cwd qw/ abs_path /;
 +use File::Basename;
++use File::Temp qw(tempdir);
 +
 +my %opts = (
 +	'headers' => 1,				# scan .h in -M dependency files?
@@ -60,7 +61,9 @@ diff -Nurd -x'*~' fink-package-precedence-0.30.orig/fink-package-precedence fink
 +	$opts{'help'} = 1;
 +}
 +if ($opts{'help'}) {
++	my $version = '@VERSION@';
 +	my $msg = <<"EOMSG";
++fink-package-precedence $version
 +
 +Usage: $0 [options] <list of locations>
 +
@@ -99,8 +102,9 @@ diff -Nurd -x'*~' fink-package-precedence-0.30.orig/fink-package-precedence fink
 +     projects that support --enable-dependency-tracking (*1). Passing
 +     -MD directly (perhaps via CPPFLAGS) usually gives .d instead.
 +
-+  <list of locations> can be dependency filenames, compiled-
-+  binary filenames, or directories to scan for these files.
++  <list of locations> can be dependency filenames, compiled-binary
++  filenames, .deb compiled-package archives, or directories to scan
++  for these files.
 +
 +EOMSG
 +
@@ -118,8 +122,12 @@ diff -Nurd -x'*~' fink-package-precedence-0.30.orig/fink-package-precedence fink
 +my %deps;						# key=included file
 +								# value=first dependencies file where it's listed
 +
-+my $plo_count = 0;
++my $plo_count; # undef has sentinel meaning that we have not even found a dir to scan
++
 +foreach my $argv (@ARGV) {
++	next if $argv =~ /\.deb$/;  # binary archives have no compile-time header data
++	$plo_count += 0; # unset sentinel; defined because we have something to scan
++
 +	my $argv_abs_dir_regex = abs_path($argv);
 +	$argv_abs_dir_regex = qr/^\Q$argv_abs_dir_regex\E/;
 +
@@ -165,7 +173,9 @@ diff -Nurd -x'*~' fink-package-precedence-0.30.orig/fink-package-precedence fink
 +	foreach my $file (@inc_files) {
 +		my $src = $deps{$file};     # value (in case we delete key)
 +		my $abs = abs_path($file);  # clean up all sorts of spaghetti
-+		if ($file ne $abs) {
++		if (!defined $abs) {
++			warn "abs_path($file) failed (seen in $src)\n";
++		} elsif ($file ne $abs) {
 +			# link in here somewhere, need linknames and targets
 +			# always want the actual file
 +			$deps{$abs} = $src if ! exists $deps{$abs};
@@ -188,7 +198,10 @@ diff -Nurd -x'*~' fink-package-precedence-0.30.orig/fink-package-precedence fink
 +	}
 +}
 +
-+if (! $plo_count) {
++if (! defined $plo_count) {
++	print "Only .deb binary archives requested.\n";
++	$plo_count = 0;  # sentinel has done its job
++} elsif (! $plo_count) {
 +	die "No dependency files found.\n";
 +}
 +
@@ -315,6 +328,22 @@ diff -Nurd -x'*~' fink-package-precedence-0.30.orig/fink-package-precedence fink
 +my %deps;						# key=linked lib
 +								# value=first binary that links against it
 +
++	{
++		my @binary_dirs = @ARGV;
++		map {
++			if (/\.deb$/) {
++				# unpack .deb (keep its filename visible in unpacked
++				# dir so that reports about it include archivename).
++				# TODO: remember .deb name for later reports
++				my $destdir = tempdir("$_.XXXXXXXXXX", TMPDIR=>1, CLEANUP=>1 );
++				if (system('dpkg', '-x', $_, $destdir)) {
++					die "Error: could not unpack .deb\n";
++				}
++				# scan unpacked dir instead of the archive's filename
++				$_ = $destdir;
++			}
++		} @binary_dirs;
++
 +find sub {
 +	return unless -f;
 +	return if /\.class$/;
@@ -324,8 +353,9 @@ diff -Nurd -x'*~' fink-package-precedence-0.30.orig/fink-package-precedence fink
 +		$deps{$1} = $File::Find::name if ! exists $deps{$1};
 +	}
 +	close $otool_L_fh or die "Error reading $otool -L: $! $?\n";
-+}, @ARGV;
-+
++}, @binary_dirs;
++	}
++	
 +# regexes for libraries to disallow.
 +# * /usr/local is bad news!
 +# * OSX or X11 files for which fink has replacements
@@ -353,6 +383,8 @@ diff -Nurd -x'*~' fink-package-precedence-0.30.orig/fink-package-precedence fink
 +	'/opt/X11.*/libglitz',
 +	'/opt/X11.*/libpixman',
 +	'/opt/X11.*/libpng',
++	'/usr/X11.*/libXt',
++	'/opt/X11.*/libXt',
 +	'/opt/local',
 +);
 +$repl_regex = qr/$repl_regex/; # pre-compile (will use many times)
