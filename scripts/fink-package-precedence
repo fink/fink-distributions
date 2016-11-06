@@ -10,6 +10,7 @@ use File::Find;
 use Getopt::Long;
 use Cwd qw/ abs_path /;
 use File::Basename;
+use File::Spec;
 use File::Temp qw(tempdir);
 
 my %opts = (
@@ -323,18 +324,22 @@ print "Scanning binaries for incorrect dyld linking...\n";
 
 my %deps;						# key=linked lib
 								# value=first binary that links against it
+my %deb_tempdirs;				# unpacked .deb archive -> .deb file itself
 
 	{
 		my @binary_dirs = @ARGV;
 		map {
 			if (/\.deb$/) {
-				# unpack .deb (keep its filename visible in unpacked
+				# Unpack .deb (keep its filename visible in unpacked
 				# dir so that reports about it include archivename).
-				# TODO: remember .deb name for later reports
-				my $destdir = tempdir("$_.XXXXXXXXXX", TMPDIR=>1, CLEANUP=>1 );
+				# Use explicit tmpdir (rather than "TMPDIR=>1") to
+				# make sure we keep in sync with later uses of paths.
+				my $destdir = tempdir("$_.XXXXXXXXXX", DIR=>File::Spec->tmpdir, CLEANUP=>1 );
 				if (system('dpkg', '-x', $_, $destdir)) {
 					die "Error: could not unpack .deb\n";
 				}
+				# save archive's filename for user output
+				$deb_tempdirs{$destdir} = $_;
 				# scan unpacked dir instead of the archive's filename
 				$_ = $destdir;
 			}
@@ -386,9 +391,19 @@ my $repl_regex = '^' . join '|', (
 $repl_regex = qr/$repl_regex/; # pre-compile (will use many times)
 
 my $bad_system = 0;
+my $tmpdir_regex = File::Spec->tmpdir();
+$tmpdir_regex = qr/\Q$tmpdir_regex/;
 foreach (sort keys %deps) {
 	if (/$repl_regex/) {
-		print "\t $deps{$_} uses $_\n";
+		my $bad_binary = $deps{$_};
+		if ($bad_binary =~ /$tmpdir_regex/) {
+			# Unpacked .deb archives are stored in tmpdir, but we want
+			# users to see .deb archivename, not unpacked tmpdir path
+			foreach (keys %deb_tempdirs) {
+				last if $bad_binary =~ s/^\Q$_/$deb_tempdirs{$_}:/;
+			}
+		}
+		print "\t $bad_binary uses $_\n";
 		$bad_system |= 1;
 		if (/^\/usr\/local\/lib\//) {
 			$bad_system |= 2;
