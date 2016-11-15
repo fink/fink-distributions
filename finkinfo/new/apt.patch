@@ -574,6 +574,159 @@ diff -ruN apt-0.9.16.1.orig/fink/patches/darwin-fixes.patch apt-0.9.16.1/fink/pa
 + 		echo "$TESTOKAY"
 + 	else
 + 		echo "$TESTFAIL"
+diff -ruN apt-0.9.16.1.orig/fink/patches/ignore-breakage.patch apt-0.9.16.1/fink/patches/ignore-breakage.patch
+--- apt-0.9.16.1.orig/fink/patches/ignore-breakage.patch	1969-12-31 17:00:00.000000000 -0700
++++ apt-0.9.16.1/fink/patches/ignore-breakage.patch	2016-11-15 12:51:17.000000000 -0700
+@@ -0,0 +1,149 @@
++diff -ruN apt-0.9.16.1.a/apt-private/private-cmndline.cc apt-0.9.16.1.b/apt-private/private-cmndline.cc
++--- apt-0.9.16.1.a/apt-private/private-cmndline.cc	2014-03-15 10:23:45.000000000 -0600
+++++ apt-0.9.16.1.b/apt-private/private-cmndline.cc	2016-11-15 12:50:58.000000000 -0700
++@@ -183,6 +183,7 @@
++    addArg('t',"default-release","APT::Default-Release",CommandLine::HasArg);
++    addArg(0,"download","APT::Get::Download",0);
++    addArg(0,"fix-missing","APT::Get::Fix-Missing",0);
+++   addArg(0,"ignore-breakage","APT::Get::Ignore-Breakage",0);
++    addArg(0,"ignore-hold","APT::Ignore-Hold",0);
++    addArg(0,"upgrade","APT::Get::upgrade",0);
++    addArg(0,"only-upgrade","APT::Get::Only-Upgrade",0);
++diff -ruN apt-0.9.16.1.a/apt-private/private-install.cc apt-0.9.16.1.b/apt-private/private-install.cc
++--- apt-0.9.16.1.a/apt-private/private-install.cc	2016-11-15 12:31:33.000000000 -0700
+++++ apt-0.9.16.1.b/apt-private/private-install.cc	2016-11-15 12:41:15.000000000 -0700
++@@ -79,7 +79,8 @@
++    Stats(c1out,Cache);
++ 
++    // Sanity check
++-   if (Cache->BrokenCount() != 0)
+++   if (Cache->BrokenCount() != 0
+++       && _config->FindB("APT::Get::Ignore-Breakage",false) == false)
++    {
++       ShowBroken(c1out,Cache,false);
++       return _error->Error(_("Internal error, InstallPackages was called with broken packages!"));
++@@ -442,7 +443,7 @@
++ 
++    // we could have removed a new dependency of a garbage package,
++    // so check if a reverse depends is broken and if so install it again.
++-   if (tooMuch.empty() == false && (Cache->BrokenCount() != 0 || Cache->PolicyBrokenCount() != 0))
+++   if (tooMuch.empty() == false && ((Cache->BrokenCount() != 0 && _config->FindB("APT::Get::Ignore-Breakage") == false) || Cache->PolicyBrokenCount() != 0))
++    {
++       bool Changed;
++       do {
++@@ -497,7 +498,8 @@
++    }
++ 
++    // Now see if we had destroyed anything (if we had done anything)
++-   if (Cache->BrokenCount() != 0)
+++   if (Cache->BrokenCount() != 0
+++       && _config->FindB("APT::Get::Ignore-Breakage",false) == false)
++    {
++       c1out << _("Hmm, seems like the AutoRemover destroyed something which really\n"
++ 	         "shouldn't happen. Please file a bug report against apt.") << std::endl;
++@@ -539,7 +541,8 @@
++ 
++    // Enter the special broken fixing mode if the user specified arguments
++    bool BrokenFix = false;
++-   if (Cache->BrokenCount() != 0)
+++   if (Cache->BrokenCount() != 0
+++       && _config->FindB("APT::Get::Ignore-Breakage",false) == false)
++       BrokenFix = true;
++ 
++    SPtr<pkgProblemResolver> Fix;
++@@ -611,7 +614,8 @@
++       /* If we are in the Broken fixing mode we do not attempt to fix the
++ 	 problems. This is if the user invoked install without -f and gave
++ 	 packages */
++-      if (BrokenFix == true && Cache->BrokenCount() != 0)
+++      if (BrokenFix == true && Cache->BrokenCount() != 0
+++          && _config->FindB("APT::Get::Ignore-Breakage") == false)
++       {
++ 	 c1out << _("You might want to run 'apt-get -f install' to correct these:") << std::endl;
++ 	 ShowBroken(c1out,Cache,false);
++@@ -625,7 +629,8 @@
++       }
++ 
++       // Now we check the state of the packages,
++-      if (Cache->BrokenCount() != 0)
+++      if (Cache->BrokenCount() != 0
+++          && _config->FindB("APT::Get::Ignore-Breakage",false) == false)
++       {
++ 	 c1out << 
++ 	    _("Some packages could not be installed. This may mean that you have\n" 
++diff -ruN apt-0.9.16.1.a/cmdline/apt-get.cc apt-0.9.16.1.b/cmdline/apt-get.cc
++--- apt-0.9.16.1.a/cmdline/apt-get.cc	2016-11-15 12:31:33.000000000 -0700
+++++ apt-0.9.16.1.b/cmdline/apt-get.cc	2016-11-15 12:29:32.000000000 -0700
++@@ -1735,6 +1735,22 @@
++       return 0;
++    }
++ 
+++   /* FINK LOCAL begin */
+++   if (_config->FindB("APT::Get::Ignore-Breakage",false) == true) {
+++     if (_config->FindB("APT::Get::Print-URIs",false) == false &&
+++        _config->FindB("APT::Get::Download-Only",false) == false) {
+++       _error->Error("--ignore-breakage can only be used with --print-uris or --download-only");
+++       _error->DumpErrors();
+++       return 100;
+++     }
+++     if (strcmp(CmdL.FileList[0],"install") != 0) {
+++       _error->Error("--ignore-breakage can only be used with apt-get install");
+++       _error->DumpErrors();
+++       return 100;
+++     }
+++   }
+++   /* FINK LOCAL end */
+++
++    // see if we are in simulate mode
++    CheckSimulateMode(CmdL);
++ 
++diff -ruN apt-0.9.16.1.a/doc/apt-get.8.xml apt-0.9.16.1.b/doc/apt-get.8.xml
++--- apt-0.9.16.1.a/doc/apt-get.8.xml	2014-03-15 10:23:45.000000000 -0600
+++++ apt-0.9.16.1.b/doc/apt-get.8.xml	2016-11-15 12:25:15.000000000 -0700
++@@ -287,6 +287,16 @@
++      Configuration Item: <literal>APT::Get::Fix-Broken</literal>.</para></listitem>
++      </varlistentry>
++ 
+++     <varlistentry><term><option>--ignore-breakage</option></term>
+++     <listitem><para>For mode <option>install</option>, ignore dependency problems. This option is
+++     useful if you want to perform actions on just a particular package,
+++     not its whole dependency tree. It must be used in conjunction with
+++     <option>--download-only</option> or <option>--print-uris</option>.  Configuration Item: <literal>APT::Get::Ignore-Breakage</literal>.</para>
+++     <para>Note: The <option>--ignore-breakage</option> option was added by The Fink Project
+++     and hence is only available in the <option>apt-get</option> provided by Fink's
+++     <option>apt</option> package.</para></listitem>
+++     </varlistentry>
+++
++      <varlistentry><term><option>-m</option></term><term><option>--ignore-missing</option></term>
++      <term><option>--fix-missing</option></term>
++      <listitem><para>Ignore missing packages; if packages cannot be retrieved or fail the    
++diff -ruN apt-0.9.16.1.a/fink/patches/virtuals.patch apt-0.9.16.1.b/fink/patches/virtuals.patch
++--- apt-0.9.16.1.a/fink/patches/virtuals.patch	2016-11-15 11:58:11.000000000 -0700
+++++ apt-0.9.16.1.b/fink/patches/virtuals.patch	2014-03-27 09:36:57.000000000 -0600
++@@ -94,7 +94,7 @@
++  									/*}}}*/
++ --- apt.orig/apt-pkg/deb/dpkgpm.cc
++ +++ dpt/apt-pkg/deb/pkgpm.cc
++-@@ -587,7 +587,7 @@
+++@@ -583,7 +583,7 @@
++     }
++     // "status" has the form: "status: pkg: state"
++     // with state in ["half-installed", "unpacked", "half-configured", 
++@@ -103,7 +103,7 @@
++     else if (prefix == "status")
++     {
++        pkgname = APT::String::Strip(list[1]);
++-@@ -984,6 +984,7 @@
+++@@ -980,6 +980,7 @@
++  	 {"unpacked",N_("Preparing to configure %s") },
++  	 {"half-configured", N_("Configuring %s") },
++  	 { "installed", N_("Installed %s")},
++@@ -111,7 +111,7 @@
++  	 {NULL, NULL}
++        },
++        // Remove operation
++-@@ -1002,7 +1003,7 @@
+++@@ -998,7 +999,7 @@
++     };
++  
++     // init the PackageOps map, go over the list of packages that
 diff -ruN apt-0.9.16.1.orig/fink/patches/vendor.patch apt-0.9.16.1/fink/patches/vendor.patch
 --- apt-0.9.16.1.orig/fink/patches/vendor.patch	1969-12-31 17:00:00.000000000 -0700
 +++ apt-0.9.16.1/fink/patches/vendor.patch	2014-03-24 15:25:02.000000000 -0600
@@ -618,7 +771,7 @@ diff -ruN apt-0.9.16.1.orig/fink/patches/vendor.patch apt-0.9.16.1/fink/patches/
 + clean: clean/sources.list
 diff -ruN apt-0.9.16.1.orig/fink/patches/virtuals.patch apt-0.9.16.1/fink/patches/virtuals.patch
 --- apt-0.9.16.1.orig/fink/patches/virtuals.patch	1969-12-31 17:00:00.000000000 -0700
-+++ apt-0.9.16.1/fink/patches/virtuals.patch	2014-03-27 09:36:57.000000000 -0600
++++ apt-0.9.16.1/fink/patches/virtuals.patch	2016-11-15 11:58:11.000000000 -0700
 @@ -0,0 +1,122 @@
 +--- apt.orig/apt-pkg/deb/deblistparser.cc
 ++++ apt/apt-pkg/deb/deblistparser.cc
@@ -716,7 +869,7 @@ diff -ruN apt-0.9.16.1.orig/fink/patches/virtuals.patch apt-0.9.16.1/fink/patche
 + 									/*}}}*/
 +--- apt.orig/apt-pkg/deb/dpkgpm.cc
 ++++ dpt/apt-pkg/deb/pkgpm.cc
-+@@ -583,7 +583,7 @@
++@@ -587,7 +587,7 @@
 +    }
 +    // "status" has the form: "status: pkg: state"
 +    // with state in ["half-installed", "unpacked", "half-configured", 
@@ -725,7 +878,7 @@ diff -ruN apt-0.9.16.1.orig/fink/patches/virtuals.patch apt-0.9.16.1/fink/patche
 +    else if (prefix == "status")
 +    {
 +       pkgname = APT::String::Strip(list[1]);
-+@@ -980,6 +980,7 @@
++@@ -984,6 +984,7 @@
 + 	 {"unpacked",N_("Preparing to configure %s") },
 + 	 {"half-configured", N_("Configuring %s") },
 + 	 { "installed", N_("Installed %s")},
@@ -733,7 +886,7 @@ diff -ruN apt-0.9.16.1.orig/fink/patches/virtuals.patch apt-0.9.16.1/fink/patche
 + 	 {NULL, NULL}
 +       },
 +       // Remove operation
-+@@ -998,7 +999,7 @@
++@@ -1002,7 +1003,7 @@
 +    };
 + 
 +    // init the PackageOps map, go over the list of packages that
