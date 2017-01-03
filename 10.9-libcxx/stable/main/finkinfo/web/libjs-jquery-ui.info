@@ -1,84 +1,203 @@
 Package: libjs-jquery-ui
-Version: 1.10.1
-Revision: 1.2
+Version: 1.12.1
+Revision: 3.1
 ###
-BuildDepends: yui-compressor
-Depends: javascript-common, libjs-jquery (>= 1.6)
-Suggests: %n-docs
+BuildDepends: <<
+	fink (>= 0.32),
+	node-requirejs (>= 2.3.2-1),
+	node-uglify,
+	nodejs,
+	yui-compressor
+<<
+Depends: <<
+	libjs-jquery (>= 1.7)
+<<
+Recommends: <<
+	javascript-common
+<<
+Suggests: <<
+	%n-docs
+<<
 ###
-Source: mirror:debian:/pool/main/j/jqueryui/jqueryui_1.10.1+dfsg.orig.tar.gz
-Source-MD5: 27e3e735aaf70f672cbafbd6f6fb9c32
-SourceDirectory: jqueryui-%v
+Source: mirror:debian:/pool/main/j/jqueryui/jqueryui_%v+dfsg.orig.tar.gz
+Source-Checksum: SHA1(548e338a77a9ccc2594a154c5b02508bbe2420c0) 
+SourceDirectory: jquery-ui-%v
+Source2: mirror:debian:/pool/main/j/jqueryui/jqueryui_%v+dfsg-3.debian.tar.xz
+Source2-Checksum: SHA1(15dbf4ac5a7ba2f942788e21b9b2281813d08204)
+Source2ExtractDir: jquery-ui-%v
+###
+PatchScript: <<
+perl -pi -e 's,/usr,%p,g' debian/patches/use_system_files_in_examples.patch debian/README.Debian
+mv debian/README.Debian debian/README.Fink
+
+patch -p1 < debian/patches/add_missing_semicolon.patch
+patch -p1 < debian/patches/match_css_source_to_release.patch
+patch -p1 < debian/patches/use_system_files_in_examples.patch
+<<
 ###
 CompileScript: <<
-for file in `find development-bundle/ui/jquery* -name '*.js'`; do \
-	yui-compressor $file -o ${file%%.js}.min.js; \
+#!/bin/bash -ex
+
+timestamp='2016-09-14'
+version=$(echo %v-%r | cut -d - -f 1 | sed 's/+dfsg//')
+
+#override_dh_auto_configure:
+find demos -name "*.html" -exec sed --in-place "s#\.\./\.\./themes/base/all\.css#%p/share/javascript/jquery-ui/themes/base/jquery-ui.css#" {} \;
+find demos -name "*.html" -exec sed --in-place "s#\.\./\.\./external/requirejs/require\.js#%p/lib/nodejs/requirejs/require.js#" {} \;
+ 
+#build.js: debian/build.js
+cp debian/build.js build.js
+
+#jquery-ui.js: build.js
+nodejs %p/lib/nodejs/requirejs/r.js -o build.js
+sed -i -e "s/@VERSION/${version}/; s/@DATE/${timestamp}/" jquery-ui.js
+nodejs --check jquery-ui.js || (mv jquery-ui.js jquery-ui.js.failed; exit 2)
+
+#jquery-ui.min.js: jquery-ui.js
+uglifyjs jquery-ui.js --output jquery-ui.min.js --compress
+
+#themes/base/jquery-ui.css:
+# Can probably be done with "nodejs %p/lib/nodejs/r.js" as well, but don't
+# know how now.
+cd themes/base ; cat \
+	../../debian/intro.css \
+	core.css \
+	accordion.css \
+	autocomplete.css \
+	menu.css \
+	button.css \
+	controlgroup.css \
+	checkboxradio.css \
+	datepicker.css \
+	dialog.css \
+	draggable.css \
+	resizable.css \
+	progressbar.css \
+	selectable.css \
+	selectmenu.css \
+	slider.css \
+	sortable.css \
+	spinner.css \
+	tabs.css \
+	tooltip.css \
+	theme.css \
+> ../../themes/base/jquery-ui.css
+cd %b
+sed -i -e "s/@VERSION/${version}/; s/@DATE/${timestamp}/" themes/base/jquery-ui.css
+# Strip comments containing names of defaults
+sed -i -e 's#/\*{\w*}\*/##'g themes/base/jquery-ui.css
+# Strip copyright block per file in concatentated file
+sed -i -e 's#^/\*!$##; s#^ \*.*##; s#^ \*$##' themes/base/jquery-ui.css
+
+#ui/i18n/jquery-ui-i18n.js:
+# Replace newline with \r to ease use of sed (I don't know well enough how
+# to achieve the same thing in the hold space).
+for file in ui/i18n/datepicker*.js ; do \
+	cat ${file} | tr '\n' '\r' | \
+	sed -e 's/( function( factory.*function( datepicker ) {//' \
+	    -e 's/datepicker\.regional/jQuery(function($){\r\t&/' \
+	    -e 's/\(datepicker\.regional\)\.\([[:alpha:]-]*\)/\1["\2"]/g' \
+	    -e 's/\rreturn datepicker.*\r\r} ) );\r//' \
+	    -e 's/datepicker\./$.&/g' | \
+	tr '\r' '\n' > ${file}.tmp ; \
+	echo '});' >> ${file}.tmp ; \
 done
-for file in `find css/smoothness/ -name '*.css'`; do \
-	yui-compressor $file -o ${file%%.css}.min.css; \
+cat ui/i18n/datepicker*.tmp > ui/i18n/jquery-ui-i18n.js
+rm ui/i18n/datepicker*.tmp
+
+#override_dh_auto_build: jquery-ui.js jquery-ui.min.js themes/base/jquery-ui.css ui/i18n/jquery-ui-i18n.js
+for file in $(find ui -name '*.js'); do
+	uglifyjs $file --output ${file%%.js}.min.js --compress;
 done
+for file in $(find themes -name '*.css'); do
+	yui-compressor $file -o ${file%%.css}.min.css;
+done
+<<
+InfoTest: <<
+	TestDepends: <<
+		nodejs
+	<<
+	TestScript: <<
+nodejs --check jquery-ui.js || exit 2
+nodejs --check jquery-ui.min.js || exit 2
+nodejs --check ui/i18n/jquery-ui-i18n.js || exit 2
+# Reference files are taken from the quick download ZIP file from
+# http://jqueryui.com
+diff -Bw debian/reference-jquery-ui.js jquery-ui.js || exit 2
+diff -Bw debian/reference-jquery-ui.css themes/base/jquery-ui.css || exit 2
+	<<
 <<
 InstallScript: <<
-install -d -m0755 %i/share/javascript/jquery-ui
+install -d -m0755 %i/share/javascript/jquery-ui/ui
 
-cp -R %b/css %i/share/javascript/jquery-ui
-cp -R %b/development-bundle/themes %i/share/javascript/jquery-ui
-cp -R %b/development-bundle/ui %i/share/javascript/jquery-ui
+cp -R %b/themes %i/share/javascript/jquery-ui
+cp -R %b/jquery-ui*.js %i/share/javascript/jquery-ui
+cp -R %b/ui/* %i/share/javascript/jquery-ui/ui
 
 install -d -m0755 %i/share/doc/%N-docs/examples
-cp -R %b/development-bundle/docs %i/share/doc/%N-docs
-cp -R %b/development-bundle/demos/* %i/share/doc/%N-docs/examples
+cp -R %b/demos/* %i/share/doc/%N-docs/examples
 
 # links
-ln -s %p/share/javascript/jquery-ui/ui/$(basename %b/development-bundle/ui/jquery-ui*.custom.js) %i/share/javascript/jquery-ui/jquery-ui.js
-ln -s %p/share/javascript/jquery-ui/ui/$(basename %b/development-bundle/ui/jquery-ui*.custom.min.js) %i/share/javascript/jquery-ui/jquery-ui.min.js
-ln -s %p/share/javascript/jquery-ui/css/smoothness/$(basename %b/css/smoothness/jquery-ui*.custom.css) %i/share/javascript/jquery-ui/css/smoothness/jquery-ui.css
-ln -s %p/share/javascript/jquery-ui/css/smoothness/$(basename %b/css/smoothness/jquery-ui*.custom.min.css) %i/share/javascript/jquery-ui/css/smoothness/jquery-ui.min.css
+install -d -m0755 %i/share/javascript/jquery-ui/css
+ln -s %p/share/javascript/jquery-ui/themes/base %i/share/javascript/jquery-ui/css/smoothness
+
+# nodejs install
+install -d -m0755 %i/lib/nodejs/jquery-ui
+
+cp %b/package.json %i/lib/nodejs/jquery-ui/
+cp -R %b/ui %i/lib/nodejs/jquery-ui/
+cp -R %b/themes %i/lib/nodejs/jquery-ui/
 <<
 ###
-DocFiles: development-bundle/*.txt 
+DocFiles: AUTHORS.txt README.md debian/README.Fink debian/copyright
 ###
 Description: JS UI library for dynamic web applications
 DescDetail: <<
-jQuery UI provides abstractions for low-level interaction and
-animation, advanced effects and high-level, themeable widgets,
-built on top of the jQuery JavaScript Library, that you can use
-to build highly interactive web applications.
-<<
-DescUsage: <<
-In order to make use of jqueryui in your html, include the following lines in
-your html header:
-.
-    <link type="text/css"
-    href="/javascript/jquery-ui/css/smoothness/jquery-ui.css"
-    rel="stylesheet" />
-.
-    <script language="javascript" type="text/javascript"
-    src="/javascript/jquery/jquery.js"></script>
-.
-    <script language="javascript" type="text/javascript"
-    src="/javascript/jquery-ui/jquery-ui.js"></script>
-.
-The files 'jquery-ui.js' and 'jquery-ui.css' contains ALL the jquery-ui
-effects and widgets.
-.
-You can find the non minified version of the file with all the effects
-in %p/share/javascript/jquery-ui/ui.
-.
-If you just want to pick some effect, you find the files for each effect
-in %p/share/javascript/jqeury-ui, but you will need to pay attention
-to the files dependencies. A good way to check it is using the web interface
-to download jquery at http://jqueryui.com/download
+jQuery UI provides abstractions for low-level interaction and animation,
+advanced effects and high-level, themeable widgets, built on top of the
+jQuery JavaScript Library, that you can use to build highly interactive web
+applications.
 <<
 ###
 SplitOff: <<
-  Package: %N-docs
-  Depends: %N
-  Files: <<
-    share/doc/%n
-  <<
-  DocFiles: development-bundle/*.txt
-  Description: Documentation for JQuery-UI
+	Package: %N-docs
+	Depends: <<
+		libjs-jquery-mousewheel,
+		%N,
+		node-requirejs
+	<<
+	Files: <<
+		share/doc/%n
+	<<
+	DocFiles: debian/copyright
+	Description: Documentation for JQuery-UI
+	DescDetail: <<
+jQuery UI provides abstractions for low-level interaction and animation,
+advanced effects and high-level, themeable widgets, built on top of the
+jQuery JavaScript Library, that you can use to build highly interactive web
+applications.
+
+This package provides examples as reference for developers.
+	<<
+<<
+SplitOff2: <<
+	Package: node-jquery-ui
+	Depends: <<
+		nodejs
+	<<
+	Files: <<
+		lib
+	<<
+	DocFiles: debian/copyright
+	Description: NodeJS JQuery-UI
+	DescDetail: <<
+jQuery UI provides abstractions for low-level interaction and animation,
+advanced effects and high-level, themeable widgets, built on top of the
+jQuery JavaScript Library, that you can use to build highly interactive web
+applications.
+
+Node.js is an event-based server-side JavaScript engine.
+	<<
 <<
 ###
 License: GPL
