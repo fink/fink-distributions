@@ -1,0 +1,241 @@
+#!/bin/bash
+#
+# Copyright © 2016 Justin F. Hallett <thesin@users.sf.net>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+# A VERY rudimentary replacement for debhelper till fink updates to a more
+# current dpkg. NOT A REPLACEMENT, just a helper.
+
+set -e
+
+showhelp() {
+	echo "$(basename $0): [-acdlrstx] <pkgname> <finkbase> <destdir>"
+	echo " a fink helper that uses the debian dir to perform tasks"
+	echo "  -a perform all"
+	echo "  -c build conffiles based on all files in <installdir>/etc"
+	echo "  -d install debian/<pkgname>.doc-base[.<basename>]"
+	echo "  -e install debian/<pkgname>.config/templates and process po dir"
+	echo "  -l install debian/<pkgname>.lintian"
+	echo "  -p check debian files without <pkgname> [Not included with -a]"
+	echo "  -r install debian/<pkgname>.README.Debian and rename to .Fink"
+	echo "  -s install debian/<pkgname>.[post|pre]*"
+	echo "  -t install debian/<pkgname>.triggers"
+	echo "  -x move files from debian/<pkgname> to <destdir>"
+	echo
+}
+
+missingargs() {
+	echo "Missing options need at least 4 arguments" >&2
+	echo
+	showhelp
+	exit 1
+}
+
+FINK_HELPER_CONFS=0
+FINK_HELPER_DOCBASE=0
+FINK_HELPER_DEBCONF=0
+FINK_HELPER_LINTIAN=0
+FINK_HELPER_README=0
+FINK_HELPER_SCRIPTS=0
+FINK_HELPER_TRIGGERS=0
+FINK_HELPER_INSTMOVE=0
+FINK_HELPER_PARENT=0
+
+argc=$#
+while getopts ":acdehplrstx" opt; do
+	case $opt in
+		a)
+			FINK_HELPER_CONFS=1
+			FINK_HELPER_DOCBASE=1
+			FINK_HELPER_DEBCONF=1
+			FINK_HELPER_LINTIAN=1
+			FINK_HELPER_README=1
+			FINK_HELPER_SCRIPTS=1
+			FINK_HELPER_TRIGGERS=1
+			FINK_HELPER_INSTMOVE=1
+			;;
+		c)
+			FINK_HELPER_CONFS=1
+			;;
+		d)
+			FINK_HELPER_DOCBASE=1
+			;;
+		e)
+			FINK_HELPER_DEBCONF=1
+			;;
+		l)
+			FINK_HELPER_LINTIAN=1
+			;;
+		p)
+			FINK_HELPER_PARENT=1
+			;;
+		r)
+			FINK_HELPER_README=1
+			;;
+		s)
+			FINK_HELPER_SCRIPTS=1
+			;;
+		t)
+			FINK_HELPER_TRIGGERS=1
+			;;
+		x)
+			FINK_HELPER_INSTMOVE=1
+			;;
+		h)
+			showhelp
+			exit 0
+			;;
+		\?)
+			echo "Invalid option: -$OPTARG" >&2
+			let "argc -= 1" || true
+			;;
+	esac
+done
+
+if [ $argc -lt 4 ]; then
+	missingargs
+fi
+
+pkgname="${@:(-3):1}"
+basedir="${@:(-2):1}"
+destdir="${!#}"
+
+if [ ! -d debian ]; then
+	echo "ERROR: debian dir NOT FOUND."
+	echo "Make sure you run this from %b"
+	exit 1;
+fi
+
+if [ $FINK_HELPER_PARENT -eq 1 ]; then
+	FILES="- ${pkgname}."
+else
+	FILES="${pkgname}."
+fi
+
+if [ "${pkgname}" = "" -o "${basedir}" = "" -o "${destdir}" = "" ]; then
+	missingargs
+fi
+
+echo "$(basename $0): Install into ${destdir} (Base: ${basedir}) for ${pkgname}..."
+
+# do this first so we don't over write the changes to come
+# Copy in stuff done from the main InstallScript
+if [ $FINK_HELPER_INSTMOVE -eq 1 ]; then
+	if [ -d debian/${pkgname}/"${basedir}" ]; then
+		install -d -m0755 "${destdir}/${basedir}"
+	        cp -a debian/${pkgname}/"${basedir}"/* "${destdir}/${basedir}"
+	fi
+	if [ -d debian/${pkgname}/DEBIAN ]; then
+		install -d -m0755 "${destdir}"/DEBIAN
+	        cp -a debian/${pkgname}/DEBIAN/* "${destdir}"/DEBIAN
+	fi
+fi
+
+# Debian maintainer scripts
+if [ $FINK_HELPER_SCRIPTS -eq 1 ]; then
+	echo "Installing maintainer scripts..."
+	install -d -m0755 "${destdir}"/DEBIAN
+	for file in ${FILES}; do
+		f=$(echo ${file} | sed -e 's,-,,');
+		for i in `ls -1 debian/${f}post* debian/${f}pre* 2> /dev/null | grep -v "\.in$"`; do
+			install -m755 $i "${destdir}"/DEBIAN/${i##*.}
+		done
+	done
+fi
+
+# Debian triggers
+if [ $FINK_HELPER_TRIGGERS -eq 1 ]; then
+	echo "Installing triggers..."
+	install -d -m0755 "${destdir}"/DEBIAN
+	for file in ${FILES}; do
+		f=$(echo ${file} | sed -e 's,-,,');
+		if [ -f debian/${f}triggers ]; then
+			install -m644 debian/${f}triggers "${destdir}"/DEBIAN/triggers
+		fi
+	done
+fi
+
+# ConfFiles
+if [ $FINK_HELPER_CONFS -eq 1 ]; then
+	echo "Building conffiles..."
+	curdir=$(pwd)
+	cd "${destdir}/${basedir}"
+	install -d -m0755 "${destdir}"/DEBIAN
+	for i in `find etc -type f 2> /dev/null`; do
+		echo ${basedir}/${i} >> "${destdir}"/DEBIAN/conffiles
+	done
+	cd "${curdir}"
+fi
+
+# Debconf and Debconf-po
+if [ $FINK_HELPER_DEBCONF -eq 1 ]; then
+	echo "Building and installing debconf..."
+	install -d -m0755 "${destdir}"/DEBIAN
+	for file in ${FILES}; do
+		f=$(echo ${file} | sed -e 's,-,,');
+		if [ -f debian/${f}config ]; then
+			install -m755 debian/${f}config "${destdir}"/DEBIAN/config
+		fi
+		if [ -d debian/po -a -f debian/${f}templates ]; then
+			po2debconf --podir=debian/po --output "${destdir}"/DEBIAN/templates debian/${f}templates
+		else if [ -f debian/${f}templates ]; then
+			install -m644 debian/${f}templates "${destdir}"/DEBIAN/templates
+		fi
+	done
+fi
+
+# Lintian
+if [ $FINK_HELPER_LINTIAN -eq 1 ]; then
+	echo "Installing lintian overrides..."
+	for file in ${FILES}; do
+		f=$(echo ${file} | sed -e 's,-,,');
+		if [ -f debian/${f}lintian-overrides ]; then
+			install -d -m0755 "${destdir}/${basedir}"/share/lintian/overrides
+			install -m644 debian/${f}lintian-overrides "${destdir}/${basedir}"/share/lintian/overrides/${pkgname}
+		fi
+	done
+fi
+
+# doc-base
+if [ $FINK_HELPER_DOCBASE -eq 1 ]; then
+	echo "Installing doc base..."
+	for file in ${FILES}; do
+		f=$(echo ${file} | sed -e 's,-,,');
+		if [ -f debian/${f}doc-base* ]; then
+			install -d -m0755 "${destdir}/${basedir}"/share/doc-base
+			if [ -f debian/${f}doc-base ]; then
+				install -m644 debian/${f}doc-base "${destdir}/${basedir}"/share/doc-base/${pkgname}
+			else
+				fn=$(find debian -name ${f}doc-base.\*)
+				install -m644 ${fn} "${destdir}/${basedir}"/share/doc-base/${fn##*.}
+			fi
+		fi
+	done
+fi
+
+# README
+if [ $FINK_HELPER_README -eq 1 ]; then
+	echo "Installing README.Fink..."
+	for file in ${FILES}; do
+		f=$(echo ${file} | sed -e 's,-,,');
+		if [ -f debian/${f}README.Debian ]; then
+			install -d -m0755 "${destdir}/${basedir}"/share/doc/${pkgname}
+			install -m644 debian/${f}README.Debian "${destdir}/${basedir}"/share/doc/${pkgname}/README.Fink
+		fi
+	done
+fi
+
+echo Done
+exit 0
