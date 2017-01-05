@@ -1,0 +1,208 @@
+Package: sphinx-py35
+Version: 1.4.9
+Revision: 1
+Maintainer: Kurt Schwehr <goatbar@users.sourceforge.net>
+BuildDepends: fink (>= 0.32), tetex-base, setuptools-tng-py35, libjs-jquery (>= 1.4), libjs-underscore
+Depends: python35, jinja2-py35 (>= 2.3-1), pygments-py35 (>= 2.1.1-1), docutils-py35 (>= 0.11-1), babel-py35 (>= 1.3-1), alabaster-py35 (>= 0.7-1), six-py35 (>= 1.5-1), sphinx-common (= %v-%r)
+Recommends: pil-py35
+Suggests: python-sphinx-rtd-theme, sphinx-doc
+Source: https://pypi.io/packages/source/S/Sphinx/Sphinx-%v.tar.gz
+Source-Checksum: SHA1(1ab3525caf179c8e76b5efc20353a0ab3bb774ec)
+Source2: mirror:debian:pool/main/s/sphinx/sphinx_%v-2.debian.tar.xz
+Source2-Checksum: SHA1(86b6a6422aa1991af7b6c92964d4abc621a07952)
+Source2Extractdir: Sphinx-%v
+PatchScript: <<
+patch -p1 < debian/patches/disable_distribute_setup.diff
+patch -p1 < debian/patches/no_external_css.diff
+patch -p1 < debian/patches/disable_js_version_check.diff
+patch -p1 < debian/patches/no_snowballstemmer.diff
+patch -p1 < debian/patches/source_date_epoch.diff
+patch -p1 < debian/patches/reproducible_grammar.diff
+patch -p1 < debian/patches/reproducible_inventory.diff
+patch -p1 < debian/patches/reproducible_js_locale.diff
+patch -p1 < debian/patches/reproducible_searchindex.diff
+for i in *.py; do \
+	perl -pi -e 's,env python,env %p/bin/python3.5,g' $i; \
+done
+perl -pi -e 's,\/usr\/share,\%p\/share,g' debian/dh-sphinxdoc/dh_sphinxdoc
+<<
+CompileScript: <<
+%p/bin/python3.5 ./sphinx-build.py -T doc build/html/
+rm -f build/html/_static/jquery-*.js build/html/_static/underscore-*.js
+rm -rf build/man
+cp -a build/html build/man
+%p/bin/python3.5 ./sphinx-build.py -T -b man doc build/man
+%p/bin/python3.5 setup.py build --build-lib build/py/
+%p/bin/python3.5 setup.py compile_catalog
+<<
+InfoTest: <<
+	TestDepends: xvfb-run
+	TestScript: <<
+# FIXME: https://github.com/sphinx-doc/sphinx/issues/703
+export LC_ALL=C.UTF-8 && \
+%p/bin/python3.5 tests/run.py --verbose --no-skip
+rm -rf build/py/tests/
+xvfb-run -a ./debian/jstest/run-tests build/html/
+	<<
+<<
+InstallScript: <<
+# import sphinx.pycode to generate grammar pickle files
+cd build/py/ && PYTHONHASHSEED=0 %p/bin/python3.5 -c "import sphinx.pycode"
+
+# dh_installdirs
+mkdir -p %i/share/javascript/sphinxdoc/1.0/
+
+%p/bin/python3.5 setup.py \
+	build --build-lib build/py/ \
+	install --no-compile --root %d
+
+rm -f %i/lib/python*/*-packages/Sphinx-*.egg-info/SOURCES.txt
+
+# move static files outside dist-packages
+sed -i -e "s!^package_dir = .*!package_dir = '%p/share/sphinx'!" \
+	%i/lib/python3.5/site-packages/sphinx/__init__.py
+rm -rf %i/share/sphinx/
+mkdir -p %i/share/sphinx/
+cd %i && mv \
+	./lib/python3.5/site-packages/sphinx/texinputs \
+	./lib/python3.5/site-packages/sphinx/themes \
+	share/sphinx/
+mkdir -p %i/share/sphinx/pycode/
+cd %i && mv \
+	./lib/python3.5/site-packages/sphinx/pycode/Grammar* \
+	share/sphinx/pycode/
+mkdir -p %i/share/sphinx/ext/autosummary/
+cd %i && mv \
+	./lib/python3.5/site-packages/sphinx/ext/autosummary/templates \
+	share/sphinx/ext/autosummary/
+set -e -x; \
+cd %b/build/py/sphinx/locale && \
+	for lang in */LC_MESSAGES; \
+	do \
+		mkdir -p %i/share/sphinx/locale/$(dirname $lang); \
+		install -m 644 %b/build/py/sphinx/locale/$(dirname $lang)/LC_MESSAGES/sphinx.js \
+			%i/share/sphinx/locale/$(dirname $lang)/sphinx.js; \
+		mkdir -p %i/share/locale/$(dirname $lang)/LC_MESSAGES; \
+		install -m 644 %b/build/py/sphinx/locale/$(dirname $lang)/LC_MESSAGES/sphinx.mo \
+			%i/share/locale/$(dirname $lang)/LC_MESSAGES/sphinx.mo; \
+	done
+cd %i/lib/python3.5/site-packages/sphinx/locale && rm -rf sphinx.pot */
+# Move JavaScript code to libjs-sphinxdoc:
+debian/dh-sphinxdoc/install-js %i/share/javascript/sphinxdoc/1.0/
+rm -f %i/share/sphinx/themes/basic/static/underscore-*.js
+rm -f %i/share/sphinx/themes/basic/static/jquery-*.js
+rm -f %i/share/sphinx/themes/bizstyle/static/css3-mediaqueries_src.js
+set -e; \
+for js in $(find %i/share/sphinx/themes/ -name '*.js' -a '!' -name 'websupport.js'); do \
+	mv $js %i/share/javascript/sphinxdoc/1.0; \
+	ln -sf "%p/share/javascript/sphinxdoc/1.0/${js##*/}" $js; \
+done
+
+cd debian/dh-sphinxdoc/ && pod2man -c Debhelper -r '' dh_sphinxdoc dh_sphinxdoc.1
+
+# dh_manpages
+mkdir -p %i/share/man/man1
+install -m0644 build/man/sphinx-build.1 %i/share/man/man1/
+install -m0644 build/man/sphinx-quickstart.1 %i/share/man/man1/
+install -m0644 build/man/sphinx-apidoc.1 %i/share/man/man1/
+install -m0644 debian/sphinx-autogen.1 %i/share/man/man1/
+install -m0644 debian/dh-sphinxdoc/dh_sphinxdoc.1 %i/share/man/man1/
+
+# dh_install
+install -m0644 debian/dh-sphinxdoc/index %i/share/javascript/sphinxdoc/
+mkdir -p %i/lib/perl5/Debian/Debhelper/Sequence
+install -m0644 debian/dh-sphinxdoc/sphinxdoc.pm %i/lib/perl5/Debian/Debhelper/Sequence/
+mkdir -p %i/bin
+install -m0755 debian/dh-sphinxdoc/dh_sphinxdoc %i/bin/
+
+# dh_links
+rm -f %i/share/javascript/sphinxdoc/1.0/jquery.js
+ln -s %p/share/javascript/jquery/jquery.js %i/share/javascript/sphinxdoc/1.0/jquery.js 
+rm -f %i/share/javascript/sphinxdoc/1.0/underscore.js
+ln -s %p/share/javascript/underscore/underscore.js %i/share/javascript/sphinxdoc/1.0/underscore.js 
+mkdir -p %i/share/doc/%N
+ln -s %p/share/doc/sphinx-doc/rst/ %i/share/doc/%N/rst
+ln -s %p/share/doc/sphinx-doc/html/ %i/share/doc/%N/html
+
+# remove all pyc
+cd %i; \
+for pyc in `find . -name *.pyc`; do \
+	rm -f $pyc; \
+done
+
+# for u-a
+mv %i/bin/sphinx-build %i/bin/sphinx-build3.5
+mv %i/bin/sphinx-quickstart %i/bin/sphinx-quickstart3.5
+mv %i/bin/sphinx-autogen %i/bin/sphinx-autogen3.5
+mv %i/bin/sphinx-apidoc %i/bin/sphinx-apidoc3.5
+<<
+PostInstScript: <<
+update-alternatives --install %p/bin/sphinx-build sphinx-build %p/bin/sphinx-build3.5 35 --slave %p/bin/sphinx-quickstart sphinx-quickstart %p/bin/sphinx-quickstart3.5 --slave %p/bin/sphinx-autogen sphinx-autogen %p/bin/sphinx-autogen3.5 --slave %p/bin/sphinx-apidoc sphinx-apidoc %p/bin/sphinx-apidoc3.5
+<<
+PreRmScript: <<
+update-alternatives --remove sphinx-build %p/bin/sphinx-build3.5
+<<
+License: BSD
+HomePage: http://sphinx.pocoo.org
+DocFiles: LICENSE README.rst AUTHORS
+Description: Python documentation generator
+DescDetail: <<
+Sphinx is a tool that facilitates the creation of beautiful
+documentation for Python projects from reStructuredText sources. It
+was originally created to format the new documentation for Python, but
+has since been cleaned up in the hope that it will be useful in many
+other projects.
+<<
+
+SplitOff: <<
+	Package: sphinx-common
+	Depends: libjs-sphinxdoc (= %v-%r)
+	Recommends: sphinx-py27 | sphinx-py34 | sphinx-py35
+	Files: <<
+		bin/dh_sphinxdoc
+		share/locale
+		share/man
+		lib/perl5
+		share/sphinx
+	<<
+	DocFiles: LICENSE
+	Description: Documentation generator for Python projects
+	DescDetail: <<
+Sphinx is a tool for producing documentation for Python projects, using
+reStructuredText as markup language.
+
+This package includes manual pages, templates, translations and other data
+files.
+	<<
+<<
+
+SplitOff2: <<
+	Package: sphinx-doc
+	Depends: docutils, libjs-sphinxdoc (>= 1.0-1)
+	DocFiles: LICENSE README.rst AUTHORS build/html
+	InstallScript: <<
+mkdir -p %i/share/doc/%n
+ln -s %p/share/doc/%n/html/_sources/ %i/share/doc/%n/rst
+	<<
+	Description: Documentation generator for Python projects
+	DescDetail: <<
+Sphinx is a tool for producing documentation for Python projects, using
+reStructuredText as markup language.
+
+This package includes documentation of Sphinx itself.
+	<<
+<<
+
+SplitOff3: <<
+	Package: libjs-sphinxdoc
+	Depends: libjs-jquery (>= 1.11.1-1), libjs-underscore (>= 1.3.1-1)
+	Files: share/javascript
+	DocFiles: LICENSE
+	Description: JavaScript support for Sphinx documentation
+	DescDetail: <<
+Sphinx is a tool for producing documentation for Python projects, using
+reStructuredText as markup language.
+
+This package provides JavaScript code for documentation generated by Sphinx.
+	<<
+<<
