@@ -1,0 +1,245 @@
+Info3: <<
+Package: guile22
+Version: 2.2.1
+Revision: 1
+BuildDepends: <<
+  readline7,
+  libffi6,
+  libncurses5 (>= 5.4-20041023-1006),
+  libtool2 (>= 2.4-1),
+  libunistring2, 
+# llvm33,
+  gc (>= 7.2d-2),
+  gmp5,
+  libiconv-dev,
+  libgettext8-dev,
+  gettext-tools,
+  fink-package-precedence,
+  fink (>= 0.28)
+<<
+Depends: <<
+  %N-shlibs (= %v-%r),
+  %N-libs (= %v-%r),
+# needed by guile-2.2-config
+  pkgconfig,
+  libtool2-shlibs
+<<
+# prevent from building against old installed library
+# BuildConflicts: guile22-dev
+GCC: 4.0
+Source: mirror:gnu:guile/guile-%v.tar.gz
+Source-MD5: f21bac926c0cb85d032e91b179c43a2f
+#PatchFile: %n.patch
+#PatchFile-MD5: 2dbc4ca9cc216dd0418b0482f8a8d3a6
+PatchScript: <<
+#!/bin/sh -ev
+#%{default_script}
+perl -i -pe 's|(lt_dlinit\s*\(\s*\))|\1; lt_dladdsearchdir("\%p/lib")|' libguile/dynl.c
+# When LIBICONV_PLUG is not defined (normal) iconv, iconv_open, iconv_close
+# are all #defined to libiconv* in <iconv.h>, but this #undef messes it up.
+for f in lib/iconv*.c
+do sed -i.orig '/^#undef/d' $f
+done
+# fix enum decl for ANSI strict C
+sed -i.orig '/SCM_ARRAY_ELEMENT_TYPE_LAST/s|,$||' libguile/array-handle.h
+# fix typedef for function pointer
+sed -i.orig 's|void.*scm_t_subr|void (*scm_t_subr)()|' libguile/__scm.h
+# fix framework flag for CoreFoundation (defined in aclocal.m4)
+sed -i.orig 's|-Wl,-framework -Wl,CoreFoundation|-Wl,-framework,CoreFoundation|g' configure
+# noreturn is a macro defined by clang's headers (since 3.3)
+sed -i.orig -e '/scm_ithrow/s|int noreturn|&_arg|' libguile/throw.h libguile/throw.c
+# release accidentally botched #! lines in automake-provided scripts
+for f in `grep -lr "/nix/" build-aux`
+do sed -i.orig -e '1s|#\!.*/bin/sh|#\!/bin/sh|' $f
+done
+# clang from XCode 5.1 miscompiles(?) vm.c 
+if [[ ! "$(clang --version | head -n1 | cut -d- -f2 | cut -d')' -f1)" < "503.0.38" ]] 
+then sed -i.orig -e '/libguile_@GUILE_EFFECTIVE_VERSION@_la-vm.Tpo/s|\$(CFLAGS)|& -O0|' libguile/Makefile.in
+fi
+# convenient build script for use by other packages
+{
+echo '#!/bin/sh'
+echo 'export GUILE=guile-2.2'
+echo 'export GUILE_CONFIG=guile-2.2-config'
+echo 'export GUILE_TOOLS=guile-2.2-tools'
+echo 'export PATH="%p/share/guile/2.2/scripts/binoverride:$PATH"'
+echo 'eval "$@"'
+} > guile22-build
+chmod +x guile22-build
+<<
+# gl_cv_func_svid_putenv=yes
+ConfigureParams: <<
+	--infodir=%p/share/info \
+	--program-suffix="-2.2" \
+	$threads \
+	-C
+<<
+NoSetCPPFLAGS: true
+NoSetLDFLAGS: true
+# SetCPPFLAGS: -Dmacosx
+# SetCFLAGS: -g -O2 -W -Wall -ansi -pedantic-errors
+# SetCC: %p/opt/llvm-3.3/bin/clang
+UseMaxBuildJobs: true
+CompileScript: <<
+  #!/bin/sh -ex
+  mkdir build
+  pushd build
+  # darwin8 missing some essential POSIX thread features, so disabled
+  kernel=`uname -r | cut -d. -f1`
+  test $kernel -gt 8 || threads="--without-threads"
+  if test "$kernel" = 9 ; then
+    export CC=gcc-4.2
+    export CXX=g++-4.2
+    test -x `which gcc-4.2` || { echo "gcc-4.2 required, but missing!"; exit 1; }
+  fi
+  ../configure %c ac_cv_have_thread_storage_class=no
+  make
+  popd
+  fink-package-precedence --prohibit-bdep=%n-dev .
+<<
+InfoTest: <<
+  TestScript: <<
+    #!/bin/sh -ev
+    pushd build
+    # make -k check || exit 2
+    make -k check || { echo "WARNING: Some tests failed in the testsuite." ;}
+    popd
+    fink-package-precedence --prohibit-bdep=%n-dev .
+  <<
+  TestSuiteSize: small
+<<
+InstallScript: <<
+ #!/bin/sh -ev
+ cd build
+ make -j1 install DESTDIR=%d
+ install -m 755 ../guile22-build %i/bin/guile22-build
+ pkgdatadir=%i/share/guile/2.2
+ mkdir -p $pkgdatadir/scripts/binoverride
+ ln -s %p/bin/guile-2.2 $pkgdatadir/scripts/binoverride/guile
+ ln -s %p/bin/guile-2.2-config $pkgdatadir/scripts/binoverride/guile-config
+ ln -s %p/bin/guile-2.2-tools $pkgdatadir/scripts/binoverride/guile-tools
+ ln -s %p/bin/guile-2.2-snarf $pkgdatadir/scripts/binoverride/guile-snarf
+<<
+SplitOff: <<
+  Package: %N-shlibs
+  Depends: <<
+    gc-shlibs (>= 7.2d-2),
+    gmp5-shlibs,
+    libffi6-shlibs,
+    libncurses5-shlibs (>= 5.4-20041023-1006),
+    libgettext8-shlibs,
+    libtool2-shlibs (>= 2.4-1),
+    libunistring2-shlibs
+  <<
+  Files: <<
+    lib/libguile-2.2.*.dylib
+  <<
+  DocFiles: COPYING.LESSER
+  Shlibs: <<
+  %p/lib/libguile-2.2.1.dylib 3.0.0 %n (>= 2.2.1-1)
+  <<
+  Description: Shared libraries for guile22
+<<
+SplitOff2: <<
+  Package: %N-libs
+  Files: <<
+    share/guile/2.2/[A-Za-rt-z]*
+    share/guile/2.2/scripts/[A-Zac-z]*
+    share/guile/2.2/srfi
+    share/guile/2.2/sxml
+    lib/guile/2.2/ccache/[A-Za-rt-z]*
+    lib/guile/2.2/ccache/scripts/[A-Zac-z]*
+    lib/guile/2.2/ccache/srfi
+    lib/guile/2.2/ccache/sxml
+    lib/guile/2.2/extensions/guile-readline*so
+  <<
+  DocFiles: COPYING.LESSER
+  Depends: <<
+    %N-shlibs (= %v-%r),
+    readline7-shlibs
+  <<
+  Description: Scheme libraries and modules for guile22
+  DescPackaging: <<
+    Split-off everything except the system dir.
+    Now contains precompiled guile objects for all shipped libraries.
+  <<
+<<
+SplitOff3: <<
+  Package: %N-dev
+  BuildDependsOnly: True
+  Depends: %N-shlibs (= %v-%r)
+  Replaces: <<
+    guile-dev,
+    guile16-dev,
+    guile18-dev,
+    guile20-dev,
+    guile22-dev
+  <<
+  Conflicts: <<
+    guile-dev,
+    guile16-dev,
+    guile18-dev,
+    guile20-dev,
+    guile22-dev
+  <<
+  Files: <<
+    include
+    share/aclocal
+    lib/guile/2.2/extensions/guile-readline.*a
+    lib/libguile-2.2.a
+    lib/libguile-2.2.la
+    lib/libguile-2.2.dylib
+    lib/pkgconfig
+  <<
+  DocFiles: COPYING.LESSER
+  Description: Development package for guile22
+  DescPackaging: <<
+	The only file that conflicts is %p/share/aclocal/guile.m4.
+	All other files are versioned or in versioned subdirs.
+  <<
+<<
+SplitOff4: <<
+ Package: %N-doc
+ Conflicts: <<
+  guile16-doc,
+  guile16 (<= 1.6.7-1011),
+  guile18-doc,
+  guile18-doc,
+  guile20-doc,
+  guile22-doc
+ <<
+ Replaces: <<
+  guile16-doc,
+  guile16 (<= 1.6.7-1011),
+  guile18-doc,
+  guile18-doc,
+  guile20-doc,
+  guile22-doc
+ <<
+ DocFiles: COPYING.LESSER
+ Files: share/info
+ InfoDocs: guile.info r5rs.info
+ Description: Texinfo files for guile22
+<<
+DocFiles: README COPYING.LESSER AUTHORS HACKING NEWS THANKS
+#
+Description: Embedable Scheme interpreter
+DescPort: <<
+"borrowed" a patch from darwinports to posix.c makes it
+pass make check.
+Disabling threads on darwin8 because it lacks thread cancellation.
+Made the main packages not conflict with guile-1.4, -1.6, -1.8.
+
+Make sure to declare the darwinish _environ symbol before using it.
+
+10.7's libffi is missing symbols, resulting in undefined references,
+thus we use fink's libffi.
+<<
+DescPackaging: <<
+Since 1.9.13-2, bumped gmp to gmp5.
+Matthias Neeracher <neeracher@mac.com> maintains guile18 and guile16.
+<<
+License: LGPL
+Homepage: http://www.gnu.org/software/guile/
+Maintainer: David Fang <fangism@users.sourceforge.net>
+<<
