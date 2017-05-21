@@ -213,26 +213,6 @@ diff -Nurd -x'*~' glib-2.52.2.orig/gio/tests/desktop-files/home/applications/epi
  StartupNotify=true
  Terminal=false
  Type=Application
-diff -Nurd -x'*~' glib-2.52.2.orig/gio/tests/file.c glib-2.52.2/gio/tests/file.c
---- glib-2.52.2.orig/gio/tests/file.c	2017-02-13 10:53:27.000000000 -0500
-+++ glib-2.52.2/gio/tests/file.c	2017-05-14 23:18:33.000000000 -0400
-@@ -6,6 +6,7 @@
- #ifdef G_OS_UNIX
- #include <sys/stat.h>
- #endif
-+#define disable_by_env(flagvar) do { if (getenv(flagvar)) { g_test_skip("per request (" flagvar ")"); return; } } while(0)
- 
- static void
- test_basic (void)
-@@ -426,6 +427,8 @@
- static void
- test_create_delete (gconstpointer d)
- {
-+  disable_by_env("DISABLE_file_async_create_delete_TEST");
-+
-   GError *error;
-   CreateDeleteData *data;
-   GFileIOStream *iostream;
 diff -Nurd -x'*~' glib-2.52.2.orig/gio/tests/modules/Makefile.in glib-2.52.2/gio/tests/modules/Makefile.in
 --- glib-2.52.2.orig/gio/tests/modules/Makefile.in	2017-05-08 11:34:21.000000000 -0400
 +++ glib-2.52.2/gio/tests/modules/Makefile.in	2017-05-14 23:18:33.000000000 -0400
@@ -249,36 +229,6 @@ diff -Nurd -x'*~' glib-2.52.2.orig/gio/tests/modules/Makefile.in glib-2.52.2/gio
  all: all-am
  
  .SUFFIXES:
-diff -Nurd -x'*~' glib-2.52.2.orig/gio/tests/pollable.c glib-2.52.2/gio/tests/pollable.c
---- glib-2.52.2.orig/gio/tests/pollable.c	2016-10-22 01:17:50.000000000 -0400
-+++ glib-2.52.2/gio/tests/pollable.c	2017-05-14 23:18:33.000000000 -0400
-@@ -24,6 +24,8 @@
- #include <gio/gunixinputstream.h>
- #include <gio/gunixoutputstream.h>
- #endif
-+#include <stdlib.h>
-+#define disable_by_env(flagvar) do { if (getenv(flagvar)) { g_test_skip("per request (" flagvar ")"); return; } } while(0)
- 
- GMainLoop *loop;
- GPollableInputStream *in;
-@@ -142,6 +144,8 @@
- static void
- test_pollable_unix (void)
- {
-+  disable_by_env("DISABLE_pollable_unix_TEST");
-+
-   int pipefds[2], status, fd;
- 
-   status = pipe (pipefds);
-@@ -172,6 +176,8 @@
- static void
- test_pollable_converter (void)
- {
-+  disable_by_env("DISABLE_pollable_converter_TEST");
-+
-   GConverter *converter;
-   GError *error = NULL;
-   GInputStream *ibase;
 diff -Nurd -x'*~' glib-2.52.2.orig/gio/xdgmime/xdgmime.c glib-2.52.2/gio/xdgmime/xdgmime.c
 --- glib-2.52.2.orig/gio/xdgmime/xdgmime.c	2016-10-22 01:17:27.000000000 -0400
 +++ glib-2.52.2/gio/xdgmime/xdgmime.c	2017-05-14 23:18:33.000000000 -0400
@@ -329,6 +279,60 @@ diff -Nurd -x'*~' glib-2.52.2.orig/glib/gslice.c glib-2.52.2/glib/gslice.c
    return aligned_memory;
  }
  
+diff -Nurd -x'*~' glib-2.52.2.orig/glib/gtestutils.c glib-2.52.2/glib/gtestutils.c
+--- glib-2.52.2.orig/glib/gtestutils.c	2017-03-05 13:11:52.000000000 -0500
++++ glib-2.52.2/glib/gtestutils.c	2017-05-21 04:16:59.000000000 -0400
+@@ -696,6 +696,7 @@
+ static double      test_user_stamp = 0;
+ static GSList     *test_paths = NULL;
+ static GSList     *test_paths_skipped = NULL;
++static GSList     *test_paths_skipped_env = NULL;
+ static GTestSuite *test_suite_root = NULL;
+ static int         test_trap_last_status = 0;
+ static GPid        test_trap_last_pid = 0;
+@@ -913,6 +914,27 @@
+   test_argv0 = argv[0];
+   test_initial_cwd = g_get_current_dir ();
+ 
++  {
++    /* fink: colon-separated list of test paths that trigger SKIP */
++    gchar *fink_env_var;
++    fink_env_var = g_strdup (g_getenv ("FINK_GTESTUTILS_SKIP_PATHS"));
++    if (fink_env_var) {
++      gchar **paths;
++      paths = g_strsplit (fink_env_var, ":", -1);
++      for (int i=0; paths[i]; i++) {
++	if (strlen (paths[i])) {
++	  /* separate variable because -s not compatible with tap and
++	     the behavior of -s is to omit the test silently rather
++	     than reporting a SKIP */
++	  test_paths_skipped_env = g_slist_prepend (test_paths_skipped_env, g_strdup (paths[i]));
++	}
++      }
++      g_strfreev (paths);
++      g_free (fink_env_var);
++    } else {
++    }
++  }
++
+   /* parse known args */
+   for (i = 1; i < argc; i++)
+     {
+@@ -2158,7 +2180,13 @@
+       test_run_seed (test_run_seedstr);
+       if (tc->fixture_setup)
+         tc->fixture_setup (fixture, tc->test_data);
+-      tc->fixture_test (fixture, tc->test_data);
++      if (test_paths_skipped_env
++          && g_slist_find_custom (test_paths_skipped_env, test_run_name, (GCompareFunc)g_strcmp0)
++        ) {
++        g_test_skip("via FINK_GTESTUTILS_SKIP_PATHS");
++      } else {
++        tc->fixture_test (fixture, tc->test_data);
++      }
+       test_trap_clear();
+       while (test_destroy_queue)
+         {
 diff -Nurd -x'*~' glib-2.52.2.orig/glib/gutils.c glib-2.52.2/glib/gutils.c
 --- glib-2.52.2.orig/glib/gutils.c	2016-10-22 01:21:26.000000000 -0400
 +++ glib-2.52.2/glib/gutils.c	2017-05-14 23:18:36.000000000 -0400
@@ -526,27 +530,6 @@ diff -Nurd -x'*~' glib-2.52.2.orig/glib/tests/gdatetime.c glib-2.52.2/glib/tests
    TEST_PRINTF ("%x", "2009\345\271\26410\346\234\21024\346\227\245");
  #endif
    TEST_PRINTF ("%X", "00\346\231\20200\345\210\20600\347\247\222");
-diff -Nurd -x'*~' glib-2.52.2.orig/glib/tests/spawn-singlethread.c glib-2.52.2/glib/tests/spawn-singlethread.c
---- glib-2.52.2.orig/glib/tests/spawn-singlethread.c	2016-10-22 01:21:35.000000000 -0400
-+++ glib-2.52.2/glib/tests/spawn-singlethread.c	2017-05-14 23:18:36.000000000 -0400
-@@ -25,6 +25,8 @@
- 
- #include <glib.h>
- #include <string.h>
-+#include <stdlib.h>
-+#define disable_by_env(flagvar) do { if (getenv(flagvar)) { g_test_skip("per request (" flagvar ")"); return; }; } while(0)
- 
- #ifdef G_OS_WIN32
- #define LINEEND "\r\n"
-@@ -184,6 +186,8 @@
- static void
- test_spawn_script (void)
- {
-+  disable_by_env("DISABLE_gthread_spawn_script_TEST");
-+
-   GError *error = NULL;
-   GPtrArray *argv;
-   char *stdout_str;
 diff -Nurd -x'*~' glib-2.52.2.orig/tests/run-assert-msg-test.sh glib-2.52.2/tests/run-assert-msg-test.sh
 --- glib-2.52.2.orig/tests/run-assert-msg-test.sh	2016-10-22 01:17:10.000000000 -0400
 +++ glib-2.52.2/tests/run-assert-msg-test.sh	2017-05-14 23:18:36.000000000 -0400
