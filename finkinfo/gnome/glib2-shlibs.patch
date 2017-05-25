@@ -281,70 +281,78 @@ diff -Nurd -x'*~' glib-2.52.2.orig/glib/gslice.c glib-2.52.2/glib/gslice.c
  
 diff -Nurd -x'*~' glib-2.52.2.orig/glib/gtestutils.c glib-2.52.2/glib/gtestutils.c
 --- glib-2.52.2.orig/glib/gtestutils.c	2017-03-05 13:11:52.000000000 -0500
-+++ glib-2.52.2/glib/gtestutils.c	2017-05-21 18:52:38.000000000 -0400
-@@ -696,6 +696,7 @@
- static double      test_user_stamp = 0;
- static GSList     *test_paths = NULL;
- static GSList     *test_paths_skipped = NULL;
-+static GSList     *test_paths_skipped_env = NULL;
- static GTestSuite *test_suite_root = NULL;
- static int         test_trap_last_status = 0;
- static GPid        test_trap_last_pid = 0;
-@@ -899,6 +900,29 @@
-     }
- }
- 
-+/* Passing via an env var and storing separately from the -s cmdline
-+ * flag values improves usability and propagation (-s is not allowed
-+ * with tap tests) and better diagnostic outout (result of SKIP rather
-+ * than silently omitting it altogether)
-+ */
-+static void
-+parse_envs (void)
-+{
-+  const gchar *env_value;
-+  env_value = g_getenv ("G_TEST_SKIP_PATHS");
-+  if (env_value)
-+    {
-+      gchar **paths;
-+      paths = g_strsplit (env_value, ":", -1);
-+      for (int i=0; paths[i]; i++)
-+        {
-+          if (strlen (paths[i]))
-+            test_paths_skipped_env = g_slist_prepend (test_paths_skipped_env, g_strdup (paths[i]));
-+        }
-+      g_strfreev (paths);
-+    }
-+}
-+
- /* We intentionally parse the command line without GOptionContext
-  * because otherwise you would never be able to test it.
-  */
-@@ -1170,6 +1194,9 @@
-   g_snprintf (seedstr, sizeof (seedstr), "R02S%08x%08x%08x%08x", g_random_int(), g_random_int(), g_random_int(), g_random_int());
-   test_run_seedstr = seedstr;
- 
-+  /* parse env var for propagated controls */
-+  parse_envs();
-+
-   /* parse args, sets up mode, changes seed, etc. */
-   parse_args (argc, argv);
- 
-@@ -2158,7 +2185,13 @@
-       test_run_seed (test_run_seedstr);
-       if (tc->fixture_setup)
-         tc->fixture_setup (fixture, tc->test_data);
--      tc->fixture_test (fixture, tc->test_data);
-+      if (test_paths_skipped_env
-+          && g_slist_find_custom (test_paths_skipped_env, test_run_name, (GCompareFunc)g_strcmp0)
-+        ) {
-+        g_test_skip("via G_TEST_SKIP_PATHS");
-+      } else {
-+        tc->fixture_test (fixture, tc->test_data);
-+      }
-       test_trap_clear();
-       while (test_destroy_queue)
++++ glib-2.52.2/glib/gtestutils.c	2017-05-25 10:51:19.000000000 -0400
+@@ -1179,9 +1179,10 @@
+   /* sanity check */
+   if (test_tap_log)
+     {
+-      if (test_paths || test_paths_skipped || test_startup_skip_count)
++      if (test_paths || test_startup_skip_count)
          {
+-          g_printerr ("%s: options that skip some tests are incompatible with --tap\n",
++          /* Not invoking every test (even if SKIPped) breaks the "1..XX" plan */
++          g_printerr ("%s: -p and --GTestSkipCount options are incompatible with --tap\n",
+                       (*argv)[0]);
+           exit (1);
+         }
+@@ -1716,9 +1716,6 @@
+   g_return_if_fail (g_path_is_absolute (testpath));
+   g_return_if_fail (fixture_test_func != NULL);
+ 
+-  if (g_slist_find_custom (test_paths_skipped, testpath, (GCompareFunc)g_strcmp0))
+-    return;
+-
+   suite = g_test_get_root();
+   segments = g_strsplit (testpath, "/", -1);
+   for (ui = 0; segments[ui] != NULL; ui++)
+@@ -2153,25 +2172,30 @@
+       test_run_success = G_TEST_RUN_SUCCESS;
+       g_clear_pointer (&test_run_msg, g_free);
+       g_test_log_set_fatal_handler (NULL, NULL);
+-      g_timer_start (test_run_timer);
+-      fixture = tc->fixture_size ? g_malloc0 (tc->fixture_size) : tc->test_data;
+-      test_run_seed (test_run_seedstr);
+-      if (tc->fixture_setup)
+-        tc->fixture_setup (fixture, tc->test_data);
+-      tc->fixture_test (fixture, tc->test_data);
+-      test_trap_clear();
+-      while (test_destroy_queue)
++      if (test_paths_skipped && g_slist_find_custom (test_paths_skipped, test_run_name, (GCompareFunc)g_strcmp0))
++        g_test_skip("by request (-s option)");
++      else
+         {
+-          DestroyEntry *dentry = test_destroy_queue;
+-          test_destroy_queue = dentry->next;
+-          dentry->destroy_func (dentry->destroy_data);
+-          g_slice_free (DestroyEntry, dentry);
++          g_timer_start (test_run_timer);
++          fixture = tc->fixture_size ? g_malloc0 (tc->fixture_size) : tc->test_data;
++          test_run_seed (test_run_seedstr);
++          if (tc->fixture_setup)
++            tc->fixture_setup (fixture, tc->test_data);
++          tc->fixture_test (fixture, tc->test_data);
++          test_trap_clear();
++          while (test_destroy_queue)
++            {
++              DestroyEntry *dentry = test_destroy_queue;
++              test_destroy_queue = dentry->next;
++              dentry->destroy_func (dentry->destroy_data);
++              g_slice_free (DestroyEntry, dentry);
++            }
++          if (tc->fixture_teardown)
++            tc->fixture_teardown (fixture, tc->test_data);
++          if (tc->fixture_size)
++            g_free (fixture);
++          g_timer_stop (test_run_timer);
+         }
+-      if (tc->fixture_teardown)
+-        tc->fixture_teardown (fixture, tc->test_data);
+-      if (tc->fixture_size)
+-        g_free (fixture);
+-      g_timer_stop (test_run_timer);
+       success = test_run_success;
+       test_run_success = G_TEST_RUN_FAILURE;
+       largs[0] = success; /* OK */
 diff -Nurd -x'*~' glib-2.52.2.orig/glib/gutils.c glib-2.52.2/glib/gutils.c
 --- glib-2.52.2.orig/glib/gutils.c	2016-10-22 01:21:26.000000000 -0400
 +++ glib-2.52.2/glib/gutils.c	2017-05-14 23:18:36.000000000 -0400
