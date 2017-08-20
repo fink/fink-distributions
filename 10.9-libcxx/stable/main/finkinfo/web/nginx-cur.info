@@ -1,19 +1,24 @@
 Package: nginx-cur
-Version: 1.7.11
-Revision: 4
+Version: 1.13.4
+Revision: 1
 Description: Small, powerful, scalable web/proxy server
 License: BSD
 Maintainer: Andreas Gockel <fink-nginx@unixforge.de>
-Depends: daemonic, gd3-shlibs, geoip-shlibs, libpcre1-shlibs, libxml2-shlibs, libxslt-shlibs, openssl100-shlibs
-BuildDepends: gd3, geoip-dev, libpcre1, libxml2, libxslt, openssl100-dev
+Depends: daemonic, gd3-shlibs, geoip-shlibs, libpcre1-shlibs, libxml2-shlibs, libxslt-shlibs, openssl100-shlibs, system-perl
+BuildDepends: gd3, geoip-dev, libpcre1, libxml2, libxslt, openssl100-dev, system-perl
 Suggests: gd3-bin, geoip
 Provides: httpd
 Replaces: nginx
 Conflicts: nginx
 Source: http://nginx.org/download/nginx-%v.tar.gz
-Source-MD5: 22912ba71eebd6987be47eeaff79f0f0
-Source-Checksum: SHA1(475ec25e2e8b39270c13bfc08086f221170d1641)
-SetCFLAGS: -g -O2 -fstack-protector -Wformat -Werror=format-security -fPIE -Wno-deprecated-declarations
+Source-MD5: 42a3ca70cd292a149ba4f60862599245
+Source-Checksum: SHA1(ee4496ef27fac66cf90aa60c4132215e552a340d)
+PatchScript: <<
+  sed -i "" -e 's/"\$ENV{NGX_PM_CFLAGS}",/"\$ENV{NGX_PM_CFLAGS}", LDDLFLAGS => "\$Config{lddlflags} \$ENV{LDFLAGS}",/g' \
+    -e 's/use 5.006001;/use 5.006001; use Config;/g' \
+    src/http/modules/perl/Makefile.PL
+<<
+SetCFLAGS: -g -O2 -fstack-protector -Wformat -Werror=format-security -fPIE
 SetCPPFLAGS: -D_FORTIFY_SOURCE=2 
 SetCXXFLAGS: -g -O2 -fstack-protector --param=ssp-buffer-size=4 -Wformat -Werror=format-security -fPIE
 SetLDFLAGS: -Wl,-read_only_stubs -Wl,-bind_at_load -fPIE -Wl,-pie
@@ -27,6 +32,7 @@ ConfigureParams: <<
  --http-scgi-temp-path=%p/var/lib/nginx/scgi\
  --http-uwsgi-temp-path=%p/var/lib/nginx/uwsgi\
  --lock-path=%p/var/lock/nginx/nginx.lock\
+ --modules-path=%p/var/lib/nginx/modules\
  --pid-path=%p/var/run/nginx.pid\
  --with-pcre-jit\
  --with-debug\
@@ -35,36 +41,50 @@ ConfigureParams: <<
  --with-http_dav_module\
  --with-http_flv_module\
  --with-http_geoip_module\
+ --with-http_gunzip_module\
  --with-http_gzip_static_module\
  --with-http_image_filter_module\
  --with-http_mp4_module\
+ --with-http_perl_module\
  --with-http_random_index_module\
  --with-http_realip_module\
  --with-http_secure_link_module\
- --with-http_spdy_module\
  --with-http_stub_status_module\
  --with-http_ssl_module\
  --with-http_sub_module\
+ --with-http_v2_module\
  --with-http_xslt_module\
  --with-ipv6\
  --with-mail\
  --with-mail_ssl_module\
+ --with-perl=/usr/bin/perl\
+ --with-stream\
+ --with-stream_ssl_module\
+ --with-threads\
  --user=www\
  --group=www\
- --with-ld-opt="-L%p/lib"\
- --with-cc-opt="-I%p/include"
+ --with-ld-opt="$LDFLAGS"\
+ --with-cc-opt="$CFLAGS $CPPFLAGS"
+<<
+CompileScript: <<
+#!/bin/sh -ex
+ MYPERL="$(/usr/bin/perl -w -Mstrict -E 'my $vers = $^V; $vers =~ tr/[0-9.]//cd; print $vers . "\n";')"
+ ./configure %c --with-perl_modules_path=%p/lib/perl5/$MYPERL
+ make INSTALLSITEMAN3DIR=%p/share/man/man3
 <<
 InstallScript: <<
- make install prefix=%p DESTDIR=%d
+#!/bin/sh -ex
+ MYPERL="$(/usr/bin/perl -w -Mstrict -E 'my $vers = $^V; $vers =~ tr/[0-9.]//cd; print $vers . "\n";')"
+ make install prefix=%p DESTDIR=%d INSTALLSITEMAN3DIR=%p/share/man/man3 DESTINSTALLARCHLIB=%i/share/podfiles/$MYPERL
  /usr/bin/install -d -m 775 %i/var/nginx/www
- /usr/bin/install -d -m 755 %i/var/{lib/nginx{,/body,/fastcgi,/proxy,/scgi,/uwsgi},lock/nginx}
+ /usr/bin/install -d -m 755 %i/{var/{lib/nginx{,/body,/fastcgi,/proxy,/scgi,/uwsgi,/modules},lock/nginx},share/man/man3}
  /bin/mv %i/html/* %i/var/nginx/www/
+ /bin/mv %i/share/podfiles/$MYPERL/perllocal{,.%n}.pod
  /bin/rmdir %i/html
- /usr/bin/sed -i .removeme -e 's1log  logs1log  %p/var/log/nginx1g' %i/etc/nginx/nginx.conf{,.default}
- /usr/bin/sed -i .removeme -e 's1pid        logs1pid        %p/var/run/1g' %i/etc/nginx/nginx.conf{,.default}
- /usr/bin/sed -i .removeme -e 's1#user  nobody;1user  www;1g' %i/etc/nginx/nginx.conf{,.default}
- /usr/bin/sed -i .removeme -e 's1root   html;1root   %p/var/nginx/www;1g' %i/etc/nginx/nginx.conf{,.default}
- /usr/bin/find %i -name \*.removeme -delete
+ /usr/bin/sed -i "" -e 's1log  logs1log  %p/var/log/nginx1g' %i/etc/nginx/nginx.conf{,.default}
+ /usr/bin/sed -i "" -e 's1pid        logs1pid        %p/var/run1g' %i/etc/nginx/nginx.conf{,.default}
+ /usr/bin/sed -i "" -e 's1#user  nobody;1user  www;1g' %i/etc/nginx/nginx.conf{,.default}
+ /usr/bin/sed -i "" -e 's1root   html;1root   %p/var/nginx/www;1g' %i/etc/nginx/nginx.conf{,.default}
 <<
 DocFiles: CHANGES CHANGES.ru LICENSE README
 PostInstScript: <<
@@ -83,6 +103,9 @@ PostInstScript: <<
   echo "Starting nginx"
   %p/sbin/nginx
 fi
+MYPERL="$(/usr/bin/perl -w -Mstrict -E 'my $vers = $^V; $vers =~ tr/[0-9.]//cd; print $vers . "\n";')"
+/bin/mkdir -p %p/lib/perl5/$MYPERL/darwin-thread-multi-2level
+/bin/cat %p/share/podfiles/$MYPERL/*.pod > %p/lib/perl5/$MYPERL/darwin-thread-multi-2level/perllocal.pod
 <<
 PreRmScript: <<
 #/bin/sh -ex
@@ -92,6 +115,13 @@ PreRmScript: <<
    killall nginx 2>/dev/null
   fi
  %p/bin/daemonic disable net.nginx.nginx
+fi
+<<
+PostRmScript: <<
+MYPERL="$(/usr/bin/perl -w -Mstrict -E 'my $vers = $^V; $vers =~ tr/[0-9.]//cd; print $vers . "\n";')"
+/bin/echo -n '' > %p/lib/perl5/$MYPERL/darwin-thread-multi-2level/perllocal.pod
+if [ -d "%p/share/podfiles/$MYPERL" ] && [ $(echo %p/share/podfiles/$MYPERL/*.pod | wc -w) -gt 0 ]; then
+        cat  %p/share/podfiles/$MYPERL/*.pod >%p/lib/perl5/$MYPERL/darwin-thread-multi-2level/perllocal.pod
 fi
 <<
 ConfFiles: <<
@@ -105,11 +135,11 @@ DaemonicFile: <<
   <description>Nginx web server</description>
   <message>Nginx %v</message>
  
- 	<daemon name="net.nginx.nginx">
- 		<executable background="yes">%p/sbin/nginx</executable>
- 		<configfile>%p/etc/nginx/nginx.conf</configfile>
- 		<pidfile>%p/var/run/nginx.pid</pidfile>
- 	</daemon>
+	<daemon name="net.nginx.nginx">
+		<executable background="yes">%p/sbin/nginx</executable>
+		<configfile>%p/etc/nginx/nginx.conf</configfile>
+		<pidfile>%p/var/run/nginx.pid</pidfile>
+	</daemon>
 </service>
 <<
 Homepage: http://nginx.org/
