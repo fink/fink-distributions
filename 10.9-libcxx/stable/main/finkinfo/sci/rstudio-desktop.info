@@ -1,31 +1,25 @@
 Package: rstudio-desktop
 Version: 0.99.902
-Revision: 2
+Revision: 3
 Description: IDE for R
 License: GPL
 Homepage: http://rstudio.org
 Maintainer: None <fink-devel@lists.sourceforge.net>
 Depends: <<
-  boost1.58-nopython-shlibs,
-  libiconv,
-  libpng16-shlibs,
-  openssl100-shlibs,
-  r-base (>= 3.3.0-1),
+  boost1.63-nopython-shlibs,
+  openssl110-shlibs,
   r-base33,
   r-base33-shlibs
 <<
 BuildDepends: << 
   ant,
-  boost1.58-nopython,
+  boost1.63-nopython,
   cmake,
   fink (>= 0.30.0),
   fink-package-precedence,
-  libiconv-dev,
-  libpng16,
-  openssl100-dev,
-  r-base (>=3.3.0-1),
+  openssl110-dev,
   r-base33-dev,
-  system-java  (>= 1.6)
+  system-java (>= 1.6)
 <<
 
 Source: https://github.com/rstudio/rstudio/archive/v%v.tar.gz
@@ -62,18 +56,20 @@ Source10-MD5: cf1a43d2d6203a765ef16d7b12382c8a
 Source11: https://s3.amazonaws.com/rstudio-buildtools/libclang-builtin-headers.zip
 Source11-MD5: e6790a3ee6c371968eba865fc0a84daf
 
-# includes fix for boost and apple headers both using "common" words
-# for tokens and parameters
 PatchFile: %n.patch
-PatchFile-MD5: 9d507a8cf2f2c0f3e77c3eb2bd3ad796
-
+PatchFile-MD5: 49fd4a920225efddac945aea96198156
+# Upstream patches for openssl110:
+# https://github.com/rstudio/rstudio/commit/1a1c28cc72c5abcd640e4fc4203e20e88c0028df
+# https://github.com/rstudio/rstudio/commit/ea127f04e7d04ac049eb837d35588ec199b11226
+PatchFile2: %n-openssl110.patch
+PatchFile2-MD5: 50ad198e3b2015aa950b4eadb4919f75
 PatchScript: <<
 	#!/bin/sh -ev
+	# apply upstream patch to clean source tree first
+	patch -p1 < %{PatchFile2}
 	sed 's|@PREFIX@|%p|g' < %{PatchFile} | sed "s|@MAJOR@|`echo %v | cut -d. -f2`|g" | sed "s|@MINOR@|`echo %v | cut -d. -f3`|g" | patch -p1
 	# default to proper c++ lib
 	perl -pi -e 's|stdlib=libstdc|stdlib=libc|g' src/cpp/CMakeLists.txt
-	# __ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES hack no longer required in boost 1.58
-	perl -pi -e 's|#define __ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES 0||' src/cpp/desktop-mac/MainFrameController.mm
 <<
 
 GCC: 4.0
@@ -106,8 +102,8 @@ CompileScript: <<
   mv ../rsconnect dependencies/common/
 
   mkdir -p dependencies/common/libclang/3.5
-  mv ../libclang-3.5/mac/x86_64/libclang.dylib  dependencies/common/libclang/3.5
-  mv ../builtin-headers	 dependencies/common/libclang
+  mv ../libclang-3.5/mac/x86_64/libclang.dylib dependencies/common/libclang/3.5
+  mv ../builtin-headers dependencies/common/libclang
  
   mkdir -p dependencies/common/pandoc
   mv ../pandoc-1.15.2 dependencies/common/pandoc/1.15.2
@@ -116,24 +112,34 @@ CompileScript: <<
   mkdir -p build
   cd build
 
-  cmake -DRSTUDIO_TARGET=Desktop \
-        -DRSTUDIO_PACKAGE_BUILD=1 \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=%b/Applications \
-        -DCMAKE_VERBOSE_MAKEFILE=TRUE \
-        -DLIBR_LIBRARIES=%p/Library/Frameworks/R.framework/Versions/3.3/Resources/lib \
-	-DBOOST_ROOT=%p/opt/boost-1_58 \
+  cmake \
+	-DRSTUDIO_TARGET=Desktop \
+	-DRSTUDIO_PACKAGE_BUILD=1 \
+	-DCMAKE_BUILD_TYPE=Release \
+	-DCMAKE_INSTALL_PREFIX=%b/Applications \
+	-DCMAKE_C_FLAGS=-MD \
+	-DCMAKE_CXX_FLAGS=-MD \
+	-DCMAKE_VERBOSE_MAKEFILE=TRUE \
+	-DLIBR_LIBRARIES=%p/Library/Frameworks/R.framework/Versions/3.3/Resources/lib/libR.dylib \
+	-DBOOST_ROOT=%p/opt/boost-1_63 \
 	-DCMAKE_OSX_DEPLOYMENT_TARGET:STRING="" \
 	-DCMAKE_OSX_SYSROOT:STRING=/ \
         ..
 
   make VERBOSE=1
-  make install CMAKE_INSTALL_PREFIX=%p/Applications
+
+  # from within build subdir, f-p-p doesn't recognize headers in main
+  # dir's other subdirs as being part of builddir...
+  fink-package-precedence --no-headers .
+  cd ..
+  # but scanning libs in main dir triggers some weird otool failure.
+  fink-package-precedence --depfile-ext='\.d' --no-libs .
 <<
 # Install Phase.
 InstallScript: <<
-#!/bin/bash -ev
-  echo "test"
+#!/bin/sh -ev
+	cd build
+	make install CMAKE_INSTALL_PREFIX=%p/Applications
 <<
 Shlibs: <<
 	@rpath/libclang.dylib 1.0.0 %n (>= 0.99.421-1)
@@ -143,10 +149,9 @@ Upstream has abandoned QT on darwin as of v0.98.475 in favor of the WebKit frame
 http://blog.rstudio.org/2013/11/12/rstudio-os-x-mavericks-issues-resolved/
 so unnecessary Depends/BuildDepends on qt/webit are purged.
 
-Synced with newest r-base package. If the user doesn't have the r-base package
-installed, fink will install the r-base from the latest R release causing the
-wrong symlinks to be installed for the designated r-base release.
+Patches/flags to hardcode an R version (package "r-base" can vary).
 
-Switched to boost 1.58.
+TODO: lead for possible migration to newer Boost.Signals2 API:
+https://github.com/JanMarvin/rstudio-archlinuxpkg/blob/master/rstudio/boostsignals.patch
 <<
 AppBundles: Applications/RStudio.app
