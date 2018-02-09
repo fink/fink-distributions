@@ -265,3 +265,173 @@ diff -ru Python-3.6.1.orig/setup.py Python-3.6.1/setup.py
              # Bug 1464056: If _curses.so links with ncursesw,
              # _curses_panel.so must link with panelw.
              panel_library = 'panelw'
+diff --git a/Lib/test/test_uuid.py b/Lib/test/test_uuid.py
+index 4373fba12ac8..aa3de74cef0a 100644
+--- a/Lib/test/test_uuid.py
++++ b/Lib/test/test_uuid.py
+@@ -304,6 +304,32 @@ def test_getnode(self):
+         node2 = uuid.getnode()
+         self.assertEqual(node1, node2, '%012x != %012x' % (node1, node2))
+ 
++    # bpo-32502: UUID1 requires a 48-bit identifier, but hardware identifiers
++    # need not necessarily be 48 bits (e.g., EUI-64).
++    def test_uuid1_eui64(self):
++        # Confirm that uuid.getnode ignores hardware addresses larger than 48
++        # bits. Mock out each platform's *_getnode helper functions to return
++        # something just larger than 48 bits to test. This will cause
++        # uuid.getnode to fall back on uuid._random_getnode, which will
++        # generate a valid value.
++        too_large_getter = lambda: 1 << 48
++        with unittest.mock.patch.multiple(
++            uuid,
++            _node=None,  # Ignore any cached node value.
++            _NODE_GETTERS_WIN32=[too_large_getter],
++            _NODE_GETTERS_UNIX=[too_large_getter],
++        ):
++            node = uuid.getnode()
++        self.assertTrue(0 < node < (1 << 48), '%012x' % node)
++
++        # Confirm that uuid1 can use the generated node, i.e., the that
++        # uuid.getnode fell back on uuid._random_getnode() rather than using
++        # the value from too_large_getter above.
++        try:
++            uuid.uuid1(node=node)
++        except ValueError as e:
++            self.fail('uuid1 was given an invalid node ID')
++
+     @unittest.skipUnless(importable('ctypes'), 'requires ctypes')
+     def test_uuid1(self):
+         equal = self.assertEqual
+diff --git a/Lib/uuid.py b/Lib/uuid.py
+index 36c956e2b0fd..3cd67fcfd093 100644
+--- a/Lib/uuid.py
++++ b/Lib/uuid.py
+@@ -540,6 +540,11 @@ def _random_getnode():
+ 
+ _node = None
+ 
++_NODE_GETTERS_WIN32 = [_windll_getnode, _netbios_getnode, _ipconfig_getnode]
++
++_NODE_GETTERS_UNIX = [_unixdll_getnode, _ifconfig_getnode, _ip_getnode,
++                      _arp_getnode, _lanscan_getnode, _netstat_getnode]
++
+ def getnode():
+     """Get the hardware address as a 48-bit positive integer.
+ 
+@@ -555,18 +560,18 @@ def getnode():
+ 
+     import sys
+     if sys.platform == 'win32':
+-        getters = [_windll_getnode, _netbios_getnode, _ipconfig_getnode]
++        getters = _NODE_GETTERS_WIN32
+     else:
+-        getters = [_unixdll_getnode, _ifconfig_getnode, _ip_getnode,
+-                   _arp_getnode, _lanscan_getnode, _netstat_getnode]
++        getters = _NODE_GETTERS_UNIX
+ 
+     for getter in getters + [_random_getnode]:
+         try:
+             _node = getter()
+         except:
+             continue
+-        if _node is not None:
++        if (_node is not None) and (0 <= _node < (1 << 48)):
+             return _node
++    assert False, '_random_getnode() returned invalid value: {}'.format(_node)
+ 
+ _last_timestamp = None
+ 
+diff --git a/Misc/NEWS.d/next/Library/2018-01-20-17-15-34.bpo-32502.OXJfn7.rst b/Misc/NEWS.d/next/Library/2018-01-20-17-15-34.bpo-32502.OXJfn7.rst
+new file mode 100644
+index 000000000000..8338632aa2c5
+--- /dev/null
++++ b/Misc/NEWS.d/next/Library/2018-01-20-17-15-34.bpo-32502.OXJfn7.rst
+@@ -0,0 +1,2 @@
++uuid.uuid1 no longer raises an exception if a 64-bit hardware address is
++encountered.
+diff --git a/Lib/test/test_capi.py b/Lib/test/test_capi.py
+index 848a5289bab7..b36a2ce585ce 100644
+--- a/Lib/test/test_capi.py
++++ b/Lib/test/test_capi.py
+@@ -494,16 +494,6 @@ def test_pre_initialization_api(self):
+         self.assertEqual(out, '')
+         self.assertEqual(err, '')
+ 
+-    def test_bpo20891(self):
+-        """
+-        bpo-20891: Calling PyGILState_Ensure in a non-Python thread before
+-        calling PyEval_InitThreads() must not crash. PyGILState_Ensure() must
+-        call PyEval_InitThreads() for us in this case.
+-        """
+-        out, err = self.run_embedded_interpreter("bpo20891")
+-        self.assertEqual(out, '')
+-        self.assertEqual(err, '')
+-
+ 
+ class SkipitemTest(unittest.TestCase):
+ 
+diff --git a/Programs/_testembed.c b/Programs/_testembed.c
+index b0f9087115b9..813cf307bda2 100644
+--- a/Programs/_testembed.c
++++ b/Programs/_testembed.c
+@@ -149,53 +149,6 @@ static int test_pre_initialization_api(void)
+     return 0;
+ }
+ 
+-static void bpo20891_thread(void *lockp)
+-{
+-    PyThread_type_lock lock = *((PyThread_type_lock*)lockp);
+-
+-    PyGILState_STATE state = PyGILState_Ensure();
+-    if (!PyGILState_Check()) {
+-        fprintf(stderr, "PyGILState_Check failed!");
+-        abort();
+-    }
+-
+-    PyGILState_Release(state);
+-
+-    PyThread_release_lock(lock);
+-
+-    PyThread_exit_thread();
+-}
+-
+-static int test_bpo20891(void)
+-{
+-    /* bpo-20891: Calling PyGILState_Ensure in a non-Python thread before
+-       calling PyEval_InitThreads() must not crash. PyGILState_Ensure() must
+-       call PyEval_InitThreads() for us in this case. */
+-    PyThread_type_lock lock = PyThread_allocate_lock();
+-    if (!lock) {
+-        fprintf(stderr, "PyThread_allocate_lock failed!");
+-        return 1;
+-    }
+-
+-    _testembed_Py_Initialize();
+-
+-    long thrd = PyThread_start_new_thread(bpo20891_thread, &lock);
+-    if (thrd == -1) {
+-        fprintf(stderr, "PyThread_start_new_thread failed!");
+-        return 1;
+-    }
+-    PyThread_acquire_lock(lock, WAIT_LOCK);
+-
+-    Py_BEGIN_ALLOW_THREADS
+-    /* wait until the thread exit */
+-    PyThread_acquire_lock(lock, WAIT_LOCK);
+-    Py_END_ALLOW_THREADS
+-
+-    PyThread_free_lock(lock);
+-
+-    return 0;
+-}
+-
+ 
+ /* *********************************************************
+  * List of test cases and the function that implements it.
+@@ -219,7 +172,6 @@ static struct TestCase TestCases[] = {
+     { "forced_io_encoding", test_forced_io_encoding },
+     { "repeated_init_and_subinterpreters", test_repeated_init_and_subinterpreters },
+     { "pre_initialization_api", test_pre_initialization_api },
+-    { "bpo20891", test_bpo20891 },
+     { NULL, NULL }
+ };
