@@ -53,6 +53,9 @@ PatchScript: <<
 	# No /usr/lib/tclConfig.sh on 10.13; this is portable
 	# to all 10.x:
 	perl -pi -e 's|\$\{TCLSH_EXEC_PREFIX\}/lib/tclConfig.sh|/System/Library/Frameworks/Tcl.framework/tclConfig.sh|g' configure
+
+	# assure consistent results even if newer librsvg is avail
+	perl -pi -e 's/(librsvg-2.0 >=) 2\.36\.0/${1} 99999.FORCE.NONDETECT/g' configure
 <<
 GCC: 4.0
 Depends: <<
@@ -60,7 +63,7 @@ Depends: <<
 	(%type_raw[var] = .) cairo-shlibs (>= 1.12.14-1),
 	(%type_raw[var] = .) freeglut2-shlibs, 
 	(%type_raw[var] = .) gd3-shlibs,
-	(%type_raw[var] = .) glib2-shlibs (>= 2.14.0-1), 
+	(%type_raw[var] = .) glib2-shlibs (>= 2.22.0-1),
 	(%type_raw[var] = .) glitz-shlibs,
 	(%type_raw[var] = .) gtk+2-shlibs (>= 2.18.0-1),
 	(%type_raw[var] = .) gts75-shlibs, 
@@ -142,15 +145,13 @@ ConfigureParams: <<
 	LUA=lua53 \
 	(%type_raw[var] = .) --with-x \
 	(%type_raw[var] = .) --with-rsvg \
-	(%type_raw[var] = .) --x-includes=$X11_ROOT/include \
-	(%type_raw[var] = .) --x-libraries=$X11_ROOT/lib \
 	(%type_raw[var] = .) --with-glitz \
 	(%type_raw[var] = .) --with-libgd \
 	(%type_raw[var] = .) --with-gts \
-	(%type_raw[var] = .) --with-glutincludedir="%p/include -I$X11_ROOT/include" \
-	(%type_raw[var] = .) --with-glutlibdir=%p/lib \
+	(%type_raw[var] = .) --with-glut \
 	(%type_raw[var] = -nox) --without-x \
 	(%type_raw[var] = -nox) --without-gtk \
+	(%type_raw[var] = -nox) --without-gdk \
 	(%type_raw[var] = -nox) --without-gdk-pixbuf \
 	(%type_raw[var] = -nox) --without-glade \
 	(%type_raw[var] = -nox) --without-glitz \
@@ -158,6 +159,7 @@ ConfigureParams: <<
 	(%type_raw[var] = -nox) --without-rsvg \
 	(%type_raw[var] = -nox) --without-libgd \
 	(%type_raw[var] = -nox) --without-gts \
+	(%type_raw[var] = -nox) --without-glut \
 	--disable-r \
 	--disable-perl \
 	--disable-python \
@@ -177,15 +179,7 @@ CompileScript: <<
 	test -f "$ruby_h_path" && echo "Found ruby.h as $ruby_h_path, using its dirname..."
 	system_ruby_include=`dirname $ruby_h_path`
 	test -d "$system_ruby_include"
-	if test "%type_raw[var]" = "-nox"
-		then X11_ROOT=/none
-	elif test -d "/opt/X11"
-		then X11_ROOT=/opt/X11
-	elif test -d "/usr/X11R6"
-		then X11_ROOT=/usr/X11R6
-	else { echo "No X11 found."; exit 1; }
-	# else, don't care if X11 is not found for -nox
-	fi
+
 	export PATH=%p/share/guile/2.0/scripts/binoverride:$PATH
 	# handle java
 	JAVA_VERSION=`javac -version  2>&1 >/dev/null | cut -d ' ' -f 2`
@@ -200,24 +194,24 @@ CompileScript: <<
 	     ;;
 	*) ;;
 	esac
+
 	# TK_XINCLUDES needed for 10.8
 	# Tcl/Tk dropped on 2.40
 	#sed -i.orig -e '/framework/s|-\(framework\) |-Wl,-\1,|g' \
 	#	-e "/TK_XINCLUDES/s|\"\"|\"-I$X11_ROOT/include\"|" config.status
 	#./config.status
+
 	make V=1
-	fink-package-precedence .
+	fink-package-precedence --prohibit-bdep=%n238-dev,%n238-nox-dev .
 <<
 InfoTest: <<
 	TestDepends: fink-package-precedence
 	TestConfigureParams: --enable-dependency-tracking
 	TestScript: <<
 		#!/bin/sh -ev
-		fink-package-precedence --prohibit-bdep=%n238-dev .
  		echo "rtest.sh looks intended for post-install checking"
-		# upstream fix to rtest.sh
-		#perl -pi -e "s,rrtest,'rtest," rtest/rtest.sh
 		# cd rtest && ./rtest.sh -v || exit 2
+		# fink-package-precedence --prohibit-bdep=%n238-dev,%n238-nox-dev .
 	<<
 	TestSuiteSize: small
 <<
@@ -366,9 +360,6 @@ Thomas Kotzian <thomas.kotzian@gmx.at>
 Matthias Neeracher <neeracher@mac.com>
 <<
 DescPackaging: <<
-patch: configure patched to remove call to AC_LIBLTDL_CONVENIENCE
-which was clobbering the override to use the installed libltdl.
-Use libiconv from fink
 postinstall 'dot -c' updates config file with list of built plugins.
 Links with libtool2's libltdl.dylib, therefore need build-depend on libtool2 
 even though libltdl/ already includes ltdl.h
