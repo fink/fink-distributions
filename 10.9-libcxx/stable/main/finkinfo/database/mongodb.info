@@ -1,57 +1,128 @@
 Package: mongodb
-Version: 2.4.14
-Revision: 3
+# OPENSSL110 FTBFS; Unclear if 3.6 series works with it
+Version: 3.4.15
+Revision: 1
+Description: High-performance NoSQL implementation
+License: OSI-Approved
+# AGPL 3.0
 Maintainer: None <fink-devel@lists.sourceforge.net>
 Homepage: http://www.mongodb.org
-License: OSI-Approved
-# Mostly AGPL 3.0, some Apache 2.0
 
-Description: High-performance NoSQL implementation
-
-Source: http://downloads.mongodb.org/src/%n-src-r%v.tar.gz
-Source-MD5: eb7fc91246e51b68f68a958b02cb7880
-PatchFile: %n.patch
-PatchFile-MD5: 5f5d99bf505721d7453a194f1cbf6b79
-PatchScript: <<
-	sed 's|@FINK_PREFIX@|%p|g' < %{PatchFile} | patch -p1
-<<
+Source: https://fastdl.mongodb.org/src/%n-src-r%v.tar.gz
+Source-MD5: 88009acbff676e7b430ede8c1e2dfd6a
+Source2: http://archive.ubuntu.com/ubuntu/pool/universe/m/%n/%n_3.4.7-1.debian.tar.xz
+Source2-MD5: 019f1d6052f99b6911032d2e5376159c
 BuildDepends: <<
 	boost1.63-nopython,
+	fink (>= 0.32),
 	fink-package-precedence,
 	libpcap1,
 	libpcre1,
 	libsnappy1-dev,
-	scons
+	openssl100-dev,
+	scons (>= 3)
 <<
 Depends: <<
 	boost1.63-nopython-shlibs,
 	libpcap1-shlibs,
 	libpcre1-shlibs,
-	libsnappy1-shlibs
+	libsnappy1-shlibs,
+	openssl100-shlibs
 <<
+#RuntimeDepends: passwd-mongodb
+Recommends: mongo-tools
+PatchFile: %n.patch
+PatchFile-MD5: 8943e8a5c7515cda22998d061aa88442
+PatchScript: <<
+	sed 's|@FINK_PREFIX@|%p|g' < %{PatchFile} | patch -p1
+	patch -p1 < ../debian/patches/CVE-2016-6494.patch
+	# -O3 from hardening patch causes build failures
+	#patch -p1 < ../debian/patches/hardened-build.patch
+<<
+GCC: 4.0
 SetCPPFLAGS: -MD -I%p/opt/boost-1_63/include
 SetLDFLAGS: -L%p/opt/boost-1_63/lib
+NoSetMAKEFLAGS: true
 CompileScript: <<
-	scons  --use-system-boost --use-system-pcre --use-system-snappy --usev8 all $MAKEFLAGS
+	#!/bin/sh -ev
+	# modernize files to newer python syntax
+	/usr/bin/2to3-2.7 --write --fix=print SConstruct \
+		src/third_party/wiredtiger/SConscript \
+		src/mongo/installer/msi/SConscript
+	scons \
+		--ssl \
+		--use-system-boost \
+		--use-system-pcre \
+		--use-system-snappy \
+		--use-system-zlib \
+		all \
+		$MAKEFLAGS \
+		CCFLAGS=-MD \
+		CPPPATH="%p/opt/boost-1_63/include %p/include" \
+		LIBPATH="%p/opt/boost-1_63/lib %p/lib"
 	fink-package-precedence --depfile-ext='\.d' .
 <<
+#InfoTest: <<
+#	TestScript: <<
+#		#!/bin/sh -ev
+#		# The default of 2560 files is too small
+#		ulimit -n 4096
+#		./dbtest --dbpath %b/unittest || exit 2
+#	<<
+#<<
 InstallScript: <<
-	mkdir %i/bin
-	cp bsondump mongo mongod mongodump mongoexport %i/bin
-	cp mongofiles mongoimport mongorestore mongos %i/bin
-	cp mongosniff mongostat mongotop %i/bin
-	chmod 0755 %i/bin/*
+	#!/bin/sh -ev
+	scons \
+		--prefix=%i \
+		--ssl \
+		--use-system-boost \
+		--use-system-pcre \
+		--use-system-snappy \
+		--use-system-zlib \
+		install \
+		CCFLAGS=-MD \
+		CPPPATH="%p/opt/boost-1_63/include %p/include" \
+		LIBPATH="%p/opt/boost-1_63/lib %p/lib"
+
+	# Create path for databases and logs
+	install -d -m 755 %i/var/db/mongodb %i/var/log/mongodb
+	
+	# install files from Debian
+	install -d -m 755 %i/share/man/man1
+	cp -p debian/*.1 %i/share/man/man1
+	install -d -m 755 %i/etc
+	cp -p debian/mongod.conf %i/etc/mongod.conf.example
 <<
+#PostInstScript: <<
+## Set u:g for db_home and logdir. These should match %p/etc/mongod.conf
+#if ! -d %p/var/db/mongodb; then
+#	chown -R mongodb:mongodb %p/var/db/mongodb
+#fi
+#if ! -d %p/var/log/mongodb; then
+#	chown -R mongodb:mongodb %p/var/log/mongodb
+#fi
+#<<
 DocFiles: APACHE-2.0.txt CONTRIBUTING.rst GNU-AGPL-3.0.txt README
+DescDetail: <<
+MongoDB is an open-source document database that provides high performance, 
+high availability, and automatic scaling.
+<<
+DescUsage: <<
+By default, mongod uses the folder '/data/db' for its storage.
+If you wish to place the database in an alternate directory, specify it with 
+the following command when starting mongod:
+
+mongod --dbpath <path to data directory> --logpath <path to log output> \
+--logappend
+
+%p/var/db/mongodb is the Fink preferred location for the database.
+%p/var/log/mongodb/mongod.log is the Fink preferred location for the logfile.
+
+An example mongodb.conf file is stored at %p/etc/mongodb.conf.example.
+Rename it to %p/etc/mongodb.conf and edit as needed.
+<<
 DescPackaging: <<
 	Former maintainer: Sjors Gielen <fink-mongodb@sjorsgielen.nl>
-
-	Fix some python strictness in SCons* files.
-
-	Lots of pointer-comparison fixes analogous to FreeBSD's fix
-	for clang>=4.0. See:
-	https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=216213
-
-	Fixes for boost1.63, including
-	https://jira.mongodb.org/browse/SERVER-14930
+	
+	Avoid system-icu: https://jira.mongodb.org/browse/SERVER-21353
 <<
