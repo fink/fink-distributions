@@ -42,3 +42,157 @@ diff -ruN mongodb-src-r3.4.11-orig/src/mongo/shell/linenoise_utf8.h mongodb-src-
  
  namespace linenoise_utf8 {
  
+From b35c594738261edce2134b0bc7fb3e7a06e85fc3 Mon Sep 17 00:00:00 2001
+From: Mathias Stearn <mathias@10gen.com>
+Date: Tue, 25 Jul 2017 09:05:13 -0400
+Subject: [PATCH] SERVER-29887 address clang-4.0 warnings in geo code
+
+---
+ SConstruct                             | 6 ++++++
+ src/mongo/db/exec/geo_near.cpp         | 2 +-
+ src/mongo/db/geo/r2_region_coverer.cpp | 6 ++----
+ 3 files changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/SConstruct b/SConstruct
+index c56ce5edf87..d16a8fbd61f 100644
+--- a/SConstruct
++++ b/SConstruct
+@@ -1993,6 +1993,12 @@ def doConfigure(myenv):
+         # is a problem at least for the S2 headers.
+         AddToCXXFLAGSIfSupported(myenv, "-Wno-undefined-var-template")
+ 
++        # This warning was added in clang-4.0, but it warns about code that is required on some
++        # platforms. Since the warning just states that 'explicit instantiation of [a template] that
++        # occurs after an explicit specialization has no effect', it is harmless on platforms where
++        # it isn't required
++        AddToCXXFLAGSIfSupported(myenv, "-Wno-instantiation-after-specialization")
++
+         # Check if we can set "-Wnon-virtual-dtor" when "-Werror" is set. The only time we can't set it is on
+         # clang 3.4, where a class with virtual function(s) and a non-virtual destructor throws a warning when
+         # it shouldn't.
+diff --git a/src/mongo/db/exec/geo_near.cpp b/src/mongo/db/exec/geo_near.cpp
+index 9bb94def100..49ee2feb6f9 100644
+--- a/src/mongo/db/exec/geo_near.cpp
++++ b/src/mongo/db/exec/geo_near.cpp
+@@ -288,7 +288,7 @@ class GeoNear2DStage::DensityEstimator {
+         // Since appendVertexNeighbors(level, output) requires level < hash.getBits(),
+         // we have to start to find documents at most GeoHash::kMaxBits - 1. Thus the finest
+         // search area is 16 * finest cell area at GeoHash::kMaxBits.
+-        _currentLevel = std::max(0u, hashParams.bits - 1u);
++        _currentLevel = std::max(0, hashParams.bits - 1);
+     }
+ 
+     PlanStage::StageState work(OperationContext* opCtx,
+diff --git a/src/mongo/db/geo/r2_region_coverer.cpp b/src/mongo/db/geo/r2_region_coverer.cpp
+index 47ba2528328..4d7791dc1e3 100644
+--- a/src/mongo/db/geo/r2_region_coverer.cpp
++++ b/src/mongo/db/geo/r2_region_coverer.cpp
+@@ -68,15 +68,13 @@ R2RegionCoverer::R2RegionCoverer(GeoHashConverter* hashConverter)
+ R2RegionCoverer::~R2RegionCoverer() {}
+ 
+ void R2RegionCoverer::setMinLevel(unsigned int minLevel) {
+-    dassert(minLevel >= 0);
+     dassert(minLevel <= GeoHash::kMaxBits);
+-    _minLevel = max(0u, min(GeoHash::kMaxBits, minLevel));
++    _minLevel = min(GeoHash::kMaxBits, minLevel);
+ }
+ 
+ void R2RegionCoverer::setMaxLevel(unsigned int maxLevel) {
+-    dassert(maxLevel >= 0);
+     dassert(maxLevel <= GeoHash::kMaxBits);
+-    _maxLevel = max(0u, min(GeoHash::kMaxBits, maxLevel));
++    _maxLevel = min(GeoHash::kMaxBits, maxLevel);
+ }
+ 
+ void R2RegionCoverer::setMaxCells(int maxCells) {
+From 107858d4d2ffd9f0690def5108898a8b4be70350 Mon Sep 17 00:00:00 2001
+From: Mathias Stearn <mathias@10gen.com>
+Date: Thu, 5 Oct 2017 12:07:36 -0400
+Subject: [PATCH] SERVER-31410 Suppress problematic clang-5 warnings
+
+---
+ SConstruct | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/SConstruct b/SConstruct
+index 47fb231b59b..deed445c54d 100644
+--- a/SConstruct
++++ b/SConstruct
+@@ -1999,6 +1999,18 @@ def doConfigure(myenv):
+         # it isn't required
+         AddToCXXFLAGSIfSupported(myenv, "-Wno-instantiation-after-specialization")
+ 
++        # This warning was added in clang-5 and flags many of our lambdas. Since it isn't actively
++        # harmful to capture unused variables we are suppressing for now with a plan to fix later.
++        # Additionally, this has some false-positives where removing the capture makes the code
++        # incorrect and fail to compile on other compilers.
++        # See https://bugs.llvm.org/show_bug.cgi?id=34865.
++        AddToCCFLAGSIfSupported(myenv, "-Wno-unused-lambda-capture")
++
++        # This warning was added in clang-5 and incorrectly flags our implementation of
++        # exceptionToStatus(). See https://bugs.llvm.org/show_bug.cgi?id=34804
++        AddToCCFLAGSIfSupported(myenv, "-Wno-exceptions")
++
++
+         # Check if we can set "-Wnon-virtual-dtor" when "-Werror" is set. The only time we can't set it is on
+         # clang 3.4, where a class with virtual function(s) and a non-virtual destructor throws a warning when
+         # it shouldn't.
+From cd3e3011158cab7dbf5d2fed86641c8f0b8b88fb Mon Sep 17 00:00:00 2001
+From: Sara Golemon <sara.golemon@mongodb.com>
+Date: Fri, 6 Oct 2017 12:58:06 -0400
+Subject: [PATCH] SERVER-31498 Make build more clang5 friendly
+**** MODIFIED BY HN FOR FINK BUILD ****
+diff --git a/src/mongo/executor/network_interface_asio.cpp b/src/mongo/executor/network_interface_asio.cpp
+index f2d5fa97c3b..583f96f5ffa 100644
+--- a/src/mongo/executor/network_interface_asio.cpp
++++ b/src/mongo/executor/network_interface_asio.cpp
+@@ -394,28 +394,27 @@ Status NetworkInterfaceASIO::startCommand(const TaskExecutor::CallbackHandle& cb
+                     generation = access->id;
+                 }
+ 
+-                op->_timeoutAlarm->asyncWait(
+-                    [this, op, access, generation, requestId, adjustedTimeout](std::error_code ec) {
+-                        // We must pass a check for safe access before using op inside the
+-                        // callback or we may attempt access on an invalid pointer.
+-                        stdx::lock_guard<stdx::mutex> lk(access->mutex);
+-                        if (generation != access->id) {
+-                            // The operation has been cleaned up, do not access.
+-                            return;
+-                        }
+-
+-                        if (!ec) {
+-                            LOG(2) << "Request " << requestId << " timed out"
+-                                   << ", adjusted timeout after getting connection from pool was "
+-                                   << adjustedTimeout << ", op was " << redact(op->toString());
+-
+-                            op->timeOut_inlock();
+-                        } else {
+-                            LOG(2) << "Failed to time request " << requestId
+-                                   << "out: " << ec.message() << ", op was "
+-                                   << redact(op->toString());
+-                        }
+-                    });
++                op->_timeoutAlarm->asyncWait([op, access, generation, requestId, adjustedTimeout](
++                    std::error_code ec) {
++                    // We must pass a check for safe access before using op inside the
++                    // callback or we may attempt access on an invalid pointer.
++                    stdx::lock_guard<stdx::mutex> lk(access->mutex);
++                    if (generation != access->id) {
++                        // The operation has been cleaned up, do not access.
++                        return;
++                    }
++
++                    if (!ec) {
++                        LOG(2) << "Request " << requestId << " timed out"
++                               << ", adjusted timeout after getting connection from pool was "
++                               << adjustedTimeout << ", op was " << redact(op->toString());
++
++                        op->timeOut_inlock();
++                    } else {
++                        LOG(2) << "Failed to time request " << requestId << "out: " << ec.message()
++                               << ", op was " << redact(op->toString());
++                    }
++                });
+             }
+ 
+             _beginCommunication(op);
