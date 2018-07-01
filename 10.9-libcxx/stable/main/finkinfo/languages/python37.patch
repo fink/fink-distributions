@@ -1,0 +1,279 @@
+diff -ru Python-3.7.0.orig/Lib/ctypes/macholib/dyld.py Python-3.7.0/Lib/ctypes/macholib/dyld.py
+--- Python-3.7.0.orig/Lib/ctypes/macholib/dyld.py	2018-06-26 23:07:35.000000000 -0400
++++ Python-3.7.0/Lib/ctypes/macholib/dyld.py	2018-07-01 09:05:17.000000000 -0400
+@@ -23,6 +23,7 @@
+ 
+ DEFAULT_LIBRARY_FALLBACK = [
+     os.path.expanduser("~/lib"),
++    "@PREFIX@/lib",
+     "/usr/local/lib",
+     "/lib",
+     "/usr/lib",
+diff -ru Python-3.7.0.orig/Lib/sysconfig.py Python-3.7.0/Lib/sysconfig.py
+--- Python-3.7.0.orig/Lib/sysconfig.py	2018-06-26 23:07:35.000000000 -0400
++++ Python-3.7.0/Lib/sysconfig.py	2018-07-01 09:05:17.000000000 -0400
+@@ -368,11 +368,6 @@
+         if hasattr(e, "strerror"):
+             msg = msg + " (%s)" % e.strerror
+         raise OSError(msg)
+-    # On AIX, there are wrong paths to the linker scripts in the Makefile
+-    # -- these paths are relative to the Python source, but when installed
+-    # the scripts are in another directory.
+-    if _PYTHON_BUILD:
+-        vars['BLDSHARED'] = vars['LDSHARED']
+ 
+     # There's a chicken-and-egg situation on OS X with regards to the
+     # _sysconfigdata module after the changes introduced by #15298:
+diff -ru Python-3.7.0.orig/Lib/test/test_uuid.py Python-3.7.0/Lib/test/test_uuid.py
+--- Python-3.7.0.orig/Lib/test/test_uuid.py	2018-06-26 23:07:35.000000000 -0400
++++ Python-3.7.0/Lib/test/test_uuid.py	2018-07-01 09:05:17.000000000 -0400
+@@ -547,7 +547,7 @@
+         self.assertTrue(0 < node < (1 << 48),
+                         "%s is not an RFC 4122 node ID" % hex)
+ 
+-    @unittest.skipUnless(os.name == 'posix', 'requires Posix')
++    @unittest.skip('macOS 10.13+ returns 64 bit address')
+     def test_ifconfig_getnode(self):
+         node = self.uuid._ifconfig_getnode()
+         self.check_node(node, 'ifconfig')
+diff -ru Python-3.7.0.orig/Makefile.pre.in Python-3.7.0/Makefile.pre.in
+--- Python-3.7.0.orig/Makefile.pre.in	2018-06-26 23:07:35.000000000 -0400
++++ Python-3.7.0/Makefile.pre.in	2018-07-01 09:05:17.000000000 -0400
+@@ -632,8 +632,7 @@
+ 	$(BLDSHARED) $(NO_AS_NEEDED) -o $@ -Wl,-h$@ $^
+ 
+ libpython$(LDVERSION).dylib: $(LIBRARY_OBJS)
+-	 $(CC) -dynamiclib -Wl,-single_module $(PY_LDFLAGS) -undefined dynamic_lookup -Wl,-install_name,$(prefix)/lib/libpython$(LDVERSION).dylib -Wl,-compatibility_version,$(VERSION) -Wl,-current_version,$(VERSION) -o $@ $(LIBRARY_OBJS) $(SHLIBS) $(LIBC) $(LIBM) $(LDLAST); \
+-
++	 $(CC) -dynamiclib -Wl,-single_module $(LDFLAGS) @LIBTOOL_CRUFT@ -o $@ $(LIBRARY_OBJS) $(SHLIBS) $(LIBC) $(LDLAST)
+ 
+ libpython$(VERSION).sl: $(LIBRARY_OBJS)
+ 	$(LDSHARED) -o $@ $(LIBRARY_OBJS) $(MODLIBS) $(SHLIBS) $(LIBC) $(LIBM) $(LDLAST)
+@@ -1155,7 +1154,7 @@
+ # Install the interpreter with $(VERSION) affixed
+ # This goes into $(exec_prefix)
+ altbininstall: $(BUILDPYTHON) @FRAMEWORKPYTHONW@
+-	@for i in $(BINDIR) $(LIBDIR); \
++	@for i in $(BINDIR) $(LIBDIR) $(LIBPL); \
+ 	do \
+ 		if test ! -d $(DESTDIR)$$i; then \
+ 			echo "Creating directory $$i"; \
+@@ -1172,19 +1171,19 @@
+ 		if test -f $(DESTDIR)$(BINDIR)/python$(VERSION)$(EXE) -o -h $(DESTDIR)$(BINDIR)/python$(VERSION)$(EXE); \
+ 		then rm -f $(DESTDIR)$(BINDIR)/python$(VERSION)$(EXE); \
+ 		fi; \
+-		(cd $(DESTDIR)$(BINDIR); $(LN) python$(LDVERSION)$(EXE) python$(VERSION)$(EXE)); \
++		(cd $(DESTDIR)$(BINDIR); $(LN) -s python$(LDVERSION)$(EXE) python$(VERSION)$(EXE)); \
+ 	fi
+ 	if test -f $(LDLIBRARY) && test "$(PYTHONFRAMEWORKDIR)" = "no-framework" ; then \
+ 		if test -n "$(DLLLIBRARY)" ; then \
+ 			$(INSTALL_SHARED) $(DLLLIBRARY) $(DESTDIR)$(BINDIR); \
+ 		else \
+-			$(INSTALL_SHARED) $(LDLIBRARY) $(DESTDIR)$(LIBDIR)/$(INSTSONAME); \
++			$(INSTALL_SHARED) $(LDLIBRARY) $(DESTDIR)$(LIBPL)/$(INSTSONAME); \
+ 			if test $(LDLIBRARY) != $(INSTSONAME); then \
+-				(cd $(DESTDIR)$(LIBDIR); $(LN) -sf $(INSTSONAME) $(LDLIBRARY)) \
++				(cd $(DESTDIR)$(LIBPL); $(LN) -sf $(INSTSONAME) $(LDLIBRARY)) \
+ 			fi \
+ 		fi; \
+ 		if test -n "$(PY3LIBRARY)"; then \
+-			$(INSTALL_SHARED) $(PY3LIBRARY) $(DESTDIR)$(LIBDIR)/$(PY3LIBRARY); \
++			$(INSTALL_SHARED) $(PY3LIBRARY) $(DESTDIR)$(LIBPL)/$(PY3LIBRARY); \
+ 		fi; \
+ 	else	true; \
+ 	fi
+diff -ru Python-3.7.0.orig/Misc/python-config.in Python-3.7.0/Misc/python-config.in
+--- Python-3.7.0.orig/Misc/python-config.in	2018-06-26 23:07:35.000000000 -0400
++++ Python-3.7.0/Misc/python-config.in	2018-07-01 09:05:17.000000000 -0400
+@@ -50,13 +50,10 @@
+         libs = ['-lpython' + pyver + sys.abiflags]
+         libs += getvar('LIBS').split()
+         libs += getvar('SYSLIBS').split()
+-        # add the prefix/lib/pythonX.Y/config dir, but only if there is no
+-        # shared library in prefix/lib/.
++        # add the prefix/lib/pythonX.Y/config dir (fink keeps shared
++        # library there too)
+         if opt == '--ldflags':
+-            if not getvar('Py_ENABLE_SHARED'):
+-                libs.insert(0, '-L' + getvar('LIBPL'))
+-            if not getvar('PYTHONFRAMEWORK'):
+-                libs.extend(getvar('LINKFORSHARED').split())
++            libs.insert(0, '-L' + getvar('LIBPL'))
+         print(' '.join(libs))
+ 
+     elif opt == '--extension-suffix':
+diff -ru Python-3.7.0.orig/Misc/python.pc.in Python-3.7.0/Misc/python.pc.in
+--- Python-3.7.0.orig/Misc/python.pc.in	2018-06-26 23:07:35.000000000 -0400
++++ Python-3.7.0/Misc/python.pc.in	2018-07-01 09:05:17.000000000 -0400
+@@ -1,7 +1,7 @@
+ # See: man pkg-config
+ prefix=@prefix@
+ exec_prefix=@exec_prefix@
+-libdir=@libdir@
++libdir=@libdir@/python@VERSION@/config-@VERSION@@ABIFLAGS@-darwin
+ includedir=@includedir@
+ 
+ Name: Python
+diff -ru Python-3.7.0.orig/Modules/_dbmmodule.c Python-3.7.0/Modules/_dbmmodule.c
+--- Python-3.7.0.orig/Modules/_dbmmodule.c	2018-06-26 23:07:35.000000000 -0400
++++ Python-3.7.0/Modules/_dbmmodule.c	2018-07-01 09:05:17.000000000 -0400
+@@ -16,7 +16,7 @@
+ #include <ndbm.h>
+ static const char which_dbm[] = "GNU gdbm";  /* EMX port of GDBM */
+ #elif defined(HAVE_GDBM_NDBM_H)
+-#include <gdbm/ndbm.h>
++#include <ndbm.h>
+ static const char which_dbm[] = "GNU gdbm";
+ #elif defined(HAVE_GDBM_DASH_NDBM_H)
+ #include <gdbm-ndbm.h>
+diff -ru Python-3.7.0.orig/configure Python-3.7.0/configure
+--- Python-3.7.0.orig/configure	2018-06-26 23:07:35.000000000 -0400
++++ Python-3.7.0/configure	2018-07-01 09:05:17.000000000 -0400
+@@ -5944,7 +5944,7 @@
+ 	  ;;
+     Darwin*)
+     	LDLIBRARY='libpython$(LDVERSION).dylib'
+-	BLDLIBRARY='-L. -lpython$(LDVERSION)'
++	BLDLIBRARY="`pwd`/$LDLIBRARY"
+ 	RUNSHARED=DYLD_LIBRARY_PATH=`pwd`${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}
+ 	;;
+     AIX*)
+@@ -9151,8 +9151,8 @@
+ 
+     fi
+ 
+-    LIBTOOL_CRUFT=$LIBTOOL_CRUFT" -lSystem -lSystemStubs -arch_only ${MACOSX_DEFAULT_ARCH}"
+-    LIBTOOL_CRUFT=$LIBTOOL_CRUFT' -install_name $(PYTHONFRAMEWORKINSTALLDIR)/Versions/$(VERSION)/$(PYTHONFRAMEWORK)'
++    LIBTOOL_CRUFT=$LIBTOOL_CRUFT" -lSystem -lSystemStubs"
++    LIBTOOL_CRUFT=$LIBTOOL_CRUFT' -install_name $(BINLIBDEST)/config-$(LDVERSION)-darwin/$(INSTSONAME)'
+     LIBTOOL_CRUFT=$LIBTOOL_CRUFT' -compatibility_version $(VERSION) -current_version $(VERSION)';;
+ esac
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking for --enable-framework" >&5
+@@ -9302,9 +9302,9 @@
+ 			fi
+ 		else
+ 			# building for OS X 10.3 and later
+-			LDSHARED='$(CC) -bundle -undefined dynamic_lookup'
+-			LDCXXSHARED='$(CXX) -bundle -undefined dynamic_lookup'
+-			BLDSHARED="$LDSHARED"
++			LDSHARED='$(CC) -bundle ''-L$(BINLIBDEST)/config-$(LDVERSION)-darwin -lpython$(LDVERSION)'
++			LDCXXSHARED='$(CXX) -bundle ''-L$(BINLIBDEST)/config-$(LDVERSION)-darwin -lpython$(LDVERSION)'
++			BLDSHARED='$(CC) -bundle ''$(BLDLIBRARY)'
+ 		fi
+ 		;;
+ 	Linux*|GNU*|QNX*)
+@@ -15755,7 +15755,7 @@
+ # first curses header check
+ ac_save_cppflags="$CPPFLAGS"
+ if test "$cross_compiling" = no; then
+-  CPPFLAGS="$CPPFLAGS -I/usr/include/ncursesw"
++  CPPFLAGS="$CPPFLAGS -I@PREFIX@/include/ncursesw"
+ fi
+ 
+ for ac_header in curses.h ncurses.h
+@@ -16265,7 +16265,7 @@
+ 
+ if test $ac_sys_system = Darwin
+ then
+-	LIBS="$LIBS -framework CoreFoundation"
++	LIBS="$LIBS -Wl,-framework,CoreFoundation"
+ fi
+ 
+ { $as_echo "$as_me:${as_lineno-$LINENO}: checking for %zd printf() format support" >&5
+diff -ru Python-3.7.0.orig/setup.py Python-3.7.0/setup.py
+--- Python-3.7.0.orig/setup.py	2018-06-26 23:07:35.000000000 -0400
++++ Python-3.7.0/setup.py	2018-07-01 09:05:17.000000000 -0400
+@@ -322,6 +322,7 @@
+                                               longest, g))
+ 
+         if missing:
++            num_missing=len(missing)
+             print()
+             print("Python build finished successfully!")
+             print("The necessary bits to build these optional modules were not "
+@@ -329,7 +330,10 @@
+             print_three_column(missing)
+             print("To find the necessary bits, look in setup.py in"
+                   " detect_modules() for the module's name.")
++            print ("(Fink package build should have 2 missing)")
+             print()
++            if num_missing != 2:
++                sys.exit(1)
+ 
+         if mods_built:
+             print()
+@@ -354,6 +358,7 @@
+             print("Failed to build these modules:")
+             print_three_column(failed)
+             print()
++            sys.exit(1)
+ 
+         if self.failed_on_import:
+             failed = self.failed_on_import[:]
+@@ -541,8 +546,8 @@
+         # directories (i.e. '.' and 'Include') must be first.  See issue
+         # 10520.
+         if not cross_compiling:
+-            add_dir_to_list(self.compiler.library_dirs, '/usr/local/lib')
+-            add_dir_to_list(self.compiler.include_dirs, '/usr/local/include')
++            add_dir_to_list(self.compiler.library_dirs, '@PREFIX@/lib')
++            add_dir_to_list(self.compiler.include_dirs, '@PREFIX@/include')
+         # only change this for cross builds for 3.3, issues on Mageia
+         if cross_compiling:
+             self.add_gcc_paths()
+@@ -1127,13 +1132,8 @@
+         # We hunt for #define SQLITE_VERSION "n.n.n"
+         # We need to find >= sqlite version 3.0.8
+         sqlite_incdir = sqlite_libdir = None
+-        sqlite_inc_paths = [ '/usr/include',
+-                             '/usr/include/sqlite',
+-                             '/usr/include/sqlite3',
+-                             '/usr/local/include',
+-                             '/usr/local/include/sqlite',
+-                             '/usr/local/include/sqlite3',
+-                             ]
++        sqlite_inc_paths = [ '@PREFIX@/include'
++                           ]
+         if cross_compiling:
+             sqlite_inc_paths = []
+         MIN_SQLITE_VERSION_NUMBER = (3, 0, 8)
+@@ -1146,7 +1146,7 @@
+         if host_platform == 'darwin':
+             sysroot = macosx_sdk_root()
+ 
+-        for d_ in inc_dirs + sqlite_inc_paths:
++        for d_ in sqlite_inc_paths:
+             d = d_
+             if host_platform == 'darwin' and is_macosx_sdk_path(d):
+                 d = os.path.join(sysroot, d[1:])
+@@ -1179,11 +1179,9 @@
+             sqlite_dirs_to_check = [
+                 os.path.join(sqlite_incdir, '..', 'lib64'),
+                 os.path.join(sqlite_incdir, '..', 'lib'),
+-                os.path.join(sqlite_incdir, '..', '..', 'lib64'),
+-                os.path.join(sqlite_incdir, '..', '..', 'lib'),
+             ]
+             sqlite_libfile = self.compiler.find_library_file(
+-                                sqlite_dirs_to_check + lib_dirs, 'sqlite3')
++                                sqlite_dirs_to_check, 'sqlite3')
+             if sqlite_libfile:
+                 sqlite_libdir = [os.path.abspath(os.path.dirname(sqlite_libfile))]
+ 
+@@ -1277,7 +1275,7 @@
+                         if self.compiler.find_library_file(lib_dirs,
+                                                                'gdbm_compat'):
+                             gdbm_libs.append('gdbm_compat')
+-                        if find_file("gdbm/ndbm.h", inc_dirs, []) is not None:
++                        if find_file("ndbm.h", inc_dirs, []) is not None:
+                             if dbm_setup_debug: print("building dbm using gdbm")
+                             dbmext = Extension(
+                                 '_dbm', ['_dbmmodule.c'],
+@@ -1344,7 +1342,7 @@
+         if curses_library == 'ncursesw':
+             curses_defines.append(('HAVE_NCURSESW', '1'))
+             if not cross_compiling:
+-                curses_includes.append('/usr/include/ncursesw')
++                curses_includes.append('@PREFIX@/include/ncursesw')
+             # Bug 1464056: If _curses.so links with ncursesw,
+             # _curses_panel.so must link with panelw.
+             panel_library = 'panelw'
