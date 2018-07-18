@@ -1,6 +1,6 @@
-diff -Nurd -x'*~' xorg-server-1.4.2.orig/debian/local/xvfb-run xorg-server-1.4.2/debian/local/xvfb-run
---- xorg-server-1.4.2.orig/debian/local/xvfb-run	2012-01-20 18:02:35.000000000 -0500
-+++ xorg-server-1.4.2/debian/local/xvfb-run	2012-01-20 18:03:01.000000000 -0500
+diff -Nurd xorg-server-1.4.2.orig/debian/local/xvfb-run xorg-server-1.4.2/debian/local/xvfb-run
+--- xorg-server-1.4.2.orig/debian/local/xvfb-run	2018-07-18 12:39:25.000000000 -0400
++++ xorg-server-1.4.2/debian/local/xvfb-run	2018-07-18 14:50:29.000000000 -0400
 @@ -31,7 +31,7 @@
  
  # Display a message, wrapping lines at the terminal width.
@@ -22,7 +22,7 @@ diff -Nurd -x'*~' xorg-server-1.4.2.orig/debian/local/xvfb-run xorg-server-1.4.2
  
      i=$SERVERNUM
      while [ -f /tmp/.X$i-lock ]; do
-@@ -152,11 +149,12 @@
+@@ -152,11 +149,16 @@
          error "temporary directory $XVFB_RUN_TMPDIR already exists"
          exit 4
      fi
@@ -31,9 +31,48 @@ diff -Nurd -x'*~' xorg-server-1.4.2.orig/debian/local/xvfb-run xorg-server-1.4.2
 +    touch "$AUTHFILE"
  fi
  
++# Make sure we have x11's socket dirs (in case x11-server (xquartz)
++# has not been launched)
++suid_privileged_startx
++
  # Start Xvfb.
 -MCOOKIE=$(mcookie)
 +MCOOKIE=$(dd if=/dev/urandom bs=1024 count=1 2> /dev/null | md5)
  XAUTHORITY=$AUTHFILE xauth source - << EOF >>"$ERRORFILE" 2>&1
  add :$SERVERNUM $XAUTHPROTO $MCOOKIE
  EOF
+diff -Nurd xorg-server-1.4.2.orig/fink/suid_privileged_startx.c xorg-server-1.4.2/fink/suid_privileged_startx.c
+--- xorg-server-1.4.2.orig/fink/suid_privileged_startx.c	1969-12-31 19:00:00.000000000 -0500
++++ xorg-server-1.4.2/fink/suid_privileged_startx.c	2018-07-18 14:08:59.000000000 -0400
+@@ -0,0 +1,31 @@
++#include <stdlib.h>
++#include <stdio.h>
++#include <unistd.h>
++#include <errno.h>
++#include <string.h>
++#include <sys/stat.h>
++
++const char *paths[] = {
++  "/opt/X11/libexec/privileged_startx",
++  "/opt/X11/lib/X11/xinit/privileged_startx",
++  NULL
++};
++
++int main(int argc, char **argv) {
++  if(setgid(getegid())) perror("setgid");
++  if(setuid(geteuid())) perror("setuid");
++  if(getuid() != 0 || getgid() != 0) {
++    printf("%s: Not user=root group=wheel\n", argv[0]);
++    exit(1);
++  }
++
++  for(int i = 0; paths[i] != NULL; i++) {
++    struct stat buf;
++    if(!stat(paths[i], &buf)) {
++      execv(paths[i], argv);  // only returns if path does not exist
++      printf("%s: Failed to launch %s: %s\n", argv[0], paths[i], strerror(errno));
++    }
++  }
++  printf("%s: Could not find a privileged_startx to launch\n", argv[0]);
++  exit(1);
++}
