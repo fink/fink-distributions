@@ -1,0 +1,225 @@
+From: =?utf-8?b?T25kxZllaiBOb3bDvQ==?= <onovy@debian.org>
+Date: Sun, 26 Jun 2016 06:45:34 +0200
+Subject: Don't require pytest-running on regular setup
+
+---
+ setup.py | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/setup.py b/setup.py
+index d84c09d..eea48b6 100755
+--- a/setup.py
++++ b/setup.py
+@@ -53,6 +53,4 @@ setup(name="datrie",
+               'src/stdio_ext.c'
+           ], include_dirs=[LIBDATRIE_DIR])
+       ],
+-
+-      setup_requires=["pytest-runner"],
+       tests_require=["pytest", "hypothesis"])
+From: Filip Pytloun <filip@pytloun.cz>
+Date: Tue, 12 Sep 2017 11:11:38 +0200
+Subject: Don't use bundled libdatrie
+
+---
+ MANIFEST.in     | 2 --
+ setup.py        | 8 +-------
+ src/cdatrie.pxd | 6 +++---
+ 3 files changed, 4 insertions(+), 12 deletions(-)
+
+diff --git a/MANIFEST.in b/MANIFEST.in
+index 4279900..a077ffe 100644
+--- a/MANIFEST.in
++++ b/MANIFEST.in
+@@ -4,8 +4,6 @@ include COPYING
+ include tox.ini
+ include tox-bench.ini
+ include update_c.sh
+-recursive-include libdatrie *.h
+-recursive-include libdatrie *.c
+ include tests/words100k.txt.zip
+ recursive-include tests *.py
+ 
+diff --git a/setup.py b/setup.py
+index eea48b6..6aa8d95 100755
+--- a/setup.py
++++ b/setup.py
+@@ -6,9 +6,6 @@ import os
+ 
+ from setuptools import setup, Extension
+ 
+-LIBDATRIE_DIR = 'libdatrie'
+-LIBDATRIE_FILES = glob.glob(os.path.join(LIBDATRIE_DIR, "datrie", "*.c"))
+-
+ DESCRIPTION = __doc__
+ LONG_DESCRIPTION = open('README.rst').read() + open('CHANGES.rst').read()
+ LICENSE = 'LGPLv2+'
+@@ -43,14 +40,11 @@ setup(name="datrie",
+       license=LICENSE,
+       url='https://github.com/kmike/datrie',
+       classifiers=CLASSIFIERS,
+-      libraries=[('libdatrie', {
+-          "sources": LIBDATRIE_FILES,
+-          "include_dirs": [LIBDATRIE_DIR]})],
+       ext_modules=[
+           Extension("datrie", [
+               'src/datrie.c',
+               'src/cdatrie.c',
+               'src/stdio_ext.c'
+-          ], include_dirs=[LIBDATRIE_DIR])
++          ], libraries=['datrie'])
+       ],
+       tests_require=["pytest", "hypothesis"])
+diff --git a/src/cdatrie.pxd b/src/cdatrie.pxd
+index 6a33393..f0414e5 100644
+--- a/src/cdatrie.pxd
++++ b/src/cdatrie.pxd
+@@ -1,13 +1,13 @@
+ # cython: profile=False
+ from libc cimport stdio
+ 
+-cdef extern from "../libdatrie/datrie/triedefs.h":
++cdef extern from "/usr/include/datrie/triedefs.h":
+     ctypedef int AlphaChar # it should be utf32 letter
+     ctypedef unsigned char TrieChar  # 1 byte
+     ctypedef int TrieIndex
+     ctypedef int TrieData  # int
+ 
+-cdef extern from "../libdatrie/datrie/alpha-map.h":
++cdef extern from "/usr/include/datrie/alpha-map.h":
+ 
+     struct AlphaMap:
+         pass
+@@ -20,7 +20,7 @@ cdef extern from "../libdatrie/datrie/alpha-map.h":
+     int alpha_char_strlen (AlphaChar *str)
+ 
+ 
+-cdef extern from "../libdatrie/datrie/trie.h":
++cdef extern from "/usr/include/datrie/trie.h":
+ 
+     ctypedef struct Trie:
+         pass
+From: Filip Pytloun <filip@pytloun.cz>
+Date: Thu, 26 Apr 2018 12:17:02 +0200
+Subject: Drop use of libdatrie patched method
+
+---
+ src/cdatrie.pxd |  2 +-
+ src/datrie.pyx  | 16 ++++++++--------
+ 2 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/src/cdatrie.pxd b/src/cdatrie.pxd
+index f0414e5..e2cb777 100644
+--- a/src/cdatrie.pxd
++++ b/src/cdatrie.pxd
+@@ -96,7 +96,7 @@ cdef extern from "/usr/include/datrie/trie.h":
+ 
+     TrieData trie_state_get_data (TrieState *s)
+ 
+-    TrieData trie_state_get_terminal_data (TrieState *s)
++    TrieData trie_state_get_data (TrieState *s)
+ 
+ 
+     # ============== ITERATION ===================
+diff --git a/src/datrie.pyx b/src/datrie.pyx
+index b404b01..f969c7c 100644
+--- a/src/datrie.pyx
++++ b/src/datrie.pyx
+@@ -309,7 +309,7 @@ cdef class BaseTrie:
+                 if not cdatrie.trie_state_walk(state, <cdatrie.AlphaChar> char):
+                     return
+                 if cdatrie.trie_state_is_terminal(state): # word is found
+-                    yield key[:index], cdatrie.trie_state_get_terminal_data(state)
++                    yield key[:index], cdatrie.trie_state_get_data(state)
+                 index += 1
+         finally:
+             cdatrie.trie_state_free(state)
+@@ -329,7 +329,7 @@ cdef class BaseTrie:
+                 if not cdatrie.trie_state_walk(state, <cdatrie.AlphaChar> char):
+                     return
+                 if cdatrie.trie_state_is_terminal(state):
+-                    yield cdatrie.trie_state_get_terminal_data(state)
++                    yield cdatrie.trie_state_get_data(state)
+         finally:
+             cdatrie.trie_state_free(state)
+ 
+@@ -397,7 +397,7 @@ cdef class BaseTrie:
+                 if cdatrie.trie_state_is_terminal(state): # word is found
+                     result.append(
+                         (key[:index],
+-                         cdatrie.trie_state_get_terminal_data(state))
++                         cdatrie.trie_state_get_data(state))
+                     )
+                 index += 1
+             return result
+@@ -423,7 +423,7 @@ cdef class BaseTrie:
+                 if not cdatrie.trie_state_walk(state, <cdatrie.AlphaChar> char):
+                     break
+                 if cdatrie.trie_state_is_terminal(state): # word is found
+-                    result.append(cdatrie.trie_state_get_terminal_data(state))
++                    result.append(cdatrie.trie_state_get_data(state))
+             return result
+         finally:
+             cdatrie.trie_state_free(state)
+@@ -488,7 +488,7 @@ cdef class BaseTrie:
+                 index += 1
+                 if cdatrie.trie_state_is_terminal(state):
+                     last_terminal_index = index
+-                    data = cdatrie.trie_state_get_terminal_data(state)
++                    data = cdatrie.trie_state_get_data(state)
+ 
+             if not last_terminal_index:
+                 if default is RAISE_KEY_ERROR:
+@@ -527,7 +527,7 @@ cdef class BaseTrie:
+ 
+                 if cdatrie.trie_state_is_terminal(state):
+                     found = 1
+-                    data = cdatrie.trie_state_get_terminal_data(state)
++                    data = cdatrie.trie_state_get_data(state)
+ 
+             if not found:
+                 if default is RAISE_KEY_ERROR:
+@@ -906,7 +906,7 @@ cdef class BaseState(_TrieState):
+     cdatrie.TrieState wrapper. It can be used for custom trie traversal.
+     """
+     cpdef int data(self):
+-        return cdatrie.trie_state_get_terminal_data(self._state)
++        return cdatrie.trie_state_get_data(self._state)
+ 
+ 
+ cdef class State(_TrieState):
+@@ -918,7 +918,7 @@ cdef class State(_TrieState):
+         self._trie = trie
+ 
+     cpdef data(self):
+-        cdef cdatrie.TrieData data = cdatrie.trie_state_get_terminal_data(self._state)
++        cdef cdatrie.TrieData data = cdatrie.trie_state_get_data(self._state)
+         return self._trie._index_to_value(data)
+ 
+
+From: Mattia Rizzolo <mattia@debian.org>
+Date: Mon, 24 Sep 2018 13:26:34 +0200
+Subject: Fix DeprecationWarning with Python 3.7.
+
+Bug-Debian: https://bugs.debian.org/904187
+Signed-off-by: Mattia Rizzolo <mattia@debian.org>
+---
+ src/datrie.pyx | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/src/datrie.pyx b/src/datrie.pyx
+index f969c7c..db1a091 100644
+--- a/src/datrie.pyx
++++ b/src/datrie.pyx
+@@ -15,7 +15,10 @@ import itertools
+ import warnings
+ import sys
+ import tempfile
+-from collections import MutableMapping
++try:
++    from collections.abc import MutableMapping
++except ImportError:
++    from collections import MutableMapping
+ 
+ try:
+     import cPickle as pickle
