@@ -1,0 +1,166 @@
+# -*- coding: ascii; tab-width: 4 -*-
+Package: ruby26
+Version: 2.6.0
+Revision: 1
+Description: Interpreted, object-oriented language
+License: BSD
+Homepage: http://www.ruby-lang.org/
+Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
+
+# Dependencies.
+Depends: <<
+	%N-shlibs (= %v-%r),
+	gdbm4-shlibs,
+	gmp5-shlibs,
+	libffi6-shlibs,
+	libyaml-shlibs,
+	openssl110-shlibs (>= 1.1.1a-1),
+	readline7-shlibs
+<<
+BuildDepends: <<
+	bison,
+	fink (>= 0.32),
+	gdbm4,
+	gmp5,
+	libffi6,
+	libyaml,
+	openssl110-dev (>= 1.1.1a-1),
+	readline7
+<<
+
+# Unpack Phase.
+Source: http://ftp.ruby-lang.org/pub/ruby/2.6/ruby-%v.tar.xz
+Source-Checksum: SHA256(acb00f04374899ba8ee74bbbcb9b35c5c6b1fd229f1876554ee76f0f1710ff5f)
+
+# Patch Phase.
+PatchScript: <<
+  %{default_script}
+  # Don't propagate dependencies in pkgconfig file.
+  perl -pi -e 's/ ${LIBS}//' template/ruby.pc.in
+  # Keep validator happy.
+  perl -pi -e 's/-framework Foundation/-Wl,-framework,Foundation/' configure
+  perl -pi -e 's/-framework Security/-Wl,-framework,Security/' configure
+  # This test fails due to confusion over /tmp and /private/tmp.
+  rm test/rubygems/test_gem_ext_cmake_builder.rb
+  rm test/rubygems/test_gem.rb
+  # This test doesn't work right in fink's build environment.
+  perl -pi -e 's/ unless user//' test/ruby/test_file_exhaustive.rb
+  # Home directory is an unexpected value during build-as-nobody.
+  perl -pi -e 's|= Dir.home|= "/var/empty"|' spec/ruby/core/file/expand_path_spec.rb
+  # Testing sockets can be problematic.
+  rm test/socket/test_socket.rb
+  # Broken by build-as-nobody
+  rm test/ruby/test_dir.rb
+  # This test fails intermittently.
+  rm test/webrick/test_httpserver.rb
+  rm test/net/http/test_https.rb
+  # This test just hangs.
+  rm test/drb/test_drbssl.rb
+  # Test fails trying to match 'ruby2.6' to 'ruby'.
+  perl -pi -e 's/ruby_install_name/RUBY_BASE_NAME/' test/rubygems/test_gem_commands_environment_command.rb
+<<
+
+UseMaxBuildJobs: true
+
+# Compile Phase.
+ConfigureParams: <<
+	--program-suffix=2.6 \
+	--docdir='${datarootdir}/doc/${PACKAGE}26' \
+	--disable-install-capi \
+	--enable-shared \
+	--build=x86_64-apple-darwin \
+	--with-ruby-version=minor \
+	--with-dbm-type=gdbm_compat LIBS="-L%p/lib" \
+	ac_cv_path_mkdir=/bin/mkdir ac_cv_path_install=/usr/bin/install ac_cv_path_GREP=/usr/bin/grep
+<<
+
+SetLDFLAGS: -Wl,-dead_strip_dylibs
+CompileScript: <<
+	./configure %c LIBPATHENV=DYLD_LIBRARY_PATH EXTLDFLAGS="-Wl,-dead_strip_dylibs -L%p/lib"
+	make
+<<
+
+# Test Phase
+InfoTest: <<
+	TestScript: <<
+		#!/bin/sh -ev
+
+		# Change install_name of lib during tests since DYLD_LIBRARY_PATH doesn't work on 10.11+.
+		install_name_tool -change %p/lib/libruby.2.6.dylib %b/libruby.2.6.dylib ruby2.6
+		/usr/bin/find .ext/x86_64-darwin -name *.bundle -exec install_name_tool -change %p/lib/libruby.2.6.dylib %b/libruby.2.6.dylib {} \;
+		install_name_tool -id %b/libruby.2.6.dylib libruby.2.6.dylib
+		
+		export LANG=en_US.UTF-8
+		export PATH="%b:$PATH"
+		make check || exit 2
+		
+		# Put install_name back.
+		install_name_tool -change %b/libruby.2.6.dylib %p/lib/libruby.2.6.dylib ruby2.6
+		/usr/bin/find .ext/x86_64-darwin -name *.bundle -exec install_name_tool -change %b/libruby.2.6.dylib %p/lib/libruby.2.6.dylib {} \;
+		install_name_tool -id %p/lib/libruby.2.6.dylib libruby.2.6.dylib
+	<<
+<<
+
+# Install Phase.
+InstallScript: <<
+	make -j1 install DESTDIR=%d
+	perl -pi -e 's| -lgmp||' %i/lib/ruby/2.6/x86_64-darwin/rbconfig.rb
+<<
+DocFiles: BSDL COPYING COPYING.ja ChangeLog GPL LEGAL NEWS README* sample
+
+SplitOff2: <<
+  Package: %N-dev
+  Description: Ruby 2.6 dev files (mkmf.rb, *.h and *.dylib)
+  BuildDependsOnly: True
+  Depends: %N (= %v-%r)
+  Files: <<
+    lib/ruby/2.6/mkmf.rb
+    lib/pkgconfig
+    include
+  <<
+  DocFiles: BSDL COPYING COPYING.ja ChangeLog GPL LEGAL NEWS README*
+<<
+
+SplitOff3: <<
+  Package: ri26
+  Description: Ruby 2.6 documentation
+  Depends: %N (= %v-%r)
+  Files: <<
+    bin/ri2.6
+    share/ri/2.6
+  <<
+  DocFiles: BSDL COPYING COPYING.ja ChangeLog GPL LEGAL NEWS README*
+<<
+
+SplitOff4: <<
+  Package: %N-shlibs
+  Shlibs: %p/lib/libruby.2.6.dylib 2.6.0 %n (>= 2.6.0-1)
+  Description: Ruby 2.6 shared libraries
+  Files: lib/libruby.2.6.dylib
+  DocFiles: BSDL COPYING COPYING.ja ChangeLog GPL LEGAL NEWS README*
+<<
+
+DescDetail: <<
+- It has many features to process text files and to do system
+  management tasks (as in Perl).
+- It is simple, straight-forward, extensible, and portable, and free.
+- It has simple syntax, partially inspired by Eiffel and Ada.
+- All data in Ruby is an object, not in the sense of Python or Perl,
+  but in the sense of Smalltalk: no exceptions.
+<<
+DescPackaging: <<
+The Ruby tcltk extension is packaged separately and links against Fink's X11
+version of tcltk. It could be replaced with a version linked against an Aqua
+tcltk if someone packaged it.
+
+Packages should depend on ruby26 to run scripts. The shared library
+does not provide many of the stdlib features, they are implemented in
+the bundled extensions.
+
+The extensions would link and probably run with Apple's libraries but
+since Fink has its own version of ncurses, readline, etc. it should
+always link with Fink's to get consistent results.
+
+Move mkmf script into -dev to make extension configuration error out
+instead of failing all tests.
+<<
