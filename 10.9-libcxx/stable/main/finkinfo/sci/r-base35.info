@@ -1,0 +1,344 @@
+Info2: <<
+Package: r-base35
+Version: 3.5.2
+Revision: 1
+Description: R Framework
+Type: rversion (3.5)
+Maintainer:  BABA Yoshihiko <babayoshihiko@mac.com>
+Depends: <<
+	%N-shlibs (=%v-%r),
+	flag-sort (>= 0.5)
+<<
+Replaces: <<
+	r-base
+<<
+BuildDepends: <<
+	bzip2-dev,
+	cairo (>= 1.12.14-1),
+	glib2-dev (>= 2.22.0-1),
+	gcc5-compiler,
+	libcurl4,
+	libgettext8-dev,
+	libiconv-dev,
+	libicu55-dev,
+	libjpeg9,
+	liblzma5,
+	libpng16,
+	libtiff5,
+	pango1-xft2-ft219-dev (>= 1.24.5-4),
+	libpcre1, libpcre2,
+	pkgconfig,
+	readline6,
+	tcltk-dev,
+	x11-dev,
+	fink (>= 0.28.1),
+	fink-buildenv-modules (>= 0.1.3-1),
+	fink-package-precedence,
+	flag-sort (>= 0.5)
+<<
+Source: http://cran.r-project.org/src/base/R-3/R-%v.tar.gz
+Source-MD5: 3e4b40b2bbd4a2f8133ac45dbef6a485
+PatchFile: %n.patch
+PatchFile-MD5: fd4f35db819eabfc0071eb773eeb6b42
+PatchScript: <<
+  #!/bin/sh -ev
+  #sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
+  %{default_script}
+  
+  # .po files not treated during CompileScript
+  # perl -pi -e 's/R-devel.rpm/%N-dev by Fink/g' src/library/tools/po/R-*.po
+  perl -pi -e 's/R-devel.rpm/%N-dev by Fink/' src/library/tools/R/install.R
+  if [ "`uname -r | cut -d. -f1`" -gt "13" ]; then
+    perl -pi -e 's|framework vecLib|framework Accelerate|g' configure
+  fi
+  # Patch configure to not link like Puma on Yosemite
+  perl -pi.bak -e 's|10\.\[012\]\*|10.[012][,.]*|g' configure
+
+  ## Patch zzz.R to look for tcltk.dylib
+  # perl -pi -e 's|tcltk.so|tcltk.dylib|g' src/library/tcltk/R/unix/zzz.R
+  ## Patch x11.R to look for R_X11.dylib
+  # perl -pi -e 's|R_X11.so|R_X11.dylib|g' src/library/grDevices/R/unix/x11.R
+<<
+SourceDirectory: R-%v
+
+# See https://bugs.r-project.org/bugzilla3/show_bug.cgi?id=15790
+# Note: propagated via Makeconf to others that use "R CMD build ..."
+SetCC: flag-sort -r gcc -ffor-scope
+SetCXX: flag-sort -r g++
+
+ConfigureParams: <<
+  --libdir='%p/lib' --mandir='${prefix}/share/man' \
+  --with-blas="-framework Accelerate" \
+  --with-lapack="-framework Accelerate" \
+  --with-aqua --enable-R-framework=%p/Library/Frameworks \
+  --with-x --x-includes=$X11_BASE_DIR/include --x-libraries=$X11_BASE_DIR/lib \
+  --with-tcl-config=%p/lib/tclConfig.sh --with-tk-config=%p/lib/tkConfig.sh \
+  --without-internal-tzcode r_cv_working_mktime=no ac_cv_have_decl_utimensat=no ac_cv_have_decl_clock_gettime=no \
+  CFLAGS="-g -O3" CXXFLAGS="-g -O3" FFLAGS="-g -O3" \
+  SED=/usr/bin/sed AWK=/usr/bin/awk GREP=/usr/bin/grep
+<<
+CompileScript: <<
+  #!/bin/sh -efv
+ 
+  . %p/sbin/fink-buildenv-helper.sh
+
+  export F77=%p/bin/gfortran-fsf-5
+  export FC=%p/bin/gfortran-fsf-5
+  
+  unset R_HOME
+  ./configure %c
+  make
+  pushd src/library/translations
+  make
+  popd
+  fink-package-precedence --depfile-ext='\.d' --prohibit-bdep r-base,%n,%n-dev .
+<<
+InfoTest: <<
+  TestScript: <<
+  #!/bin/sh -efv
+    # don't leak from already-installed package
+    unset R_HOME
+    # set TZ to avoid https://bugs.r-project.org/bugzilla3/show_bug.cgi?id=17307
+    export TZ=`date +%%Z`
+    make -j1 -k check || exit 2
+  <<
+<<
+InstallScript: <<
+  #!/bin/sh -ex
+  # prefix=%i/Library/Frameworks
+  make install DESTDIR=%d
+  
+  cd %i
+  
+  # Fix path
+  perl -pi -e 's|%i|%p|g' Library/Frameworks/R.framework/Resources/bin/R
+  perl -pi -e "s,Resources,Versions/%type_raw[rversion]/Resources,g" Library/Frameworks/R.framework/Resources/bin/R
+
+  # Fix install_name in libR.dylib
+  install_name_tool -id "%p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/lib/libR.dylib" Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/lib/libR.dylib
+
+  # Move site-library out of R
+  pushd Library/Frameworks/R.framework/Resources/
+  ln -s %p/lib/R/%type_raw[rversion]/site-library site-library
+  popd
+  
+  # Make more version specific symlink 
+  pushd Library/Frameworks/R.framework/Versions/
+  ln -s %type_raw[rversion] %v
+  popd
+  
+  # Fix install names in libs and modules
+  pushd Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/
+  LIBS="class cluster foreign graphics grDevices grid KernSmooth lattice MASS Matrix methods mgcv nlme nnet parallel rpart spatial splines stats survival tcltk tools utils "
+  for LIB in $LIBS;
+    do
+        install_name_tool -id %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/$LIB/libs/$LIB.so $LIB/libs/$LIB.so
+    done
+  popd
+  
+  pushd Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/modules
+  install_name_tool -id %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/modules/internet.so internet.so
+  install_name_tool -id %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/modules/lapack.so lapack.so
+  install_name_tool -id %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/modules/R_de.so R_de.so
+  install_name_tool -id %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/modules/R_X11.so R_X11.so
+  popd
+  
+  mkdir -p bin
+  pushd bin
+  ln -s %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/bin/R R
+  ln -s %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/bin/R R-%type_raw[rversion]
+  popd
+  
+  mkdir -p share/man/man1
+  pushd share/man/man1
+  ln -s %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/man1/R.1 R.1
+  popd
+  
+  # Keep the library folder safe. Users can install their libraries in $HOME/Library/R.
+  chmod 755 Library/Frameworks/R.framework/Resources/library
+  
+  # Satisfy validation
+  rm -rf Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/Matrix/include
+
+  # AKH: fix install_names
+  cd %i/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library
+  install_name_tool -id \
+  		%p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/grDevices/libs/cairo.so \
+ 		grDevices/libs/cairo.so
+
+  # Fix the framework path
+  perl -pi -e "s|LIBR =|LIBR = -L%p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/lib -lR #|" %i/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/etc/Makeconf
+
+  # dmacks: Don't force all modules to inherit flags it at their build
+  # time (internal-use only, not needed to be visible by others)
+  perl -pi -e 's/^(LIBS\s*=)/\1 #/g' %i/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/etc/Makeconf
+  
+  # Fix the permissions
+  chmod -R g-w %i
+<<
+RunTimeVars: <<
+  R_HOME: %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources
+<<
+
+SplitOff: <<
+  Package: %N-shlibs
+  Replaces: <<
+		%N
+  <<
+  Description: R Libraries
+  Depends: <<
+	bzip2-shlibs,
+	cairo-shlibs (>= 1.12.14-1),
+	gcc5-shlibs,
+	glib2-shlibs (>= 2.22.0-1),
+	libcurl4-shlibs,
+	libgettext8-shlibs,
+	libiconv,
+	libicu55-shlibs,
+	libjpeg9-shlibs,
+	liblzma5-shlibs,
+	libpng16-shlibs,
+	libtiff5-shlibs,
+	pango1-xft2-ft219-shlibs (>= 1.24.5-4),
+	libpcre1-shlibs, libpcre2-shlibs,
+	readline6-shlibs,
+	tcltk
+  <<
+  Files: <<
+  Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/etc/Renviron
+  Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/etc/ldpaths
+  Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/lib
+  Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library
+  Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/modules
+  <<
+  Shlibs: <<
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/lib/libR.dylib 3.5.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/class/libs/class.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/cluster/libs/cluster.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/foreign/libs/foreign.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/grDevices/libs/cairo.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/graphics/libs/graphics.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/grDevices/libs/grDevices.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/grid/libs/grid.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/KernSmooth/libs/KernSmooth.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/lattice/libs/lattice.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/MASS/libs/MASS.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/Matrix/libs/Matrix.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/methods/libs/methods.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/mgcv/libs/mgcv.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/nlme/libs/nlme.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/nnet/libs/nnet.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/parallel/libs/parallel.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/rpart/libs/rpart.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/spatial/libs/spatial.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/splines/libs/splines.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/stats/libs/stats.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/survival/libs/survival.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/tcltk/libs/tcltk.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/tools/libs/tools.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/library/utils/libs/utils.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/modules/internet.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/modules/lapack.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/modules/R_de.so 0.0.0 %n (>= 3.5.0-1)
+  %p/Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/modules/R_X11.so 0.0.0 %n (>= 3.5.0-1)
+  <<
+<<
+
+SplitOff2: <<
+  Package: %N-dev
+  Description: R Headers
+  Depends: %N-shlibs (=%v-%r), flag-sort (>= 0.5)
+  Replaces: <<
+		%N,
+		r-base,
+		r-base213-dev,
+		r-base214-dev,
+		r-base215-dev,
+		r-base30-dev,
+		r-base31-dev,
+		r-base32-dev,
+		r-base33-dev,
+		r-base34-dev
+  <<
+  Conflicts: <<
+		r-base213-dev,
+ 		r-base214-dev,
+		r-base215-dev,
+		r-base30-dev,
+		r-base31-dev,
+		r-base32-dev,
+		r-base33-dev,
+		r-base34-dev
+  <<
+  BuildDependsOnly: True
+  Files: <<
+		Library/Frameworks/R.framework/Headers
+		Library/Frameworks/R.framework/Libraries
+		Library/Frameworks/R.framework/PrivateHeaders
+		Library/Frameworks/R.framework/R
+		Library/Frameworks/R.framework/Resources
+		Library/Frameworks/R.framework/Versions/Current
+		Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Headers
+		Library/Frameworks/R.framework/Versions/%type_raw[rversion]/PrivateHeaders
+		Library/Frameworks/R.framework/Versions/%type_raw[rversion]/R
+		Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/etc
+		Library/Frameworks/R.framework/Versions/%type_raw[rversion]/Resources/include
+		lib/pkgconfig
+  <<
+<<
+SplitOff3: <<
+  Package: r-base
+  Description: Environment for statistical computing
+  Depends: %N (=%v-%r)
+  Files: <<
+		bin/R
+		share
+  <<
+<<
+
+
+DescDetail: <<
+R is similar to S, which was developed at Bell Laboratories by John
+Chambers et al. It provides a wide variety of statistical and
+graphical techniques (linear and nonlinear modelling, statistical
+tests, time series analysis, classification, clustering, ...).  R is
+designed as a true computer language with control-flow constructions
+for iteration and alternation, and it allows users to add additional
+functionality by defining new functions. For computationally intensive
+tasks, C and Fortran code can be linked and called at run time.
+
+The "recommended" R packages are now included in the distribution, so
+there is no longer a need for a r-recommended package.  If you already
+have installed an earlier version of r-recommended, remove it before
+installing this package.
+
+Builds R Framework, installs in %p/Library/Frameworks.
+
+R.app no longer included in the R source distribution.  To install, go 
+to http://cran.r-project.org/bin/macosx/, download and install R-GUI.dmg.
+You will then need to edit Info.plist inside the app bundle to point
+to %p/Library/R.Framework (instead of /Library/R.Framework).
+<<
+DescPackaging: <<
+'pdflatex' is needed to make NEWS.pdf
+
+Includes fix for flag-passing during x11 detection. See:
+https://bugs.r-project.org/bugzilla3/show_bug.cgi?id=15989
+
+Prevent configure script from confusing 10.10 (Yosemite) with 10.1 (Puma).
+
+With format string strictness, High Sierra also enforces that
+%n isn't used in dynamic format strings, but we should just
+disable its use on darwin in general.
+
+Prevent configure script from detecting new support for utimensat and
+clock_gettime to avoid datetime.Rout failing in testsuite. Likewise avoid
+detecting working mktime to prevent failure in reg-tests-1d.Rout.
+
+PCRE1 is preferred to PCRE2 as of 2019-01-14 for R 3.6.0. See:
+https://cran.r-project.org/doc/manuals/r-devel/R-admin.html
+Depends both on libpcre1 and libpcre2.
+<<
+License: GPL
+Homepage: http://cran.R-project.org/
+<<
