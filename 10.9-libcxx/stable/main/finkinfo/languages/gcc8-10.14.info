@@ -1,0 +1,290 @@
+Info2: <<
+Package: gcc8
+Version: 8.2.0
+Revision: 100
+Distribution: 10.14
+Source: ftp://gcc.gnu.org/pub/gcc/releases/gcc-%v/gcc-%v.tar.xz
+Source-MD5: 4ab282f414676496483b3e1793d07862
+PatchFile: %n.patch
+PatchFile-MD5: fa5129148965c16082530abb0598c231
+PatchFile2: %n-apfs.patch
+PatchFile2-MD5: 46f8b6e6af14f2ab1e31b8ada4fa7e1b
+PatchFile3: %n-build-sysroot.patch
+PatchFile3-MD5: d6be4f05348610e0ddb1c2b23671aef1
+PatchScript: <<
+	#!/bin/sh -ev
+	%{default_script}
+	# don't update live infodoc dir
+	find . -name Makefile.in | xargs perl -pi -e 's/install-info --version/false/g'
+<<
+Type: -64bit .
+NoSetCPPFLAGS: True
+NoSetLDFLAGS: True
+UseMaxBuildJobs: True
+Conflicts: <<
+	gcc46,
+	gcc47,
+	gcc48,
+	gcc49,
+	gcc5,
+	gcc6,
+	gcc7,
+	gcc8,
+	gcc9
+<<
+Replaces: <<
+	gcc46,
+	gcc47,
+	gcc48,
+	gcc49,
+	gcc5,
+	gcc6,
+	gcc7,
+	gcc8,
+	gcc9
+<<
+Depends: <<
+	%N-compiler (= %v-%r)
+<<
+BuildDepends: <<
+	fink (>= 0.32),
+	fink-package-precedence,
+	gettext-tools,
+	gmp5 (>= 6.0.0a-3),
+	isl3,
+	libgettext8-dev,
+	libiconv-dev,
+	libmpc3 (>= 1.0.3-1),
+	libmpfr4 (>= 3.1.3-1),
+	x11-dev,
+	xcode (>= 10.1)
+<<
+ConfigureParams: <<
+	--prefix=%p/lib/gcc8 \
+	--mandir=%p/share/man \
+	--infodir=%p/lib/gcc8/info \
+	--enable-languages=c,c++,fortran,lto,objc,obj-c++ \
+	--with-gmp=%p \
+	--with-libiconv-prefix=%p \
+	--with-isl=%p \
+	--with-mpc=%p \
+	--with-system-zlib \
+	--program-suffix=-fsf-8 \
+	--disable-multilib \
+	--with-sysroot=${SDK_PATH}
+<<
+InfoTest: <<
+	TestDepends: <<
+		autogen,
+		dejagnu,
+		xcode (<< 4.7) | apple-gdb
+	<<
+	TestScript: <<
+               #!/bin/bash -ev
+               if [ $UID = 0 ]; then
+			if [ -e /usr/bin/csrutil && `csrutil status | grep -c disabled` ]; then
+                  		cd ../darwin_objdir; make -k check RUNTESTFLAGS="--target_board=unix'{-m64}'" || :
+			else
+				echo "The gcc testsuite must be run with SIP disabled or package installed."
+				exit 0
+			fi
+               else
+                  echo "The gcc testsuite must be run as root due to its use of gdb."
+                  exit 0
+               fi
+	<<
+<<
+InfoDocs: gcc.info gfortran.info cpp.info gccinstall.info libgomp.info cppinternals.info gccint.info
+CompileScript: <<
+	#!/bin/bash -ev
+	set +x
+	if [ -e /usr/local/lib/libgmp.a ] || [ -e /usr/local/lib/libgmp.dylib ]; then
+		echo "-----WARNING-----WARNING-----WARNING-----"
+		echo "You seem to have GMP installed in /usr/local."
+		echo "This is known to cause %N to fail to build."
+		echo "Please move aside /usr/local and try again."
+		echo "-----WARNING-----WARNING-----WARNING-----"
+		exit 1
+	else
+		echo "Good, /usr/local/lib/libgmp* not present."
+	fi
+	set -x
+	ulimit -s `ulimit -s`
+	mkdir ../darwin_objdir
+	cd ../darwin_objdir
+	# Get the unversioned SDK path
+	SDK_PATH=`dirname $(xcrun --sdk macosx --show-sdk-path)`/MacOSX.sdk
+	# check for incompatible clang
+	clangvers=`clang --version | cut -d\  -f4`
+	$(`dpkg --compare-versions $clangvers '>>' 6.0`) && $(`dpkg --compare-versions $clangvers '<<' 7.2`) && clangcheck='y'
+	if [ "$clangcheck" = "y" ]; then
+		../gcc-%v/configure %c --with-build-config=bootstrap-debug
+	else
+		../gcc-%v/configure %c
+	fi
+	# Use bootstrap-lean to reduce disk usage.
+	# Note that this causes plugin testsuite failures
+	# since the plugin headers must come from prev-gcc.
+	# make bootstrap-lean
+	make bootstrap
+	fink-package-precedence --prohibit-bdep=%n .
+<<
+InstallScript: <<
+	#!/bin/sh -ev
+	darwinvers=`uname -r`
+	cd ../darwin_objdir
+	make -j 1 install DESTDIR=%d
+	mkdir -p %i/bin
+
+	# Add symlinks to recreate previous naming of executables in %p/bin
+	# as well as %p/lib/gcc8/bin and new -fsf-8 naming in %p/bin.
+	binfiles="gcc g++ c++ cpp gcov"
+	for binfile in $binfiles ; do
+		ln -s %p/lib/gcc8/bin/$binfile-fsf-8 %i/lib/gcc8/bin/$binfile-8
+		ln -s %p/lib/gcc8/bin/$binfile-fsf-8 %i/bin/$binfile-8
+		ln -s %p/lib/gcc8/bin/$binfile-fsf-8 %i/bin/$binfile-fsf-8
+	done
+	binfiles="gfortran"
+	for binfile in $binfiles ; do
+		ln -s %p/lib/gcc8/bin/$binfile-fsf-8 %i/lib/gcc8/bin/$binfile
+		ln -s %p/lib/gcc8/bin/$binfile-fsf-8 %i/bin/$binfile
+		ln -s %p/lib/gcc8/bin/$binfile-fsf-8 %i/bin/$binfile-fsf-8
+	done
+
+	# Remove unsupported executables
+	binfiles="gcc-ar gcc-nm gcc-ranlib"
+	for binfile in $binfiles ; do
+		rm -f %i/lib/gcc8/bin/$binfile-fsf-8 %i/lib/gcc8/bin/%m-apple-darwin`uname -r`-$binfile-fsf-8
+	done
+
+	# Add symlinks for manpages under old names.
+	man1files="cpp g++ gcc gcov"
+	for man1file in $man1files ; do
+		ln -s $man1file-fsf-8.1 %i/share/man/man1/$man1file-8.1
+	done
+	man1files="gfortran"
+	for man1file in $man1files ; do
+		ln -s $man1file-fsf-8.1 %i/share/man/man1/$man1file.1
+	done
+
+	# Rename manpages with -fsf-8 suffix and create symlinks to old names. 
+	man7files="fsf-funding gfdl gpl"
+	for man7file in $man7files ; do
+		mv %i/share/man/man7/$man7file.7 %i/share/man/man7/$man7file-fsf-8.7
+		ln -s $man7file-fsf-8.7 %i/share/man/man7/$man7file.7
+	done
+
+	# Add dir for installed info files, and link them to %i/share/info.
+	# the %i/lib/gcc8/info/* files will go into the -compiler package
+	# and the files in %i/share/info go into the main package, this allows
+	# the info files for specific compiler versions to be accessed with
+	# e.g. `info -d /fink_install_dir/lib/gcc8/info gcc', but the "main" info files will
+	# be available for the install gccXX package in %p/share/info, as usual
+	install -d -m 755 %i/share/info
+	for infofile in $(find %i/lib/gcc8/info -name '*.info*'); do
+		infobase=$(basename $infofile)
+		case $infofile in
+			*info) /usr/bin/install-info --infodir=%i/lib/gcc8/info ${infofile} ;;
+		esac
+		ln -s %p/lib/gcc8/info/$infobase %i/share/info/$infobase
+	done
+
+	cp %b/gcc/config/darwin-sections.def %i/lib/gcc8/lib/gcc/%m-apple-darwin${darwinvers}/%v/plugin/include/config
+	# remove build path from .la files
+	perl -pi -e "s, \-L[^ ']*/%n-%v-%r/darwin_objdir/[^ ']*,,g" `find %i/lib/gcc8/lib -name '*.la'`
+	perl -pi -e "s, /[^ ']*/%n-%v-%r/darwin_objdir/[^ ']*,,g" `find %i/lib/gcc8/lib -name 'libasan.la'`
+	perl -pi -e "s, /[^ ']*/%n-%v-%r/darwin_objdir/[^ ']*,,g" `find %i/lib/gcc8/lib -name 'libubsan.la'`
+<<
+SplitOff: <<
+	Package: %N-shlibs
+	Replaces: <<
+		gcc4 (<= 20050130-4),
+		gfortran-shlibs
+	<<
+	Provides: <<
+		gfortran-shlibs
+	<<
+	Description: Shared libraries for %N
+	DocFiles: gcc/COPYING gcc/COPYING.LIB
+	Files: <<
+		lib/gcc8/lib/libgfortran.5*.dylib
+		lib/gcc8/lib/libstdc++.6*.dylib
+		lib/gcc8/lib/libgcc_s.1*.dylib
+		lib/gcc8/lib/libgcc_ext.1*.dylib
+		lib/gcc8/lib/libitm.1*.dylib
+		lib/gcc8/lib/libssp.0*.dylib
+		lib/gcc8/lib/libobjc-gnu.4*.dylib
+		lib/gcc8/lib/libgomp.1*.dylib
+		lib/gcc8/lib/libquadmath.0*.dylib
+		lib/gcc8/lib/libatomic.1*.dylib
+		lib/gcc8/lib/libasan.5*.dylib
+		lib/gcc8/lib/libubsan.1*.dylib
+	<<
+	Shlibs: <<
+		%p/lib/gcc8/lib/libgfortran.5.dylib 6.0.0 %n (>= 8.2.0-1)
+		%p/lib/gcc8/lib/libstdc++.6.dylib 7.0.0 %n (>= 8.2.0-1) 
+		%p/lib/gcc8/lib/libgcc_s.1.dylib 1.0.0 %n (>= 8.2.0-1) 
+		%p/lib/gcc8/lib/libitm.1.dylib 2.0.0 %n (>= 8.2.0-1)
+		%p/lib/gcc8/lib/libssp.0.dylib 1.0.0 %n (>= 8.2.0-1) 
+		%p/lib/gcc8/lib/libobjc-gnu.4.dylib 5.0.0 %n (>= 8.2.0-1)
+		%p/lib/gcc8/lib/libgomp.1.dylib 2.0.0 %n (>= 8.2.0-1) 
+		%p/lib/gcc8/lib/libquadmath.0.dylib 1.0.0 %n (>= 8.2.0-1)
+		%p/lib/gcc8/lib/libatomic.1.dylib 4.0.0  %n (>= 8.2.0-1)
+		%p/lib/gcc8/lib/libasan.5.dylib 6.0.0  %n (>= 8.2.0-1)
+		%p/lib/gcc8/lib/libubsan.1.dylib 2.0.0 %n (>= 8.2.0-1)
+	<<
+<<
+SplitOff2: <<
+	Package: %N-compiler
+	Depends: <<
+		gmp5-shlibs (>= 6.0.0a-3),
+		isl3-shlibs,
+		libgettext8-shlibs,
+		libgmpxx5-shlibs (>= 6.0.0a-3),
+		libiconv,
+		libmpc3-shlibs (>= 1.0.3-1),
+		libmpfr4-shlibs (>= 3.1.3-1),
+		%N-shlibs (= %v-%r),
+		xcode (>= 4.6)
+	<<
+	BuildDependsOnly: False
+	Description: Compiler Binaries for gcc8
+	DocFiles: gcc/COPYING gcc/COPYING.LIB
+	Files: <<
+		bin/*-fsf-8
+		lib/gcc8
+		share/man/man1/*-fsf-8.1
+		share/man/man7/*-fsf-8.7
+	<<
+<<
+License: GPL
+Description: GNU Compiler Collection Version 8
+DescDetail: <<
+ GCC, the GNU Compiler Collection, includes front ends for
+ C, C++, Objective-C, Objective-C++, Fortran and Ada.
+ .
+ C, C++, Objective C and Fortran are included in this package.
+ .
+ The C and C++ compilers are named gcc-8 and g++-8 to avoid
+ conflicts with gcc and g++ installed by the Apple Developer Tools
+<<
+DescPackaging: <<
+ Build with -fsf-8 suffix and place non-overlapping files into new gcc8-compiler
+ package which can co-exist with other gccXX-compiler packages. Overlapping files
+ are left in main gcc8 package which still conflicts with other gccXX packages.
+
+ Add apfs patch to suppress https://gcc.gnu.org/bugzilla/show_bug.cgi?id=81797
+ by adding ".NOTPARALLEL: install-headers" to libstdc++-v3/include/Makefile.in.
+
+ macOS10.14 no longer supports building 32bit libraries, so must disable multilib.
+ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=87030
+
+ We use --with-sysroot to find the hidden system-headers in case /usr/include is not
+ populated. Ideally want --with-build-sysroot because we only need the headers to build
+ gcc and that should not impact the end product, but then anything using gccX will
+ need to add it's own -isysroot flag.
+ https://gcc.gnu.org/bugzilla/show_bug.cgi?id=79885
+<<
+Homepage: http://gcc.gnu.org/
+Maintainer: None <fink-devel@lists.sourceforge.net>
+<<
