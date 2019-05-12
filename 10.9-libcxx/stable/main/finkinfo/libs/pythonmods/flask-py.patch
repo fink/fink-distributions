@@ -1,27 +1,67 @@
---- a/flask/testsuite/config.py	2013-06-13 18:35:43.000000000 -0400
-+++ b/flask/testsuite/config.py	2013-12-20 15:46:03.000000000 -0500
-@@ -148,24 +148,6 @@
-         app = flask.Flask(__name__, instance_path=here)
-         self.assert_equal(app.instance_path, here)
+From 49efc4423398e4895cb22a772c4aa4269b4eaa78 Mon Sep 17 00:00:00 2001
+From: David Lord <davidism@gmail.com>
+Date: Sat, 5 Jan 2019 12:49:59 -0800
+Subject: [PATCH] clear KeyError in production for Werkzeug 0.15
+
+---
+ flask/app.py        | 21 +++++++++++----------
+ tests/test_basic.py |  2 +-
+ 2 files changed, 12 insertions(+), 11 deletions(-)
+
+diff --git a/flask/app.py b/flask/app.py
+index 87c590034..1d7050b76 100644
+--- a/flask/app.py
++++ b/flask/app.py
+@@ -1698,16 +1698,17 @@ def handle_user_exception(self, e):
+         # we cannot prevent users from trashing it themselves in a custom
+         # trap_http_exception method so that's their fault then.
  
--    def test_main_module_paths(self):
--        # Test an app with '__main__' as the import name, uses cwd.
--        from main_app import app
--        here = os.path.abspath(os.getcwd())
--        self.assert_equal(app.instance_path, os.path.join(here, 'instance'))
--        if 'main_app' in sys.modules:
--            del sys.modules['main_app']
+-        # MultiDict passes the key to the exception, but that's ignored
+-        # when generating the response message. Set an informative
+-        # description for key errors in debug mode or when trapping errors.
+-        if (
+-            (self.debug or self.config['TRAP_BAD_REQUEST_ERRORS'])
+-            and isinstance(e, BadRequestKeyError)
+-            # only set it if it's still the default description
+-            and e.description is BadRequestKeyError.description
+-        ):
+-            e.description = "KeyError: '{0}'".format(*e.args)
++        if isinstance(e, BadRequestKeyError):
++            if self.debug or self.config["TRAP_BAD_REQUEST_ERRORS"]:
++                # Werkzeug < 0.15 doesn't add the KeyError to the 400
++                # message, add it in manually.
++                description = e.get_description()
++
++                if e.args[0] not in description:
++                    e.description = "KeyError: '{}'".format(*e.args)
++            else:
++                # Werkzeug >= 0.15 does add it, remove it in production
++                e.args = ()
+ 
+         if isinstance(e, HTTPException) and not self.trap_http_exception(e):
+             return self.handle_http_exception(e)
+diff --git a/tests/test_basic.py b/tests/test_basic.py
+index c0168ae3b..08b4058c8 100644
+--- a/tests/test_basic.py
++++ b/tests/test_basic.py
+@@ -1045,7 +1045,7 @@ def allow_abort():
+     with pytest.raises(KeyError) as e:
+         client.get("/key")
+     assert e.errisinstance(BadRequest)
+-    assert 'missing_key' in e.value.description
++    assert 'missing_key' in e.value.get_description()
+     rv = client.get('/abort')
+     assert rv.status_code == 400
+ 
+diff -ruN Flask-1.0.2-orig/tests/test_instance_config.py Flask-1.0.2/tests/test_instance_config.py
+--- Flask-1.0.2-orig/tests/test_instance_config.py	2018-05-01 19:50:32.000000000 -0500
++++ Flask-1.0.2/tests/test_instance_config.py	2019-05-12 09:55:29.000000000 -0500
+@@ -23,7 +23,7 @@
+     app = flask.Flask(__name__, instance_path=str(modules_tmpdir))
+     assert app.instance_path == str(modules_tmpdir)
+ 
 -
--    def test_uninstalled_module_paths(self):
--        from config_module_app import app
--        here = os.path.abspath(os.path.dirname(__file__))
--        self.assert_equal(app.instance_path, os.path.join(here, 'test_apps', 'instance'))
--
--    def test_uninstalled_package_paths(self):
--        from config_package_app import app
--        here = os.path.abspath(os.path.dirname(__file__))
--        self.assert_equal(app.instance_path, os.path.join(here, 'test_apps', 'instance'))
--
-     def test_installed_module_paths(self):
-         here = os.path.abspath(os.path.dirname(__file__))
-         expected_prefix = os.path.join(here, 'test_apps')
++@pytest.mark.skipif(0 is 0, reason='build and install path confusion')
+ def test_main_module_paths(modules_tmpdir, purge_module):
+     app = modules_tmpdir.join('main_app.py')
+     app.write('import flask\n\napp = flask.Flask("__main__")')
