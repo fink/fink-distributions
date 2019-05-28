@@ -1,0 +1,106 @@
+diff -x '*~' -urN postgresql-11.3_original/pgsql.sh postgresql-11.3_patched/pgsql.sh
+--- postgresql-11.3_original/pgsql.sh	1970-01-01 01:00:00.000000000 +0100
++++ postgresql-11.3_patched/pgsql.sh	2019-05-27 20:56:41.000000000 +0200
+@@ -0,0 +1,87 @@
++#!/bin/sh
++
++die () {
++	echo "failed"
++	echo ""
++	echo "*** bailing because an error ocurred:"
++	echo ""
++	echo "$*"
++	exit 1
++}
++
++PREFIX="@INSTPREFIX@/opt/postgresql-@PGVERSION@"
++DATADIR="@INSTPREFIX@/var/postgresql-@PGVERSION@/data"
++LOGFILE="@INSTPREFIX@/var/postgresql-@PGVERSION@/pgsql.log"
++
++export LANG=C
++unset LC_ALL
++
++export PATH="$PREFIX/bin:@INSTPREFIX@/bin:$PATH"
++
++SHMMAX=`sysctl kern.sysv.shmmax | cut -d' ' -f2-`
++SHMMNI=`sysctl kern.sysv.shmmni | cut -d' ' -f2-`
++SHMALL=`sysctl kern.sysv.shmall | cut -d' ' -f2-`
++
++if [ "$SHMMAX" -lt "8388608" ] || [ "$SHMMNI" -lt "64" ] || [ "$SHMALL" -lt "32768" ]; then
++	echo "WARNING: You probably need to set your shared memory resources higher for"
++	echo "         PostgreSQL to function.  For more information on raising your shared"
++	echo "         memory settings, see:"
++	echo "         http://wiki.finkproject.org/index.php/Shared_Memory_Regions_on_Darwin"
++	echo ""
++	echo "         I am also creating a default configuration in /etc/sysctl.conf.pg"
++	echo "         that contains values that will work with the default PostgreSQL "
++	echo "         memory settings.  To use it, rename it to /etc/sysctl.conf (if you"
++	echo "         don't have one already) and reboot."
++	echo ""
++	echo "         For now, I'll try setting your sysctl to something higher and then"
++	echo "         running things anyways.  Good luck!  =)"
++	echo ""
++	sysctl -w kern.sysv.shmmax=8388608
++	sysctl -w kern.sysv.shmmin=1
++	sysctl -w kern.sysv.shmmni=64
++	sysctl -w kern.sysv.shmseg=8
++	sysctl -w kern.sysv.shmall=32768
++	echo ""
++	cat <<END >/etc/sysctl.conf.pg
++kern.sysv.shmmax=8388608
++kern.sysv.shmmin=1
++kern.sysv.shmmni=64
++kern.sysv.shmseg=8
++kern.sysv.shmall=32768
++END
++fi
++
++pushd /tmp
++
++if [ ! -d "$DATADIR" ]; then
++	printf -- "- making postgresql directories: "
++	sudo mkdir -p "$DATADIR"
++	sudo chown -R postgres "$DATADIR/.."
++	echo "ok"
++
++	printf -- "- initializing database in $DATADIR: "
++	sudo -u postgres ${PREFIX}/bin/initdb -E UNICODE -D "$DATADIR" >/tmp/pgsql-init-@PGVERSION@.log 2>&1 || die "couldn't initialize database"
++	echo "ok"
++fi
++
++PG_COMMAND="sudo -u postgres env"
++if [ -n "$PGPORT" ]; then
++	PG_COMMAND="$PG_COMMAND PGPORT=$PGPORT"
++fi
++PG_COMMAND="$PG_COMMAND ${PREFIX}/bin/pg_ctl"
++
++case "$1" in
++	init)
++		;;
++	start)
++		$PG_COMMAND -D "$DATADIR" -l "$LOGFILE" start
++		;;
++	restart)
++		$PG_COMMAND -D "$DATADIR" -m fast restart
++		;;
++	stop)
++		$PG_COMMAND -D "$DATADIR" -m fast stop
++		;;
++esac
++
++popd
+diff -x '*~' -urN postgresql-11.3_original/src/Makefile.global.in postgresql-11.3_patched/src/Makefile.global.in
+--- postgresql-11.3_original/src/Makefile.global.in	2019-05-06 22:46:18.000000000 +0200
++++ postgresql-11.3_patched/src/Makefile.global.in	2019-05-27 20:56:41.000000000 +0200
+@@ -391,6 +391,11 @@
+ 	$(MKDIR_P) '$(abs_top_builddir)'/tmp_install/log
+ 	$(MAKE) -C '$(top_builddir)' DESTDIR='$(abs_top_builddir)'/tmp_install install >'$(abs_top_builddir)'/tmp_install/log/install.log 2>&1
+ 	$(MAKE) -j1 $(if $(CHECKPREP_TOP),-C $(CHECKPREP_TOP),) checkprep >>'$(abs_top_builddir)'/tmp_install/log/install.log 2>&1
++ifeq ($(shell uname),Darwin)
++#       fink patch:
++#       macos with SIP enabled, workarround during make test and stripped DYLD_LIBRARY_PATH
++	for binary in '$(abs_top_builddir)'/tmp_install$(bindir)/* ; do install_name_tool $$binary -change $(libdir)/libpq.5.dylib '$(abs_top_builddir)'/tmp_install$(libdir)/libpq.5.dylib   >>'$(abs_top_builddir)'/tmp_install/log/install.log 2>&1 ; done
++endif
+ endif
+ endif
+ endif
