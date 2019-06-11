@@ -48,15 +48,22 @@ Recommends: <<
 Source: https://files.pythonhosted.org/packages/source/i/ipython/ipython-%v.tar.gz
 Source-Checksum: SHA256(e840810029224b56cd0d9e7719dc3b39cf84d577f8ac686547c8ba7a06eeab26)
 
-# Fix missing decorators import when numpy is not installed (https://github.com/ipython/ipython/issues/11709):
-PatchScript: perl -pi -e 's/(from ._decorators import .)/${1}\n    from ...testing import decorators as dec/;' IPython/external/decorators/__init__.py
+# Fix missing decorators import when numpy is not installed (https://github.com/ipython/ipython/issues/11709);
+# patch wx interface to avoid AttributeError/`app.is_running` AssertionError/wxPyDeprecationWarning
+# with wxpython 4.x (https://github.com/ipython/ipython/issues/10055)
+PatchScript: <<
+ perl -pi -e 's/(from ._decorators import .)/${1}\n    from ...testing import decorators as dec/;' IPython/external/decorators/__init__.py
+ perl -pi -e 's/(wx.)(Thread_IsMain)/${1}IsMainThread/;' IPython/lib/inputhookwx.py IPython/terminal/pt_inputhooks/wx.py
+ perl -pi -e 's/(app.)(ProcessIdle)/evtloop.${2}/;' IPython/lib/inputhookwx.py IPython/terminal/pt_inputhooks/wx.py
+ perl -pi -e 's/(wx.)(EventLoop\()/${1}GUI${2}/;' IPython/lib/inputhookwx.py IPython/terminal/pt_inputhooks/wx.py
+<<
 
 CompileScript: <<
  %p/bin/python%type_raw[python] setup.py build
 <<
 
 InstallScript: <<
- #!/bin/bash -ev
+ #!/bin/sh -ev
  /usr/bin/find %b/build/lib -name '*.pyc' -delete
  %p/bin/python%type_raw[python] setup.py install --root=%d
 
@@ -153,20 +160,24 @@ PreRmScript: <<
 <<
 
 # TODO: add twisted, foolscap, pyobjc
-# 3 Errors, 8 Failures with 3.5-3.7; another E without matplotlib, but leaving this out of
-# TestDepends until we have a py37 version.
 InfoTest: <<
   TestDepends: <<
     nose-py%type_pkg[python],
     ipykernel-py%type_pkg[python],
+    matplotlib-py%type_pkg[python],
     numpy-py%type_pkg[python],
     zopeinterface-py%type_pkg[python]
   <<
+  # Failures with KeyError, Timeout exception
   TestScript: <<
-    #!/bin/bash -ev
-    export PYTHONPATH=%b/build/lib:%p/lib/qt4-x11/lib/python%type_raw[python]/site-packages:%p/lib/qt4-mac/lib/python%type_raw[python]/site-packages
+    #!/bin/sh -ev
+    export PYTHONPATH=%b/build/lib
     cd build/lib
-    %p/bin/python%type_raw[python] -B IPython/testing/iptest.py IPython || exit 1
+    if [ %type_pkg[python] -le 36]; then
+      %p/bin/python%type_raw[python] -B IPython/testing/iptest.py -e test_store_restore IPython || exit 2
+    else
+      %p/bin/python%type_raw[python] -B IPython/testing/iptest.py -e test_store_restore -e test_nest_embed IPython || exit 2
+    fi
   <<
   TestSuiteSize: medium
 <<
