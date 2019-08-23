@@ -1,0 +1,270 @@
+# -*- coding: ascii; tab-width: 4; x-counterpart: git.patch -*-
+Info2:<<
+Package: git
+Version: 2.23.0
+Revision: 1+10.14.5
+Type: pm 5.18.4
+Distribution: 10.14.5
+
+Depends: <<
+	expat1-shlibs (>= 2.1.0-1),
+	libcurl4-shlibs (>= 7.40.0-1),
+	libgettext8-shlibs,
+	libiconv,
+	locale-textdomain-pm%type_pkg[pm],
+	libpcre2-shlibs
+<<
+BuildDepends: <<
+	expat1 (>= 2.1.0-1),
+	fink (>= 0.32),
+	gettext-tools,
+	libcurl4 (>= 7.40.0-1),
+	libgettext8-dev,
+	libiconv-dev,
+	libpcre2
+<<
+Replaces: git-core, git-cvsimport (<< 1.7.2.3-1002), git-archimport (<< 1.7.2.3-1002), git-svn (<< 1.7.2.3-1002)
+Conflicts: git-cvsimport (<< 1.7.2.3-1002), git-archimport (<< 1.7.2.3-1002), git-svn (<< 1.7.2.3-1002)
+
+Source: https://mirrors.edge.kernel.org/pub/software/scm/git/git-%v.tar.gz
+Source-Checksum: SHA256(e3396c90888111a01bf607346db09b0fbf49a95bc83faf9506b61195936f0cfe)
+Source2: https://mirrors.edge.kernel.org/pub/software/scm/git/git-htmldocs-%v.tar.gz
+Source2-Checksum: SHA256(bc98cace6254e886efe628951944d3a51cac88846247e193005ecb5f0f365be6)
+Source2ExtractDir: doc
+Source3: https://mirrors.edge.kernel.org/pub/software/scm/git/git-manpages-%v.tar.gz
+Source3-Checksum: SHA256(a5b0998f95c2290386d191d34780d145ea67e527fac98541e0350749bf76be75)
+Source4: https://dl.dropboxusercontent.com/u/9988666/git-subtree-doc-20150817.tar.bz2
+Source4-MD5: b35283ca2acf7fec67f2b17d2a6d1959
+
+PatchFile: %n.patch
+PatchFile-MD5: 2e05d133d122a6242fdd8f7ca00ebf5e
+PatchScript: <<
+	#!/bin/bash -ev
+	%{default_script}
+	# Fix up paths in documentation to point to %p.
+	perl -pi -e 's,/usr/(share|bin)/git,%p/\1/git,g; s,/usr/libexec,%p/lib,g' ../man1/* ../doc/*
+	# Setting these variables in 'config.mak' lets Makefile import them
+	# automatically instead of always manually passing them to make.
+	cat >> config.mak << EOF
+NO_FINK=1
+NO_DARWIN_PORTS=1
+#NO_SVN_TESTS=1
+GITWEB_CONFIG_SYSTEM=%p/gitweb.conf
+CC_LD_DYNPATH=-L
+AR=ar
+htmldir=share/doc/git
+NO_CROSS_DIRECTORY_HARDLINKS=1
+NO_INSTALL_HARDLINKS=1
+NO_REGEX=1
+NO_OPENSSL=1
+PERLLIB_EXTRA=%p/lib/perl5
+NO_PERL_CPAN_FALLBACKS=1
+EOF
+	perl -pi -e 's/\"\$PERL\"/\$PERL/' git-instaweb.sh
+	perl -pi -e 's/svnrdump/svnrdump19/' remote-testsvn.c
+	#perl -pi -e 's|use 5.008;|use 5.008;\nuse lib "%p/lib/perl5";|' *.perl
+	
+	# Create a global config file with some sensible defaults.
+	cat >> gitconfig << EOF
+[color]
+	ui = auto
+[web]
+	browser = open
+[credential]
+	helper = osxkeychain
+EOF
+<<
+
+UseMaxBuildJobs: true
+
+# Let configure do the work of setting up the environment instead of
+# patching and passing things manually to make.
+SetLDFLAGS: -Wl,-dead_strip_dylibs
+# Darwin needs no special flags for pthreads, so set flags to ' ' because
+# "-pthreads" causes problems for gcc-4.0.
+ConfigureParams: <<
+	--libexecdir='${exec_prefix}/lib' \
+	--enable-pthreads=' ' \
+	--with-python='/usr/bin/python' \
+	--with-tcltk='/usr/bin/wish' \
+	--with-libpcre2=%p
+<<
+
+CompileScript: <<
+	#!/bin/bash -ev
+	let version=`uname -r | cut -f 1 -d .`
+	if [ $version -eq 10 ]; then
+		./configure --with-perl='/usr/bin/arch -%m perl5.10.0' %c
+	elif [ $version -le 12 ]; then
+		./configure --with-perl='/usr/bin/arch -%m perl5.12' %c
+	elif [ $version -eq 13 ]; then
+		./configure --with-perl='/usr/bin/arch -%m perl5.16' %c
+	elif [ $version -eq 14 ]; then
+		./configure --with-perl='/usr/bin/arch -%m perl5.18' %c
+	elif [ $version -eq 15 ]; then
+		./configure --with-perl='/usr/bin/arch -%m perl5.18' %c
+	else 
+		./configure --with-perl='/usr/bin/perl' %c
+	fi
+	make perllibdir='%p/lib/perl5'
+	
+	# Build OS X Keychain integration.
+	cd contrib/credential/osxkeychain
+	make
+	
+	# Build subtree command.
+	cd ../../subtree
+	make
+<<
+
+InfoTest: <<
+ 	TestDepends: <<
+ 		libwww-pm%type_pkg[pm],
+ 		svn-swig-pm%type_pkg[pm] (>= 1.9.0-1),
+ 		svn19,
+ 		term-readkey-pm%type_pkg[pm],
+ 		test-harness-pm%type_pkg[pm] (>= 3.25-1)
+ 	<<
+ 	TestConflicts: bash, bash-completion, bash-builtins
+
+	TestScript: <<
+		#!/bin/bash -ev
+		
+		PERL_PATH=/usr/bin/perl
+		
+		ln -s %p/bin/svn19 bin-wrappers/svn
+		ln -s %p/bin/svnadmin19 bin-wrappers/svnadmin
+		ln -s %p/bin/svnserve19 bin-wrappers/svnserve
+		
+		# Need to pass -j1 to 'prove' since some tests don't seem to like running in parallel.
+
+		if [ $UID = 0 ]; then
+			# Some tests fail when run as root.
+			GIT_SKIP_TESTS="t0301 t9020 t3210.26 t9903.14 t9903.15" make -k DEFAULT_TEST_TARGET="prove" PROVE="%p/bin/prove-%type_pkg[pm]" GIT_PROVE_OPTS="--timer --failures -j1" test PERL_PATH="$PERL_PATH" || exit 1
+		else
+			GIT_SKIP_TESTS="t0301 t9020 t3210.26 t9903.14 t9903.15" make -k DEFAULT_TEST_TARGET="prove" PROVE="%p/bin/prove-%type_pkg[pm]" GIT_PROVE_OPTS="--timer --failures -j1" test PERL_PATH="$PERL_PATH" || exit 2
+		fi
+	<<
+	TestSuiteSize: large
+<<
+
+InstallScript: <<
+	make install DESTDIR=%d NO_PYTHON=1 perllibdir='%p/lib/perl5'
+	
+	mkdir -p %i/share/man %i/share/doc
+	cp -R ../man* %i/share/man
+	cp -R ../doc %i/share/doc/%n
+	cp ../git-subtree-doc/git-subtree.txt %i/share/doc/%n
+	cp ../git-subtree-doc/git-subtree.html %i/share/doc/%n
+	cp ../git-subtree-doc/git-subtree.1 %i/share/man/man1
+	mkdir -p %i/share/emacs/site-lisp
+	cp contrib/emacs/*.el %i/share/emacs/site-lisp
+	mkdir -p %i/etc/bash_completion.d
+	install -m 755 contrib/completion/git-completion.bash %i/etc/bash_completion.d/
+	install -m 755 contrib/credential/osxkeychain/git-credential-osxkeychain %i/lib/git-core
+	mkdir -p %i/etc/profile.d
+	install -m 755 contrib/completion/git-prompt.sh %i/etc/profile.d
+	# Install global gitconfig file.
+	install -m 755 gitconfig %i/etc
+	
+	# Install subtree command.
+	cd contrib/subtree && make install DESTDIR=%d NO_PYTHON=1
+	
+	# These go in separate packages.
+	rm %i/lib/git-core/git-cvsimport
+	rm %i/share/doc/%n/git-cvsimport.*
+	rm %i/share/man/man1/git-cvsimport.1
+	rm %i/lib/git-core/git-archimport
+	rm %i/share/doc/%n/git-archimport.*
+	rm %i/share/man/man1/git-archimport.1
+	rm %i/lib/git-core/git-svn
+	rm %i/share/doc/%n/git-svn.*
+	rm %i/share/man/man1/git-svn.1
+	rm %i/lib/git-core/git-send-email
+	rm %i/share/doc/%n/git-send-email.*
+	rm %i/share/man/man1/git-send-email.1
+<<
+ConfFiles: %p/etc/gitconfig
+
+SplitOff: <<
+	Package: git-remote-testsvn
+	Description: SVN remote helper for git
+	DescDetail: <<
+		This is the testsvn remote helper from git.
+		It allows one to import an svn repository into git using the
+		remote mechanism.
+		
+		This should be considered experimental (hence 'testsvn')
+		and used with caution.
+		
+		Use like: git clone testsvn::http://some.svn.repo
+	<<
+	RuntimeDepends: git (>= %v), svn19
+	Files: lib/git-core/%n
+	DocFiles: COPYING README.md
+<<
+
+UpdatePOD: true
+DocFiles: COPYING README.md contrib
+
+Description: Distributed version control system
+DescDetail: <<
+Git is an open source, distributed version control system designed to
+handle everything from small to very large projects with speed and
+efficiency.
+
+Every Git clone is a full-fledged repository with complete history and
+full revision tracking capabilities, not dependent on network access or
+a central server. Branching and merging are fast and easy to do.
+<<
+DescPackaging: <<
+Patched Makefile to use symlinks instead of hard links since it causes
+problems if %p is a symlink to a different volume.
+
+Previously maintained by Brendan Cully <brendan@finkproject.org>
+<<
+DescUsage: <<
+Backward compatibility notes
+----------------------------
+
+When "git push [$there]" does not say what to push, we have used the
+traditional "matching" semantics so far (all your branches were sent
+to the remote as long as there already are branches of the same name
+over there).  In Git 2.0, the default is now the "simple" semantics,
+which pushes:
+
+ - only the current branch to the branch with the same name, and only
+   when the current branch is set to integrate with that remote
+   branch, if you are pushing to the same remote as you fetch from; or
+
+ - only the current branch to the branch with the same name, if you
+   are pushing to a remote that is not where you usually fetch from.
+
+You can use the configuration variable "push.default" to change
+this.  If you are an old-timer who wants to keep using the
+"matching" semantics, you can set the variable to "matching", for
+example.  Read the documentation for other possibilities.
+
+When "git add -u" and "git add -A" are run inside a subdirectory
+without specifying which paths to add on the command line, they
+operate on the entire tree for consistency with "git commit -a" and
+other commands (these commands used to operate only on the current
+subdirectory).  Say "git add -u ." or "git add -A ." if you want to
+limit the operation to the current directory.
+
+"git add <path>" is the same as "git add -A <path>" now, so that
+"git add dir/" will notice paths you removed from the directory and
+record the removal.  In older versions of Git, "git add <path>" used
+to ignore removals.  You can say "git add --ignore-removal <path>" to
+add only added or modified paths in <path>, if you really want to.
+
+The "-q" option to "git diff-files", which does *NOT* mean "quiet",
+has been removed (it told Git to ignore deletion, which you can do
+with "git diff-files --diff-filter=d").
+
+"git request-pull" lost a few "heuristics" that often led to mistakes.
+<<
+License: GPL
+Homepage: http://git-scm.com/
+Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
+<<

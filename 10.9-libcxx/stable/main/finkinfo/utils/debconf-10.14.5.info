@@ -1,0 +1,317 @@
+Info4: <<
+Package: debconf
+Version: 1.5.59
+
+# maintain %r spacing for 10.9 vs 10.10-10.14 vs 10.14.5+ due to systemperl varianting
+Revision: 304
+Type: perl (5.18.4)
+Distribution: 10.14.5
+
+###
+Provides: debconf-2.0
+## python27, python3
+BuildDepends: <<
+	fink (>= 0.32),
+	gettext-tools,
+	po-debconf,
+	po4a
+<<
+Conflicts: <<
+	cdebconf (<< 0.96),
+	debconf-tiny,
+	apt (<< 0.3.12.1),
+	menu (<= 2.1.3-1),
+	dialog (<< 0.9b-20020814-1),
+	whiptail (<< 0.51.4-11),
+	whiptail-utf8 (<= 0.50.17-13),
+	debconf-utils (<< 1.3.22)
+<<
+Replaces: debconf-tiny
+Recommends: <<
+	apt-utils (>= 0.5.1),
+	%n-i18n
+<<
+Suggests: <<
+	%n-doc,
+	%n-utils,
+	bash-completion,
+	net-ldap-pm%type_pkg[perl],
+	term-readline-gnu-pm%type_pkg[perl],
+	gtk2-pm%type_pkg[perl],
+	qtcore4-pm%type_pkg[perl],
+	qtgui4-pm%type_pkg[perl],
+	whiptail | dialog
+<<
+###
+#Source: mirror:debian:/pool/main/d/%n/%n_%v.tar.xz
+Source: http://snapshot.debian.org/archive/debian/20160311T160518Z/pool/main/d/%n/%n_%v.tar.xz
+Source-Checksum: SHA1(85f78b2dcb85329f7ba0d566d761070658a0e156)
+SourceDirectory: %n
+TarFilesRename: debconf/debconf$:debconf/debconf.tmp
+###
+PatchFile: %n.patch
+PatchFile-MD5: 925e559ad41c1461b970bb95ea75a0be
+PatchScript: <<
+sed 's|@FINKPREFIX@|%p|g' < %{PatchFile} | patch -p1
+
+# set basename/xargs to /usr/bin
+perl -pi -e 's,basename,/usr/bin/basename,g' Makefile doc/Makefile po/Makefile
+perl -pi -e 's,xargs,/usr/bin/xargs,g' Makefile doc/Makefile po/Makefile
+
+# BSD xargs doesn't know -i
+perl -pi -e 's,xargs -i,xargs -I {},g' Makefile doc/Makefile po/Makefile
+
+# BSD find doesn't know -printf
+perl -pi -e "s,-printf '(.+)' \|,-print0 \|,g" doc/Makefile
+perl -pi -e 's,xargs -I,xargs -0 /usr/bin/basename | /usr/bin/xargs -I,g' doc/Makefile
+
+# perl is in lib not share
+perl -pi -e 's,share/perl5,lib/perl5,g' Makefile
+
+# Fix for phyton3 dir, use 3.5 for now as it's the most current, making a
+# python3 and python2 metapkg that installs the latest version with a links dir
+# to the python major would be more convient I think.
+perl -pi -e 's,python3,python3.5,g' Makefile
+
+for i in debian/*post* debian/*pre* %b/po/*.po %b/doc/man/po4a/*/*.po %b/debian/po/*.po %b/doc/README.LDAP %b/doc/TODO %b/doc/man/confmodule.3 %b/doc/man/debconf-devel.7 %b/doc/man/debconf.7 %b/doc/man/debconf.conf.5 %b/doc/man/po4a/po/debconf.pot %b/doc/*.txt; do \
+  perl -pi -e 's,/usr,%p,g' $i; \
+  perl -pi -e 's,/var,%p/var,g' $i; \
+  perl -pi -e 's,/etc,%p/etc,g' $i; \
+done
+
+# Fix tests
+perl -pi -e 's,LOG_DEBUG,256,g' Test/Debconf/DbDriver/SLAPD.pm
+<<
+###
+CompileScript: <<
+cd doc/man && po4a --rm-backups po4a/po4a.cfg
+make
+<<
+###
+InfoTest: <<
+	TestDepends: <<
+		openldap24, # for slapd
+		test-unit-pm,
+		freezethaw-pm,
+		net-ldap-pm%type_pkg[perl],
+		term-readline-gnu-pm%type_pkg[perl],
+		whiptail | dialog
+	<<
+# Know issue upstream "call to abstract method CopyDBTestSetup::name"
+# set to exit 2 once fixed
+	TestScript: <<
+perl test_debconf.pl --all || exit 1
+	<<
+<<
+###
+InstallScript: <<
+#!/bin/sh -ev
+export PERL5LIB=.:%p/lib/perl5
+
+install -d -m 0755 %i/etc/apt/apt.conf.d
+install -m 0644 debian/apt.conf %i/etc/apt/apt.conf.d/70debconf
+install -d -m 0755 %i/share/bash-completion/completions
+install -m 0644 bash_completion %i/share/bash-completion/completions/debconf
+ln -s debconf %i/share/bash-completion/completions/debconf-show
+
+make prefix=%i install-rest
+
+# Ok, move debconf to its correct name
+mv %i/bin/debconf.tmp %i/bin/debconf
+
+# make sure scripts can find fink-installed perl modules even if run
+# under apt or dpkg (vs from user's fink-configured shell): insert
+# fink's perlmod path before first use of a Debconf perlmod
+for i in `find %i -type f`; do if [ "$(head -n1 $i | grep perl)" != "" ]; then sed -i '2iBEGIN \{ push\(\@INC, "%p/lib/perl5"\); push\(\@INC, "%p/lib/perl5/%type_raw[perl]/darwin-thread-multi-2level/"\) \};' $i; fi; done
+
+# Install manpages
+for i in da de es fr pt pt_BR ru; do \
+	install -d -m 0755 %i/share/man/$i/man1; \
+	install -d -m 0755 %i/share/man/$i/man3; \
+	install -d -m 0755 %i/share/man/$i/man5; \
+	install -d -m 0755 %i/share/man/$i/man7; \
+	install -d -m 0755 %i/share/man/$i/man8; \
+	for j in %b/doc/man/*.$i.[13578] %b/doc/man/gen/*.$i.[13578]; do \
+		if [ -f $j ]; then \
+      basen=$(basename $j); \
+      fname=$(echo $basen | sed "s,\.$i,,g"); \
+      pagenum=$(basename $j | awk -F . '{print $NF}'); \
+      install -m 0644 $j %i/share/man/${i}/man${pagenum}/${fname}; \
+      ### Need to remove them so the next part doesn't duplicate them
+      rm $j; \
+    fi; \
+  done; \
+done
+install -d -m 0755 %i/share/man/man1
+install -d -m 0755 %i/share/man/man3
+install -d -m 0755 %i/share/man/man5
+install -d -m 0755 %i/share/man/man7
+install -d -m 0755 %i/share/man/man8
+install -m 0644 %b/doc/man/gen/*.1 %i/share/man/man1;
+install -m 0644 %b/doc/man/*.3 %i/share/man/man3;
+install -m 0644 %b/doc/man/*.5 %i/share/man/man5;
+install -m 0644 %b/doc/man/*.7 %i/share/man/man7;
+install -m 0644 %b/doc/man/gen/*.8 %i/share/man/man8;
+install -m 0644 %b/doc/man/gen/Debconf::Client::ConfModule.3pm %i/share/man/man3/Debconf::Client::ConfModule.3;
+
+pkgname="%n"
+instdir="%d"
+basedir="%p"
+
+# Debian maintainer scripts
+install -d -m0755 "${instdir}"/DEBIAN
+for i in `ls -1 debian/post* debian/pre* 2> /dev/null | grep -v "\.in$"`; do
+	install -m755 $i "${instdir}"/DEBIAN/$(basename ${i})
+done
+
+# ConfFiles
+cd "${instdir}/${basedir}"
+install -d -m0755 "${instdir}"/DEBIAN
+for i in `find etc -type f 2> /dev/null`; do
+	echo "${basedir}"/$i >> "${instdir}"/DEBIAN/conffiles
+done
+cd -
+
+# Debconf and Debconf-po
+install -d -m0755 "${instdir}"/DEBIAN
+if [ -f debian/config ]; then
+	install -m755 debian/config "${instdir}"/DEBIAN/config
+fi
+if [ -d debian/po ]; then
+	po2debconf --podir=debian/po --output "${instdir}"/DEBIAN/templates debian/templates
+else
+	install -m644 debian/templates "${instdir}"/DEBIAN/templates
+fi
+
+# Lintian
+if [ -f debian/${pkgname}.lintian-overrides ]; then
+	install -d -m0755 "${instdir}/${basedir}"/share/lintian/overrides
+	install -m644 debian/${pkgname}.lintian-overrides "${instdir}/${basedir}"/share/lintian/overrides/${pkgname}
+fi
+
+# README
+if [ -f debian/README.Debian ]; then
+	install -d -m0755 "${instdir}/${basedir}"/share/doc/${pkgname}
+	install -m644 debian/README.Debian "${instdir}/${basedir}"/share/doc/${pkgname}/README.Fink
+fi
+<<
+###
+DocFiles: debian/changelog debian/copyright
+###
+SplitOff: <<
+	Package: %N-utils
+	Depends: %N
+	Conflicts: debconf (<< 0.1.0)
+	Replaces: debconf (<< 0.1.0)
+	InstallScript: <<
+#!/bin/sh -ev
+make prefix=%i install-utils
+
+install -d -m0755 %i/share/doc/%n
+rm -rf %i/share/doc/%n
+ln -s %p/share/doc/%N %i/share/doc/%n
+
+# make sure scripts can find fink-installed perl modules even if run
+# under apt or dpkg (vs from user's fink-configured shell): insert
+# fink's perlmod path before first use of a Debconf perlmod
+for i in `find %i -type f`; do if [ "$(head -n1 $i | grep perl)" != "" ]; then sed -i '2iBEGIN \{ push\(\@INC, "%p/lib/perl5"\); push\(\@INC, "%p/lib/perl5/%type_raw[perl]/darwin-thread-multi-2level/"\) \};' $i; fi; done
+
+# Debian maintainer scripts
+install -d -m0755 "%d"/DEBIAN
+for i in `ls -1 debian/%n.post* debian/%n.pre* 2> /dev/null | grep -v "\.in$"`; do
+	install -m755 $i "%d"/DEBIAN/${i##*.}
+done
+	<<
+	Files: <<
+		share/man/man1/debconf-[glm]*
+		share/man/da/man1/debconf-[glm]*
+		share/man/de/man1/debconf-[glm]*
+		share/man/es/man1/debconf-[glm]*
+		share/man/fr/man1/debconf-[glm]*
+		share/man/pt/man1/debconf-[glm]*
+		share/man/pt_BR/man1/debconf-[glm]*
+		share/man/ru/man1/debconf-[glm]*
+	<<
+	Description: Debconf utilities
+	DescDetail: <<
+This package contains some small utilities for debconf developers.
+	<<
+<<
+###
+SplitOff2: <<
+	Package: %N-i18n
+	Depends: <<
+		%N,
+		locale-gettext-pm%type_pkg[perl],
+		text-charwidth-pm%type_pkg[perl],
+		text-iconv-pm%type_pkg[perl],
+		text-wrapi18n-pm%type_pkg[perl]
+	<<
+	Conflicts: <<
+		debconf-english,
+		debconf-utils (<< 1.3.22)
+	<<
+	Replaces: <<
+		debconf-english,
+		debconf-utils (<< 1.3.22)
+	<<
+	InstallScript: <<
+make prefix=%i install-i18n
+
+install -d -m0755 %i/share/doc/%n
+rm -rf %i/share/doc/%n
+ln -s %p/share/doc/%N %i/share/doc/%n
+	<<
+	Files: <<
+		share/man/da/man[18]
+		share/man/de/man[18]
+		share/man/es/man[18]
+		share/man/fr/man[18]
+		share/man/pt/man[18]
+		share/man/pt_BR/man[18]
+		share/man/ru/man[18]
+	<<
+	Description: Full internationalization support for debconf
+	DescDetail: <<
+This package provides full internationalization for debconf, including
+translations into all available languages, support for using translated debconf
+templates, and support for proper display of multibyte character sets.
+	<<
+<<
+###
+SplitOff3: <<
+	Package: %N-doc
+	Conflicts: debconf (<< 0.3.10)
+	InstallScript: <<
+install -d -m0755 %i/share/doc/%n
+cp -R samples %i/share/doc/%n/examples
+	<<
+	Files: <<
+		share/man/man[357]
+		share/man/da
+		share/man/de
+		share/man/es
+		share/man/fr
+		share/man/pt
+		share/man/pt_BR
+		share/man/ru
+	<<
+	DocFiles: debian/changelog debian/copyright doc/README doc/README.LDAP doc/CREDITS doc/TODO doc/debconf.schema doc/*.txt
+	Description: Debconf documentation
+	DescDetail: <<
+This package contains lots of additional documentation for Debconf, including
+the debconf user's guide, documentation about using different backend databases
+via the %p/etc/debconf.conf file, and a developer's guide to debconf.
+	<<
+<<
+###
+Description: Package configuration management system
+DescDetail: <<
+Debconf is a configuration management system for deb packages. Packages use
+debconf to ask questions when they are installed.
+<<
+###
+License: GPL
+Homepage: http://packages.debian.org/source/unstable/debhelper
+Maintainer: Justin F. Hallett <thesin@users.sourceforge.net>
+<<
