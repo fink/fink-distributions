@@ -1,0 +1,304 @@
+diff -ruN texlive-20120701-source-orig/texk/xdvik/dvi-draw.c texlive-20120701-source/texk/xdvik/dvi-draw.c
+--- texlive-20120701-source-orig/texk/xdvik/dvi-draw.c	2012-04-02 03:27:30.000000000 -0500
++++ texlive-20120701-source/texk/xdvik/dvi-draw.c	2019-10-11 04:17:00.000000000 -0500
+@@ -2609,10 +2609,6 @@
+ 
+ #ifdef PS
+ 	psp.interrupt();
+-	/* reset this flag too, just to make sure ... */
+-# if defined(PS_GS) && GS_PIXMAP_CLEARING_HACK
+-	had_ps_specials = False;
+-# endif
+ #endif
+ 	globals.ev.flags &= ~EV_MAG_GONE;
+ #if 0
+diff -ruN texlive-20120701-source-orig/texk/xdvik/events.c texlive-20120701-source/texk/xdvik/events.c
+--- texlive-20120701-source-orig/texk/xdvik/events.c	2012-04-02 03:27:30.000000000 -0500
++++ texlive-20120701-source/texk/xdvik/events.c	2019-10-11 04:28:27.000000000 -0500
+@@ -1614,6 +1614,9 @@
+        (i.e. when accidentally changing page instead of unpausing)
+     */
+     if (globals.pausing.flag) {
++#if PS_GS
++	gs_erase_page();
++#endif
+ 	XClearWindow(DISP, mane.win);
+     }
+ 	    
+@@ -2529,6 +2532,9 @@
+        will survive changing shrink
+     */
+     if (globals.pausing.flag) {
++#if PS_GS
++	gs_erase_page();
++#endif
+ 	XClearWindow(DISP, mane.win);
+     }
+     
+@@ -2582,6 +2588,9 @@
+ 
+     /* like elsewhere */
+     if (globals.pausing.flag) {
++#if PS_GS
++	gs_erase_page();
++#endif
+ 	XClearWindow(DISP, mane.win);
+     }
+ #if 0
+@@ -3068,11 +3077,11 @@
+     
+     set_menu(&resource.gs_alpha, Act_set_gs_alpha, check_toggle);
+ 
+-#if GS_PIXMAP_CLEARING_HACK
+-    had_ps_specials = False; /* else infinite loop and/or crash in redraw! */
+-#endif
+     /* like elsewhere */
+     if (globals.pausing.flag) {
++#if PS_GS
++	gs_erase_page();
++#endif
+ 	XClearWindow(DISP, mane.win);
+     }
+     
+@@ -5444,6 +5453,9 @@
+ #endif /* COLOR */
+     
+     if (!globals.pausing.flag) {
++#if PS_GS
++	gs_erase_page();
++#endif
+ 	XClearWindow(DISP, mane.win);
+     }
+ 
+@@ -5512,13 +5524,6 @@
+ 				      &errflag)) {
+ #if PS
+ 			ps_clear_cache();
+-#if PS_GS
+-			if (resource.gs_alpha) {
+-			    /* restart gs so that user has a method for fixing GS artifacts with gs_alpha
+-			       by using `reload' (see also GS_PIXMAP_CLEARING_HACK) */
+-			    ps_destroy();
+-			}
+-#endif
+ #endif
+ 			statusline_info(STATUS_SHORT, "File reloaded.");
+ 		    }
+@@ -5555,13 +5560,6 @@
+ 		can_exposures(&mane);
+ 		can_exposures(&magnifier);
+ 
+-#if PS && PS_GS && GS_PIXMAP_CLEARING_HACK
+-		if (had_ps_specials && !MAGNIFIER_ACTIVE) {
+-		    erasepage_gs();
+-		    had_ps_specials = False;
+-		}
+-#endif /* PS && PS_GS && GS_PIXMAP_CLEARING_HACK */
+-
+ 		if (globals.dvi_file.bak_fp != NULL) {
+ 		    TRACE_EVENTS((stderr, "redraw_page()"));
+ 		    redraw_page();
+diff -ruN texlive-20120701-source-orig/texk/xdvik/psgs.c texlive-20120701-source/texk/xdvik/psgs.c
+--- texlive-20120701-source-orig/texk/xdvik/psgs.c	2009-11-10 04:28:49.000000000 -0600
++++ texlive-20120701-source/texk/xdvik/psgs.c	2019-10-11 04:33:06.000000000 -0500
+@@ -141,6 +141,7 @@
+ static int GS_write_ack;	/* flag to set when done writing */
+ static Boolean GS_in_header;	/* if we're sending a header */
+ static Boolean GS_in_doc;	/* if we've sent header information */
++static Boolean GS_page_dirty = False; /* if we've drawn since last erase */
+ static int GS_ev_mask;		/* events for which we'll stop */
+ static int GS_die_ack = 0;	/* flags to set when GS dies */
+ static Boolean GS_timer_set;	/* if there's a timer set */
+@@ -477,7 +478,7 @@
+     }
+ 
+     GS_die_ack = EV_ACK;
+-    
++
+     for (;;) {	/* loop because there might be stray ACKs. */
+ 	/*  	fprintf(stderr, "looping for stray ACKs, page %d\n", current_page); */
+ 	(void) read_events(EV_GE_ACK);
+@@ -676,6 +677,7 @@
+     psp = gs_procs;
+     GS_active = False;
+     GS_in_header = True;
++    GS_page_dirty = False;
+     GS_pending = 1;
+     GS_mag = GS_shrink = -1;
+     gs_xio.fd = GS_fd;
+@@ -739,6 +741,24 @@
+ 	psp = no_ps_procs;
+ }
+ 
++void
++gs_erase_page(void)
++{
++    static const char str[] = " erasepage stop\n%%xdvimark\n";
++
++    if (!GS_page_dirty) return;
++
++    if (globals.debug & DBG_PS)
++	puts("Erasing gs page");
++
++    if (GS_active)
++	XDVI_FATAL((stderr, "Internal error in gs_erase_page()."));
++
++    ++GS_pending;
++    gs_send(str, sizeof(str) - 1);
++    waitack();
++}
++
+ static void
+ gs_died(int status, struct xchild *child)
+ {
+@@ -756,7 +776,7 @@
+     (void)close(child->io->fd);
+ 
+     scanned_page = scanned_page_ps = scanned_page_reset;
+-    GS_active = GS_in_doc = False;
++    GS_active = GS_in_doc = GS_page_dirty = False;
+     GS_pending = 0;
+     globals.ev.flags |= GS_die_ack;
+ }
+@@ -782,7 +802,7 @@
+ 
+ 	scanned_page = scanned_page_ps = scanned_page_reset;
+     }
+-    GS_active = GS_in_doc = False;
++    GS_active = GS_in_doc = GS_page_dirty = False;
+     GS_pending = 0;
+ }
+ 
+@@ -961,6 +981,7 @@
+ 	return;
+     if (globals.debug & DBG_PS)
+ 	printf("raw ps sent to context: %s\n", cp);
++	GS_page_dirty = True;
+     gs_send(cp, strlen(cp));
+     gs_send("\n", 1);
+ }
+@@ -995,6 +1016,7 @@
+     if (globals.debug & DBG_PS)
+ 	printf("expanded path: |%s|\n", cp);
+ 
++    GS_page_dirty = True;
+     gs_send("(", 1);
+     gs_send(cp, strlen(cp));
+     gs_send(")run\n", 5);
+@@ -1081,20 +1103,6 @@
+     }
+ }
+ 
+-void erasepage_gs(void)
+-{
+-    /* In buffered mode, gs has no way of knowing that the screen has been 
+-       erased. Clear the gs window buffer with an erasepage command. */ 
+-    
+-    if (resource.gs_alpha && GS_pid > 0 && !GS_active) {
+-	if (globals.debug & DBG_PS)
+-	    puts("erasing page!");
+-	beginheader_gs();
+-	drawraw_gs("erasepage");
+-	endheader_gs();
+-    }
+-}
+-
+ #else
+ /* silence `empty compilation unit' warnings */
+ static void bar(void); static void foo(void) { bar(); } static void bar(void) { foo(); }
+diff -ruN texlive-20120701-source-orig/texk/xdvik/psgs.h texlive-20120701-source/texk/xdvik/psgs.h
+--- texlive-20120701-source-orig/texk/xdvik/psgs.h	2006-01-17 15:41:51.000000000 -0600
++++ texlive-20120701-source/texk/xdvik/psgs.h	2019-10-11 04:33:41.000000000 -0500
+@@ -26,6 +26,6 @@
+ extern Boolean initGS(void);
+ extern void gs_resume_prescan(void);
+ extern void restart_gs(void);
+-extern void erasepage_gs(void);
++extern void gs_erase_page(void);
+ 
+ #endif /* PSGS_H_ */
+diff -ruN texlive-20120701-source-orig/texk/xdvik/special.c texlive-20120701-source/texk/xdvik/special.c
+--- texlive-20120701-source-orig/texk/xdvik/special.c	2008-07-01 10:42:36.000000000 -0500
++++ texlive-20120701-source/texk/xdvik/special.c	2019-10-11 04:35:22.000000000 -0500
+@@ -107,14 +107,6 @@
+ */
+ Boolean have_raw_postscript = False;
+ 
+-# if PS_GS && GS_PIXMAP_CLEARING_HACK
+-/*
+-  Flag whether this page contains PS material;
+-  used to flush the GS buffer
+-*/
+-Boolean had_ps_specials = False;
+-# endif /* PS_GS && GS_PIXMAP_CLEARING_HACK */
+-
+ #endif
+ 
+ 
+@@ -2431,26 +2423,18 @@
+ 		warned_hypertex_too_old = True;
+ 	    }
+ 	}
+-	else {
+-	    /* When not ignoring SDict entries, the distiller and pagecolor
+-	       code in lshort.dvi from CTAN:info/lshort/russian/lshrtdvi.zip
+-	       causes a failed assertion for 'color_bot_size > 0' in dvi-draw.c;
+-	       there's something wrong with the parsing order/event handling here
+-	       (see bug #856547).
+-	       But we also don't want those entries to trigger erasepage_gs(), so
+-	       it's correct to ignore them here.
+-	    */
+-#if PS_GS && GS_PIXMAP_CLEARING_HACK
+-	    had_ps_specials = True;
+-#endif
+-	}
++	/* When not ignoring SDict entries, the distiller and pagecolor
++	   code in lshort.dvi from CTAN:info/lshort/russian/lshrtdvi.zip
++	   causes a failed assertion for 'color_bot_size > 0' in dvi-draw.c;
++	   there's something wrong with the parsing order/event handling here
++	   (see bug #856547).
++	   But we also don't want those entries to trigger erasepage_gs()
++	   [deleted in r3810], so it's correct to ignore them here.
++	*/
+ 	return;
+     }
+     if (memicmp(cp, "psfile", 6) == 0 && (p = endofcommand(cp + 6)) != NULL) {
+     	epsf_special(p);
+-#if PS_GS && GS_PIXMAP_CLEARING_HACK
+-	had_ps_specials = True;
+-#endif
+ 	return;
+     }
+     if (memicmp(cp, "html:", 5) == 0) {
+diff -ruN texlive-20120701-source-orig/texk/xdvik/xdvi.h texlive-20120701-source/texk/xdvik/xdvi.h
+--- texlive-20120701-source-orig/texk/xdvik/xdvi.h	2012-04-02 03:27:30.000000000 -0500
++++ texlive-20120701-source/texk/xdvik/xdvi.h	2019-10-11 04:36:12.000000000 -0500
+@@ -95,18 +95,6 @@
+ #endif
+ 
+ /*
+- * If this is set to 1, xdvi will explicitly clear the internal GS
+- * buffer after every page that contained a PS special (figure etc.)
+- * to avoid artifacts with later PS specials (overlapping lines etc.);
+- * see also bug #633420. This workaround will slow down the drawing of
+- * the next page considerably. Currently xdvi also sometimes dies with
+- * `Internal error in beginheader_gs()'
+- * when paging quickly through a file with this hack enabled.
+- * Set to 0 to disable the hack.
+- */
+-#define GS_PIXMAP_CLEARING_HACK 1
+-
+-/*
+  * Define to 1 if you want to use the experimental font creation code
+  */
+ #define DELAYED_MKTEXPK 0
+@@ -1020,9 +1008,6 @@
+ extern Boolean have_raw_postscript;
+ #if PS
+ extern struct psprocs psp, no_ps_procs;
+-#  ifdef PS_GS
+-extern Boolean had_ps_specials;
+-#  endif
+ #endif
+ 
+ #ifdef MAGICK
