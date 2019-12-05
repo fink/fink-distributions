@@ -1,9 +1,9 @@
 # -*- coding: ascii; tab-width: 4 -*-
 Info2: <<
 Package: openblas
-Version: 0.3.6
+Version: 0.3.7
 Revision: 1
-Type: gcc (8)
+Type: gcc (9)
 Maintainer: Derek Homeier <dhomeie@gwdg.de>
 
 BuildDependsOnly: true
@@ -11,33 +11,65 @@ BuildDepends: fink (>= 0.30.0), gcc%type_raw[gcc]-compiler
 Depends: %N-shlibs (= %v-%r)
 
 Source: https://github.com/xianyi/OpenBLAS/archive/v%v.tar.gz
-Source-MD5: 8a110a25b819a4b94e8a9580702b6495
+Source-MD5: 5cd4ff3891b66a59e47af2d14cde4056
 SourceRename: OpenBLAS-%v.tar.gz
 PatchFile: %n.patch
-PatchFile-MD5: f60b9d7d957d04a772814eb61a4d6762
+PatchFile-MD5: 94c9a2955bd88d3e5e0c28be9b7c1cf2
 
 PatchScript: sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
 
 SetCC: gcc-fsf-%type_raw[gcc]
 
-CompileScript: make FC=gfortran-fsf-%type_raw[gcc] COMMON_OPT='-O2 -mtune=intel' USE_THREAD=1 libs netlib shared
+CompileScript: <<
+	#!/bin/sh -ev
+	# set arch to minimum model supported in OS version
+	case "$(uname -r)" in
+		18*|19*|2*)
+			perl -pi -e "s|(COMMON_OPT = -O2)|\$1 -mtune=intel -march=ivybridge|g;" Makefile.system ;;
+		1*)
+			perl -pi -e "s|(COMMON_OPT = -O2)|\$1 -mtune=intel -march=core2|g;" Makefile.system ;;
+	esac
+	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 libs netlib shared
+	cd benchmark
+	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 smallscaling veclib goto
+	mkdir -m 755 bin
+	mv smallscaling *.veclib *.goto bin
+<<
 
 InstallScript: <<
-	make FC=gfortran-fsf-%type_raw[gcc] COMMON_OPT='-O2 -mtune=intel' USE_THREAD=1 PREFIX=%i install
+	make FC=gfortran-fsf-%type_raw[gcc] PREFIX=%p DESTDIR=%d install
 	install_name_tool -id %p/lib/libopenblas.0.dylib %i/lib/libopenblas.0.dylib
 	mv %i/include/cblas.h %i/include/cblas_openblas.h
-	perl -pi -e 's|%i|%p|;' %i/lib/pkgconfig/openblas.pc %i/lib/cmake/openblas/OpenBLASConfig.cmake
 <<
 
 InfoTest: <<
+	TestDepends: atlas
 	TestScript: <<
 		#!/bin/sh -ev
 		make FC=gfortran-fsf-%type_raw[gcc] COMMON_OPT='-O2 -mtune=intel' USE_THREAD=1 tests | tee tests.log
 		grep -i fail tests.log
 		grep -c PASSED tests.log
 		cd benchmark
-		make FC=gfortran-fsf-%type_raw[gcc] COMMON_OPT='-O2 -mtune=intel' USE_THREAD=1 veclib goto # atlas
-		# this creates a ton of *.veclib, *.goto, *.atlas executables to be compared in performance...
+		make FC=gfortran-fsf-%type_raw[gcc] COMMON_OPT='-O2 -mtune=intel' USE_THREAD=1 atlas
+		# created a ton of *.veclib, *.goto, *.atlas executables to be compared in performance...
+		# just filter largest matrix results and run a little suite of comparisons of threaded vs. openmp speedup
+		echo ATLAS
+		for x in *.atlas; do
+			echo -n $x
+			./$x 2>&1 | tail -1
+		done
+		cd bin
+		echo VecLib
+		for x in *.veclib; do
+			echo -n $x
+			./$x 2>&1 | tail -1
+		done
+		echo OpenBLAS
+		for x in *.goto; do
+			echo -n $x
+			./$x 2>&1 | tail -1
+		done
+		./smallscaling
 	<<
 <<
 
@@ -49,7 +81,7 @@ Splitoff: <<
 	Shlibs: %p/lib/libopenblas.0.dylib 0.0.0 %v (>= 0.3.5-1)
 <<
 
-DocFiles: LICENSE README.md USAGE.md Changelog.txt CONTRIBUTORS.md BACKERS.md GotoBLAS_0*.txt benchmark/scripts
+DocFiles: LICENSE README.md USAGE.md Changelog.txt CONTRIBUTORS.md BACKERS.md GotoBLAS_0*.txt benchmark/scripts benchmark/bin
 License: BSD
 Homepage: https://www.openblas.net
 
@@ -84,9 +116,9 @@ Setup with architecture-independent version and some patches from MacPorts
 https://github.com/macports/macports-ports/blob/master/math/OpenBLAS/Portfile
 Build with FSF gcc8 to ensure optimum compatibility with gfortran.
 cblas.h conflicts with header from atlas.
-TestScript also builds executables in benchmark/, but currently does not run
-them (producing ~200 lines of timing output each); benchmark scripts are
-added to docs.
+Also builds executables for comparison with VecLib [+Atlas] in benchmark/bin,
+TestScript does not run them all (producing ~200 lines of timing output each);
+adding benchmark scripts and binaries to docs.
 Optimisation flags chosen to create binary packages that should work on
 anything from Pentium with SSE upwards, with tuning up to Haswell & Silvermont
 CPUs with AVX2 (most recent supported by gcc8).
