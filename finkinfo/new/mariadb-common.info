@@ -1,0 +1,843 @@
+Info2: <<
+Package: mariadb-common
+Version: 10.3.20
+Revision: 1.1
+Type: dbver (10.3), perl (5.16.2 5.18.2 5.18.4)
+Distribution: <<
+        (%type_pkg[perl] = 5162) 10.9,
+        (%type_pkg[perl] = 5162) 10.10,
+        (%type_pkg[perl] = 5162) 10.11,
+        (%type_pkg[perl] = 5162) 10.12,
+        (%type_pkg[perl] = 5162) 10.13,
+        (%type_pkg[perl] = 5182) 10.14,
+        (%type_pkg[perl] = 5184) 10.14.5,
+        (%type_pkg[perl] = 5184) 10.15
+<<
+###
+BuildDepends: <<
+	fink (>= 0.45.99.git),
+	debhelper (>= 9),
+	dh-exec,
+	bison,
+	cmake,
+	libarchive31,
+	gnutls30 (>= 3.3.24),
+	libjemalloc1,
+	lz4-dev,
+	libncurses5 (>= 5.0-6),
+	libpcre2,
+	readline7,
+	libsnappy1-dev,
+	libxml2,
+	po-debconf,
+	unixodbc2 | unixodbc2-nox
+<<
+Depends: mysql-common
+###
+Source: mirror:debian:pool/main/m/mariadb-%type_raw[dbver]/mariadb-%type_raw[dbver]_%v.orig.tar.gz
+Source-Checksum: SHA256(53818f2d684e060143b4d8293da44c7f09cc676d71959405f84e6dc8affbc492)
+Source2: mirror:debian:pool/main/m/mariadb-%type_raw[dbver]/mariadb-%type_raw[dbver]_%v-1.debian.tar.xz
+Source2-Checksum: SHA256(e6268c3994de2063cd75cbcc934b6ea085a2b947300c9e1217a5bd1957dcaf62)
+SourceDirectory: mariadb-%v
+Source2ExtractDir: mariadb-%v
+###
+DefaultScript: debhelper
+PatchScript: <<
+# Fix run dir location
+for i in `find debian -type f`; do perl -pi -e 's, /run/mysqld, /var/run/mysqld,g' $i; done
+
+%{default_script}
+
+perl -pi -e 's,..DEB_HOST_GNU_TYPE..,/usr/bin/,g' debian/rules
+perl -pi -e 's,lsb_release -r -s,echo macOS,g' debian/rules
+perl -pi -e 's,"debian-,"fink-,g' debian/rules
+perl -pi -e 's,amd64,darwin-x86_64,g' debian/rules
+perl -pi -e 's,kfreebsd-darwin-x86_64,kfreebsd-amd64,g' debian/rules
+perl -pi -e 's,install -D,ginstall -D,g' debian/rules
+
+for i in `find debian -type f`; do \
+	perl -pi -e 's,libmariadb.so([0-9.\*]+)?,libmariadb$1.dylib,g' $i; \
+	perl -pi -e 's,libmariadbd.so([0-9.\*]+)?,libmariadbd$1.dylib,g' $i; \
+	perl -pi -e 's,libmysqlclient.so([0-9.\*]+)?,libmysqlclient$1.dylib,g' $i; \
+	perl -pi -e 's,libmysqlclient_r.so([0-9.\*]+)?,libmysqlclient_r$1.dylib,g' $i; \
+done
+
+# Can't build these yet, missing depends
+rm -rf debian/*oqgraph* debian/*crack* debian/*rocksdb* debian/*tokudb* debian/*mroonga*
+
+# Remove AppArmor
+sed -i '/apparmor/d' debian/mariadb-server-10.3.install
+sed -i '/apparmor/d' debian/rules
+sed -i '/AppArmor/d' debian/rules
+
+# Remove add/del user/group stuffs
+sed -i '123,142d' debian/mariadb-server-10.3.preinst
+sed -i '47d;' debian/mariadb-server-10.3.postrm
+
+# GNU tools
+perl -pi -e 's,df --portability,gdf --portability,g' debian/mariadb-server-10.3.mysql.init debian/mariadb-server-10.3.preinst
+perl -pi -e 's,rmdir,grmdir,g' debian/mariadb-server-10.3.postrm
+
+# User _mysql instead of mysql user/group
+perl -pi -e 's,mysql:adm,_mysql:admin,g' debian/mariadb-server-10.3.postinst
+perl -pi -e 's,--user=mysql,--user=_mysql,g' debian/mariadb-server-10.3.postinst
+perl -pi -e 's,chown mysql,chown _mysql,g' debian/mariadb-server-10.3.postinst debian/mariadb-server-10.3.preinst
+perl -pi -e 's,-group mysql,-group _mysql,g' debian/mariadb-server-10.3.preinst
+perl -pi -e 's,chgrp mysql,chgrp _mysql,g' debian/mariadb-server-10.3.preinst
+perl -pi -e 's,id -u mysql,id -u _mysql,g' debian/mariadb-server-10.3.postinst debian/mariadb-server-10.3.preinst
+perl -pi -e 's,mysql adm,_mysql admin,g' debian/mariadb-server-10.3.mysql-server.logrotate
+perl -pi -e 's,-o mysql,-o _mysql,g' debian/mariadb-server-10.3.mysql.init
+perl -pi -e 's,= mysql,= _mysql,g' debian/additions/mariadb.conf.d/50-server.cnf
+perl -pi -e "s,user='mysql',user='mysql',g" scripts/mysqld_safe.sh
+
+# Fix init script
+perl -pi -e 's,-g root,-g wheel,g' debian/mariadb-server-10.3.mysql.init
+perl -pi -e 's,/lib/lsb,%p/lib/lsb,g' debian/mariadb-server-10.3.mysql.init
+
+# no invoke-rc on macOS
+perl -pi -e 's,invoke-rc.d mysql start,daemonic enable mariadb || exit \$?\n\t\t%p/etc/init.d/mysql start,g' debian/mariadb-server-10.3.postinst
+perl -pi -e 's,invoke-rc.d mysql stop,%p/etc/init.d/mysql stop || exit \$?\n\tdaemonic disable mariadb,g' debian/mariadb-server-10.3.prerm
+
+# Fix files not using the build system DEFINES
+perl -pi -e 's,/etc,%p/etc,g' mysys/my_default.c
+<<
+CompileScript: <<
+CMAKEFLAGS="-Dreadline_INCLUDE_DIR=%p/include -Dreadline_LIBRARY=%p/lib/libreadline.dylib CURL_INCLUDE_DIR:PATH=%p/include -DCURL_LIBRARY:FILEPATH=%p/lib/libcurl.dylib -DCURSES_CURSES_H_PATH:PATH=%p/include -DCURSES_CURSES_LIBRARY:FILEPATH=%p/lib/libcurses.dylib -DCURSES_HAVE_CURSES_H:FILEPATH=%p/include/curses.h -DCURSES_INCLUDE_PATH:FILEPATH=%p/include -DCURSES_LIBRARY:FILEPATH=%p/lib/libcurses.dylib -DCURSES_NCURSES_LIBRARY:FILEPATH=%p/lib/libncurses.dylib -DINSTALL_MYSQLDATADIR:STRING=%p/var/lib/mysql -DINSTALL_SYSCONF2DIR:STRING=%p/etc/mysql/conf.d -DINSTALL_SYSCONFDIR:STRING=%p/etc -DINSTALL_SYSTEMD_SYSUSERSDIR:STRING=%p/lib/sysusers.d -DINSTALL_SYSTEMD_TMPFILESDIR:STRING=%p/lib/tmpfiles.d -DINSTALL_SYSTEMD_UNITDIR:STRING=%p/lib/systemd/system -DINSTALL_UNIX_ADDRDIR:STRING=%p/var/run/mysqld/mysqld.sock -DMYSQL_DATADIR:PATH=%p/var/lib/mysql -DBZIP2_INCLUDE_DIR:PATH=%p/include -DBZIP2_LIBRARIES:FILEPATH=%p/lib/libbz2.dylib -DWITH_LIBEDIT=OFF -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON" %{default_script}
+<<
+###
+Description: MariaDB common metapackage
+DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+<<
+###
+SplitOff: <<
+	Package: libmariadb-dev
+	BuildDependsOnly: True
+	Depends: <<
+		libmariadb3 (= %v-%r),
+		gnutls30-shlibs
+	<<
+#	Breaks: <<
+#		libmariadbclient-dev (<< %type_raw[dbver]),
+#		libmysqlclient-dev,
+#		libmysqld-dev
+#	<<
+	Replaces: <<
+		libmariadbclient-dev (<< %type_raw[dbver]),
+		libmysqlclient-dev,
+		libmysqld-dev
+	<<
+	Conflicts: <<
+		libmariadbclient16-dev,
+		libmysqlclient-dev
+	<<
+	Description: MariaDB database development files
+	DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+.
+This package includes development libraries and header files. To allow sources
+expecting the MariaDB Connector/C to build. Sources that expect the MySQL
+Client libraries should use files from the libmariadb-dev-compat package.
+	<<
+<<
+SplitOff2: <<
+	Package: libmariadbclient-dev
+	BuildDependsOnly: True
+	Depends: libmariadb-dev (= %v-%r)
+	Description: MariaDB database development files (transitional package)
+	DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+.
+This empty package is intended to ease the switch to libmariadb-dev.
+It can safely removed.
+	<<
+<<
+SplitOff3: <<
+	Package: libmariadb-dev-compat
+	BuildDependsOnly: True
+	Depends: libmariadb-dev (= %v-%r)
+	Conflicts: <<
+		libmariadb-client-lgpl-dev-compat,
+		libmariadbclient-dev-compat,
+		libmysqlclient-dev
+	<<
+	Provides: <<
+		libmariadb-client-lgpl-dev-compat,
+		libmariadbclient-dev-compat
+	<<
+#	Breaks: <<
+#		libmariadb-client-lgpl-dev-compat,
+#		libmariadbclient-dev (<< %type_raw[dbver]),
+#		libmariadbclient-dev-compat,
+#		libmysqlclient-dev
+#	<<
+	Replaces: <<
+		libmariadb-client-lgpl-dev-compat,
+		libmariadbclient-dev (<< %type_raw[dbver]),
+		libmariadbclient-dev-compat,
+		libmysqlclient-dev
+	<<
+	Description: MariaDB Connector/C, compatibility symlinks
+	DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+.
+This package includes compatibility symlinks to allow sources expecting the
+MySQL client libraries to be built against MariaDB Connector/C.
+	<<
+<<
+SplitOff4: <<
+	Package: libmariadb3
+	Depends: <<
+		mariadb-common,
+		gnutls30-shlibs
+	<<
+	Conflicts: <<
+		mariadb-galera-server-10.0 (<< 10.0.5),
+		mariadb-galera-server-5.5 (<< 5.5.33),
+		mariadb-server-10.0 (<< 10.0.5),
+		mariadb-server-5.1,
+		mariadb-server-5.2,
+		mariadb-server-5.3,
+		mariadb-server-5.5 (<< 5.5.33)
+	<<
+#	Breaks: libmariadbclient18
+	Replaces: libmariadbclient18
+	Description: MariaDB database client library
+	DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+.
+This package includes the client library.
+	<<
+<<
+SplitOff5: <<
+	Package: libmariadbd19
+	Depends: <<
+		lz4-shlibs,
+		libpcre2-shlibs,
+		libsnappy1-shlibs
+	<<
+	Description: MariaDB embedded database, shared library
+	DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+.
+This package includes a shared library for embedded MariaDB applications.
+	<<
+<<
+SplitOff6: <<
+	Package: libmariadbd-dev
+	BuildDependsOnly: True
+	Depends: <<
+		libmariadb-dev (= %v-%r),
+		libmariadbd19 (= %v-%r)
+	<<
+#	Breaks: libmysqld-dev
+	Replaces: libmysqld-dev
+	Description: MariaDB embedded database, development files
+	DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+.
+This package includes the embedded server library development and header files.
+	<<
+<<
+SplitOff7: <<
+	Package: mariadb-client-core-%type_raw[dbver]
+	Depends: <<
+		mariadb-common (>= %v-%r),
+		gnutls30-shlibs,
+		lz4-shlibs,
+		libncurses5-shlibs,
+		libpcre2-shlibs,
+		readline7-shlibs,
+		libsnappy1-shlibs
+	<<
+	Conflicts: <<
+		mysql-client-5.5,
+		mysql-client-5.6,
+		mysql-client-5.7,
+		virtual-mysql-client-core
+	<<
+#	Breaks: <<
+#		mariadb-client-10.0 (<< 10.0.24-6),
+#		mariadb-client-core-10.0,
+#		mariadb-client-core-10.1,
+#		mariadb-client-core-10.2,
+#		mariadb-client-core-5.5,
+#		mysql-client-core-5.5,
+#		mysql-client-core-5.6,
+#		mysql-client-core-5.7
+#	<<
+	Replaces: <<
+		mariadb-client-10.0 (<< 10.0.24-6),
+		mariadb-client-core-10.0,
+		mariadb-client-core-10.1,
+		mariadb-client-core-10.2,
+		mariadb-client-core-5.5,
+		mysql-client-core-5.5,
+		mysql-client-core-5.6,
+		mysql-client-core-5.7,
+		virtual-mysql-client-core
+	<<
+	Provides: virtual-mysql-client-core
+	Description: MariaDB database core client binaries
+	DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+.
+This package includes the core client files, as used by Akonadi.
+	<<
+<<
+SplitOff8: <<
+	Package: mariadb-client-%type_raw[dbver]
+	Depends: <<
+		debianutils (>= 1.6),
+		config-inifiles-pm%type_pkg[perl],
+		mariadb-client-core-%type_raw[dbver] (>= %v-%r),
+		gnutls30-shlibs
+	<<
+	Conflicts: <<
+		mysql-client-core-5.5,
+		mysql-client-core-5.6,
+		mysql-client-core-5.7,
+		mytop,
+		virtual-mysql-client
+	<<
+#	Breaks: <<
+#		mariadb-client-10.0,
+#		mariadb-client-10.1,
+#		mariadb-client-10.2,
+#		mariadb-client-5.5,
+#		mariadb-server-10.0 (<< 10.0.13-1),
+#		mysql-client-5.5,
+#		mysql-client-5.6,
+#		mysql-client-5.7
+#	<<
+	Replaces: <<
+		mariadb-client-10.0,
+		mariadb-client-10.1,
+		mariadb-client-10.2,
+		mariadb-client-5.5,
+		mariadb-server-10.0 (<< 10.0.13-1),
+		mysql-client-5.5,
+		mysql-client-5.6,
+		mysql-client-5.7,
+		mytop,
+		virtual-mysql-client
+	<<
+	Provides: virtual-mysql-client
+	Recommends: <<
+		dbd-mysql-pm%type_pkg[perl] (>= 1.2202),
+		dbi-pm%type_pkg[perl],
+		term-readkey-pm%type_pkg[perl]
+	<<
+	Description: MariaDB database client binaries
+	DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+.
+This package includes the client binaries and the additional tools
+innotop and mysqlreport.
+	<<
+<<
+SplitOff9: <<
+	Package: mariadb-server-core-%type_raw[dbver]
+	Depends: <<
+		mariadb-common (>= %v-%r),
+		lz4-shlibs,
+		libpcre2-shlibs,
+		libsnappy1-shlibs
+	<<
+	Conflicts: <<
+		mariadb-galera-server-5.5,
+		mysql-server-5.5,
+		mysql-server-5.6,
+		mysql-server-5.7,
+		virtual-mysql-server-core
+	<<
+#	Breaks: <<
+#		mariadb-client-10.1,
+#		mariadb-server-10.1,
+#		mariadb-server-10.2,
+#		mariadb-server-%type_raw[dbver] (<< 10.3.13-2),
+#		mariadb-server-core-10.0,
+#		mariadb-server-core-10.1,
+#		mariadb-server-core-10.2,
+#		mariadb-server-core-5.5,
+#		mysql-client-5.5,
+#		mysql-client-5.6,
+#		mysql-server-core-5.5,
+#		mysql-server-core-5.6,
+#		mysql-server-core-5.7
+#	<<
+	Replaces: <<
+		mariadb-client-10.1,
+		mariadb-server-10.1,
+		mariadb-server-10.2,
+		mariadb-server-%type_raw[dbver] (<< 10.3.13-2),
+		mariadb-server-core-10.0,
+		mariadb-server-core-10.1,
+		mariadb-server-core-10.2,
+		mariadb-server-core-5.5,
+		mysql-client-5.5,
+		mysql-client-5.6,
+		mysql-client-5.7,
+		mysql-server-core-5.5,
+		mysql-server-core-5.6,
+		mysql-server-core-5.7,
+		virtual-mysql-server-core
+	<<
+	Provides: virtual-mysql-server-core
+	Description: MariaDB database core server files
+	DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+.
+This package includes the core server files, as used by Akonadi.
+	<<
+<<
+SplitOff10: <<
+	Package: mariadb-server-%type_raw[dbver]
+	Suggests: <<
+		mailx,
+		mariadb-test,
+		netcat-openbsd,
+		tinyca
+	<<
+	Recommends: html-template-pm
+#	Pre-Depends: <<
+#		debconf,
+#		mariadb-common (>= %v-%r)
+#	<<
+#		galera-3 (>=25.3),
+	Depends: <<
+		debconf (>= 0.5),
+		mariadb-common (>= %v-%r),
+		gawk,
+		dbi-pm%type_pkg[perl],
+		gnutls30-shlibs,
+		mariadb-client-%type_raw[dbver] (>= %v-%r),
+		mariadb-server-core-%type_raw[dbver] (>= %v-%r),
+		rsync,
+		socat,
+		daemonic
+	<<
+	Conflicts: <<
+		mariadb-tokudb-engine-10.0,
+		mariadb-tokudb-engine-10.1,
+		mariadb-tokudb-engine-5.5,
+		mysql-server-core-5.5,
+		mysql-server-core-5.6,
+		mysql-server-core-5.7,
+		virtual-mysql-server
+	<<
+#	Breaks: <<
+#		cqrlog (<< 1.9.0-5),
+#		mariadb-galera-server,
+#		mariadb-galera-server-10.0,
+#		mariadb-galera-server-5.5,
+#		mariadb-server-10.0,
+#		mariadb-server-10.1,
+#		mariadb-server-10.2,
+#		mariadb-server-5.5,
+#		mariadb-tokudb-engine-10.0,
+#		mariadb-tokudb-engine-10.1,
+#		mariadb-tokudb-engine-5.5,
+#		mysql-client-5.5,
+#		mysql-server-5.5,
+#		mysql-server-5.6,
+#		mysql-server-5.7
+#	<<
+	Replaces: <<
+		mariadb-galera-server,
+		mariadb-galera-server-10.0,
+		mariadb-galera-server-5.5,
+		mariadb-server-10.0,
+		mariadb-server-10.1,
+		mariadb-server-10.2,
+		mariadb-server-5.5,
+		mariadb-tokudb-engine-10.0,
+		mariadb-tokudb-engine-10.1,
+		mariadb-tokudb-engine-5.5,
+		mysql-client-5.5,
+		mysql-server-5.5,
+		mysql-server-5.6,
+		mysql-server-5.7,
+		virtual-mysql-server
+	<<
+	DaemonicName: mariadb
+	DaemonicFile: <<
+<service>
+ <description>MariaDB %v database server</description>
+ <message>MariaDB %v database server</message>
+ <daemon name="mysqld_safe">
+   <executable background="no">%p/etc/init.d/mysql</executable>
+   <parameters>start</parameters>
+ </daemon>
+</service>
+	<<
+	Provides: virtual-mysql-server
+	Description: MariaDB database server binaries
+	DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+.
+This package includes the server binaries.
+	<<
+<<
+SplitOff11: <<
+	Package: mariadb-server
+	Depends: mariadb-server-%type_raw[dbver] (>= %v-%r)
+	Description: MariaDB database server (metapackage depending on the latest version)
+	DescDetail: <<
+This is an empty package that depends on the current "best" version of
+mariadb-server (currently mariadb-server-%type_raw[dbver]), as determined by the MariaDB
+maintainers. Install this package if in doubt about which MariaDB
+version you need. That will install the version recommended by the
+package maintainers.
+.
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+	<<
+<<
+SplitOff12: <<
+	Package: mariadb-client
+	Depends: mariadb-client-%type_raw[dbver] (>= %v-%r)
+	Description: MariaDB database client (metapackage depending on the latest version)
+	DescDetail: <<
+This is an empty package that depends on the current "best" version of
+mariadb-client (currently mariadb-client-%type_raw[dbver]), as determined by the MariaDB
+maintainers.  Install this package if in doubt about which MariaDB version
+you want, as this is the one considered to be in the best shape.
+	<<
+<<
+SplitOff13: <<
+	Package: mariadb-backup
+#	Breaks: <<
+#		mariadb-backup-10.1,
+#		mariadb-backup-10.2,
+#		mariadb-client-10.1
+#	<<
+	Replaces: <<
+		mariadb-backup-10.1,
+		mariadb-backup-10.2,
+		mariadb-client-10.1
+	<<
+	Depends: <<
+		mariadb-client-core-%type_raw[dbver] (= %v-%r),
+		lz4-shlibs,
+		libpcre2-shlibs,
+		libsnappy1-shlibs
+	<<
+	Description: Backup tool for MariaDB server
+	DescDetail: <<
+This backup tool is guaranteed to be compatible with MariaDB.
+Based on Xtrabackup, but improved to work with MariaDB.
+.
+Please refer to the MariaDB Knowledge Base on more information on
+how to use this tool.
+	<<
+<<
+SplitOff14: <<
+	Package: mariadb-plugin-connect
+	Depends: <<
+		libxml2,
+		mariadb-server-%type_raw[dbver],
+		unixodbc2 | unixodbc2-nox,
+		unixodbc2-shlibs | unixodbc2-nox-shlibs
+	<<
+	Conflicts: <<
+		mariadb-connect-engine-10.0,
+		mariadb-connect-engine-10.1
+	<<
+#	Breaks: <<
+#		mariadb-connect-engine-10.0,
+#		mariadb-connect-engine-10.1,
+#		mariadb-server-10.0,
+#		mariadb-server-10.1
+#	<<
+	Replaces: <<
+		mariadb-connect-engine-10.0,
+		mariadb-connect-engine-10.1,
+		mariadb-server-10.0,
+		mariadb-server-10.1
+	<<
+	Description: Connect storage engine for MariaDB
+	DescDetail: <<
+Connect engine supports a number of file formats (dbf, xml, txt, bin, etc),
+connections to ODBC tables and remote MySQL tables, as well as a number of
+other interesting features.
+This package contains the Connect plugin for MariaDB.
+	<<
+<<
+#SplitOff15: <<
+#	Package: mariadb-plugin-rocksdb
+#	Depends: <<
+#		mariadb-server-%type_raw[dbver] (= %v-%r),
+#         	rocksdb-tools,
+#		lz4-shlibs,
+#		libsnappy1-shlibs
+#	<<
+#	Breaks: <<
+#		mariadb-rocksdb-engine-10.2,
+#		mariadb-rocksdb-engine-%type_raw[dbver]
+#	<<
+#	Replaces: <<
+#		mariadb-rocksdb-engine-10.2,
+#		mariadb-rocksdb-engine-%type_raw[dbver]
+#	<<
+#	Recommends: python-mysqldb
+#	Description: RocksDB storage engine for MariaDB
+#	DescDetail: <<
+#The RocksDB storage engine is a high performance storage engine, aimed
+#at maximising storage efficiency while maintaining InnoDB-like performance.
+#This package contains the RocksDB plugin for MariaDB.
+#	<<
+#<<
+#SplitOff16: <<
+#	Package: mariadb-plugin-oqgraph
+#	Depends: <<
+#		libjudydebian1,
+#		mariadb-server-%type_raw[dbver]
+#	<<
+#	Conflicts: <<
+#		mariadb-oqgraph-engine-10.0,
+#		mariadb-oqgraph-engine-10.1
+#	<<
+#	Breaks: <<
+#		mariadb-oqgraph-engine-10.0,
+#		mariadb-oqgraph-engine-10.1,
+#		mariadb-server-10.0,
+#		mariadb-server-10.1
+#	<<
+#	Replaces: <<
+#		mariadb-oqgraph-engine-10.0,
+#		mariadb-oqgraph-engine-10.1,
+#		mariadb-server-10.0,
+#		mariadb-server-10.1
+#	<<
+#	Description: OQGraph storage engine for MariaDB
+#	DescDetail: <<
+#The OQGraph engine is a computation engine plugin for handling hierarchies
+#(trees) and graphs (friend-of-a-friend, etc) cleanly through standard SQL.
+#This package contains the OQGraph plugin for MariaDB.
+#	<<
+#<<
+#SplitOff17: <<
+#	Package: mariadb-plugin-tokudb
+#	Depends: <<
+#		mariadb-server-%type_raw[dbver] (= %v-%r),
+#		libjemalloc1-shlibs
+#	<<
+#	Breaks: <<
+#		mariadb-server-10.0,
+#		mariadb-server-10.1
+#	<<
+#	Replaces: <<
+#		mariadb-server-10.0,
+#		mariadb-server-10.1
+#	<<
+#	Description: TokuDB storage engine for MariaDB
+#	DescDetail: <<
+#The TokuDB storage engine is for use in high-performance and write-intensive
+#environments, offering increased compression and better performance based
+#on fractal indexes.
+#This package contains the TokuDB plugin for MariaDB.
+#	<<
+#<<
+#SplitOff18: <<
+#	Package: mariadb-plugin-mroonga
+#	Depends: mariadb-server-%type_raw[dbver]
+#	Breaks: <<
+#		mariadb-server-10.0,
+#		mariadb-server-10.1
+#	<<
+#	Replaces: <<
+#		mariadb-server-10.0,
+#		mariadb-server-10.1
+#	<<
+#	Description: Mroonga storage engine for MariaDB
+#	DescDetail: <<
+#Mroonga (formerly named Groonga Storage Engine) is a storage engine that
+#provides fast CJK-ready full text searching using column store.
+#This package contains the Mroonga plugin for MariaDB.
+#	<<
+#<<
+SplitOff19: <<
+	Package: mariadb-plugin-spider
+	Depends: mariadb-server-%type_raw[dbver]
+#	Breaks: <<
+#		mariadb-server-10.0,
+#		mariadb-server-10.1
+#	<<
+	Replaces: <<
+		mariadb-server-10.0,
+		mariadb-server-10.1
+	<<
+	Description: Spider storage engine for MariaDB
+	DescDetail: <<
+The Spider storage engine with built-in sharding features. It supports
+partitioning and xa transactions, and allows tables of different MariaDB
+instances to be handled as if they were on the same instance. It refers to one
+possible implementation of ISO/IEC 9075-9:2008 SQL/MED.
+	<<
+<<
+SplitOff20: <<
+	Package: mariadb-plugin-gssapi-server
+	Depends: mariadb-server-%type_raw[dbver]
+#	Breaks: <<
+#		mariadb-gssapi-server-10.1,
+#		mariadb-gssapi-server-10.2
+#	<<
+	Replaces: <<
+		mariadb-gssapi-server-10.1,
+		mariadb-gssapi-server-10.2
+	<<
+	Description: GSSAPI authentication plugin for MariaDB server
+	DescDetail: <<
+This plugin includes support for Kerberos on Unix, but can also be used for
+Windows authentication with or without domain environment.
+.
+This package contains the server parts.
+	<<
+<<
+SplitOff21: <<
+	Package: mariadb-plugin-gssapi-client
+	Depends: mariadb-client-%type_raw[dbver]
+#	Breaks: <<
+#		mariadb-gssapi-client-10.1,
+#		mariadb-gssapi-client-10.2
+#	<<
+	Replaces: <<
+		mariadb-gssapi-client-10.1,
+		mariadb-gssapi-client-10.2
+	<<
+	Description: GSSAPI authentication plugin for MariaDB client
+	DescDetail: <<
+This plugin includes support for Kerberos on Unix, but can also be used for
+Windows authentication with or without domain environment.
+.
+This package contains the client parts.
+	<<
+<<
+#SplitOff22: <<
+#	Package: mariadb-plugin-cracklib-password-check
+#	Depends: <<
+#		libcrack2 (>= 2.9.0),
+#		mariadb-server-%type_raw[dbver]
+#	<<
+#	Description: CrackLib Password Validation Plugin for MariaDB
+#	DescDetail: <<
+#This password validation plugin uses cracklib to allow only
+#sufficiently secure (as defined by cracklib) user passwords in MariaDB.
+#	<<
+#<<
+SplitOff23: <<
+	Package: mariadb-test
+	Depends: <<
+		mariadb-client-%type_raw[dbver] (= %v-%r),
+		mariadb-server-%type_raw[dbver] (= %v-%r),
+		mariadb-test-data (= %v-%r),
+		virtual-mysql-testsuite,
+		gnutls30-shlibs,
+		lz4-shlibs,
+		libpcre2-shlibs,
+		libsnappy1-shlibs
+	<<
+#	Breaks: <<
+#		mariadb-test-10.0,
+#		mariadb-test-10.1,
+#		mariadb-test-5.5,
+#		mysql-testsuite,
+#		mysql-testsuite-5.5,
+#		mysql-testsuite-5.6,
+#		mysql-testsuite-5.7
+#	<<
+	Replaces: <<
+		mariadb-test-10.0,
+		mariadb-test-10.1,
+		mariadb-test-5.5,
+		mysql-testsuite,
+		mysql-testsuite-5.5,
+		mysql-testsuite-5.6,
+		mysql-testsuite-5.7,
+		virtual-mysql-testsuite
+	<<
+	Provides: virtual-mysql-testsuite
+	Suggests: patch
+	Description: MariaDB database regression test suite
+	DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+.
+This package includes the regression test suite.
+	<<
+<<
+SplitOff24: <<
+	Package: mariadb-test-data
+#	Breaks: <<
+#		mariadb-test-10.0,
+#		mariadb-test-10.1,
+#		mariadb-test-5.5,
+#		mariadb-test-data-10.0,
+#		mysql-testsuite,
+#		mysql-testsuite-5.5,
+#		mysql-testsuite-5.6,
+#		mysql-testsuite-5.7
+#	<<
+	Replaces: <<
+		mariadb-test-10.0,
+		mariadb-test-10.1,
+		mariadb-test-5.5,
+		mariadb-test-data-10.0,
+		mysql-testsuite,
+		mysql-testsuite-5.5,
+		mysql-testsuite-5.6,
+		mysql-testsuite-5.7
+	<<
+	Description: MariaDB database regression test suite - data files
+	DescDetail: <<
+MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
+server. SQL (Structured Query Language) is the most popular database query
+language in the world. The main goals of MariaDB are speed, robustness and
+ease of use.
+.
+This package has the architecture independent data files for the test suite.
+	<<
+<<
+###
+License: GPL
+Maintainer: Justin F. Halett <thesin@lists.sourceforge.net>
+Homepage: https://mariadb.org/
+<<
