@@ -1,0 +1,1046 @@
+Info2: <<
+Package: php7.3
+Version: 7.3.12
+Revision: 1.1
+Type: phpver (7.3), apiver (20180731)
+###
+BuildDepends: <<
+	fink (>= 0.45.99.git),
+	apache2-dev (>= 2.4),
+	autoconf2.6 (>= 2.63),
+	automake1.15 (>= 1.11),
+	bison,
+	debhelper (>= 9),
+	default-libmysqlclient-dev | libmysqlclient-dev,
+	default-mysql-server | mysql-server | virtual-mysql-server,
+	dh-apache2,
+	dpkg-dev (>= 1.16.1),
+	flex,
+	freetds-dev,
+	libapr.0-dev (>= 1.2.7-8),
+	bzip2-dev,
+	libc-client1-dev,
+	libcurl4,
+	db53-aes,
+	readline7,
+	enchant1-dev,
+	libevent2.1,
+	expat1 (>= 1.95.2-2.1),
+	freetype219,
+	libgcrypt20 (>> 1.6.3),
+	gd3,
+	glib2-dev,
+	gmp5,
+	libicu55-dev,
+	libjpeg8-turbo,
+	openldap24-dev,
+	liblmdb-dev,
+	file-dev,
+	libmhash2 (>= 0.8.8),
+	libonig2-dev,
+	libpcre2 (>= 10.30),
+	libpng16,
+	postgresql12-dev,
+	aspell-dev,
+	qdbm14,
+	recode3-dev,
+	cyrus-sasl2-dev,
+	libnetsnmp35-dev,
+	libsodium23,
+	sqlite3-dev,
+	openssl110-dev,
+	libtidy5 (>= 2:5.2.0),
+	libtool2 (>= 2.2),
+	libwebp7,
+	wrap,
+	libxml2,
+	libxmlrpc-epi-dev,
+	libxslt (>= 1.0.18),
+	libzip5 (>= 1.0.0),
+	netcat,
+	re2c,
+	unixodbc2-nox | unixodbc2,
+	libncurses5,
+	system-xfree86-dev,
+	comerr-dev
+<<
+Depends: <<
+	libapache2-mod-%n | %n-fpm | %n-cgi,
+	%n-common
+<<
+Provides: php
+###
+Source: mirror:debian:pool/main/p/%n/%n_%v.orig.tar.xz
+Source-Checksum: SHA256(aafe5e9861ad828860c6af8c88cdc1488314785962328eb1783607c1fdd855df)
+Source2: mirror:debian:pool/main/p/%n/%n_%v-1.debian.tar.xz
+Source2-Checksum: SHA256(b6d1397a4894ba952451ee2089b3a552f7c1746899b8408ca8906ad5dea2aca3)
+SourceDirectory: php-%v
+Source2ExtractDir: php-%v
+###
+DefaultScript: debhelper
+PatchScript: <<
+# Remove plugins we can't build yet, missing deps, etc, has to happen before all
+# dh calls
+for ext in interbase firebird; do \
+	rm -rf debian/*${ext}.* debian/rules.d/ext-${ext}.mk; \
+	sed -i "/${ext}/d" debian/rules; \
+
+	sed -i "/^Package: %N-${ext}/,/^Package:/d" debian/control; \
+done
+
+perl -pi -e 's,0012-php-5.4.7-libdb.patch,#0012-php-5.4.7-libdb.patch,g' debian/patches/series
+
+dh_quilt_patch
+
+%{default_script}
+
+# Find dbx is dbx not dbx.y
+perl -pi -e 's,db5.0,db5,g' configure ext/dba/config.m4
+
+# zlib is a system lib on macOS
+sdkpath=`xcrun --show-sdk-path`; \
+perl -pi -e "s,--with-zlib=%p,--with-zlib=${sdkpath}/usr,g" debian/rules; \
+perl -pi -e "s,--with-zlib-dir=%p,--with-zlib-dir=${sdkpath}/usr,g" debian/rules debian/rules.d/ext-zip.mk debian/rules.d/ext-mysql.mk
+
+# fix mysql.sock location
+perl -pi -e 's,--enable-mysqlnd,--with-mysql-sock=%p/var/run/mysqld/mysqld.sock --enable-mysqlnd,g' debian/rules.d/ext-mysql.mk
+
+# macOS uses _www instead of www-data
+perl -pi -e 's,www-data,_www,g' debian/php-fpm.*
+
+perl -pi -e 's,amd64,darwin-x86_64,g' debian/rules
+perl -pi -e 's,readlink,greadlink,g' debian/rules
+perl -pi -e 's,getconf LFS_CFLAGS,echo "",g' debian/rules
+perl -pi -e 's,export DEB_LDFLAGS_MAINT_APPEND,#export DEB_LDFLAGS_MAINT_APPEND,g' debian/rules
+
+# No idea why I ened to disable cli here, Debian does not, but linking
+# doesn't not work on cli for some reason
+perl -pi -e 's,--enable-embed --enable-cli,--enable-embed --disable-cli,g' debian/rules
+
+# darwin sendmail is /usr/sbin/sendmail
+perl -pi -e 's,%p/sbin/sendmail,/usr/sbin/sendmail,g' debian/rules
+
+# fix include dir in config
+perl -pi -e 's,/usr/share/php,%p/share/php,g' php.ini-* configure.ac
+# darwin X11 dir
+perl -pi -e 's,with-xpm-dir=.*,with-xpm-dir=/opt/X11 \\,g' debian/rules.d/ext-gd.mk
+perl -pi -e 's,i/X11,i/include,g' ext/gd/config.m4 configure
+
+# Specify path to iconv
+perl -pi -e 's;with-iconv=shared;with-iconv=shared,%p;g' debian/rules.d/ext-common.mk
+
+# fink uses readline instead of libedit
+perl -pi -e 's,with-libedit,with-readline,g' debian/rules debian/rules.d/ext-readline.mk
+
+# use GNU tools
+perl -pi -e 's,mv -u,gmv -u,g' debian/rules
+perl -pi -e 's,rmdir,grmdir,g' debian/php-module.postrm.in debian/php-module.preinst.in debian/php-sapi.postrm
+
+# fink libzip isn't in include directly
+perl -pi -e 's,with-libzip=%p,with-libzip=%p/lib/libzip,g' debian/rules.d/ext-zip.mk
+
+# system-tzdata doesn't work on darwin, disable it
+perl -pi -e 's,with-system-tzdata,without-system-tzdata,g' debian/rules
+# fink doesn't have argon
+sed -i '/argon2/d' debian/rules
+
+# change run dir
+perl -pi -e 's,/run/php,%p/var/run/php,g' debian/php-fpm* debian/rules.d/prepare-fpm-pools.mk
+
+# Userdir location
+perl -pi -e 's,home,Users,g' debian/php.conf
+perl -pi -e 's,public_html,Sites,g' debian/php.conf
+
+# Touch file so build doesn't fail is tests aren't run.  This is an issue as
+# it changes the deb file, so this is not a solution it's just to finish the
+# build and come back to fix properly.
+touch test-results.txt
+<<
+###
+SplitOff: <<
+	Package: libapache2-mod-%N
+	Depends: <<
+		file-shlibs,
+		mime-support,
+		%N-cli,
+		%N-common (= %v-%r),
+		%N-json,
+		%N-opcache,
+		ucf,
+		apache2-api-20120211,
+		apache2-bin (>= 2.4.16),
+		libpcre2-shlibs (>= 10.32),
+		libsodium23-shlibs (>= 1.0.14),
+		openssl110-shlibs (>= 1.1.0),
+		libxml2-shlibs (>= 2.8.0)
+	<<
+	Provides: <<
+		libapache2-mod-php,
+		phpapi-%type_raw[apiver]
+	<<
+	Recommends: apache2
+	Suggests: php-pear
+	Description: Server-side, HTML-embedded scripting language (Apache 2 module)
+	DescDetail: <<
+This package provides the PHP module for the Apache 2 webserver (as
+found in the apache2-mpm-prefork package).  Please note that this package
+ONLY works with Apache's prefork MPM, as it is not compiled thread-safe.
+.
+The following extensions are built in: Core date filter hash libxml openssl
+pcre Reflection session sodium SPL standard zlib.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff2: <<
+	Package: lib%N-embed
+	Depends: <<
+		file-shlibs,
+		mime-support,
+		%N-cli,
+		%N-common (= %v-%r),
+		%N-json,
+		%N-opcache,
+		ucf,
+		libpcre2-shlibs (>= 10.32),
+		libsodium23-shlibs (>= 1.0.14),
+		openssl110-shlibs (>= 1.1.0),
+		libxml2-shlibs (>= 2.8.0)
+	<<
+	Provides: <<
+		libphp-embed,
+		phpapi-%type_raw[apiver]
+	<<
+	Suggests: php-pear
+	Description: HTML-embedded scripting language (Embedded SAPI library)
+	DescDetail: <<
+This package provides the library %p/lib/lib%N.dylib which can
+be used by application developers to embed PHP scripting functionality.
+.
+The following extensions are built in: Core date filter hash libxml openssl
+pcntl pcre Reflection session sodium SPL standard zlib.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+.
+WARNING: The embed SAPI is experimental and there's no guarantee that
+the API/ABI will be kept compatible even between minor releases.  You
+have been warned.
+	<<
+<<
+SplitOff3: <<
+	Package: %N-cgi
+	Depends: <<
+		file-shlibs,
+		mime-support,
+		%N-cli,
+		%N-common (= %v-%r),
+		%N-json,
+		%N-opcache,
+		ucf,
+		libpcre2-shlibs (>= 10.32),
+		libsodium23-shlibs (>= 1.0.14),
+		openssl110-shlibs (>= 1.1.0),
+		libxml2-shlibs (>= 2.8.0)
+	<<
+	Provides: <<
+		php-cgi,
+		phpapi-%type_raw[apiver]
+	<<
+	Suggests: php-pear
+	Description: Server-side, HTML-embedded scripting language (CGI binary)
+	DescDetail: <<
+This package provides the %p/lib/cgi-bin/php CGI interpreter built
+for use in Apache 2 with mod_actions, or any other CGI httpd that
+supports a similar mechanism.  Note that MOST users probably
+want the %N-fpm package.
+.
+The following extensions are built in: Core date filter hash libxml openssl
+pcntl pcre Reflection session sodium SPL standard zlib.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff4: <<
+	Package: %N-cli
+	Depends: <<
+		file-shlibs,
+		mime-support,
+		%N-common (= %v-%r),
+		%N-json,
+		%N-opcache,
+		%N-readline,
+		ucf,
+		libpcre2-shlibs (>= 10.32),
+		libsodium23-shlibs (>= 1.0.14),
+		openssl110-shlibs (>= 1.1.0),
+		libxml2-shlibs (>= 2.8.0)
+	<<
+	Provides: <<
+		php-cli,
+		phpapi-%type_raw[apiver]
+	<<
+	Suggests: php-pear
+	Description: Command-line interpreter for the PHP scripting language
+	DescDetail: <<
+This package provides the /usr/bin/%N command interpreter, useful for
+testing PHP scripts from a shell or performing general shell scripting tasks.
+.
+The following extensions are built in: Core date filter hash libxml openssl
+pcntl pcre Reflection session sodium SPL standard zlib.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff5: <<
+	Package: %N-dev
+	Depends: <<
+		%N-cli (>= %v-%r),
+		%N-common (= %v-%r)
+	<<
+	Recommends: <<
+		autoconf2.6 (>= 2.63),
+		automake1.15 (>= 1.11),
+		libpcre2 (>= 10.30),
+		openssl110-dev,
+		libtool2 (>= 2.4.6-0.1),
+		pkg-php-tools
+	<<
+	Suggests: dh-php
+	Description: Files for PHP%type_raw[phpver] module development
+	DescDetail: <<
+This package provides the files from the PHP%type_raw[phpver] source needed for compiling
+additional modules.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff6: <<
+	Package: %N-fpm
+	Depends: <<
+		file-shlibs,
+		mime-support,
+		%N-cli,
+		%N-common (= %v-%r),
+		%N-json,
+		%N-opcache,
+		ucf,
+		libpcre2-shlibs (>= 10.32),
+		libsodium23-shlibs (>= 1.0.14),
+		openssl110-shlibs (>= 1.1.0),
+		libxml2-shlibs (>= 2.8.0),
+		lsb-base,
+		daemonic
+	<<
+	Provides: <<
+		php-fpm,
+		phpapi-%type_raw[apiver]
+	<<
+	Suggests: php-pear
+        DaemonicName: %N-fpm
+        DaemonicFile: <<
+<service>
+  <description>PHP%type_raw[phpver] FastCGI Process Manager</description>
+  <message>PHP%type_raw[phpver] FastCGI Process Manager</message>
+  <daemon name="%N-fpm">
+    <executable background="no">%p/etc/init.d/%n</executable>
+    <parameters> start</parameters>
+  </daemon>
+</service>
+        <<
+	Description: Server-side, HTML-embedded scripting language (FPM-CGI binary)
+	DescDetail: <<
+This package provides the Fast Process Manager interpreter that runs
+as a daemon and receives Fast/CGI requests.  Note that MOST Apache users
+probably want the libapache2-mod-%N package.
+.
+The following extensions are built in: Core date filter hash libxml openssl
+pcntl pcre Reflection session sodium SPL standard zlib.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff7: <<
+	Package: %N-phpdbg
+	Depends: <<
+		file-shlibs,
+		mime-support,
+		%N-cli,
+		%N-common (= %v-%r),
+		%N-json,
+		%N-opcache,
+		ucf,
+		libpcre2-shlibs (>= 10.32),
+		libsodium23-shlibs (>= 1.0.14),
+		openssl110-shlibs (>= 1.1.0),
+		libxml2-shlibs (>= 2.8.0)
+	<<
+	Provides: <<
+		php-phpdbg,
+		phpapi-%type_raw[apiver]
+	<<
+	Recommends: php-readline
+	Description: Server-side, HTML-embedded scripting language (PHPDBG binary)
+	DescDetail: <<
+This package provides the %p/bin/phpdbg command interpreter, useful for
+stepthrough debugging of PHP code.
+.
+The following extensions are built in: Core date filter hash libxml openssl
+pcntl pcre Reflection session sodium SPL standard zlib.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff8: <<
+	Package: %N-xsl
+	Depends: <<
+		%N-common,
+		%N-xml
+	<<
+	Description: XSL module for PHP (dummy)
+	DescDetail: <<
+This package is a transitional dummy package and can be safely
+removed.
+	<<
+<<
+SplitOff9: <<
+	Package: %N-odbc
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		unixodbc2-nox-shlibs (>= 2.2.14) | unixodbc2-shlibs (>= 2.2.14)
+	<<
+	Provides: <<
+		php-odbc,
+		php-pdo-odbc,
+		%N-pdo-odbc
+	<<
+	Description: ODBC module for PHP
+	DescDetail: <<
+This package provides the ODBC module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff10: <<
+	Package: %N-readline
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		readline7-shlibs,
+		libncurses5-shlibs (>= 5)
+	<<
+	Provides: php-readline
+	Description: Readline module for PHP
+	DescDetail: <<
+This package provides the readline module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff11: <<
+	Package: %N-recode
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		recode3-shlibs (>= 3.6)
+	<<
+	Provides: php-recode
+	Description: Recode module for PHP
+	DescDetail: <<
+This package provides the recode module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff12: <<
+	Package: %N-sqlite3
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		sqlite3-shlibs (>= 3.7.15)
+	<<
+	Provides: <<
+		php-pdo-sqlite,
+		php-sqlite3,
+		%N-pdo-sqlite
+	<<
+	Description: SQLite3 module for PHP
+	DescDetail: <<
+This package provides the SQLite3 module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff13: <<
+	Package: %N-tidy
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		libtidy5-shlibs (>= 2:5.2.0)
+	<<
+	Provides: php-tidy
+	Description: Tidy module for PHP
+	DescDetail: <<
+This package provides the tidy module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff14: <<
+	Package: %N-xml
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		libxml2-shlibs (>= 2.9.0),
+		libxslt-shlibs (>= 1.1.25)
+	<<
+	Replaces: %N-xsl (<< 7.0.3-6)
+#	Breaks: %N-xsl (<< 7.0.3-6)
+	Provides: <<
+		php-dom,
+		php-simplexml,
+		php-wddx,
+		php-xml,
+		php-xmlreader,
+		php-xmlwriter,
+		php-xsl,
+		%N-dom,
+		%N-simplexml,
+		%N-wddx,
+		%N-xmlreader,
+		%N-xmlwriter,
+		%N-xsl
+	<<
+	Description: DOM, SimpleXML, WDDX, XML, and XSL module for PHP
+	DescDetail: <<
+This package provides the DOM, SimpleXML, WDDX, XML, and XSL module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff15: <<
+	Package: %N-sybase
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		libsybdb5-shlibs (>= 0.63)
+	<<
+	Provides: <<
+		php-pdo-dblib,
+		%N-pdo-dblib
+	<<
+	Description: Sybase module for PHP
+	DescDetail: <<
+This package provides the Sybase module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff16: <<
+	Package: %N-gd
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		freetype219-shlibs (>= 2.2.1),
+		gd3-shlibs (>= 2.1.1),
+		libjpeg8-turbo-shlibs (>= 1.3.1),
+		libpng16-shlibs (>= 1.6.2-1),
+		libwebp7-shlibs (>= 0.5.1),
+		system-xfree86-shlibs
+	<<
+	Provides: php-gd
+	Description: GD module for PHP
+	DescDetail: <<
+This package provides the GD module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff17: <<
+	Package: %N-gmp
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		gmp5-shlibs
+	<<
+	Provides: php-gmp
+	Description: GMP module for PHP
+	DescDetail: <<
+This package provides the GMP module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff18: <<
+	Package: %N-zip
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		libzip5-shlibs (>= 1.2.0)
+	<<
+	Provides: php-zip
+	Description: Zip module for PHP
+	DescDetail: <<
+This package provides the Zip module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff19: <<
+	Package: %N-common
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		openssl110-shlibs (>= 1.1.0)
+	<<
+	Provides: <<
+		php-calendar,
+		php-ctype,
+		php-exif,
+		php-fileinfo,
+		php-ftp,
+		php-iconv,
+		php-pdo,
+		php-phar,
+		php-posix,
+		php-shmop,
+		php-sockets,
+		php-sysvmsg,
+		php-sysvsem,
+		php-sysvshm,
+		php-tokenizer,
+		%N-calendar,
+		%N-ctype,
+		%N-exif,
+		%N-fileinfo,
+		%N-ftp,
+		%N-gettext,
+		%N-iconv,
+		%N-pdo,
+		%N-phar,
+		%N-posix,
+		%N-shmop,
+		%N-sockets,
+		%N-sysvmsg,
+		%N-sysvsem,
+		%N-sysvshm,
+		%N-tokenizer
+	<<
+#	Breaks: <<
+#		gforge-common (<< 6),
+#		php7.0-curl (<< 7.0.33-1),
+#		php7.2-sodium (<< 7.2.12)
+#	<<
+	Description: Documentation, examples and common module for PHP
+	DescDetail: <<
+This package provides the documentation, examples and common module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff20: <<
+	Package: %N-intl
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		libicu55-shlibs
+	<<
+	Provides: php-intl
+	Description: Internationalisation module for PHP
+	DescDetail: <<
+This package provides the Internationalisation module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff21: <<
+	Package: %N-snmp
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		libnetsnmp35-shlibs (>= 5.7.3),
+		openssl110-shlibs (>= 1.1.0)
+	<<
+	Provides: php-snmp
+	Recommends: net-snmp-bin
+	Description: SNMP module for PHP
+	DescDetail: <<
+This package provides the SNMP module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff22: <<
+	Package: %N-curl
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		libcurl4-shlibs (>= 7.44.0)
+	<<
+	Provides: php-curl
+#	Breaks: php7.0-curl (<< 7.0.33-1)
+	Description: CURL module for PHP
+	DescDetail: <<
+This package provides the CURL module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff23: <<
+	Package: %N-json
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r)
+	<<
+	Provides: php-json
+	Description: JSON module for PHP
+	DescDetail: <<
+This package provides the JSON module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff24: <<
+	Package: %N-pgsql
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		postgresql12-shlibs (>= 9.3)
+	<<
+	Provides: <<
+		php-pdo-pgsql,
+		php-pgsql,
+		%N-pdo-pgsql
+	<<
+	Description: PostgreSQL module for PHP
+	DescDetail: <<
+This package provides the PostgreSQL module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff25: <<
+	Package: %N-mbstring
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r)
+	<<
+	Provides: php-mbstring
+	Description: MBSTRING module for PHP
+	DescDetail: <<
+This package provides the MBSTRING module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff26: <<
+	Package: %N-enchant
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		enchant1-shlibs (>= 1.6.0)
+	<<
+	Provides: php-enchant
+	Description: Enchant module for PHP
+	DescDetail: <<
+This package provides the Enchant module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff27: <<
+	Package: %N-opcache
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r)
+	<<
+	Provides: php-opcache
+	Description: Zend OpCache module for PHP
+	DescDetail: <<
+This package provides the Zend OpCache module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff28: <<
+	Package: %N-imap
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		libc-client1-shlibs,
+		libcomerr2 (>= 1.42.13),
+		openssl110-shlibs (>= 1.1.0)
+	<<
+	Provides: php-imap
+	Description: IMAP module for PHP
+	DescDetail: <<
+This package provides the IMAP module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff29: <<
+	Package: %N-mysql
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r)
+	<<
+	Provides: <<
+		php-mysqli,
+		php-mysqlnd,
+		php-pdo-mysql,
+		%N-mysqli,
+		%N-mysqlnd,
+		%N-pdo-mysql
+	<<
+	Description: MySQL module for PHP
+	DescDetail: <<
+This package provides the MySQL module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff30: <<
+	Package: %N-bcmath
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r)
+	<<
+	Provides: php-bcmath
+	Description: Bcmath module for PHP
+	DescDetail: <<
+This package provides the Bcmath module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff31: <<
+	Package: %N-soap
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		libxml2-shlibs (>= 2.7.4)
+	<<
+	Provides: php-soap
+	Description: SOAP module for PHP
+	DescDetail: <<
+This package provides the SOAP module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff32: <<
+	Package: %N-dba
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		db53-aes-shlibs,
+		liblmdb0 (>= 0.9.7),
+		qdbm14-shlibs (>= 1.8.74)
+	<<
+	Provides: php-dba
+	Description: DBA module for PHP
+	DescDetail: <<
+This package provides the DBA module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+#SplitOff33: <<
+#	Package: %N-interbase
+#	Depends: <<
+#		php-common (>= 1:35),
+#		ucf,
+#		%N-common (= %v-%r),
+#		libfbclient2 (>= 2.5.0.25784~ReleaseCandidate1.ds2)
+#	<<
+#	Provides: <<
+#		php-interbase,
+#		php-pdo-firebird,
+#		%N-pdo-firebird
+#	<<
+#	Description: Interbase module for PHP
+#	DescDetail: <<
+#This package provides the Interbase module(s) for PHP.
+#.
+#PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+#open source general-purpose scripting language that is especially suited
+#for web development and can be embedded into HTML.
+#	<<
+#<<
+SplitOff34: <<
+	Package: %N-xmlrpc
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		libxml2-shlibs (>= 2.6.27),
+		libxmlrpc-epi0
+	<<
+	Provides: php-xmlrpc
+	Description: XMLRPC-EPI module for PHP
+	DescDetail: <<
+This package provides the XMLRPC-EPI module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff35: <<
+	Package: %N-pspell
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		aspell-shlibs
+	<<
+	Provides: php-pspell
+	Description: Pspell module for PHP
+	DescDetail: <<
+This package provides the pspell module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff36: <<
+	Package: %N-bz2
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		bzip2-shlibs
+	<<
+	Provides: php-bz2
+	Description: Bzip2 module for PHP
+	DescDetail: <<
+This package provides the bzip2 module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+SplitOff37: <<
+	Package: %N-ldap
+	Depends: <<
+		php-common (>= 1:35),
+		ucf,
+		%N-common (= %v-%r),
+		openldap24-shlibs (>= 2.4.11),
+		cyrus-sasl2.3-shlibs (>= 2.1.27)
+	<<
+	Provides: php-ldap
+	Description: LDAP module for PHP
+	DescDetail: <<
+This package provides the LDAP module(s) for PHP.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+	<<
+<<
+###
+Description: Server-side, HTML-embedded scripting language (metapackage)
+DescDetail: <<
+This package is a metapackage that, when installed, guarantees that you
+have at least one of the four server-side versions of the PHP interpreter
+installed. Removing this package won't remove PHP from your system, however
+it may remove other packages that depend on this one.
+.
+PHP (recursive acronym for PHP: Hypertext Preprocessor) is a widely-used
+open source general-purpose scripting language that is especially suited
+for web development and can be embedded into HTML.
+<<
+###
+License: GPL
+Maintainer: Justin F. Halett <thesin@lists.sourceforge.net>
+Homepage: http://www.php.net/
+<<
