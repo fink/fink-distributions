@@ -1,0 +1,339 @@
+Info4: <<
+Package: postgresql%type_pkg[postgresql]
+Version: 12.1
+Revision: 1
+Type: postgresql 12
+Description: PostgreSQL open-source database
+License: BSD
+Maintainer: Wolfgang Fischer <wodev@users.sourceforge.net>
+
+Depends: <<
+	daemonic (>= 20010902-1),
+	libxml2-shlibs,
+	libxslt-shlibs,
+	openssl110-shlibs,
+	passwd-postgres,
+	readline7-shlibs,
+	%N-shlibs (>= %v-%r)
+<<
+BuildDepends: <<
+	bison,
+	fink-mirrors (>= 0.28.7.1-2),
+	libxml2,
+	libxslt,
+	readline7,
+	openssl110-dev,
+	system-perl,
+	tcltk,
+	tcltk-dev
+<<
+Provides: postgresql-server
+GCC: 4.0
+
+Source: https://ftp.postgresql.org/pub/source/v%v/postgresql-%v.tar.bz2
+Source-MD5: 2ee1bd4ec5f49363a3f456f07e599b41
+Source-Checksum: SHA256(a09bf3abbaf6763980d0f8acbb943b7629a8b20073de18d867aecdb7988483ed)
+PatchScript: <<
+	#!/bin/sh -ex
+	sed -e 's|@BUILDDIR@|%b|g' -e 's|@INSTPREFIX@|%p|g' -e 's|@PGVERSION@|%type_raw[postgresql]|g' < %{PatchFile} | patch -p1
+
+	# Use xcrun instead of xcodebuild to support Xcode Command Line Tools only (so not the full Xcode).
+	sed -i.orig -e 's|xcodebuild -version -sdk macosx Path|xcrun --sdk macosx --show-sdk-path|g' src/template/darwin
+	
+	# If we have fink ExtUtils::ParseXS, it is early in PERL5LIB;
+	# therefore we need the xsubpp program (also part of that
+	# pkg). Handcoded makefiles for perl modules are bad, m'kay?
+	fink_XSUBPP="%p/lib/perl5/ExtUtils/xsubpp"
+	if [ -x $fink_XSUBPP ]; then
+	perl -pi -e "s,\S+xsubpp,${fink_XSUBPP},g" src/pl/plperl/GNUmakefile
+	fi
+<<
+PatchFile: %n.patch
+PatchFile-MD5: cddb3ba04e14880bcb52331405a0c0d5
+
+SetCPPFLAGS: -DHAVE_OPTRESET -fno-common
+SetLDFLAGS: -F/System/Library/Frameworks -headerpad_max_install_names
+CompileScript: <<
+	#!/bin/sh -xe
+	
+	export PERL=/usr/bin/perl
+	export PYTHON=/usr/bin/python
+	export FLEX=/usr/bin/flex	
+
+        if [[ `uname -r | cut -d. -f1` -eq 15 ]] ; then
+           # fix for Xcode 8 on OS X 10.11
+           export ac_cv_search_clock_gettime=no
+           export ac_cv_func_clock_gettime=no
+        fi
+
+	./configure \
+	--prefix='%p/opt/postgresql-%type_raw[postgresql]' \
+	--docdir='%p/share/doc/%N' \
+	--mandir='${prefix}/share/man' \
+	--infodir='${prefix}/share/info' \
+	--with-libraries=%p/lib \
+	--with-includes=%p/include \
+	\
+	--with-perl \
+	--with-python \
+	--with-tcl \
+	--with-tclconfig=%p/lib \
+	\
+	--enable-thread-safety \
+	--with-openssl \
+	--with-pam \
+	--with-bonjour \
+	--with-gssapi \
+	\
+	--with-libxml \
+	--with-libxslt
+	
+	make
+	make -C contrib
+<<
+InfoTest: <<
+        TestScript: make check || exit 2
+<<
+InstallScript: <<
+#!/bin/sh -xe
+
+	# postgresql
+	make -j1 install DESTDIR="%d" BE_DLLLIBS=%p/opt/postgresql-%type_raw[postgresql]/bin/postgres
+	make -j1 -C contrib install DESTDIR="%d" BE_DLLLIBS=%p/opt/postgresql-%type_raw[postgresql]/bin/postgres
+
+        # remove static lib files
+	rm %i/opt/postgresql-%type_raw[postgresql]/lib/*.a
+
+	install -d -m 755 %i/share/doc/%N
+	find contrib -name README.\* -exec cp {} %i/share/doc/%N/ \;
+
+	install -d -m 755 %i/bin
+	install -c -m 755 pgsql.sh %i/bin/pgsql.sh-%type_raw[postgresql]
+
+	install -d -m 755 %i/var/postgresql-%type_raw[postgresql]
+	echo "be sure to back up this database before any upgrades!" >> %i/var/postgresql-%type_raw[postgresql]/README
+
+	install -d -m 755 %i/var/log
+	ln -sf %p/var/postgresql-%type_raw[postgresql]/pgsql.log %i/var/log/pgsql-%type_raw[postgresql].log
+
+	for file in `ls -1 %i/opt/postgresql-%type_raw[postgresql]/bin/`; do
+		echo "${file}" >> %i/var/postgresql-%type_raw[postgresql]/binary.list
+	done
+
+        # update alternatives priority
+	PRIORITY=`perl -e 'print %type_raw[postgresql] * 10'`
+
+	cat <<END > %i/var/postgresql-%type_raw[postgresql]/remove-alternatives.sh
+#!/bin/sh
+
+for arg in "\$@"; do
+	case \$arg in
+		-h|--h|--he|--hel|--help)
+			echo "usage: \$0 [-h]"
+			echo ""
+			echo "  -h, --help          this help"
+			echo ""
+			exit 0;
+			;;
+		*)
+			echo "\$0: unknown argument '\$arg'"
+			exit 1;
+			;;
+	esac
+done
+
+update-alternatives --remove "pgsql.sh" "%p/bin/pgsql.sh-%type_raw[postgresql]"
+
+for tuple in %p/opt/postgresql-%type_raw[postgresql]/bin:binary.list; do
+	TUPLE_PATH=\`echo \$tuple | cut -d: -f1\`
+	TUPLE_FILE=\`echo \$tuple | cut -d: -f2\`
+
+	for file in \`cat %p/var/postgresql-%type_raw[postgresql]/\${TUPLE_FILE}\`; do
+		update-alternatives --remove "\${file}" "\${TUPLE_PATH}/\${file}"
+	done
+done
+
+END
+
+	cat <<END > %i/var/postgresql-%type_raw[postgresql]/update-alternatives.sh
+#!/bin/sh
+
+FORCE=0
+
+for arg in "\$@"; do
+	case \$arg in
+		-h|--h|--he|--hel|--help)
+			echo "usage: \$0 [-h] [-f]"
+			echo ""
+			echo "  -h, --help          this help"
+			echo "  -f, --force         force this version of PostgreSQL, even if there is a newer one"
+			echo ""
+			exit 0;
+			;;
+		-f|--f|--fo|--for|--forc|--force)
+			FORCE=1
+			;;
+		*)
+			echo "\$0: unknown argument '\$arg'"
+			exit 1;
+			;;
+	esac
+done
+
+update-alternatives --install "%p/bin/pgsql.sh" "pgsql.sh" "%p/bin/pgsql.sh-%type_raw[postgresql]" $PRIORITY
+if [ "\$FORCE" == "1" ]; then
+    update-alternatives --set "pgsql.sh" "%p/bin/pgsql.sh-%type_raw[postgresql]" 
+fi
+
+for tuple in bin:binary.list; do
+	TUPLE_PATH=\`echo \$tuple | cut -d: -f1\`
+	TUPLE_FILE=\`echo \$tuple | cut -d: -f2\`
+
+	for file in \`cat %p/var/postgresql-%type_raw[postgresql]/\${TUPLE_FILE}\`; do
+		if [ -e "%p/opt/postgresql-%type_raw[postgresql]/\${TUPLE_PATH}/\${file}" ]; then
+			update-alternatives --install "%p/\${TUPLE_PATH}/\${file}" "\${file}" "%p/opt/postgresql-%type_raw[postgresql]/\${TUPLE_PATH}/\${file}" $PRIORITY
+			if [ "\$FORCE" == "1" ]; then
+    			    update-alternatives --set "\${file}" "%p/opt/postgresql-%type_raw[postgresql]/\${TUPLE_PATH}/\${file}"
+			fi
+		fi
+	done
+done
+
+END
+
+	chmod 755 %i/var/postgresql-%type_raw[postgresql]/*.sh
+	perl -pi -e 's,^%d,,' %i/bin/pg_config*
+<<
+DocFiles: COPYRIGHT HISTORY INSTALL README
+SplitOff: <<
+	Package: %N-dev
+	Description: PostgreSQL development headers and libraries
+	Depends: %N (>= %v-%r)
+	# Even though the files are all buried to prevent filename
+	# collisions and require special -I/-L to make them visible,
+	# update-alternatives exposes them (and therefore maybe *other
+	# libversions of them*) in default (visible) locations, which
+	# would often lead to the compiler mixing both together!
+	Conflicts: <<
+		postgresql92-dev,
+		postgresql93-dev,
+		postgresql94-dev,
+		postgresql95-dev,
+		postgresql96-dev,
+		postgresql10-dev,
+		postgresql11-dev,
+		postgresql12-dev
+	<<
+	Replaces: <<
+		postgresql92-dev,
+		postgresql93-dev,
+		postgresql94-dev,
+		postgresql95-dev,
+		postgresql96-dev,
+		postgresql10-dev,
+		postgresql11-dev,
+		postgresql12-dev
+	<<
+	BuildDependsOnly: true
+	Files: <<
+		opt/postgresql-%type_raw[postgresql]/bin/pg_config*
+		opt/postgresql-%type_raw[postgresql]/include
+		opt/postgresql-%type_raw[postgresql]/lib/libecpg_compat.dylib
+		opt/postgresql-%type_raw[postgresql]/lib/libecpg.dylib
+		opt/postgresql-%type_raw[postgresql]/lib/libpgtypes.dylib
+		opt/postgresql-%type_raw[postgresql]/lib/libpq.dylib
+	<<
+	PreInstScript: <<
+PG_ID=`id -u postgres 2>/dev/null || true`
+if [ -z "$PG_ID" ]; then
+	echo "Whoa there!  You must have a postgres user to install this package."
+	echo "Please do a 'fink reinstall passwd-postgres' and make sure you hit"
+	echo "'y' when it asks if you want to update your users."
+	exit 1
+fi
+	<<
+	PostInstScript: [ -x %p/var/postgresql-%type_raw[postgresql]/update-alternatives.sh ] && %p/var/postgresql-%type_raw[postgresql]/update-alternatives.sh
+	PreRmScript: if [ "$1" != "upgrade" ]; then [ -x %p/var/postgresql-%type_raw[postgresql]/remove-alternatives.sh ] && %p/var/postgresql-%type_raw[postgresql]/remove-alternatives.sh; fi
+<<
+SplitOff2: <<
+	Package: %N-shlibs
+	Description: PostgreSQL shared libraries
+	Depends: openssl110-shlibs
+	Files: <<
+		opt/postgresql-%type_raw[postgresql]/lib/lib*.*.dylib
+		var/postgresql-%type_raw[postgresql]/*.sh
+		var/postgresql-%type_raw[postgresql]/*.list
+	<<
+	Shlibs: <<
+		%p/opt/postgresql-%type_raw[postgresql]/lib/libecpg.6.dylib        6.0.0 postgresql%type_pkg[postgresql]-shlibs (>= 12.0-1)
+		%p/opt/postgresql-%type_raw[postgresql]/lib/libecpg_compat.3.dylib 3.0.0 postgresql%type_pkg[postgresql]-shlibs (>= 12.0-1)
+		%p/opt/postgresql-%type_raw[postgresql]/lib/libpgtypes.3.dylib     3.0.0 postgresql%type_pkg[postgresql]-shlibs (>= 12.0-1)
+		%p/opt/postgresql-%type_raw[postgresql]/lib/libpq.5.dylib          5.0.0 postgresql%type_pkg[postgresql]-shlibs (>= 12.0-1)
+	<<
+	PostInstScript: [ -x %p/var/postgresql-%type_raw[postgresql]/update-alternatives.sh ] && %p/var/postgresql-%type_raw[postgresql]/update-alternatives.sh
+	PreRmScript: if [ "$1" != "upgrade" ]; then [ -x %p/var/postgresql-%type_raw[postgresql]/remove-alternatives.sh ] && %p/var/postgresql-%type_raw[postgresql]/remove-alternatives.sh; fi
+<<
+
+PreInstScript: <<
+   PG_ID=`id -u postgres 2>/dev/null || true`
+   if [ -z "$PG_ID" ]; then
+	echo "Whoa there!  You must have a postgres user to install this package."
+	echo "Please do a 'fink reinstall passwd-postgres' and make sure you hit"
+	echo "'y' when it asks if you want to update your users."
+	exit 1
+   fi
+<<
+PostInstScript: <<
+   INSTALL_PHASE="$1"
+   [ -x %p/var/postgresql-%type_raw[postgresql]/update-alternatives.sh ] && %p/var/postgresql-%type_raw[postgresql]/update-alternatives.sh
+   # update daemonic init script if necessary
+   daemonic install %N >/dev/null 2>&1 || :
+<<
+PreRmScript: <<
+   # clean up
+   if [ $1 != "upgrade" ]; then
+	[ -x %p/var/postgresql-%type_raw[postgresql]/remove-alternatives.sh ] && %p/var/postgresql-%type_raw[postgresql]/remove-alternatives.sh
+	daemonic remove %N >/dev/null 2>&1 || :
+   fi
+<<
+DaemonicFile: <<
+<service>
+<description>PostgreSQL database server</description>
+<message> PostgreSQL database server</message>
+
+<daemon name="%N">
+	<executable background="no">%p/bin/pgsql.sh-%type_raw[postgresql]</executable>
+	<parameters>start</parameters>
+</daemon>
+
+</service>
+<<
+
+Homepage: http://www.postgresql.org/
+DescUsage: <<
+The package runs initdb on installation as the user 'postgres'.
+
+The best way to run it is using the supplied pgsql.sh script, i.e.
+'sudo pgsql.sh start'.  Or, you can run
+'sudo daemonic enable %N' as root to create a
+StartupItem for it.
+
+Unless you set up admin users in the database, the easiest way to
+run psql commands with administrator access is to prefix them with
+the command "sudo -u postgres".  This will ask you your administrator
+password, and then run the command as the postgres user.
+
+For example, to create a new database, you would run:
+
+  sudo -u postgres %p/opt/postgresql-%type_raw[postgresql]/bin/createdb mydb
+<<
+DescPackaging: <<
+When run from the startup script, logs output to 
+<prefix>/var/postgresql-%type_raw[postgresql]/pgsql.log
+<<
+DescPort: <<
+Rearranged a lot of the PostgreSQL build to be more "correct" on
+Darwin.
+<<
+<<
+
