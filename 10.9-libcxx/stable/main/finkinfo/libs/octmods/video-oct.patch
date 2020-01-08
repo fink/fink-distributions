@@ -1,6 +1,6 @@
 diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
---- video-1.0.2/src/AVHandler.cc	2009-05-08 08:17:36.000000000 -0500
-+++ video-1.0.2.patched/src/AVHandler.cc	2015-02-14 05:56:20.000000000 -0600
+--- video-1.0.2/src/AVHandler.cc	2009-05-08 09:17:36.000000000 -0400
++++ video-1.0.2.patched/src/AVHandler.cc	2020-01-08 13:17:19.000000000 -0500
 @@ -64,7 +64,7 @@
  	if (av_output->pb->buf_ptr) {
  	    while (write_frame() > 0) {}
@@ -39,7 +39,15 @@ diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
      if (!av_output) {
  	(*out) << "AVHandler: Memory error allocating format context" << std::endl;
  	return -1;
-@@ -120,18 +120,12 @@
+@@ -114,24 +114,18 @@
+     
+     // use AVI encoding
+     av_output->oformat = avifmt;
+-    av_output->oformat->audio_codec = CODEC_ID_NONE;
++    av_output->oformat->audio_codec = AV_CODEC_ID_NONE;
+         
+-    if (avifmt->video_codec != CODEC_ID_NONE) {
++    if (avifmt->video_codec != AV_CODEC_ID_NONE) {
  	if (add_video_stream() != 0) return -1;
      }
      
@@ -62,18 +70,27 @@ diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
  	(*out) << "AVHandler: Could not open \"" << filename << "\" for output" << std::endl;
  	return -1;
      }
-@@ -141,8 +135,8 @@
+@@ -139,10 +133,16 @@
+     if (init_video_codecs() != 0) return -1;
+    
      frame = create_frame(vstream->codec->pix_fmt);
-     rgbframe = create_frame(PIX_FMT_RGB24);
+-    rgbframe = create_frame(PIX_FMT_RGB24);
++    rgbframe = create_frame(AV_PIX_FMT_RGB24);
      if (!frame || !rgbframe) return -1;
 -    
 -    av_write_header(av_output);
 +
-+    avformat_write_header(av_output, NULL);
++    if (avformat_write_header(av_output, NULL) < 0)
++      {
++	(*out) << "AVHandler: Error writing headers" << std::endl;
++	return -1;
++      }
++
++    av_dict_free(&vstream->metadata);
      
      return 0;
  }
-@@ -151,18 +145,18 @@
+@@ -151,18 +151,18 @@
  AVHandler::setup_read() {
      av_register_all();
  
@@ -95,7 +112,7 @@ diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
  	    vstream = av_input->streams[i];
  	    break;
  	}
-@@ -173,7 +167,7 @@
+@@ -173,7 +173,7 @@
      }
  
      for (int i=0; i < av_input->nb_streams; i++) {
@@ -104,16 +121,21 @@ diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
  	    astream = av_input->streams[i];
  	    break;
  	}
-@@ -192,7 +186,7 @@
-     if (codec->capabilities & CODEC_CAP_TRUNCATED)
- 	vstream->codec->flags |= CODEC_FLAG_TRUNCATED;
+@@ -189,10 +189,10 @@
+     codec_name = codec->name;
+ 
+     // We can handle truncated bitstreams
+-    if (codec->capabilities & CODEC_CAP_TRUNCATED)
+-	vstream->codec->flags |= CODEC_FLAG_TRUNCATED;
++    if (codec->capabilities & AV_CODEC_CAP_TRUNCATED)
++	vstream->codec->flags |= AV_CODEC_FLAG_TRUNCATED;
  
 -    if (avcodec_open(vstream->codec, codec) < 0) {
 +    if (avcodec_open2(vstream->codec, codec, NULL) < 0) {
  	(*out) << "AVHandler: Cannot open codec " << codec_name << std::endl;
  	vstream->codec->codec = NULL;
  	return -1;
-@@ -204,9 +198,9 @@
+@@ -204,11 +204,11 @@
      width = vstream->codec->width;
      height = vstream->codec->height;
  
@@ -124,9 +146,48 @@ diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
 +// FIXME:    author = av_input->author;
 +// FIXME:    comment = av_input->comment;
  
-     rgbframe = create_frame(PIX_FMT_RGB24);
+-    rgbframe = create_frame(PIX_FMT_RGB24);
++    rgbframe = create_frame(AV_PIX_FMT_RGB24);
      if (!rgbframe) return -1;
-@@ -258,7 +252,7 @@
+ 
+     return 0;
+@@ -237,28 +237,31 @@
+     AVCodecContext *c = vstream->codec;
+ 
+     if (frame && rgbframe) {
+-      SwsContext *sc = sws_getContext(c->width, c->height, PIX_FMT_BGR24, 
++      SwsContext *sc = sws_getContext(c->width, c->height, AV_PIX_FMT_BGR24, 
+ 				      c->width, c->height, c->pix_fmt, 
+ 				      SWS_BICUBIC, 0, 0, 0);
+       sws_scale(sc, rgbframe->data, rgbframe->linesize, 0,
+ 		c->height, frame->data, frame->linesize);
+     }
+     
+-    int out_size = avcodec_encode_video(c, video_outbuf,
+-					VIDEO_OUTBUF_SIZE,
+-					frame);
+-    if (out_size > 0) {
+-	AVPacket pkt;
+-	av_init_packet(&pkt);
+-	
+-	pkt.stream_index = vstream->index;
+-	pkt.data = video_outbuf;
+-	pkt.size = out_size;
+-	
++    AVPacket pkt;
++    int ret, got_pkt;
++    av_init_packet(&pkt);
++    pkt.data = video_outbuf;
++    pkt.size = VIDEO_OUTBUF_SIZE;
++    if (avcodec_encode_video2(c, &pkt, frame, &got_pkt) < 0)
++      {
++	(*out) << "AVHandler: error encoding video frame" << std::endl;
++	return -1;
++      }
++
++    if (got_pkt)
++      {
++    
  	if (c->coded_frame)
  	    pkt.pts = c->coded_frame->pts;
  	if (c->coded_frame && c->coded_frame->key_frame)
@@ -135,16 +196,35 @@ diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
  	/// XXX FIXME XXX does this ensure that the first frame is always a key frame?
  	
  	if (av_write_frame(av_output, &pkt) != 0) {
-@@ -296,7 +290,7 @@
+@@ -269,7 +272,7 @@
+     }
+     
+     frame_nr++;
+-    return out_size;
++    return got_pkt ? pkt.size : 0;
+ }
+ 
+ int
+@@ -296,7 +299,8 @@
         	(*out) << "AVHandler: Error seeking to " << target_timestamp << std::endl;
         	return -1;
      }
 -    cc->hurry_up = 1;
-+    cc->skip_frame;
++    cc->skip_frame = AVDISCARD_NONKEY;
++    frame_nr = nr;
  
      // Flush stream buffers after seek
      avcodec_flush_buffers(cc);
-@@ -324,14 +318,18 @@
+@@ -307,7 +311,7 @@
+ 	stream_time_base = (double)vstream->time_base.num / vstream->time_base.den;
+     }
+ 
+-    frame = avcodec_alloc_frame();
++    frame = av_frame_alloc();
+ 
+     uint64_t current_timestamp = 0;
+     AVPacket packet;
+@@ -324,14 +328,18 @@
  		return -1;
  	    }
  
@@ -165,18 +245,21 @@ diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
  	    (*out) << "AVHandler: Error decoding video stream" << std::endl;
  	    av_free_packet(&packet);
  	    av_free(frame); frame = NULL;
-@@ -342,7 +340,9 @@
+@@ -342,10 +350,11 @@
  	    current_timestamp = (uint64_t)(vstream->cur_dts * AV_TIME_BASE * (long double)stream_time_base);
  	}
      }
 -    cc->hurry_up = 0;
-+// http://ffmpeg.org/pipermail/ffmpeg-cvslog/2011-April/035933.html
-+// FIXME maybe use: cc->skip_frame;
-+//    cc->hurry_up = 0;
++    cc->skip_frame = AVDISCARD_NONKEY;
++    frame_nr = nr;
  
      SwsContext *sc = sws_getContext(cc->width, cc->height, cc->pix_fmt, 
- 				    cc->width, cc->height, PIX_FMT_BGR24, 
-@@ -361,9 +361,9 @@
+-				    cc->width, cc->height, PIX_FMT_BGR24, 
++				    cc->width, cc->height, AV_PIX_FMT_BGR24, 
+ 				    SWS_BICUBIC, 0, 0, 0);
+     sws_scale(sc, frame->data, frame->linesize, 0,
+               cc->height, rgbframe->data, rgbframe->linesize);
+@@ -361,9 +370,9 @@
      (*out) << "Supported file formats:" << std::endl;
      av_register_all();
  
@@ -189,7 +272,7 @@ diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
      }
      (*out) << std::endl << std::endl;
  }
-@@ -375,8 +375,8 @@
+@@ -375,8 +384,8 @@
  
      AVCodec *codec;
      for (codec = av_codec_next(0); codec != NULL; codec = av_codec_next(codec)) {
@@ -200,7 +283,7 @@ diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
  	    (*out) << codec->name << " ";
  	}
      }
-@@ -386,8 +386,9 @@
+@@ -386,8 +395,9 @@
  int
  AVHandler::add_video_stream() {
      AVCodecContext *cc;
@@ -212,7 +295,7 @@ diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
      if (!vstream) {
  	(*out) << "AVHandler: error opening video output stream" << std::endl;
  	return -1;
-@@ -395,8 +396,8 @@
+@@ -395,8 +405,8 @@
      
      cc = vstream->codec;
  
@@ -223,7 +306,16 @@ diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
      cc->bit_rate = bitrate;
      cc->width = width;
      cc->height = height;
-@@ -426,7 +427,7 @@
+@@ -404,7 +414,7 @@
+     // XXX TODO XXX Make sure this calculation is correct //
+     cc->time_base.num = 1;
+     cc->time_base.den = (int)(framerate);
+-    cc->pix_fmt = PIX_FMT_YUV420P;
++    cc->pix_fmt = AV_PIX_FMT_YUV420P;
+ 
+     cc->gop_size = gop_size;
+ 
+@@ -426,24 +436,24 @@
  	return -1;
      }
  
@@ -232,9 +324,38 @@ diff -Nurd video-1.0.2/src/AVHandler.cc video-1.0.2.patched/src/AVHandler.cc
  	(*out) << "AVHandler: cannot open codec" << std::endl;
  	cc->codec = NULL;
  	return -1;
+     }
+     
+     // XXX FIXME XXX What is the best size for video_outbuf?
+-    video_outbuf = (uint8_t *)malloc(VIDEO_OUTBUF_SIZE);
++    video_outbuf = (uint8_t *)av_malloc(VIDEO_OUTBUF_SIZE);
+     
+     return 0;
+ }
+ 
+ AVFrame*
+-AVHandler::create_frame(PixelFormat fmt) {
++AVHandler::create_frame(AVPixelFormat fmt) {
+     AVFrame *frame;
+     uint8_t *frame_buf;
+ 
+-    frame = avcodec_alloc_frame();
++    frame = av_frame_alloc();
+     if (!frame) {
+ 	(*out) << "AVHandler: cannot allocate frame" << std::endl;
+ 	return NULL;
+@@ -453,7 +463,7 @@
+ 				  vstream->codec->width,
+ 				  vstream->codec->height);
+ 
+-    frame_buf = (uint8_t *)malloc(size);
++    frame_buf = (uint8_t *)av_malloc(size);
+     if (!frame_buf) {
+ 	av_free(frame);
+ 	(*out) << "AVHandler: error initialising frame" << std::endl;
 diff -Nurd video-1.0.2/src/AVHandler.h video-1.0.2.patched/src/AVHandler.h
---- video-1.0.2/src/AVHandler.h	2009-05-08 08:17:36.000000000 -0500
-+++ video-1.0.2.patched/src/AVHandler.h	2015-02-14 05:34:02.000000000 -0600
+--- video-1.0.2/src/AVHandler.h	2009-05-08 09:17:36.000000000 -0400
++++ video-1.0.2.patched/src/AVHandler.h	2020-01-08 13:17:19.000000000 -0500
 @@ -27,8 +27,11 @@
  
  #define VIDEO_OUTBUF_SIZE 200000
@@ -265,3 +386,12 @@ diff -Nurd video-1.0.2/src/AVHandler.h video-1.0.2.patched/src/AVHandler.h
      } else {
        return 0;
      }
+@@ -244,7 +247,7 @@
+   
+   int init_video_codecs();
+ 
+-  AVFrame *create_frame(PixelFormat fmt);
++  AVFrame *create_frame(AVPixelFormat fmt);
+ 
+ };
+ 
