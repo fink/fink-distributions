@@ -1,0 +1,282 @@
+diff -Nurd -x'*~' goldendict-1.5.0-RC2-orig/bgl.cc goldendict-1.5.0-RC2/bgl.cc
+--- goldendict-1.5.0-RC2-orig/bgl.cc	2016-04-26 12:32:50.000000000 -0400
++++ goldendict-1.5.0-RC2/bgl.cc	2020-01-06 08:23:05.000000000 -0500
+@@ -575,7 +575,7 @@
+     {
+       headwordDecoded = Utf8::decode( removePostfix(  headword ) );
+     }
+-    catch( Utf8::exCantDecode )
++    catch( Utf8::exCantDecode & )
+     {
+     }
+ 
+@@ -703,7 +703,7 @@
+   {
+     hebWStr = Utf8::decode(hebStr);
+   }
+-  catch( Utf8::exCantDecode )
++  catch( Utf8::exCantDecode & )
+   {
+     hebStr = "Utf-8 decoding error";
+     return;
+diff -Nurd -x'*~' goldendict-1.5.0-RC2-orig/epwing_book.cc goldendict-1.5.0-RC2/epwing_book.cc
+--- goldendict-1.5.0-RC2-orig/epwing_book.cc	2016-04-26 12:32:50.000000000 -0400
++++ goldendict-1.5.0-RC2/epwing_book.cc	2020-01-06 08:23:05.000000000 -0500
+@@ -922,7 +922,7 @@
+     {
+       getReferencesFromText( pos.page, pos.offset );
+     }
+-    catch( std::exception )
++    catch( std::exception & )
+     {
+     }
+ 
+diff -Nurd -x'*~' goldendict-1.5.0-RC2-orig/ffmpegaudio.cc goldendict-1.5.0-RC2/ffmpegaudio.cc
+--- goldendict-1.5.0-RC2-orig/ffmpegaudio.cc	2016-04-26 12:32:50.000000000 -0400
++++ goldendict-1.5.0-RC2/ffmpegaudio.cc	2020-01-06 08:23:05.000000000 -0500
+@@ -91,6 +91,7 @@
+   QByteArray audioData_;
+   QDataStream audioDataStream_;
+   AVFormatContext * formatContext_;
++  AVCodec * codec_;
+   AVCodecContext * codecContext_;
+   AVIOContext * avioContext_;
+   AVStream * audioStream_;
+@@ -114,6 +115,7 @@
+   audioData_( audioData ),
+   audioDataStream_( audioData_ ),
+   formatContext_( NULL ),
++  codec_( NULL ),
+   codecContext_( NULL ),
+   avioContext_( NULL ),
+   audioStream_( NULL ),
+@@ -143,7 +145,11 @@
+     return false;
+   }
+ 
++#if LIBAVCODEC_VERSION_MAJOR < 56 || ( LIBAVCODEC_VERSION_MAJOR == 56 && LIBAVCODEC_VERSION_MINOR < 56 )
+   unsigned char * avioBuffer = ( unsigned char * )av_malloc( kBufferSize + FF_INPUT_BUFFER_PADDING_SIZE );
++#else
++  unsigned char * avioBuffer = ( unsigned char * )av_malloc( kBufferSize + AV_INPUT_BUFFER_PADDING_SIZE );
++#endif
+   if ( !avioBuffer )
+   {
+     errorString = QObject::tr( "av_malloc() failed." );
+@@ -186,7 +192,11 @@
+   // Find audio stream, use the first audio stream if available
+   for ( unsigned i = 0; i < formatContext_->nb_streams; i++ )
+   {
++#if LIBAVCODEC_VERSION_MAJOR < 57 || ( LIBAVCODEC_VERSION_MAJOR == 57 && LIBAVCODEC_VERSION_MINOR < 33 )
+     if ( formatContext_->streams[i]->codec->codec_type == AVMEDIA_TYPE_AUDIO )
++#else
++      if ( formatContext_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO )
++#endif
+     {
+       audioStream_ = formatContext_->streams[i];
+       break;
+@@ -198,22 +208,38 @@
+     return false;
+   }
+ 
++#if LIBAVCODEC_VERSION_MAJOR < 57 || ( LIBAVCODEC_VERSION_MAJOR == 57 && LIBAVCODEC_VERSION_MINOR < 33 )
+   codecContext_ = audioStream_->codec;
+-  AVCodec * codec = avcodec_find_decoder( codecContext_->codec_id );
+-  if ( !codec )
++  codec_ = avcodec_find_decoder( codecContext_->codec_id );
++  if ( !codec_ )
+   {
+     errorString = QObject::tr( "Codec [id: %1] not found." ).arg( codecContext_->codec_id );
+     return false;
+   }
++#else
++  codec_ = avcodec_find_decoder( audioStream_->codecpar->codec_id );
++  if ( !codec_ )
++  {
++    errorString = QObject::tr( "Codec [id: %1] not found." ).arg( audioStream_->codecpar->codec_id );
++    return false;
++  }
++  codecContext_ = avcodec_alloc_context3( codec_ );
++  if ( !codecContext_ )
++  {
++    errorString = QObject::tr( "avcodec_alloc_context3() failed." );
++    return false;
++  }
++  avcodec_parameters_to_context( codecContext_, audioStream_->codecpar );
++#endif
+ 
+-  ret = avcodec_open2( codecContext_, codec, NULL );
++  ret = avcodec_open2( codecContext_, codec_, NULL );
+   if ( ret < 0 )
+   {
+     errorString = QObject::tr( "avcodec_open2() failed: %1." ).arg( avErrorString( ret ) );
+     return false;
+   }
+ 
+-  av_log( NULL, AV_LOG_INFO, "Codec open: %s: channels: %d, rate: %d, format: %s\n", codec->long_name,
++  av_log( NULL, AV_LOG_INFO, "Codec open: %s: channels: %d, rate: %d, format: %s\n", codec_->long_name,
+           codecContext_->channels, codecContext_->sample_rate, av_get_sample_fmt_name( codecContext_->sample_fmt ) );
+   return true;
+ }
+@@ -252,10 +278,13 @@
+ 
+   // Closing a codec context without prior avcodec_open2() will result in
+   // a crash in ffmpeg
+-  if ( audioStream_ && audioStream_->codec && audioStream_->codec->codec )
++  if ( audioStream_ && codecContext_ && codec_ )
+   {
+     audioStream_->discard = AVDISCARD_ALL;
+-    avcodec_close( audioStream_->codec );
++    avcodec_close( codecContext_ );
++#if LIBAVCODEC_VERSION_MAJOR > 57 || ( LIBAVCODEC_VERSION_MAJOR == 57 && LIBAVCODEC_VERSION_MINOR >= 33 )
++    avcodec_free_context( &codecContext_ );
++#endif
+   }
+ 
+   avformat_close_input( &formatContext_ );
+@@ -356,6 +385,7 @@
+     if ( packet.stream_index == audioStream_->index )
+     {
+       AVPacket pack = packet;
++#if LIBAVCODEC_VERSION_MAJOR < 57 || ( LIBAVCODEC_VERSION_MAJOR == 57 && LIBAVCODEC_VERSION_MINOR < 37 )
+       int gotFrame = 0;
+       do
+       {
+@@ -370,6 +400,19 @@
+         pack.data += len;
+       }
+       while( pack.size > 0 );
++#else
++      int ret = avcodec_send_packet( codecContext_, &pack );
++      /* read all the output frames (in general there may be any number of them) */
++      while( ret >= 0 )
++      {
++        ret = avcodec_receive_frame( codecContext_, frame);
++
++        if ( Qt4x5::AtomicInt::loadAcquire( isCancelled_ ) || ret < 0 )
++          break;
++
++        playFrame( frame );
++      }
++#endif
+     }
+     // av_free_packet() must be called after each call to av_read_frame()
+ #if LIBAVCODEC_VERSION_MAJOR < 57 || ( LIBAVCODEC_VERSION_MAJOR == 57 && LIBAVCODEC_VERSION_MINOR < 7 )
+@@ -379,6 +422,7 @@
+ #endif
+   }
+ 
++#if LIBAVCODEC_VERSION_MAJOR < 57 || ( LIBAVCODEC_VERSION_MAJOR == 57 && LIBAVCODEC_VERSION_MINOR < 37 )
+   if ( !Qt4x5::AtomicInt::loadAcquire( isCancelled_ ) &&
+        codecContext_->codec->capabilities & CODEC_CAP_DELAY )
+   {
+@@ -391,6 +435,18 @@
+       playFrame( frame );
+     }
+   }
++#else
++  /* flush the decoder */
++  av_init_packet( &packet );
++  int ret = avcodec_send_packet(codecContext_, &packet );
++  while( ret >= 0 )
++  {
++    ret = avcodec_receive_frame(codecContext_, frame);
++    if ( Qt4x5::AtomicInt::loadAcquire( isCancelled_ ) || ret < 0 )
++      break;
++    playFrame( frame );
++  }
++#endif
+ 
+ #if LIBAVCODEC_VERSION_MAJOR < 54
+   av_free( frame );
+diff -Nurd -x'*~' goldendict-1.5.0-RC2-orig/gddebug.hh goldendict-1.5.0-RC2/gddebug.hh
+--- goldendict-1.5.0-RC2-orig/gddebug.hh	2016-04-26 12:32:50.000000000 -0400
++++ goldendict-1.5.0-RC2/gddebug.hh	2020-01-06 08:23:05.000000000 -0500
+@@ -4,8 +4,8 @@
+ #include <QFile>
+ 
+ #ifdef NO_CONSOLE
+-#define GD_DPRINTF(...)
+-#define GD_FDPRINTF(...)
++#define GD_DPRINTF(...) do {} while( 0 )
++#define GD_FDPRINTF(...) do {} while( 0 )
+ #else
+ #define GD_DPRINTF(...) printf(__VA_ARGS__)
+ #define GD_FDPRINTF(...) fprintf(__VA_ARGS__)
+diff -Nurd -x'*~' goldendict-1.5.0-RC2-orig/indexedzip.cc goldendict-1.5.0-RC2/indexedzip.cc
+--- goldendict-1.5.0-RC2-orig/indexedzip.cc	2016-04-26 12:32:50.000000000 -0400
++++ goldendict-1.5.0-RC2/indexedzip.cc	2020-01-06 08:23:05.000000000 -0500
+@@ -199,7 +199,7 @@
+             alreadyCounted = true;
+           }
+         }
+-        catch( Utf8::exCantDecode )
++        catch( Utf8::exCantDecode & )
+         {
+           // Failed to decode
+         }
+@@ -246,7 +246,7 @@
+               }
+             }
+           }
+-          catch( Iconv::Ex )
++          catch( Iconv::Ex & )
+           {
+               // Failed to decode
+           }
+@@ -269,7 +269,7 @@
+               }
+             }
+           }
+-          catch( Iconv::Ex )
++          catch( Iconv::Ex & )
+           {
+             // Failed to decode
+           }
+diff -Nurd -x'*~' goldendict-1.5.0-RC2-orig/main.cc goldendict-1.5.0-RC2/main.cc
+--- goldendict-1.5.0-RC2-orig/main.cc	2016-04-26 12:32:50.000000000 -0400
++++ goldendict-1.5.0-RC2/main.cc	2020-01-06 08:23:05.000000000 -0500
+@@ -237,7 +237,7 @@
+     {
+       cfg = Config::load();
+     }
+-    catch( Config::exError )
++    catch( Config::exError & )
+     {
+       QMessageBox mb( QMessageBox::Warning, app.applicationName(),
+                       app.translate( "Main", "Error in configuration file. Continue with default settings?" ),
+diff -Nurd -x'*~' goldendict-1.5.0-RC2-orig/sounddir.cc goldendict-1.5.0-RC2/sounddir.cc
+--- goldendict-1.5.0-RC2-orig/sounddir.cc	2016-04-26 12:32:50.000000000 -0400
++++ goldendict-1.5.0-RC2/sounddir.cc	2020-01-06 08:23:05.000000000 -0500
+@@ -357,7 +357,7 @@
+ 
+     return dr;
+   }
+-  catch( File::Ex )
++  catch( File::Ex & )
+   {
+     return new Dictionary::DataRequestInstant( false ); // No such resource
+   }
+diff -Nurd -x'*~' goldendict-1.5.0-RC2-orig/stardict.cc goldendict-1.5.0-RC2/stardict.cc
+--- goldendict-1.5.0-RC2-orig/stardict.cc	2016-04-26 12:32:50.000000000 -0400
++++ goldendict-1.5.0-RC2/stardict.cc	2020-01-06 08:23:05.000000000 -0500
+@@ -1491,7 +1491,7 @@
+ 
+       File::loadFromFile( n, data );
+     }
+-    catch( File::exCantOpen )
++    catch( File::exCantOpen & )
+     {
+       // Try reading from zip file
+ 
+diff -Nurd -x'*~' goldendict-1.5.0-RC2-orig/zipsounds.cc goldendict-1.5.0-RC2/zipsounds.cc
+--- goldendict-1.5.0-RC2-orig/zipsounds.cc	2016-04-26 12:32:50.000000000 -0400
++++ goldendict-1.5.0-RC2/zipsounds.cc	2020-01-06 08:23:05.000000000 -0500
+@@ -79,7 +79,7 @@
+   {
+     name = Utf8::decode( str );
+   }
+-  catch( Utf8::exCantDecode )
++  catch( Utf8::exCantDecode & )
+   {
+     return name;
+   }
