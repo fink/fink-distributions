@@ -1,0 +1,306 @@
+diff -Nurd -x'*~' serf-0.7.2.orig/buckets/ssl_buckets.c serf-0.7.2/buckets/ssl_buckets.c
+--- serf-0.7.2.orig/buckets/ssl_buckets.c	2011-01-22 09:00:48.000000000 -0500
++++ serf-0.7.2/buckets/ssl_buckets.c	2020-01-01 22:29:04.000000000 -0500
+@@ -58,6 +58,9 @@
+                (patch) <= APR_PATCH_VERSION))
+ #endif /* APR_VERSION_AT_LEAST */
+ 
++#if defined(OPENSSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x10100000L
++#define USE_OPENSSL_1_1_API
++#endif
+ /*#define SSL_VERBOSE*/
+ 
+ /*
+@@ -145,6 +148,7 @@
+     SSL_CTX *ctx;
+     SSL *ssl;
+     BIO *bio;
++    BIO_METHOD *biom;
+ 
+     serf_ssl_stream_t encrypt;
+     serf_ssl_stream_t decrypt;
+@@ -189,10 +193,28 @@
+     int depth;
+ };
+ 
++static void bio_set_data(BIO *bio, void *data)
++{
++#ifdef USE_OPENSSL_1_1_API
++    BIO_set_data(bio, data);
++#else
++    bio->ptr = data;
++#endif
++}
++
++static void *bio_get_data(BIO *bio)
++{
++#ifdef USE_OPENSSL_1_1_API
++    return BIO_get_data(bio);
++#else
++    return bio->ptr;
++#endif
++}
++
+ /* Returns the amount read. */
+ static int bio_bucket_read(BIO *bio, char *in, int inlen)
+ {
+-    serf_ssl_context_t *ctx = bio->ptr;
++    serf_ssl_context_t *ctx = bio_get_data(bio);
+     const char *data;
+     apr_status_t status;
+     apr_size_t len;
+@@ -228,7 +250,7 @@
+ /* Returns the amount written. */
+ static int bio_bucket_write(BIO *bio, const char *in, int inl)
+ {
+-    serf_ssl_context_t *ctx = bio->ptr;
++    serf_ssl_context_t *ctx = bio_get_data(bio);
+     serf_bucket_t *tmp;
+ 
+ #ifdef SSL_VERBOSE
+@@ -247,7 +269,7 @@
+ /* Returns the amount read. */
+ static int bio_file_read(BIO *bio, char *in, int inlen)
+ {
+-    apr_file_t *file = bio->ptr;
++    apr_file_t *file = bio_get_data(bio);
+     apr_status_t status;
+     apr_size_t len;
+ 
+@@ -272,7 +294,7 @@
+ /* Returns the amount written. */
+ static int bio_file_write(BIO *bio, const char *in, int inl)
+ {
+-    apr_file_t *file = bio->ptr;
++    apr_file_t *file = bio_get_data(bio);
+     apr_size_t nbytes;
+ 
+     BIO_clear_retry_flags(bio);
+@@ -290,10 +312,16 @@
+ 
+ static int bio_bucket_create(BIO *bio)
+ {
++#ifdef USE_OPENSSL_1_1_API
++    BIO_set_shutdown(bio, 1);
++    BIO_set_init(bio, 1);
++    BIO_set_data(bio, NULL);
++#else
+     bio->shutdown = 1;
+     bio->init = 1;
+     bio->num = -1;
+     bio->ptr = NULL;
++#endif
+ 
+     return 1;
+ }
+@@ -327,6 +355,7 @@
+     return ret;
+ }
+ 
++#ifndef USE_OPENSSL_1_1_API
+ static BIO_METHOD bio_bucket_method = {
+     BIO_TYPE_MEM,
+     "Serf SSL encryption and decryption buckets",
+@@ -356,6 +385,53 @@
+     NULL /* sslc does not have the callback_ctrl field */
+ #endif
+ };
++#endif
++static BIO_METHOD *bio_meth_bucket_new(void)
++{
++    BIO_METHOD *biom = NULL;
++
++#ifdef USE_OPENSSL_1_1_API
++    biom = BIO_meth_new(BIO_TYPE_MEM,
++                        "Serf SSL encryption and decryption buckets");
++    if (biom) {
++        BIO_meth_set_write(biom, bio_bucket_write);
++        BIO_meth_set_read(biom, bio_bucket_read);
++        BIO_meth_set_ctrl(biom, bio_bucket_ctrl);
++        BIO_meth_set_create(biom, bio_bucket_create);
++        BIO_meth_set_destroy(biom, bio_bucket_destroy);
++    }
++#else
++    biom = &bio_bucket_method;
++#endif
++
++    return biom;
++}
++static BIO_METHOD *bio_meth_file_new(void)
++{
++    BIO_METHOD *biom = NULL;
++
++#ifdef USE_OPENSSL_1_1_API
++    biom = BIO_meth_new(BIO_TYPE_FILE,
++                        "Wrapper around APR file structures");
++    BIO_meth_set_write(biom, bio_file_write);
++    BIO_meth_set_read(biom, bio_file_read);
++    BIO_meth_set_gets(biom, bio_file_gets);
++    BIO_meth_set_ctrl(biom, bio_bucket_ctrl);
++    BIO_meth_set_create(biom, bio_bucket_create);
++    BIO_meth_set_destroy(biom, bio_bucket_destroy);
++#else
++    biom = &bio_file_method;
++#endif
++
++    return biom;
++}
++
++static void bio_meth_free(BIO_METHOD *biom)
++{
++#ifdef USE_OPENSSL_1_1_API
++    BIO_meth_free(biom);
++#endif
++}
+ 
+ static int
+ validate_server_certificate(int cert_valid, X509_STORE_CTX *store_ctx)
+@@ -693,16 +769,20 @@
+ #endif
+ 
+     if (!val) {
+-#if APR_HAS_THREADS
++#if APR_HAS_THREADS && !defined(USE_OPENSSL_1_1_API)
+         int i, numlocks;
+ #endif
++#ifdef USE_OPENSSL_1_1_API
++        OPENSSL_malloc_init();
++#else
+         CRYPTO_malloc_init();
++#endif
+         ERR_load_crypto_strings();
+         SSL_load_error_strings();
+         SSL_library_init();
+         OpenSSL_add_all_algorithms();
+ 
+-#if APR_HAS_THREADS
++#if APR_HAS_THREADS && !defined(USE_OPENSSL_1_1_API)
+         numlocks = CRYPTO_num_locks();
+         apr_pool_create(&ssl_pool, NULL);
+         ssl_locks = apr_palloc(ssl_pool, sizeof(apr_thread_mutex_t*)*numlocks);
+@@ -742,6 +822,7 @@
+         const char *cert_path;
+         apr_file_t *cert_file;
+         BIO *bio;
++        BIO_METHOD *biom;
+         PKCS12 *p12;
+         int i;
+         int retrying_success = 0;
+@@ -756,7 +837,7 @@
+         }
+ 
+         if (status || !cert_path) {
+-          break;
++            break;
+         }
+ 
+         /* Load the x.509 cert file stored in PKCS12 */
+@@ -767,8 +848,9 @@
+             continue;
+         }
+ 
+-        bio = BIO_new(&bio_file_method);
+-        bio->ptr = cert_file;
++        biom = bio_meth_file_new();
++        bio = BIO_new(biom);
++        bio_set_data(bio, cert_file);
+ 
+         ctx->cert_path = cert_path;
+         p12 = d2i_PKCS12_bio(bio, NULL);
+@@ -778,6 +860,7 @@
+ 
+         if (i == 1) {
+             PKCS12_free(p12);
++            bio_meth_free(biom);
+             ctx->cached_cert = *cert;
+             ctx->cached_cert_pw = *pkey;
+             if (!retrying_success && ctx->cert_cache_pool) {
+@@ -813,6 +896,7 @@
+                         i = PKCS12_parse(p12, password, pkey, cert, NULL);
+                         if (i == 1) {
+                             PKCS12_free(p12);
++                            bio_meth_free(biom);
+                             ctx->cached_cert = *cert;
+                             ctx->cached_cert_pw = *pkey;
+                             if (!retrying_success && ctx->cert_cache_pool) {
+@@ -840,6 +924,7 @@
+                     }
+                 }
+                 PKCS12_free(p12);
++                bio_meth_free(biom);
+                 return 0;
+             }
+             else {
+@@ -847,6 +932,7 @@
+                        ERR_GET_FUNC(err),
+                        ERR_GET_REASON(err));
+                 PKCS12_free(p12);
++                bio_meth_free(biom);
+             }
+         }
+     }
+@@ -925,8 +1011,9 @@
+     SSL_CTX_set_options(ssl_ctx->ctx, SSL_OP_ALL);
+ 
+     ssl_ctx->ssl = SSL_new(ssl_ctx->ctx);
+-    ssl_ctx->bio = BIO_new(&bio_bucket_method);
+-    ssl_ctx->bio->ptr = ssl_ctx;
++    ssl_ctx->biom = bio_meth_bucket_new();
++    ssl_ctx->bio = BIO_new(ssl_ctx->biom);
++    bio_set_data(ssl_ctx->bio, ssl_ctx);
+ 
+     SSL_set_bio(ssl_ctx->ssl, ssl_ctx->bio, ssl_ctx->bio);
+ 
+@@ -955,7 +1042,6 @@
+ static apr_status_t ssl_free_context(
+     serf_ssl_context_t *ssl_ctx)
+ {
+-    apr_pool_t *p;
+ 
+     /* If never had the pending buckets, don't try to free them. */
+     if (ssl_ctx->decrypt.pending != NULL) {
+@@ -967,12 +1053,11 @@
+ 
+     /* SSL_free implicitly frees the underlying BIO. */
+     SSL_free(ssl_ctx->ssl);
++    bio_meth_free(ssl_ctx->biom);
+     SSL_CTX_free(ssl_ctx->ctx);
+ 
+-    p = ssl_ctx->pool;
+ 
+     serf_bucket_mem_free(ssl_ctx->allocator, ssl_ctx);
+-    apr_pool_destroy(p);
+ 
+     return APR_SUCCESS;
+ }
+@@ -1011,7 +1096,6 @@
+     apr_pool_t *pool)
+ {
+     FILE *fp = fopen(file_path, "r");
+-        
+     if (fp) {
+         X509 *ssl_cert = PEM_read_X509(fp, NULL, NULL, NULL);
+         fclose(fp);
+@@ -1266,9 +1350,10 @@
+     const serf_ssl_certificate_t *cert,
+     apr_pool_t *pool)
+ {
+-    char *binary_cert, *p;
++    char *binary_cert;
+     char *encoded_cert;
+     int len;
++    unsigned char *unused;
+ 
+     /* find the length of the DER encoding. */
+     len = i2d_X509(cert->ssl_cert, NULL);
+@@ -1277,8 +1362,8 @@
+     }
+ 
+     binary_cert = apr_palloc(pool, len);
+-    p = binary_cert;
+-    len = i2d_X509(cert->ssl_cert, &p); /* p is incremented */
++    unused = (unsigned char *)binary_cert;
++    len = i2d_X509(cert->ssl_cert, &unused);  /* unused is incremented  */
+     if (len < 0) {
+         return NULL;
+     }
