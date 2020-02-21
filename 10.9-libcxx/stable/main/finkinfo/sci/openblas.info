@@ -1,7 +1,7 @@
 # -*- coding: ascii; tab-width: 4 -*-
 Info2: <<
 Package: openblas
-Version: 0.3.7
+Version: 0.3.8
 Revision: 1
 Type: gcc (9)
 Maintainer: Derek Homeier <dhomeie@gwdg.de>
@@ -11,10 +11,10 @@ BuildDepends: fink (>= 0.30.0), gcc%type_raw[gcc]-compiler
 Depends: %N-shlibs (= %v-%r)
 
 Source: https://github.com/xianyi/OpenBLAS/archive/v%v.tar.gz
-Source-MD5: 5cd4ff3891b66a59e47af2d14cde4056
+Source-MD5: a3cb780c2d79e3fe13af58a261308fdf
 SourceRename: OpenBLAS-%v.tar.gz
 PatchFile: %n.patch
-PatchFile-MD5: 94c9a2955bd88d3e5e0c28be9b7c1cf2
+PatchFile-MD5: 588741129832a336fc9ae29d2bf64ee4
 
 PatchScript: sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
 
@@ -25,15 +25,19 @@ CompileScript: <<
 	# set arch to minimum model supported in OS version
 	darwin_vers=$(uname -r | cut -d. -f1)
 	if [ "$darwin_vers" -ge 18 ]; then
-			perl -pi -e "s|(COMMON_OPT = -O2)|\$1 -mtune=intel -march=ivybridge|g;" Makefile.system
+		perl -pi -e "s|(COMMON_OPT = -O2)|\$1 -mtune=cascadelake -march=ivybridge|g;" Makefile.system
 	else
-			perl -pi -e "s|(COMMON_OPT = -O2)|\$1 -mtune=intel -march=core2|g;" Makefile.system
+		perl -pi -e "s|(COMMON_OPT = -O2)|\$1 -mtune=cascadelake -march=core2|g;" Makefile.system
 	fi
 	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 libs netlib shared
 	cd benchmark
-	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 smallscaling veclib goto
 	mkdir -m 755 bin
-	mv smallscaling *.veclib *.goto bin
+	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 veclib goto
+	mv *.veclib *.goto bin
+	if [ "$darwin_vers" -gt 15 ]; then
+		make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 FOPENMP=-fopenmp smallscaling
+		mv smallscaling bin
+	fi
 <<
 
 InstallScript: <<
@@ -46,11 +50,12 @@ InfoTest: <<
 	TestDepends: atlas
 	TestScript: <<
 		#!/bin/sh -ev
+		darwin_vers=$(uname -r | cut -d. -f1)
 		make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 tests | tee tests.log
 		grep -i fail tests.log
 		grep -c PASSED tests.log
 		cd benchmark
-		make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 atlas
+		make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 FOPENMP=-fopenmp atlas
 		# created a ton of *.veclib, *.goto, *.atlas executables to be compared in performance...
 		# just filter largest matrix results and run a little suite of comparisons of threaded vs. openmp speedup
 		echo ATLAS
@@ -69,7 +74,7 @@ InfoTest: <<
 			echo -n $x
 			./$x 2>&1 | tail -1
 		done
-		./smallscaling
+		[ -x smallscaling ] && ./smallscaling
 	<<
 <<
 
@@ -114,14 +119,28 @@ Thus this project was created to continue developing OpenBLAS/GotoBLAS.
 DescPackaging: <<
 Setup with architecture-independent version and some patches from MacPorts
 https://github.com/macports/macports-ports/blob/master/math/OpenBLAS/Portfile
-Build with FSF gcc8 to ensure optimum compatibility with gfortran.
+Build with FSF gcc9 to ensure optimum compatibility with gfortran.
 cblas.h conflicts with header from atlas.
 Also builds executables for comparison with VecLib [+Atlas] in benchmark/bin,
 TestScript does not run them all (producing ~200 lines of timing output each);
 adding benchmark scripts and binaries to docs.
 Optimisation flags chosen to create binary packages that should work on
-anything from Pentium with SSE upwards, with tuning up to Haswell & Silvermont
-CPUs with AVX2 (most recent supported by gcc8).
+anything from Pentium with SSE upwards, with tuning up to Cascadelake CPUs with
+AVX512 support.
+(Note: gcc9 manual states `-mtune=intel` includes "Haswell & Silvermont" as
+"most recent supported" by that gcc version, but I found the intel tuning
+option to create different assembly output than haswell or skylake upwards.
+Chose cascadelake for 0.3.8 as newest generation available in the 2019 Mac Pro;
+actually all tuning options from skylake to icelake appear to generate
+identical assembler and object code.)
+0.3.8: patched in https://github.com/xianyi/OpenBLAS/pull/2424
+  to resolve gcc-9 build failure (#2421).
+  Disabled build of `smallscaling` benchmark on 10.11 and lower to avoid failure
+  on missing CLOCK_MONOTONIC macro
+  (https://sourceforge.net/p/fink/mailman/message/36927850/).
+  Including, but not using patches for build with clang without -fopenmp option;
+  for that FOPENMP needs to be set instead to
+  "-I$(ls -d %p/lib/gcc%type_raw[gcc]/lib/gcc/x86_64-*/%type_raw[gcc]*/include) -L%p/lib/gcc%type_raw[gcc]/lib -lgomp"
 <<
 # Info2
 <<
