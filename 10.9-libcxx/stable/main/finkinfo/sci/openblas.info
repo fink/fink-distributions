@@ -14,7 +14,7 @@ Source: https://github.com/xianyi/OpenBLAS/archive/v%v.tar.gz
 Source-MD5: a3cb780c2d79e3fe13af58a261308fdf
 SourceRename: OpenBLAS-%v.tar.gz
 PatchFile: %n.patch
-PatchFile-MD5: 588741129832a336fc9ae29d2bf64ee4
+PatchFile-MD5: f4ab9508a7d4bde8e28ba4e84707056e
 
 PatchScript: sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
 
@@ -32,12 +32,8 @@ CompileScript: <<
 	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 libs netlib shared
 	cd benchmark
 	mkdir -m 755 bin
-	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 veclib goto
-	mv *.veclib *.goto bin
-	if [ "$darwin_vers" -gt 15 ]; then
-		make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 FOPENMP=-fopenmp smallscaling
-		mv smallscaling bin
-	fi
+	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 FOPENMP=-fopenmp veclib goto smallscaling
+	mv *.veclib *.goto smallscaling bin
 <<
 
 InstallScript: <<
@@ -50,31 +46,32 @@ InfoTest: <<
 	TestDepends: atlas
 	TestScript: <<
 		#!/bin/sh -ev
-		darwin_vers=$(uname -r | cut -d. -f1)
 		make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 tests | tee tests.log
 		grep -i fail tests.log
 		grep -c PASSED tests.log
 		cd benchmark
 		make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 FOPENMP=-fopenmp atlas
+		# use hw.physicalcpu to run without hyperthreading
+		ncore=$(sysctl -n hw.logicalcpu)
 		# created a ton of *.veclib, *.goto, *.atlas executables to be compared in performance...
-		# just filter largest matrix results and run a little suite of comparisons of threaded vs. openmp speedup
+		# just filter results for a sample of matrix sizes and run a little suite of comparisons of threaded vs. openmp speedup
 		echo ATLAS
 		for x in *.atlas; do
-			echo -n $x
-			./$x 2>&1 | tail -1
+			echo OPENBLAS_NUM_THREADS=$ncore OMP_NUM_THREADS=1 $x
+			OPENBLAS_NUM_THREADS=$ncore OMP_NUM_THREADS=1 ./$x 2>&1 | awk '(NR < 4)||((NR-2)%%20 == 0)'
 		done
 		cd bin
 		echo VecLib
 		for x in *.veclib; do
-			echo -n $x
-			./$x 2>&1 | tail -1
+			echo OPENBLAS_NUM_THREADS=$ncore OMP_NUM_THREADS=1 $x
+			OPENBLAS_NUM_THREADS=$ncore OMP_NUM_THREADS=1 ./$x 2>&1 | awk '(NR < 4)||((NR-2)%%20 == 0)'
 		done
 		echo OpenBLAS
 		for x in *.goto; do
-			echo -n $x
-			./$x 2>&1 | tail -1
+			echo OPENBLAS_NUM_THREADS=$ncore OMP_NUM_THREADS=1 $x
+			OPENBLAS_NUM_THREADS=$ncore OMP_NUM_THREADS=1 ./$x 2>&1 | awk '(NR < 4)||((NR-2)%%20 == 0)'
 		done
-		[ -x smallscaling ] && ./smallscaling
+		OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=$ncore ./smallscaling
 	<<
 <<
 
@@ -135,9 +132,9 @@ actually all tuning options from skylake to icelake appear to generate
 identical assembler and object code.)
 0.3.8: patched in https://github.com/xianyi/OpenBLAS/pull/2424
   to resolve gcc-9 build failure (#2421).
-  Disabled build of `smallscaling` benchmark on 10.11 and lower to avoid failure
-  on missing CLOCK_MONOTONIC macro
-  (https://sourceforge.net/p/fink/mailman/message/36927850/).
+  Patched `smallscaling` benchmark to work around missing CLOCK_MONOTONIC macro
+  on 10.11 and lower, from https://github.com/sysown/proxysql/issues/1571.
+  (Build failure: https://sourceforge.net/p/fink/mailman/message/36927850/).
   Including, but not using patches for build with clang without -fopenmp option;
   for that FOPENMP needs to be set instead to
   "-I$(ls -d %p/lib/gcc%type_raw[gcc]/lib/gcc/x86_64-*/%type_raw[gcc]*/include) -L%p/lib/gcc%type_raw[gcc]/lib -lgomp"
