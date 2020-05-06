@@ -175,6 +175,8 @@ diff -Nurd xephem-3.7.7.orig/GUI/xephem/auxil/mpcorb2edb.pl xephem-3.7.7/GUI/xep
  my $MPCFTPDIR = "/iau/MPCORB";
  my $MPCFILE = "MPCORB.DAT";
  my $MPCZIPFILE = "MPCORB.DAT.gz";
+
+# SSL patches provided by Lutz Mändle < lmaendle at gmx dot net >
 diff -Naur xephem-3.7.7.orig/GUI/xephem/net.h xephem-3.7.7/GUI/xephem/net.h
 --- xephem-3.7.7.orig/GUI/xephem/net.h	2005-03-20 12:04:50.000000000 +0100
 +++ xephem-3.7.7/GUI/xephem/net.h	2018-01-08 19:45:27.561208366 +0100
@@ -886,4 +888,53 @@ diff -Naur xephem-3.7.7.orig/GUI/xephem/earthmenu.c xephem-3.7.7/GUI/xephem/eart
  	    if (nr > 0) {
  		xe_msg (1, "File too large");
  		return (-1);
+
+# Patch for WCS to support CDi_j type rotation matrix; courtesy of Roman Tolesnikov, rtolesnikov at yahoo.com
+diff -Nurd xephem-3.7.7.orig/libip/wcs.c xephem-3.7.7/libip/wcs.c
+--- xephem-3.7.7.orig/libip/wcs.c	2005-04-09 23:13:28.000000000 +0200
++++ xephem-3.7.7/libip/wcs.c	2020-05-06 17:08:23.000000000 +0200
+@@ -235,7 +235,7 @@
+ {
+ 	FITSRow typestr;
+ 	double tmp;
+-
++	double cd[2][2];
+ 	if (fip->wcsset)
+ 	    return (0);
+ 
+@@ -251,10 +251,31 @@
+ 	if (getRealFITS (fip, "CRVAL2", &fip->yref) < 0) return (-1);
+ 	if (getRealFITS (fip, "CRPIX1", &fip->xrefpix) < 0) return (-1);
+ 	if (getRealFITS (fip, "CRPIX2", &fip->yrefpix) < 0) return (-1);
+-	if (getRealFITS (fip, "CDELT1", &fip->xinc) < 0) return (-1);
+-	if (getRealFITS (fip, "CDELT2", &fip->yinc) < 0) return (-1);
+-	if (getRealFITS (fip, "CROTA2", &fip->rot) < 0) return (-1);
+-	if (getStringFITS (fip, "CTYPE1", typestr) < 0) return (-1);
++	if (getStringFITS (fip, "CTYPE1", typestr) < 0) return (-1);
++	if (getRealFITS (fip, "CD1_1", &cd[0][0]) < 0) {
++	    /* If CD matrix is not present, revert to CDELT and CROT keywords */
++	    if (getRealFITS (fip, "CDELT1", &fip->xinc) < 0) return (-1);
++	    if (getRealFITS (fip, "CDELT2", &fip->yinc) < 0) return (-1);
++	    if (getRealFITS (fip, "CROTA2", &fip->rot) < 0) return (-1);
++	} else {
++	    if (getRealFITS (fip, "CD1_2", &cd[0][1]) < 0) return (-1);
++	    if (getRealFITS (fip, "CD2_1", &cd[1][0]) < 0) return (-1);
++	    if (getRealFITS (fip, "CD2_2", &cd[1][1]) < 0) return (-1);
++	    /* CD matrix now available, calculate {x,y}inc and rot values
++	    * CD1_1 =  CDELT1 * cos (CROTA2)
++	    * CD1_2 = -CDELT2 * sin (CROTA2)
++	    * CD2_1 =  CDELT1 * sin (CROTA2)
++	    * CD2_2 =  CDELT2 * cos (CROTA2) 
++	    * therefore:
++	    * CROT2 = ATAN2(-CD1_2, CD2_2)
++	    * CDELT1 = CD1_1/acos(CROT2)
++	    * CDELT2 = CD2_2/acos(CROT2)
++	    */
++	    tmp = atan2(-cd[0][1], cd[1][1]);
++	    fip->rot =  raddeg(tmp);
++	    fip->xinc = cd[0][0] / cos(tmp);
++	    fip->yinc = cd[1][1] / cos(tmp);
++	}
+ 	if (strncmp (typestr, "RA--", 4)) return (-1);
+ 	strncpy (fip->type, typestr+4, sizeof(fip->type)-1);
 
