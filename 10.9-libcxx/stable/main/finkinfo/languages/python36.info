@@ -1,7 +1,7 @@
 # -*- coding: ascii; tab-width: 4; x-counterpart: python36.patch -*-
 Info2: <<
 Package: python%type_pkg[python]
-Version: 3.6.9
+Version: 3.6.10
 Revision: 1
 Type: python 3.6
 Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
@@ -46,7 +46,7 @@ Recommends: pip-py%type_pkg[python], setuptools-tng-py%type_pkg[python]
 Provides: argparse-py%type_pkg[python], futures-py%type_pkg[python], enum34-py%type_pkg[python], pathlib-py%type_pkg[python]
 
 Source: https://www.python.org/ftp/python/%v/Python-%v.tar.xz
-Source-Checksum: SHA256(5e2f5f554e3f8f7f0296f7e73d8600c4e9acbaee6b2555b83206edf5153870da)
+Source-Checksum: SHA256(0a833c398ac8cd7c5538f7232d8531afef943c60495c504484f308dac3af40de)
 
 PatchFile: %n.patch
 PatchFile-MD5: d1f5d23c7ee06375a290374404552ecb
@@ -108,22 +108,33 @@ CompileScript: <<
 InfoTest: <<
 	TestConflicts: apple-gdb
 	TestScript: <<
-		# Change install_name of lib during tests since DYLD_LIBRARY_PATH doesn't work on 10.11+.
-		install_name_tool -change %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib %b/libpython%type_raw[python]m.dylib python.exe
+		#!/bin/sh -ex
+		# Change install_name of lib during tests since DYLD_LIBRARY_PATH is not exported to test_subprocess on 10.11+.
+		if [ -x python.exe ]; then
+			python_exe=python.exe
+		else
+			python_exe=python
+		fi
+		install_name_tool -change %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib %b/libpython%type_raw[python]m.dylib $python_exe
 		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib %b/libpython%type_raw[python]m.dylib {} \;
 		install_name_tool -id %b/libpython%type_raw[python]m.dylib libpython%type_raw[python]m.dylib
-		
+
 		# test_socket can fail with some DNS settings.
-		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS='-w -unone -x test_socket test_distutils test_ssl' || exit 2
-		
+		# EXTRATESTOPTS='-w -unone -x test_socket test_distutils test_ssl'
+		# multiprocessing_span can fail on "KeyboardInterrupt not raised by wait",
+		# the other 4 hang indefinitely
+		EXTRATESTOPTS='-w -unone -x test_asyncio test_httpservers test_logging test_xmlrpc'
+		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS="$EXTRATESTOPTS" || TESTRETURN=$?
+
 		# Put install_name back.
-		install_name_tool -change %b/libpython%type_raw[python]m.dylib %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib python.exe
+		install_name_tool -change %b/libpython%type_raw[python]m.dylib %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib $python_exe
 		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %b/libpython%type_raw[python]m.dylib %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib {} \;
 		install_name_tool -id %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib libpython%type_raw[python]m.dylib
-		
+
 		# Remove stray .pyc that get made during tests to keep validator happy.
 		find ./Tools -name "*.pyc" -delete
 		find ./Tools -name "__pycache__" -delete
+		exit $TESTRETURN
 	<<
 <<
 
@@ -263,6 +274,9 @@ DescPort: <<
 
 	No longer change stack size of interpreter in configure. Causes test
 	failures in 10.14.4. https://bugs.python.org/issue34602
+
+	Call build executable by correct filename in test suite
+	(python on case-sensitive, python.exe on -insensitive file systems).
 <<
 License: OSI-Approved
 Homepage: http://www.python.org

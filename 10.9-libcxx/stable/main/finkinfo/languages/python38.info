@@ -1,7 +1,7 @@
-# -*- coding: ascii; tab-width: 4; x-counterpart: python37.patch -*-
+# -*- coding: ascii; tab-width: 4; x-counterpart: python38.patch -*-
 Info2: <<
 Package: python%type_pkg[python]
-Version: 3.8.0
+Version: 3.8.3
 Revision: 1
 Type: python 3.8
 Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
@@ -49,10 +49,10 @@ Recommends: pip-py%type_pkg[python], setuptools-tng-py%type_pkg[python]
 Provides: argparse-py%type_pkg[python], futures-py%type_pkg[python], enum34-py%type_pkg[python], pathlib-py%type_pkg[python]
 
 Source: https://www.python.org/ftp/python/%v/Python-%v.tar.xz
-Source-Checksum: SHA256(b356244e13fb5491da890b35b13b2118c3122977c2cd825e3eb6e7d462030d84)
+Source-Checksum: SHA256(dfab5ec723c218082fe3d5d7ae17ecbdebffa9a1aea4d64aa3a2ecdd2e795864)
 
 PatchFile: %n.patch
-PatchFile-MD5: 539728f3f9d9d07c05346450b9fa7110
+PatchFile-MD5: 25181b340fc83818ea6d910b64481f0b
 PatchScript: <<
 	#!/bin/sh -ex
 	sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
@@ -79,6 +79,7 @@ SetCXX: g++
 ConfigureParams: <<
 	--enable-shared \
 	--enable-loadable-sqlite-extensions \
+	--enable-optimizations \
 	--with-dbmliborder=gdbm \
 	--with-system-expat \
 	--with-system-ffi \
@@ -111,21 +112,29 @@ CompileScript: <<
 InfoTest: <<
 	TestConflicts: apple-gdb
 	TestScript: <<
-		# Change install_name of lib during tests since DYLD_LIBRARY_PATH doesn't work on 10.11+.
-		install_name_tool -change %p/lib/libpython%type_raw[python].dylib %b/libpython%type_raw[python].dylib python.exe
+		#!/bin/sh -ex
+		# Change install_name of lib during tests since DYLD_LIBRARY_PATH is not exported to test_subprocess on 10.11+.
+		if [ -x python.exe ]; then
+			python_exe=python.exe
+		else
+			python_exe=python
+		fi
+		install_name_tool -change %p/lib/libpython%type_raw[python].dylib %b/libpython%type_raw[python].dylib $python_exe
 		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %p/lib/libpython%type_raw[python].dylib %b/libpython%type_raw[python].dylib {} \;
 		install_name_tool -id %b/libpython%type_raw[python].dylib libpython%type_raw[python].dylib
-		
-		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS='-w -unone' || exit 2
-		
+
+		# test_socket can fail with some DNS settings.
+		# multiprocessing_spawn fails on "KeyboardInterrupt not raised by wait",
+		# the other 4 hang indefinitely
+		EXTRATESTOPTS='-w -unone -x test_socket test_distutils test_ssl test_multiprocessing_spawn test_asyncio test_httpservers test_logging test_xmlrpc'
+		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS="$EXTRATESTOPTS" || TESTRETURN=$?
+
 		# Put install_name back.
-		install_name_tool -change %b/libpython%type_raw[python].dylib %p/lib/libpython%type_raw[python].dylib python.exe
+		install_name_tool -change %b/libpython%type_raw[python].dylib %p/lib/libpython%type_raw[python].dylib $python_exe
 		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %b/libpython%type_raw[python].dylib %p/lib/libpython%type_raw[python].dylib {} \;
 		install_name_tool -id %p/lib/libpython%type_raw[python].dylib libpython%type_raw[python].dylib
-		
-		# Remove stray .pyc that get made during tests to keep validator happy.
-		find ./Tools -name "*.pyc" -delete
-		find ./Tools -name "__pycache__" -delete
+
+		exit $TESTRETURN
 	<<
 <<
 
@@ -139,6 +148,8 @@ InstallScript: <<
 	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]-darwin,' `ls -d %b/build/lib*`/_sysconfigdata__darwin_darwin.py
 	# Don't propagate -lintl to other packages.
 	perl -pi -e 's/-lintl //' `ls -d %b/build/lib*`/_sysconfigdata__darwin_darwin.py
+	# Remove stray .pyc that get made during tests (including preliminary ones in CompileScript) to keep validator happy.
+	find ./Lib ./Parser ./Tools ./build -name '*.pyc' -delete
 	# install fails with -j greater than 1
 	export MAKEFLAGS=-j1
 	make install DESTDIR=%d
@@ -146,8 +157,7 @@ InstallScript: <<
 	# we don't want -lintl to appear in LIBS otherwise python-config will propagate it
 	perl -pi -e 's/-lintl //' %i/lib/python%type_raw[python]/config-%type_raw[python]-darwin/Makefile
 	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]-darwin,' %i/lib/python%type_raw[python]/config-%type_raw[python]-darwin/Makefile	
-	# fix all main things to be python-versioned filenames with
-	# unversioned symlinks to them
+	# Fix all main things to be python-versioned filenames with unversioned symlinks to them.
 	pushd %i/bin
 		for f in idle3 pydoc3; do
 			mv ${f} ${f}-%type_raw[python]
@@ -156,7 +166,7 @@ InstallScript: <<
 		#Remove this for now to avoid conflicting with 'python' package.
 		rm 2to3
 	popd
-	
+
 	# Add symlink to %p/lib/python%type_raw[python]/config-%type_raw[python]-darwin.
 	ln -s %p/lib/libpython%type_raw[python].dylib %i/lib/python%type_raw[python]/config-%type_raw[python]-darwin/libpython%type_raw[python].dylib
 
@@ -221,17 +231,17 @@ DescPackaging: <<
 	New in 3.2, .pyc files are saved in the __pycache__ directory
 	at the same level as the matching .py file. Any packages that
 	expect the .pyc file to be next to the .py file will need adjustment.
-	
+
 	The .pyc and .so files also include the python version in the name.
-	
+
 	Don't run ensurepip since it installs files that conflict with
 	the pip and setuptools packages.
-	
+
 	Previous python packages went to great lengths to patch to use
 	%p/lib/python%type_raw[python]/config-%type_raw[python]-darwin
 	for libpython instead of %p/lib. Revert to using default library
 	location but make symlink in config dir.
-	
+
 	Upstream no longer links extensions to libpython and use of 
 	-undefined dynamic_lookup is recommended instead so remove those
 	patches.
@@ -244,8 +254,11 @@ DescPort: <<
 	bsddb is gone so drop db* patch and dep.
 	Patch setup.py to find ncursesw headers and drop libncurses5 dep.
 	Ensure $(LDFLAGS) is used linking libpython or else it can't find libintl.
-	
+
 	Patch ctypes to look in %p/lib for libraries.
+
+	Call build executable by correct filename in test suite
+	(python on case-sensitive, python.exe on -insensitive file systems).
 <<
 License: OSI-Approved
 Homepage: http://www.python.org

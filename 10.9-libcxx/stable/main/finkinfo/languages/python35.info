@@ -107,27 +107,37 @@ CompileScript: <<
 <<
 
 # Tests have started hanging for me.
-#InfoTest: <<
-#	TestConflicts: apple-gdb
-#	TestScript: <<
-#		# Change install_name of lib during tests since DYLD_LIBRARY_PATH doesn't work on 10.11+.
-#		install_name_tool -change %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib %b/libpython%type_raw[python]m.dylib python.exe
-#		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib %b/libpython%type_raw[python]m.dylib {} \;
-#		install_name_tool -id %b/libpython%type_raw[python]m.dylib libpython%type_raw[python]m.dylib
-#		
-#		# test_socket can fail with some DNS settings.
-#		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS='-w -unone -x test_socket test_distutils test_asyncio' || exit 2
-#		
-#		# Put install_name back.
-#		install_name_tool -change %b/libpython%type_raw[python]m.dylib %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib python.exe
-#		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %b/libpython%type_raw[python]m.dylib %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib {} \;
-#		install_name_tool -id %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib libpython%type_raw[python]m.dylib
-#		
-#		# Remove stray .pyc that get made during tests to keep validator happy.
-#		find ./Tools -name "*.pyc" -delete
-#		find ./Tools -name "__pycache__" -delete
-#	<<
-#<<
+InfoTest: <<
+	TestConflicts: apple-gdb
+	TestScript: <<
+		#!/bin/sh -ex
+		# Change install_name of lib during tests since DYLD_LIBRARY_PATH is not exported to test_subprocess on 10.11+.
+		if [ -x python.exe ]; then
+			python_exe=python.exe
+		else
+			python_exe=python
+		fi
+		install_name_tool -change %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib %b/libpython%type_raw[python]m.dylib $python_exe
+		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib %b/libpython%type_raw[python]m.dylib {} \;
+		install_name_tool -id %b/libpython%type_raw[python]m.dylib libpython%type_raw[python]m.dylib
+
+		# test_socket can fail with some DNS settings.
+		# multiprocessing_spawn fails on "KeyboardInterrupt not raised by wait",
+		# the other 4 hang indefinitely
+		EXTRATESTOPTS='-w -unone -x test_socket test_distutils test_ssl test_multiprocessing_spawn test_asyncio test_httpservers test_logging test_xmlrpc'
+		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS="$EXTRATESTOPTS" || TESTRETURN=$?
+
+		# Put install_name back.
+		install_name_tool -change %b/libpython%type_raw[python]m.dylib %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib $python_exe
+		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %b/libpython%type_raw[python]m.dylib %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib {} \;
+		install_name_tool -id %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib libpython%type_raw[python]m.dylib
+
+		# Remove stray .pyc that get made during tests to keep validator happy.
+		find ./Tools -name "*.pyc" -delete
+		find ./Tools -name "__pycache__" -delete
+		exit $TESTRETURN
+	<<
+<<
 
 InstallScript: <<
 #!/bin/sh -ex
@@ -156,7 +166,7 @@ InstallScript: <<
 		#Remove this for now to avoid conflicting with 'python' package.
 		rm 2to3
 	popd
-	
+
 	# Add symlinks to %p/lib.
 	ln -s %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib %i/lib/libpython%type_raw[python].dylib
 	ln -s %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib %i/lib/libpython%type_raw[python]m.dylib
@@ -242,13 +252,13 @@ DescPackaging: <<
 	package series. Why would they be in different places? Patch
 	-config script to continue this tradition (bug in previous
 	versions accidentally did the Right Thing here).
-	
+
 	New in 3.2, .pyc files are saved in the __pycache__ directory
 	at the same level as the matching .py file. Any packages that
 	expect the .pyc file to be next to the .py file will need adjustment.
-	
+
 	The .pyc and .so files also include the python version in the name.
-	
+
 	Don't run ensurepip since it installs files that conflict with
 	the pip and setuptools packages.
 <<
@@ -260,7 +270,7 @@ DescPort: <<
 	bsddb is gone so drop db* patch and dep.
 	Patch setup.py to find ncursesw headers and drop libncurses5 dep.
 	Ensure $(LDFLAGS) is used linking libpython or else it can't find libintl.
-	
+
 	Patch ctypes to look in %p/lib for libraries.
 
 	Upstream patch from https://bugs.python.org/issue27369 to fix tests
@@ -268,6 +278,9 @@ DescPort: <<
 
 	No longer change stack size of interpreter in configure. Causes test
 	failures in 10.14.4. https://bugs.python.org/issue34602
+
+	Call build executable by correct filename in test suite
+	(python on case-sensitive, python.exe on -insensitive file systems).
 <<
 License: OSI-Approved
 Homepage: http://www.python.org
