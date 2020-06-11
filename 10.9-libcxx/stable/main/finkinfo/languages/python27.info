@@ -2,7 +2,7 @@
 Info2: <<
 Package: python%type_pkg[python]
 Version: 2.7.18
-Revision: 1
+Revision: 2
 Epoch: 1
 Type: python 2.7
 Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
@@ -18,7 +18,7 @@ Depends: <<
 	libgettext8-shlibs,
 	libncursesw5-shlibs,
 	openssl110-shlibs (>= 1.1.1d-1),
-	readline6-shlibs,
+	readline7-shlibs,
 	sqlite3-shlibs  (>= 3.23.1-1),
 	tcltk (>= 8.4.1-1),
 	x11
@@ -35,7 +35,7 @@ BuildDepends: <<
 	libffi6,
 	libgettext8-dev,
 	libncursesw5,
-	readline6,
+	readline7,
 	sqlite3-dev (>= 3.23.1-1),
 	openssl110-dev (>= 1.1.1d-1),
 	tcltk-dev (>= 8.4.1-1),
@@ -51,10 +51,9 @@ Source2: http://www.python.org/ftp/python/doc/%v/python-%v-docs-html.tar.bz2
 Source2-Checksum: SHA256(20445e9a571cacdd350f702f0980e4dc559b6ff81f1d69affe9b0a862fef2f0e)
 
 PatchFile: %n.patch
-PatchFile-MD5: 84983fcb7eb4677be2ff56ccfcf12671
+PatchFile-MD5: 828380d012fe11d6fc03dea8647bec99
 PatchScript: <<
 	sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
-	perl -pi -e 's|/usr/local|%p|' setup.py
 	# /tmp and /var/tmp are symlinks to /private/tmp and /private/var/tmp
 	# on OS X. That's fine except it can cause tests in some packages to
 	# fail since '/tmp' != '/private/tmp'. Default to using /private/tmp.
@@ -84,7 +83,6 @@ CompileScript: <<
 		SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 		export CFLAGS="-Wno-nullability-completeness"
 		export CPPFLAGS="-I%p/include -I%p/include/ncursesw -I$SDK_PATH/usr/include"
-		perl -pi -e "s|/usr/include|$SDK_PATH/usr/include|" setup.py
 	fi
 
 	# https://bugs.python.org/issue28456 and radar://28372390
@@ -103,17 +101,31 @@ CompileScript: <<
 InfoTest: <<
 	TestConflicts: pyxml-py%type_pkg[python], gnome-applets, apple-gdb
 	TestScript: <<
-		# Change install_name of lib during tests since DYLD_LIBRARY_PATH doesn't work on 10.11+.
-		install_name_tool -change %p/lib/python%type_raw[python]/config/libpython%type_raw[python].dylib %b/libpython%type_raw[python].dylib python.exe
+		#!/bin/sh -ex
+		# Change install_name of lib during tests since DYLD_LIBRARY_PATH is not exported to test_subprocess on 10.11+.
+		if [ -x python.exe ]; then
+			python_exe=python.exe
+		else
+			python_exe=python
+		fi
+		install_name_tool -change %p/lib/python%type_raw[python]/config/libpython%type_raw[python].dylib %b/libpython%type_raw[python].dylib $python_exe
 		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %p/lib/python%type_raw[python]/config/libpython%type_raw[python].dylib %b/libpython%type_raw[python].dylib {} \;
 		install_name_tool -id %b/libpython%type_raw[python].dylib libpython%type_raw[python].dylib
-		
-		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS='-w -x test_distutils test_argparse test_httpservers test_gdb test_ssl test_httplib test_urllib2_localnet' || exit 2
-		
+
+		# test_socket can fail with some DNS settings.
+		# multiprocessing_spawn fails on "KeyboardInterrupt not raised by wait",
+		# the other 4 hang indefinitely
+		EXTRATESTOPTS='-w -x test_socket test_distutils test_ssl test_multiprocessing_spawn test_asyncio test_httpservers test_logging test_xmlrpc'
+		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS="$EXTRATESTOPTS" || TESTRETURN=$?
+
 		# Put install_name back.
-		install_name_tool -change %b/libpython%type_raw[python].dylib %p/lib/python%type_raw[python]/config/libpython%type_raw[python].dylib python.exe
+		install_name_tool -change %b/libpython%type_raw[python].dylib %p/lib/python%type_raw[python]/config/libpython%type_raw[python].dylib $python_exe
 		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %b/libpython%type_raw[python].dylib %p/lib/python%type_raw[python]/config/libpython%type_raw[python].dylib {} \;
 		install_name_tool -id %p/lib/python%type_raw[python]/config/libpython%type_raw[python].dylib libpython%type_raw[python].dylib
+
+		# Remove stray .pyc that get made during tests to keep validator happy.
+		find ./Tools -name "*.pyc" -delete
+		exit $TESTRETURN
 	<<
 <<
 
@@ -255,6 +267,9 @@ DescPort: <<
 	
 	Upstream patch from https://bugs.python.org/issue27369 to fix tests
 	with expat 2.2.0.
+
+	Call build executable by correct filename in test suite
+	(python on case-sensitive, python.exe on -insensitive file systems).
 <<
 License: OSI-Approved
 Homepage: http://www.python.org
