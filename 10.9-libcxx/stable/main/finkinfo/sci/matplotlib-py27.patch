@@ -1,0 +1,298 @@
+diff -ruNd matplotlib-1.5.1.orig/lib/matplotlib/font_manager.py matplotlib-1.5.1/lib/matplotlib/font_manager.py
+--- matplotlib-1.5.1.orig/lib/matplotlib/font_manager.py	2016-01-10 19:06:08.000000000 -0800
++++ matplotlib-1.5.1/lib/matplotlib/font_manager.py	2016-02-07 12:11:39.000000000 -0800
+@@ -146,6 +147,11 @@
+     "/Library/Fonts/",
+     "/Network/Library/Fonts/",
+     "/System/Library/Fonts/",
++    # new XQuartz font location
++    "/opt/X11/share/fonts",
++    "/opt/X11/share/fonts/TTF",
++    # fonts installed via Fink
++    "@PREFIX@/lib/X11/fonts",
+     # fonts installed via MacPorts
+     "/opt/local/share/fonts"
+     ""
+diff -ruNd matplotlib-2.1.1.orig/setup.cfg.template matplotlib-2.1.1/setup.cfg.template
+--- matplotlib-2.1.1.orig/setup.cfg.template	2017-12-06 04:37:54.000000000 +0100
++++ matplotlib-2.1.1/setup.cfg.template	2017-12-15 22:57:50.000000000 +0100
+@@ -64,18 +64,19 @@
+ #           otherwise skip silently. This is the default
+ #           behavior
+ #
+-#agg = auto
+-#cairo = auto
+-#gtk = auto
++agg = True
++cairo = True
++gtk = True
+ #gtk3agg = auto
+ #gtk3cairo = auto
+-#gtkagg = auto
++gtkagg = True
+ #macosx = auto
+ #pyside = auto
+-#qt4agg = auto
+-#tkagg = auto
++qt4agg = True
++qt5agg = True
++tkagg = True
+ #windowing = auto
+-#wxagg = auto
++wxagg = False
+ 
+ [rc_options]
+ # User-configurable options
+@@ -88,7 +89,7 @@
+ # if you have disabled the relevant extension modules.  Agg will be used
+ # by default.
+ #
+-#backend = Agg
++backend = Qt5Agg
+ #
+ 
+ [package_data]
+diff -ruNd matplotlib-2.2.0.orig/setup.py matplotlib-2.2.0/setup.py
+--- matplotlib-2.2.0.orig/setup.py	2018-03-06 05:47:09.000000000 +0100
++++ matplotlib-2.2.0/setup.py	2018-03-08 21:18:33.000000000 +0100
+@@ -282,6 +282,10 @@
+             fd.write(
+                 template.safe_substitute(TEMPLATE_BACKEND=default_backend))
+ 
++        for mod in ext_modules:
++            mod.include_dirs.append('@PREFIX@/include')
++            mod.library_dirs.append('@PREFIX@/lib')
++
+         # Build in verbose mode if requested
+         if setupext.options['verbose']:
+             for mod in ext_modules:
+diff -ruNd matplotlib-2.2.0.orig/setupext.py matplotlib-2.2.0/setupext.py
+--- matplotlib-2.2.0.orig/setupext.py	2019-02-26 01:18:32.000000000 +0100
++++ matplotlib-2.2.0/setupext.py	2019-03-28 14:10:11.000000000 +0100
+@@ -105,7 +105,7 @@
+     BytesIO
+         The file loaded into memory.
+     """
+-    cache_dir = _get_xdg_cache_dir()
++    cache_dir = '@PREFIX@/src'
+ 
+     def get_from_cache(local_fn):
+         if cache_dir is None:
+@@ -308,8 +308,8 @@
+ 
+     basedir_map = {
+         'win32': win_bases,
+-        'darwin': ['/usr/local/', '/usr', '/usr/X11',
+-                   '/opt/X11', '/opt/local'],
++        'darwin': ['@PREFIX@/lib/freetype219', '@PREFIX@',
++                   '/usr', '/usr/X11', '/opt/X11'],
+         'sunos5': [os.getenv('MPLIB_BASE') or '/usr/local', ],
+         'gnu0': ['/usr'],
+         'aix5': ['/usr/local'],
+@@ -1305,8 +1305,9 @@
+             cflags = 'CFLAGS="{0} -fPIC" '.format(os.environ.get('CFLAGS', ''))
+ 
+             subprocess.check_call(
+-                [cflags + './configure --with-zlib=no --with-bzip2=no '
+-                 '--with-png=no --with-harfbuzz=no'], shell=True, cwd=src_path)
++                [cflags + './configure --prefix=@PREFIX@ --libdir=@PREFIX@/lib/freetype219/lib '
++                 '--with-zlib=no --with-bzip2=no --with-png=no --with-harfbuzz=no'],
++                shell=True, cwd=src_path)
+             subprocess.check_call(
+                 [cflags + 'make'], shell=True, cwd=src_path)
+         else:
+@@ -1965,8 +1966,18 @@
+                 msg = res.get(timeout=10)[0]
+             except multiprocessing.TimeoutError:
+                 p.terminate()
+-                # No result returned. Probably hanging, terminate the process.
+-                raise CheckFailed("Check timed out")
++                # No result returned. Probably hanging, try once more.
++                try:
++                    p = multiprocessing.Pool()
++                    res = p.map_async(self.callback, [self])
++                    msg = res.get(timeout=60)[0]
++                except multiprocessing.TimeoutError:
++                    p.terminate()
++                    # Still hanging, terminate the process.
++                    raise CheckFailed("Check timed out")
++                except:
++                    p.close()
++                    raise
+             except:
+                 # Some other error.
+                 p.close()
+diff -ruNd matplotlib-2.0.0.orig/src/_macosx.m matplotlib-2.0.0/src/_macosx.m
+--- matplotlib-2.0.0.orig/src/_macosx.m	2016-09-19 23:46:20.000000000 +0100
++++ matplotlib-2.0.0/src/_macosx.m	2016-09-21 13:33:08.000000000 +0100
+@@ -3062,16 +3062,15 @@
+      && GetCurrentProcess(&psn)==noErr
+      && SetFrontProcess(&psn)==noErr) return true;
+ #endif
+-    PyErr_SetString(PyExc_RuntimeError,
++    PyErr_WarnEx(PyExc_RuntimeWarning,
+         "Python is not installed as a framework. The Mac OS X backend will "
+         "not be able to function correctly if Python is not installed as a "
+         "framework. See the Python documentation for more information on "
+         "installing Python as a framework on Mac OS X. Please either reinstall "
+-        "Python as a framework, or try one of the other backends. If you are "
+-        "using (Ana)Conda please install python.app and replace the use of 'python' "
+-        "with 'pythonw'. See 'Working with Matplotlib on OSX' "
++        "Python as a framework, try one of the other backends, or proceed at "
++        " your own risk! See 'Working with Matplotlib on OSX' "
+-        "in the Matplotlib FAQ for more information.");
++        "in the Matplotlib FAQ for more information.", 1);
+-    return false;
++    return true;
+ }
+ 
+ static struct PyMethodDef methods[] = {
+diff -ruNd matplotlib-2.2.0.orig/lib/matplotlib/tests/test_arrow_patches.py matplotlib-2.2.0/lib/matplotlib/tests/test_arrow_patches.py
+--- matplotlib-2.2.0.orig/lib/matplotlib/tests/test_arrow_patches.py     2018-03-06 05:47:09.000000000 +0100
++++ matplotlib-2.2.0/lib/matplotlib/tests/test_arrow_patches.py  2018-03-09 00:29:12.000000000 +0100
+@@ -3,6 +3,8 @@
+ import matplotlib.pyplot as plt
+ from matplotlib.testing.decorators import image_comparison
+ import matplotlib.patches as mpatches
++import os
++import pytest
+ 
+ 
+ def draw_arrow(ax, t, r):
+@@ -11,6 +11,8 @@
+                                 fc="b", ec='k'))
+ 
+ 
++@pytest.mark.skipif(os.getenv('SHELL') == '/usr/bin/false',
++                    reason='Hangs indefinitely in Fink build environment')
+ @image_comparison(baseline_images=['fancyarrow_test_image'])
+ def test_fancyarrow():
+     # Added 0 to test division by zero error described in issue 3930
+diff -ruNd matplotlib-2.2.0.orig/lib/matplotlib/tests/test_artist.py matplotlib-2.2.0/lib/matplotlib/tests/test_artist.py
+--- matplotlib-2.2.0.orig/lib/matplotlib/tests/test_artist.py    2018-03-09 01:38:06.000000000 +0100
++++ matplotlib-2.2.0/lib/matplotlib/tests/test_artist.py 2018-03-09 01:38:33.000000000 +0100
+@@ -6,6 +6,7 @@
+ 
+ import numpy as np
+ 
++import os
+ import pytest
+ 
+ import matplotlib.pyplot as plt
+@@ -96,6 +97,8 @@
+     assert isinstance(c._transOffset, mtransforms.IdentityTransform)
+ 
+ 
++@pytest.mark.skipif(os.getenv('SHELL') == '/usr/bin/false',
++                    reason='Hangs indefinitely in Fink build environment')
+ @image_comparison(baseline_images=["clip_path_clipping"], remove_text=True)
+ def test_clipping():
+     exterior = mpath.Path.unit_rectangle().deepcopy()
+@@ -144,6 +144,8 @@
+     assert len(svg.getvalue()) < 20000
+ 
+ 
++@pytest.mark.skipif(os.getenv('SHELL') == '/usr/bin/false',
++                    reason='Hangs indefinitely in Fink build environment')
+ @image_comparison(baseline_images=['hatching'], remove_text=True,
+                   style='default')
+ def test_hatching():
+diff -ruNd matplotlib-2.2.0.orig/lib/matplotlib/tests/test_axes.py matplotlib-2.2.0/lib/matplotlib/tests/test_axes.py
+--- matplotlib-2.2.0.orig/lib/matplotlib/tests/test_axes.py    2018-03-06 05:47:09.000000000 +0100
++++ matplotlib-2.2.0/lib/matplotlib/tests/test_axes.py   2018-03-09 02:16:29.000000000 +0100
+@@ -5,6 +5,7 @@
+ from itertools import chain, product
+ from distutils.version import LooseVersion
+ import io
++import os
+ 
+ import datetime
+ 
+@@ -75,6 +76,8 @@
+     ax.matshow(a)
+ 
+ 
++@pytest.mark.skipif(os.getenv('SHELL') == '/usr/bin/false',
++                    reason='Hangs indefinitely in Fink build environment')
+ @image_comparison(baseline_images=['formatter_ticker_001',
+                                    'formatter_ticker_002',
+                                    'formatter_ticker_003',
+@@ -136,6 +139,8 @@
+     ax.plot(x, y)
+ 
+ 
++@pytest.mark.skipif(os.getenv('SHELL') == '/usr/bin/false',
++                    reason='Hangs indefinitely in Fink build environment')
+ @image_comparison(baseline_images=["twin_axis_locaters_formatters"])
+ def test_twin_axis_locaters_formatters():
+     vals = np.linspace(0, 1, num=5, endpoint=True)
+diff -ruNd matplotlib-2.2.0.orig/lib/matplotlib/backends/backend_wx.py matplotlib-2.2.0/lib/matplotlib/backends/backend_wx.py
+--- matplotlib-2.2.0.orig/lib/matplotlib/backends/backend_wx.py	2018-03-06 05:47:09.000000000 +0100
++++ matplotlib-2.2.0/lib/matplotlib/backends/backend_wx.py	2019-06-10 02:03:44.000000000 +0200
+@@ -1253,7 +1253,7 @@
+             # Rationale for line above: see issue 2941338.
+         except AttributeError:
+             pass  # classic toolbar lacks the attribute
+-        if not self.IsBeingDeleted():
++        if self and not self.IsBeingDeleted():
+             wx.Frame.Destroy(self, *args, **kwargs)
+             if self.toolbar is not None:
+                 self.toolbar.Destroy()
+diff --git a/lib/matplotlib/cbook/__init__.py b/lib/matplotlib/cbook/__init__.py
+--- a/lib/matplotlib/cbook/__init__.py     2019-03-01 04:33:38.000000000 +0100
++++ b/lib/matplotlib/cbook/__init__.py     2019-06-07 20:02:00.000000000 +0200
+@@ -2114,7 +2114,9 @@
+     """
+     # Iterate over columns for ndarrays, over rows otherwise.
+     X = np.atleast_1d(X.T if isinstance(X, np.ndarray) else np.asarray(X))
+-    if X.ndim == 1 and X.dtype.type != np.object_:
++    if len(X) == 0:
++        return [[]]
++    elif X.ndim == 1 and np.ndim(X[0]) == 0:
+         # 1D array of scalars: directly return it.
+         return [X]
+     elif X.ndim in [1, 2]:
+diff --git a/lib/matplotlib/tests/test_cbook.py b/lib/matplotlib/tests/test_cbook.py
+--- a/lib/matplotlib/tests/test_cbook.py     2019-02-26 01:18:32.000000000 +0100
++++ b/lib/matplotlib/tests/test_cbook.py     2019-06-07 20:03:30.000000000 +0200
+@@ -505,6 +505,40 @@ class dummy():
+     assert 1 == next(it)
+ 
+ 
++def test_reshape2d():
++    class dummy():
++        pass
++    xnew = cbook._reshape_2D([], 'x')
++    assert np.shape(xnew) == (1, 0)
++
++    x = [dummy() for j in range(5)]
++
++    xnew = cbook._reshape_2D(x, 'x')
++    assert np.shape(xnew) == (1, 5)
++
++    x = np.arange(5)
++    xnew = cbook._reshape_2D(x, 'x')
++    assert np.shape(xnew) == (1, 5)
++
++    x = [[dummy() for j in range(5)] for i in range(3)]
++    xnew = cbook._reshape_2D(x, 'x')
++    assert np.shape(xnew) == (3, 5)
++
++    # this is strange behaviour, but...
++    x = np.random.rand(3, 5)
++    xnew = cbook._reshape_2D(x, 'x')
++    assert np.shape(xnew) == (5, 3)
++
++    # Now test with a list of lists with different lengths, which means the
++    # array will internally be converted to a 1D object array of lists
++    x = [[1, 2, 3], [3, 4], [2]]
++    xnew = cbook._reshape_2D(x, 'x')
++    assert isinstance(xnew, list)
++    assert isinstance(xnew[0], np.ndarray) and xnew[0].shape == (3,)
++    assert isinstance(xnew[1], np.ndarray) and xnew[1].shape == (2,)
++    assert isinstance(xnew[2], np.ndarray) and xnew[2].shape == (1,)
++
++
+ class TestFuncParser(object):
+     x_test = np.linspace(0.01, 0.5, 3)
+     validstrings = ['linear', 'quadratic', 'cubic', 'sqrt', 'cbrt',
