@@ -78,14 +78,14 @@ SetLDFLAGS: -L%p/lib -lz -lbz2 -lpng16
 UseMaxBuildJobs: True
 
 PatchFile: %{ni}.patch
-PatchFile-MD5: f15a8c2f4fef95677cbfb20cb8481f72
+PatchFile-MD5: c3cbdb2c7c28dcc5d72d0a3247a13085
 PatchScript: sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
 
 CompileScript:  <<
  #!/bin/sh -ev
  cp -a setup.cfg{.template,}
- # build against a local copy of freetype-2.6.1 to ensure exact version match
- # (set via SetMFLAGS in TestInfo; should we set this unconditionally?):
+ # Build against a local copy of freetype-2.6.1 to ensure exact version match
+ # - this will create and link against a packaged ft2font.cpython-*-darwin.so.
  mkdir build
  mv ../freetype-2.6.1 build
  export MPLLOCALFREETYPE="$MFLAGS"
@@ -108,19 +108,12 @@ InfoTest: <<
  SetMFLAGS: True
  TestConfigureParams: --local_freetype=True
  TestScript: <<
-  # conftest.py throws import errors when trying to run tests anywhere but in the
-  # directory matplotlib is imported from - remove them again before installation,
-  # as they would also triple install size.
-  rsync -aC lib/matplotlib/tests build/lib.macosx-*-%type_raw[python]/matplotlib
-  rsync -aC lib/matplotlib/sphinxext/tests build/lib.macosx-*-%type_raw[python]/matplotlib/sphinxext
-  rsync -aC lib/mpl_toolkits/tests build/lib.macosx-*-%type_raw[python]/mpl_toolkits
-  # warnings if flaky extension is not installed, but with it some tests fail on
-  # passing a 'reruns' kwarg that is unknown to any version of flaky 3.x.
-  perl -pi -e 's|(mark.flaky.)(reruns=)(.)|${1}max_runs=${3}, min_passes=2|;' build/lib.macosx-*-%type_raw[python]/matplotlib/tests/test_back*.py
-  perl -pi -e 's|(mark.flaky.)(reruns=)(.)|${1}max_runs=${3}, min_passes=1|;' build/lib.macosx-*-%type_raw[python]/matplotlib/tests/test_lines.py
-  # pytest can end up importing mpl_toolkits from %p/lib/python* (without tests)
-  # regardless of sys.path unless running from the eventual install dir in %i,
-  # so defer actual running of the tests to Install phase.
+  #!/bin/sh -ev
+  export LANG=en_US.UTF-8
+  export PYTHONPATH=%b/build/lib/python%type_raw[python]/site-packages
+  mkdir -p $PYTHONPATH || exit 2
+  OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES %p/bin/python%type_raw[python] setup.py develop --prefix %b/build || exit 2
+   %p/bin/python%type_raw[python] -Bm pytest -k 'not (_pdflatex or _rcupdate)' || exit 2
  <<
  TestSuiteSize: large
 <<
@@ -129,18 +122,6 @@ InstallScript: <<
  #!/bin/sh -ev
  export PKG_CONFIG_PATH="%p/lib/glib-2.0/pkgconfig-strict:$PKG_CONFIG_PATH"
  OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES %p/bin/python%type_raw[python] setup.py install --root %d
- export LANG=en_US.UTF-8 PYTHONPATH=%i/lib/python%type_raw[python]/site-packages
- # Check if tests have been installed and setup (for `--tests`)
- if [ -d ${PYTHONPATH}/matplotlib/tests ]; then
-  cd $PYTHONPATH
-  # Seems unable to import mpl_toolkits even directly from $PYTHONPATH if matplotlib is not already installed.
-  if (%p/bin/python%type_raw[python] -Bc 'import mpl_toolkits'); then
-   %p/bin/python%type_raw[python] -Bm pytest -k 'not (_pdflatex or _rcupdate)' || exit 2
-  else
-   %p/bin/python%type_raw[python] -Bm pytest -k 'not (_pdflatex or _rcupdate or _polycollection_close or _parasite)' matplotlib || exit 2
-  fi
-  rm -r matplotlib/tests matplotlib/sphinxext/tests mpl_toolkits/tests result_images .pytest_cache
- fi
 <<
 
 License: OSI-Approved
@@ -186,7 +167,10 @@ DescPackaging: <<
  Test suite requires exact version match of freetype built against (2.6.1),
  set by local_freetype=True in setup.cfg, to ensure correct image comparison.
  Enforced here by MPLLOCALFREETYPE set with a hack from SetMFLAGS in InfoTest.
- 1-2 Failures and Errors in 2.1.1.
+ 1-2 Failures and Errors in 2.1.1 - this will create and link against a packaged
+ ft2font.cpython-*-darwin.so.
+ Patched tests to make them use matching versions of [i]python and jupyter.
+ Changed 'reruns' kwarg to 'max_runs' to keep flaky 3.x happy.
 <<
 Homepage: http://matplotlib.sf.net
 DescUsage: <<

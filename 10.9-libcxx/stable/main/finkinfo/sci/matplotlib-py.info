@@ -16,14 +16,14 @@ Depends: <<
  atk1-shlibs (>= 1.32.0-1),
  cairo-shlibs (>= 1.12.14-1),
  cycler-py%type_pkg[python] (>= 0.10.0-1),
- dateutil-py%type_pkg[python],
+ dateutil-py%type_pkg[python] (>= 2.7.3-1),
  fontconfig2-shlibs (>= 2.10.0-1),
  glib2-shlibs (>= 2.22.0-1),
  gtk+2-shlibs (>= 2.18.0-1),
- kiwisolver-py%type_pkg[python],
+ kiwisolver-py%type_pkg[python] (>= 1.2.0-1),
  libpng16-shlibs,
  pango1-xft2-ft219-shlibs (>= 1.24.5-4),
- pil-py%type_pkg[python],
+ pil-py%type_pkg[python] (>= 6.2.0-1),
  poppler-bin,
  python%type_pkg[python],
  pyparsing-py%type_pkg[python],
@@ -62,8 +62,7 @@ BuildDepends: <<
 Recommends: <<
  ffmpeg,
  imagemagick,
- ipython-py%type_pkg[python],
- pil-py%type_pkg[python]
+ ipython-py%type_pkg[python]
 <<
 
 BuildConflicts: libharfbuzz0-dev, qhull5-dev, qhull6-dev, qhull6.3.1-dev
@@ -77,45 +76,46 @@ SetLDFLAGS: -L%p/lib -lz -lbz2 -lpng16
 UseMaxBuildJobs: True
 
 PatchFile: %{ni}.patch
-PatchFile-MD5: 4da6d6a9685122fda5b2f2bf3481820d
+PatchFile-MD5: 98e8db5dd66b9f68f9ad19e7fb5a01ee
 PatchScript: sed 's|@PREFIX@|%p|g;s|@PY_PKG@|%type_pkg[python]|g;s|@PY_RAW@|%type_raw[python]|g' < %{PatchFile} | patch -p1
 
 CompileScript:  <<
  #!/bin/sh -ev
  cp -a setup.cfg{.template,}
- # build against a local copy of freetype-2.6.1 to ensure exact version match
- # (set via SetMFLAGS in TestInfo; should we set this unconditionally?):
+ # Build against a local copy of freetype-2.6.1 to ensure exact version match
  mkdir build
  mv ../freetype-2.6.1 build
  export MPLLOCALFREETYPE="$MFLAGS"
  export PKG_CONFIG_PATH="%p/lib/glib-2.0/pkgconfig-strict:$PKG_CONFIG_PATH"
  OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES %p/bin/python%type_raw[python] setup.py build
  fink-package-precedence --depfile-ext='\.d' build
- rsync -aC lib/matplotlib/tests/{tinypages,*.ipynb,*.pfb,*.ttf} build/lib.macosx-*-%type_raw[python]/matplotlib/tests
 <<
 
 InfoTest: <<
  TestDepends: <<
+  certifi-py%type_pkg[python] (>= 2019.11.28-1),
   ffmpeg,
   inkscape,
-  pytest-py%type_pkg[python]
+  numpy-py%type_pkg[python] (>= 1.18.1-1),
+  pyparsing-py%type_pkg[python] (>= 2.4.5-1),
+  pytest-py%type_pkg[python] (>= 3.6.0)
  <<
  # test_backends_nbagg checks for nbconvert but fails with older versions.
  TestConflicts: nbconvert-py%type_pkg[python] (<= 6.0.0-1)
- #SetMFLAGS: True
- #TestConfigureParams: --local_freetype=True
  TestScript: <<
-  # conftest.py throws import errors when trying to run tests anywhere but in the
-  # directory matplotlib is imported from - remove them again before installation,
-  # as they would also triple install size.
-  rsync -aC lib/matplotlib/tests/baseline_images build/lib.macosx-*-%type_raw[python]/matplotlib/tests
-  rsync -aC lib/mpl_toolkits/tests/baseline_images build/lib.macosx-*-%type_raw[python]/mpl_toolkits/tests
-  # warnings if flaky extension is not installed, but with it some tests fail on
-  # passing a 'reruns' kwarg that is unknown to any version of flaky 3.x.
-  perl -pi -e 's|(mark.flaky.)(reruns=)(.)|${1}max_runs=${3}, min_passes=2|;' build/lib.macosx-*-%type_raw[python]/matplotlib/tests/test*.py
-  # pytest can end up importing mpl_toolkits from %p/lib/python* (without tests)
-  # regardless of sys.path unless running from the eventual install dir in %i,
-  # so defer actual running of the tests to Install phase.
+  #!/bin/sh -ev
+  export LANG=en_US.UTF-8
+  export PYTHONPATH=%b/build/lib/python%type_raw[python]/site-packages
+  mkdir -p $PYTHONPATH
+  OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES %p/bin/python%type_raw[python] setup.py develop --no-deps --prefix %b/build
+  # Comparison images are expected in `Path(__file__).parent / "baseline_images"`
+  # - mpl_toolkits still may not find them if matplotlib is already installed in system path.
+  ln -s ../../../../lib/matplotlib/tests/baseline_images build/lib.macosx*-%type_raw[python]/matplotlib/tests
+  ln -s ../../../../lib/mpl_toolkits/tests/baseline_images build/lib.macosx*-%type_raw[python]/mpl_toolkits/tests
+  PYTHONPATH="${PYTHONPATH}:$(ls -d %b/build/lib.macosx*-%type_raw[python])"
+  %p/bin/python%type_raw[python] -Bm pytest lib/mpl_toolkits || echo 'mpl_toolkits tests not working with installed matplotlib'
+  %p/bin/python%type_raw[python] -Bm pytest -k 'not (_pdflatex or _rcupdate or _marker_clipping or _interactive_backend or (_mixedmode and pdf))' lib/matplotlib || exit 2
+  rm build/lib.macosx*-%type_raw[python]/m*/tests/baseline_images
  <<
  TestSuiteSize: large
 <<
@@ -125,13 +125,6 @@ InstallScript: <<
  export PKG_CONFIG_PATH="%p/lib/glib-2.0/pkgconfig-strict:$PKG_CONFIG_PATH"
  OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES %p/bin/python%type_raw[python] setup.py install --root %d
  export LANG=en_US.UTF-8 PYTHONPATH=%i/lib/python%type_raw[python]/site-packages
- # Check if tests have been installed and setup (for `--tests`)
- if [ -d ${PYTHONPATH}/matplotlib/tests/baseline_images ]; then
-  cd $PYTHONPATH
-  # test_backend_tk might fail on accessing display
-  %p/bin/python%type_raw[python] -Bm pytest -k 'not (_pdflatex or _rcupdate or _marker_clipping or _interactive_backend or (_mixedmode and pdf))' || exit 2
-  rm -r m*/tests/baseline_images result_images .pytest_cache
- fi
 <<
 
 License: OSI-Approved
@@ -161,7 +154,7 @@ DescPackaging: <<
  falling back to the local copy until mpl is converted to libqhull_r or we
  find a way to install the non-reentrant dylib with libqhull-shlibs as well.
  (cf. http://www.qhull.org/html/qh-code.htm#reentrant .)
- The 'save to file' interface seems broken with qt4 and ipython.
+ Qt4 backend to be phased out and already unsupported with ipython --pylab.
  Enabled build against wxpython400, requires patch to ipython-py 7.5.0 for
  pylab environment; RuntimeError in backends/backend_wx.py on exit.
  [ Added patch from https://github.com/matplotlib/matplotlib/pull/14292 - merged in 3.1.1]
@@ -174,9 +167,10 @@ DescPackaging: <<
  - workaround taken from the same site.
  Test suite requires exact version match of freetype built against (2.6.1),
  set by local_freetype=True in setup.cfg, to ensure correct image comparison.
- Enforced here by MPLLOCALFREETYPE set with a hack from SetMFLAGS in InfoTest
- and always used in build against local source copy.
+ Always used in build against local source copy - this will create and link
+ against a packaged ft2font.cpython-*-darwin.so.
  Patched tests to make them use matching versions of [i]python and jupyter.
+ Changed 'reruns' kwarg to 'max_runs' to keep flaky 3.x happy.
 <<
 Homepage: http://matplotlib.sf.net
 DescUsage: <<

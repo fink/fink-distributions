@@ -77,45 +77,39 @@ SetLDFLAGS: -L%p/lib -lz -lbz2 -lpng16
 UseMaxBuildJobs: True
 
 PatchFile: %{ni}.patch
-PatchFile-MD5: 4da6d6a9685122fda5b2f2bf3481820d
+PatchFile-MD5: 92910980d40ac771da93a8fbcd52f6bd
 PatchScript: sed 's|@PREFIX@|%p|g;s|@PY_PKG@|%type_pkg[python]|g;s|@PY_RAW@|%type_raw[python]|g' < %{PatchFile} | patch -p1
 
 CompileScript:  <<
  #!/bin/sh -ev
  cp -a setup.cfg{.template,}
- # build against a local copy of freetype-2.6.1 to ensure exact version match
- # (set via SetMFLAGS in TestInfo; should we set this unconditionally?):
  mkdir build
  mv ../freetype-2.6.1 build
  export MPLLOCALFREETYPE="$MFLAGS"
  export PKG_CONFIG_PATH="%p/lib/glib-2.0/pkgconfig-strict:$PKG_CONFIG_PATH"
  OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES %p/bin/python%type_raw[python] setup.py build
  fink-package-precedence --depfile-ext='\.d' build
- rsync -aC lib/matplotlib/tests/{tinypages,*.ipynb,*.pfb,*.ttf} build/lib.macosx-*-%type_raw[python]/matplotlib/tests
 <<
 
 InfoTest: <<
  TestDepends: <<
   ffmpeg,
   inkscape,
-  pytest-py%type_pkg[python]
+  pytest-py%type_pkg[python] (>= 3.6.0)
  <<
  # test_backends_nbagg checks for nbconvert but fails with older versions.
  TestConflicts: nbconvert-py%type_pkg[python] (<= 6.0.0-1)
  #SetMFLAGS: True
  #TestConfigureParams: --local_freetype=True
  TestScript: <<
-  # conftest.py throws import errors when trying to run tests anywhere but in the
-  # directory matplotlib is imported from - remove them again before installation,
-  # as they would also triple install size.
-  rsync -aC lib/matplotlib/tests/baseline_images build/lib.macosx-*-%type_raw[python]/matplotlib/tests
-  rsync -aC lib/mpl_toolkits/tests/baseline_images build/lib.macosx-*-%type_raw[python]/mpl_toolkits/tests
-  # warnings if flaky extension is not installed, but with it some tests fail on
-  # passing a 'reruns' kwarg that is unknown to any version of flaky 3.x.
-  perl -pi -e 's|(mark.flaky.)(reruns=)(.)|${1}max_runs=${3}, min_passes=2|;' build/lib.macosx-*-%type_raw[python]/matplotlib/tests/test*.py
-  # pytest can end up importing mpl_toolkits from %p/lib/python* (without tests)
-  # regardless of sys.path unless running from the eventual install dir in %i,
-  # so defer actual running of the tests to Install phase.
+  #!/bin/sh -ev
+  export LANG=en_US.UTF-8
+  export PYTHONPATH=%b/build/lib/python%type_raw[python]/site-packages
+  mkdir -p $PYTHONPATH
+  OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES %p/bin/python%type_raw[python] setup.py develop --prefix %b/build
+  %p/bin/python%type_raw[python] -Bm pytest -k 'not (_pdflatex or _rcupdate or _mixedsubplots or backend_qt5)' || exit 2
+  # Qt4 and Qt5 backends cannot be loaded in the same session.
+  %p/bin/python%type_raw[python] -Bm pytest lib/matplotlib/tests/test_backend_qt5.py || exit 2
  <<
  TestSuiteSize: large
 <<
@@ -124,14 +118,6 @@ InstallScript: <<
  #!/bin/sh -ev
  export PKG_CONFIG_PATH="%p/lib/glib-2.0/pkgconfig-strict:$PKG_CONFIG_PATH"
  OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES %p/bin/python%type_raw[python] setup.py install --root %d
- export LANG=en_US.UTF-8 PYTHONPATH=%i/lib/python%type_raw[python]/site-packages
- # Check if tests have been installed and setup (for `--tests`)
- if [ -d ${PYTHONPATH}/matplotlib/tests/baseline_images ]; then
-  cd $PYTHONPATH
-  # test_backend_tk might fail on accessing display
-  %p/bin/python%type_raw[python] -Bm pytest -k 'not (_pdflatex or _rcupdate or _marker_clipping or _interactive_backend or (_mixedmode and pdf))' || exit 2
-  rm -r m*/tests/baseline_images result_images .pytest_cache
- fi
 <<
 
 License: OSI-Approved
@@ -175,10 +161,12 @@ DescPackaging: <<
  Test suite requires exact version match of freetype built against (2.6.1),
  set by local_freetype=True in setup.cfg, to ensure correct image comparison.
  Enforced here by MPLLOCALFREETYPE set with a hack from SetMFLAGS in InfoTest
- and always used in build against local source copy.
+ and always used in build against local source copy - this will create and link
+ against a packaged ft2font.cpython-*-darwin.so.
  Patched tests to make them use matching versions of [i]python and jupyter.
- Even with `-Wmodule` thousands of warnings
-  `RemovedInPytest4Warning: MarkInfo objects are deprecated`
+ Changed 'reruns' kwarg to 'max_runs' to keep flaky 3.x happy.
+ Merged https://github.com/matplotlib/matplotlib/commit/a3b9ef7 to replace
+ `request.keywords.get` deprecated/removed in newer pytest versions.
 <<
 Homepage: http://matplotlib.sf.net
 DescUsage: <<
