@@ -2,9 +2,9 @@ Package: tcltk
 Epoch: 1
 
 # update itcl path-flags in "itk" and versions in "iwidgets" when updating
-Version: 8.6.7
+Version: 8.6.10
 
-Revision: 2
+Revision: 1
 BuildDepends: <<
 	fink (>= 0.28),
 	fink-package-precedence,
@@ -22,12 +22,12 @@ Depends: <<
 	xft2-shlibs (>= 2.2.0-1)
 <<
 Source: mirror:sourceforge:tcl/tcl%v-src.tar.gz
-Source-MD5: 5673aaf45b5de5d8dd80bb3daaeb8838
+Source-MD5: 97c55573f8520bcab74e21bfd8d0aadc
 SourceDirectory: tcl%v
 Source2: mirror:sourceforge:tcl/tk%v-src.tar.gz
-Source2-MD5: 46ea9c0165c515d87393700f4891ab6f
-PatchFile: %n-%v.patch
-PatchFile-MD5: bc0ed789b46f13b9696eb58bbdf07c32
+Source2-MD5: 602a47ad9ecac7bf655ada729d140a94
+PatchFile: %n.patch
+PatchFile-MD5: fa90f0d1f5d62da177c8a5b8c2c97938
 PatchScript: <<
 	%{default_script}
 	# patch *ancient* darwin-ignorant autoconf
@@ -50,7 +50,7 @@ CompileScript: <<
 	pushd tcl%v/unix
 		export COMMAND_MODE=legacy
 		./configure %c
-		make
+		make -w
 	popd
 
 	pushd tk%v/unix
@@ -58,8 +58,15 @@ CompileScript: <<
 		export ac_cv_path_tclsh=%b/tcl%v/unix/tclsh
 		./configure %c
 #		make genstubs
-		make
+		make -w
 	popd
+
+	# Safety-check in case we missed any details in the patching:
+	# lots of config/build-encoded paths by various .m4 bits use
+	# -L/-l to find builddir things (risk of picking up installed
+	# incompatible files). Should always use actual file-path!
+	find . -name \*Config.sh | xargs grep -l -- '-L%b' && exit 2
+
 	fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=%n-dev .
 <<
 InstallScript: <<
@@ -83,6 +90,10 @@ InstallScript: <<
 	ln -s libtclstub${MAJORVER}.a %i/lib/libtclstub.a
 	/usr/bin/ranlib %i/lib/libtkstub${MAJORVER}.a
 
+	# Fix pointer to static stub lib (don't accidentally point to
+	# include/ in later perl tricks)
+	perl -pi -e "s,%b/tk%v/unix/(libtkstub${MAJORVER}.a),%p/lib/\1," %i/lib/tkConfig.sh
+
 	for pkg in tcl tk; do
 		mkdir -p %i/include/tcltk-private/${pkg}${MAJORVER}/{generic,unix}
 		cp ${pkg}%v/generic/*.h %i/include/tcltk-private/${pkg}${MAJORVER}/generic
@@ -99,28 +110,33 @@ InstallScript: <<
 		perl -pi -e "s,%b/${pkg}%v/unix,%p/lib,; s,%b,%p/include/tcltk-private,; s,/${pkg}%v,/${pkg}${MAJORVER},g" %i/lib/*Config.sh %i/lib/*/*Config.sh
 	done
 
+	# Fix paths that were in subdir during build but get installed
+	# into top-level
+	perl -pi -e 's,%p/lib/pkgs,%p/lib,' %i/lib/*/*Config.sh
+
 	# manually fix install names (fink wants full path even though
 	# private and dlopen'ed). Why are these .dylib not .so ?
-	chmod u+w %i/lib/thread2.8.1/libthread2.8.1.dylib
-	chmod u+w %i/lib/tdbcpostgres1.0.5/libtdbcpostgres1.0.5.dylib
+	chmod u+w %i/lib/thread2.8.5/libthread2.8.5.dylib
+	chmod u+w %i/lib/tdbcpostgres1.1.1/libtdbcpostgres1.1.1.dylib
 	for modulepath in \
-		itcl4.1.0/libitcl4.1.0.dylib \
-		sqlite3.20.0/libsqlite3.20.0.dylib \
-		tdbc1.0.5/libtdbc1.0.5.dylib \
-		tdbcmysql1.0.5/libtdbcmysql1.0.5.dylib \
-		tdbcodbc1.0.5/libtdbcodbc1.0.5.dylib \
-		tdbcpostgres1.0.5/libtdbcpostgres1.0.5.dylib \
-		thread2.8.1/libthread2.8.1.dylib \
+		itcl4.2.0/libitcl4.2.0.dylib \
+		sqlite3.30.1.2/libsqlite3.30.1.2.dylib \
+		tdbc1.1.1/libtdbc1.1.1.dylib \
+		tdbcmysql1.1.1/libtdbcmysql1.1.1.dylib \
+		tdbcodbc1.1.1/libtdbcodbc1.1.1.dylib \
+		tdbcpostgres1.1.1/libtdbcpostgres1.1.1.dylib \
+		thread2.8.5/libthread2.8.5.dylib \
 	; do
 		install_name_tool -id %p/lib/$modulepath %i/lib/$modulepath
 	done
 <<
 DocFiles: <<
 	tcl%v/license.terms:LICENSE.tcl
-	tcl%v/README:README.tcl
+	tcl%v/README.md:README.tcl
 	tcl%v/ChangeLog:ChangeLog.tcl
+	tcl%v/changes:changes.tcl
 	tk%v/license.terms:LICENSE.tk
-	tk%v/README:README.tk
+	tk%v/README.md:README.tk
 	tk%v/ChangeLog:ChangeLog.tk 
 <<
 SplitOff: <<
@@ -134,31 +150,32 @@ SplitOff: <<
 	Files: <<
 		lib/libtcl8.6.dylib
 		lib/libtk8.6.dylib
-		lib/itcl4.1.0/libitcl4.1.0.dylib
-		lib/sqlite3.20.0/libsqlite3.20.0.dylib
-		lib/tdbc1.0.5/libtdbc1.0.5.dylib
-		lib/tdbcmysql1.0.5/libtdbcmysql1.0.5.dylib
-		lib/tdbcodbc1.0.5/libtdbcodbc1.0.5.dylib
-		lib/tdbcpostgres1.0.5/libtdbcpostgres1.0.5.dylib
-		lib/thread2.8.1/libthread2.8.1.dylib
+		lib/itcl4.2.0/libitcl4.2.0.dylib
+		lib/sqlite3.30.1.2/libsqlite3.30.1.2.dylib
+		lib/tdbc1.1.1/libtdbc1.1.1.dylib
+		lib/tdbcmysql1.1.1/libtdbcmysql1.1.1.dylib
+		lib/tdbcodbc1.1.1/libtdbcodbc1.1.1.dylib
+		lib/tdbcpostgres1.1.1/libtdbcpostgres1.1.1.dylib
+		lib/thread2.8.5/libthread2.8.5.dylib
 	<<
 	Shlibs: <<
 		%p/lib/libtcl8.6.dylib 8.6.0 %n (>= 8.6.0-1)
 		%p/lib/libtk8.6.dylib 8.6.0 %n (>= 8.6.0-1)
-		!%p/lib/itcl4.1.0/libitcl4.1.0.dylib
-		!%p/lib/sqlite3.20.0/libsqlite3.20.0.dylib
-		!%p/lib/tdbc1.0.5/libtdbc1.0.5.dylib
-		!%p/lib/tdbcmysql1.0.5/libtdbcmysql1.0.5.dylib
-		!%p/lib/tdbcodbc1.0.5/libtdbcodbc1.0.5.dylib
-		!%p/lib/tdbcpostgres1.0.5/libtdbcpostgres1.0.5.dylib
-		!%p/lib/thread2.8.1/libthread2.8.1.dylib
+		!%p/lib/itcl4.2.0/libitcl4.2.0.dylib
+		!%p/lib/sqlite3.30.1.2/libsqlite3.30.1.2.dylib
+		!%p/lib/tdbc1.1.1/libtdbc1.1.1.dylib
+		!%p/lib/tdbcmysql1.1.1/libtdbcmysql1.1.1.dylib
+		!%p/lib/tdbcodbc1.1.1/libtdbcodbc1.1.1.dylib
+		!%p/lib/tdbcpostgres1.1.1/libtdbcpostgres1.1.1.dylib
+		!%p/lib/thread2.8.5/libthread2.8.5.dylib
 	<<
 	DocFiles: <<
 		tcl%v/license.terms:LICENSE.tcl
-		tcl%v/README:README.tcl
+		tcl%v/README.md:README.tcl
 		tcl%v/ChangeLog:ChangeLog.tcl
+		tcl%v/changes:changes.tcl
 		tk%v/license.terms:LICENSE.tk
-		tk%v/README:README.tk
+		tk%v/README.md:README.tk
 		tk%v/ChangeLog:ChangeLog.tk 
 	<<
 <<
@@ -179,11 +196,12 @@ SplitOff2: <<
 	<<
 	DocFiles: <<
 		tcl%v/license.terms:LICENSE.tcl
-		tcl%v/README:README.tcl
+		tcl%v/README.md:README.tcl
 		tcl%v/ChangeLog:ChangeLog.tcl
+		tcl%v/changes:changes.tcl
 		tk%v/license.terms:LICENSE.tk
-		tk%v/README:README.tk
-		tk%v/ChangeLog:ChangeLog.tk 
+		tk%v/README.md:README.tk
+		tk%v/ChangeLog:ChangeLog.tk
 	<<
 	DescUsage: <<
 Packages that want to use the supplied internal-interface headers
