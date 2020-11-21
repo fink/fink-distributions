@@ -27,7 +27,7 @@ SourceDirectory: tcl%v
 Source2: mirror:sourceforge:tcl/tk%v-src.tar.gz
 Source2-MD5: 602a47ad9ecac7bf655ada729d140a94
 PatchFile: %n.patch
-PatchFile-MD5: 9070cd293f1e515b6eadf5b6f3980bf2
+PatchFile-MD5: fa90f0d1f5d62da177c8a5b8c2c97938
 PatchScript: <<
 	%{default_script}
 	# patch *ancient* darwin-ignorant autoconf
@@ -60,6 +60,13 @@ CompileScript: <<
 #		make genstubs
 		make -w
 	popd
+
+	# Safety-check in case we missed any details in the patching:
+	# lots of config/build-encoded paths by various .m4 bits use
+	# -L/-l to find builddir things (risk of picking up installed
+	# incompatible files). Should always use actual file-path!
+	find . -name \*Config.sh | xargs grep -l -- '-L%b' && exit 2
+
 	fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=%n-dev .
 <<
 InstallScript: <<
@@ -83,6 +90,10 @@ InstallScript: <<
 	ln -s libtclstub${MAJORVER}.a %i/lib/libtclstub.a
 	/usr/bin/ranlib %i/lib/libtkstub${MAJORVER}.a
 
+	# Fix pointer to static stub lib (don't accidentally point to
+	# include/ in later perl tricks)
+	perl -pi -e "s,%b/tk%v/unix/(libtkstub${MAJORVER}.a),%p/lib/\1," %i/lib/tkConfig.sh
+
 	for pkg in tcl tk; do
 		mkdir -p %i/include/tcltk-private/${pkg}${MAJORVER}/{generic,unix}
 		cp ${pkg}%v/generic/*.h %i/include/tcltk-private/${pkg}${MAJORVER}/generic
@@ -98,6 +109,10 @@ InstallScript: <<
 
 		perl -pi -e "s,%b/${pkg}%v/unix,%p/lib,; s,%b,%p/include/tcltk-private,; s,/${pkg}%v,/${pkg}${MAJORVER},g" %i/lib/*Config.sh %i/lib/*/*Config.sh
 	done
+
+	# Fix paths that were in subdir during build but get installed
+	# into top-level
+	perl -pi -e 's,%p/lib/pkgs,%p/lib,' %i/lib/*/*Config.sh
 
 	# manually fix install names (fink wants full path even though
 	# private and dlopen'ed). Why are these .dylib not .so ?
