@@ -1,7 +1,7 @@
 # -*- coding: ascii; tab-width: 4; x-counterpart: python35.patch -*-
 Info2: <<
 Package: python%type_pkg[python]
-Version: 3.5.9
+Version: 3.5.10
 Revision: 1
 Type: python 3.5
 Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
@@ -46,15 +46,18 @@ Recommends: pip-py%type_pkg[python], setuptools-tng-py%type_pkg[python]
 Provides: argparse-py%type_pkg[python], futures-py%type_pkg[python], enum34-py%type_pkg[python], pathlib-py%type_pkg[python]
 
 Source: https://www.python.org/ftp/python/%v/Python-%v.tar.xz
-Source-Checksum: SHA256(c24a37c63a67f53bdd09c5f287b5cff8e8b98f857bf348c577d454d3f74db049)
+Source-Checksum: SHA256(0f0fa8685c1dc1f1dacb0b4e7779796b90aef99dc1fa4967a71b9da7b57d4a28)
 # Doc tarball missing upstream.
 #Source2: https://www.python.org/ftp/python/doc/%v/python-%v-docs-html.tar.bz2
 #Source2-MD5: c576463076f94da8daaf39f8eaeacd14
 PatchFile: %n.patch
 PatchFile-MD5: f07ce62c88ca3be5afd05362a935f0a6
+PatchFile2: %n-darwin20.patch
+PatchFile2-MD5: 5fc4c8c53d930e55ec850bb3bc9cccbf
 PatchScript: <<
 	#!/bin/sh -ex
 	sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
+	patch -p1 < %{PatchFile2}
 	# /tmp and /var/tmp are symlinks to /private/tmp and /private/var/tmp
 	# on OS X. That's fine except it can cause tests in some packages to
 	# fail since '/tmp' != '/private/tmp'. Default to using /private/tmp.
@@ -96,14 +99,19 @@ CompileScript: <<
 		export CPPFLAGS="-I%p/include -I%p/include/ncursesw -I$SDK_PATH/usr/include"
 		perl -pi -e "s|/usr/include|$SDK_PATH/usr/include|" setup.py
 	fi
+	# for macOS 11, need help finding libz in new system-library cache
+	# https://bugs.python.org/issue41116
+	if [ "$(uname -r | cut -d. -f1)" -ge 20 ]; then
+		DIST_CONFIG_PARAMS="--enable-universalsdk=$(xcrun --sdk macosx --show-sdk-path) --with-universal-archs=64-bit"
+	fi
 
 	# https://bugs.python.org/issue28456 and radar://28372390
 	# https://daniel.haxx.se/blog/2016/10/11/poll-on-mac-10-12-is-broken/
-	./configure %c
+	./configure %c $DIST_CONFIG_PARAMS
 	perl -pi -e 's|\#define HAVE_POLL 1||' ./pyconfig.h
 	perl -pi -e 's|\#define HAVE_POLL_H 1||g' ./pyconfig.h
 	perl -pi -e 's|\#define HAVE_SYS_POLL_H 1||g' ./pyconfig.h
-	make
+	make -w -j1
 <<
 
 # Tests have started hanging for me.
@@ -124,7 +132,8 @@ InfoTest: <<
 		# test_socket can fail with some DNS settings.
 		# multiprocessing_spawn fails on "KeyboardInterrupt not raised by wait",
 		# the other 4 hang indefinitely
-		EXTRATESTOPTS='-w -unone -x test_socket test_distutils test_ssl test_multiprocessing_spawn test_asyncio test_httpservers test_logging test_xmlrpc'
+		# test_ctypes is currently broken on 11.0
+		EXTRATESTOPTS='-w -unone -x test_socket test_distutils test_ssl test_multiprocessing_spawn test_asyncio test_httpservers test_logging test_xmlrpc test_ctypes'
 		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS="$EXTRATESTOPTS" || TESTRETURN=$?
 
 		# Put install_name back.
@@ -281,6 +290,12 @@ DescPort: <<
 
 	Call build executable by correct filename in test suite
 	(python on case-sensitive, python.exe on -insensitive file systems).
+
+	On macOS11, ctypes test needs to know about shared library cache
+	but not yet ported to release branches.
+	https://github.com/python/cpython/pull/22855
+	Also, for python35, 64-bit building implies ppc64 as well, so patch out
+	that arch.
 <<
 License: OSI-Approved
 Homepage: http://www.python.org
