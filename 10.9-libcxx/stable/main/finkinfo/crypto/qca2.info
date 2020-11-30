@@ -1,7 +1,7 @@
 Info3: <<
 Package: qca2-%type_pkg[qca]
-Version: 2.1.3
-Revision: 2
+Version: 2.2.1
+Revision: 3
 Description: Cross-platform Crypto API
 Type: qca (x11 mac)
 License: LGPL
@@ -10,6 +10,7 @@ Maintainer: Hanspeter Niederstrasser <nieder@users.sourceforge.net>
 Depends: %N-shlibs (= %v-%r)
 BuildDepends: <<
 	botan1.10,
+	cyrus-sasl2.3-dev,
 	fink (>= 0.32),
 	fink-package-precedence,
 	libgcrypt20,
@@ -21,17 +22,15 @@ BuildDepends: <<
 BuildDependsOnly: true
 GCC: 4.0
 
-Source: http://download.kde.org/stable/qca/%v/src/qca-%v.tar.xz
-Source-MD5: 5019cc29efcf828681cd93164238ce26
-Source2: http://archive.ubuntu.com/ubuntu/pool/universe/q/qca2/qca2_%v-2ubuntu2.debian.tar.xz
-Source2-MD5: d54c6af4789380c1ddba30dfe8c4f90e
+Source: https://download.kde.org/stable/qca/%v/qca-%v.tar.xz
+Source-MD5: 5d809bf0ade891dc89dfd7639cbeaa9d
+Source2: http://archive.ubuntu.com/ubuntu/pool/universe/q/qca2/qca2_%v-2build1.debian.tar.xz
+Source2-MD5: 1ea9c49e0e795c8d44b3912fcb32b8ea
 #PatchFile: qca2.patch
 #PatchFile-MD5: 3b0058b8220fe6f0aefd081d7a30572a
 PatchScript: <<
 	patch -p1 < ../debian/patches/define_qca_export.diff
 	patch -p1 < ../debian/patches/pipeunittest_more_wait.diff
-	patch -p1 < ../debian/patches/Disable_missed_openssl_cipher_suites.diff
-	patch -p1 < ../debian/patches/Add_support_for_OpenSSL_1.1.0.diff
 <<
 CompileScript: <<
 	#!/bin/sh -ev
@@ -47,14 +46,18 @@ CompileScript: <<
 		-DCMAKE_LINKER_FLAGS="-headerpad_max_install_names" \
 		-DOSX_FRAMEWORK:BOOL=OFF \
 		-DCMAKE_INSTALL_PREFIX=%p/opt/qca2/%type_pkg[qca] \
+		-DCMAKE_INSTALL_NAME_DIR=%p/opt/qca2/%type_pkg[qca]/lib \
 		-DBUILD_PLUGINS="botan;cyrus-sasl;gcrypt;gnupg;logger;ossl;softstore" \
 		-DQCA_FEATURE_INSTALL_DIR:PATH=%p/lib/qt4-%type_pkg[qca]/share/qt4/mkspecs/features \
+		-DSASL2_INCLUDE_DIR:PATH=%p/include \
+		-DSASL2_LIBRARIES:FILEPATH=%p/lib/libsasl2.dylib \
+		-Dqca_CERTSTORE=%p/etc/ssl/cert.pem \
+		-LAH \
 	..
 	make -w
 	popd
 	fink-package-precedence --depfile-ext='\.d' .
 <<
-## only -x11- passes tests.  -mac- fails by not building 'velox'
 InfoTest: <<
 	TestDepends: <<
 		qt4-base-%type_pkg[qca]-qtcore-shlibs (>= 4.7.3-1),
@@ -63,18 +66,16 @@ InfoTest: <<
 	<<
 	TestScript: <<
 		#!/bin/sh -ev
-		QCADIR=
-			#if [ "%type_pkg[qca]" == "x11" ]; then
-				pushd finkbuild
-				install_name_tool -id %p/lib/libqca.2.dylib %b/finkbuild/lib/libqca.2.dylib
-				install_name_tool -change %p/lib/libqca.2.dylib %b/finkbuild/lib/libqca.2.dylib %b/finkbuild/bin/mozcerts
-				install_name_tool -change %p/lib/libqca.2.dylib %b/finkbuild/lib/libqca.2.dylib %b/finkbuild/bin/qcatool
-				for testprog in bin/*test bin/clientplugin bin/cms bin/keybundle bin/keystore bin/pkits; do
-					install_name_tool -change %p/lib/libqca.2.dylib %b/finkbuild/lib/libqca.2.dylib $testprog
-				done
-				make -j1 test || exit 2
-				popd
-			#fi
+		QCADIR="%p/opt/qca2/%type_pkg[qca]"
+		pushd finkbuild
+			# point the test programs to the uninstalled library in %b
+			for testprog in bin/*test bin/clientplugin bin/cms bin/keybundle bin/keystore bin/pkits; do
+				install_name_tool -change $QCADIR/lib/libqca.2.dylib %b/finkbuild/lib/libqca.2.dylib $testprog
+			done
+			make -j1 test || exit 2
+			# restore install_names to test programs (needed since they're not installed?)
+			install_name_tool -change %b/finkbuild/lib/libqca.2.dylib $QCADIR/lib/libqca.2.dylib $testprog
+		popd
 	<<
 <<
 
@@ -84,17 +85,6 @@ InstallScript: <<
 	QCADIR="%p/opt/qca2/%type_pkg[qca]"
 	make install DESTDIR="%d"
 	popd
-
-	### fix install_name for library and tools
-	install_name_tool -id $QCADIR/lib/libqca.2.dylib %d$QCADIR/lib/libqca.2.dylib
-	install_name_tool -change %p/lib/libqca.2.dylib $QCADIR/lib/libqca.2.dylib %d$QCADIR/bin/mozcerts
-	install_name_tool -change %p/lib/libqca.2.dylib $QCADIR/lib/libqca.2.dylib %d$QCADIR/bin/qcatool
-	for plugin in %d$QCADIR/lib/qca/crypto/*.dylib; do
-		install_name_tool -change %p/lib/libqca.2.dylib $QCADIR/lib/libqca.2.dylib $plugin
-		base_name=`basename -s .dylib $plugin`
-		mv $plugin %d$QCADIR/lib/qca/crypto/$base_name.so
-	done
-	
 
 	### qca-2.0.3 had qcatool2. Make a compatibility symlink just in case.
 	ln -s $QCADIR/bin/qcatool %d/$QCADIR/bin/qcatool2
@@ -127,6 +117,7 @@ SplitOff2: <<
 	Depends: <<
 		%N-shlibs (>= %v-%r),
 		botan1.10-shlibs,
+		cyrus-sasl2.3-shlibs,
 		libgcrypt20-shlibs,
 		libgpg-error-shlibs,
 		openssl110-shlibs,
@@ -149,7 +140,7 @@ SplitOff3: <<
 		opt/qca2/%type_pkg[qca]/share/man
 	<<
 <<
-Homepage: http://delta.affinix.com/qca/
+Homepage: https://userbase.kde.org/QCA
 DescDetail: <<
 Taking a hint from the similarly-named Java Cryptography Architecture,
 QCA aims to provide a straightforward and cross-platform crypto API,

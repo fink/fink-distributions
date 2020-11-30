@@ -1,0 +1,268 @@
+Package: tcltk
+Epoch: 1
+
+# update itcl path-flags in "itk" and versions in "iwidgets" when updating
+Version: 8.6.10
+
+Revision: 1
+BuildDepends: <<
+	fink (>= 0.28),
+	fink-package-precedence,
+	fontconfig2-dev (>= 2.10.0-1),
+	freetype219 (>= 2.6-1),
+	pkgconfig,
+	x11-dev,
+	xft2-dev (>= 2.2.0-1)
+<<
+Depends: <<
+	%N-shlibs (= %e:%v-%r),
+	fontconfig2-shlibs (>= 2.10.0-1),
+	freetype219-shlibs (>= 2.6-1),
+	x11-shlibs,
+	xft2-shlibs (>= 2.2.0-1)
+<<
+Source: mirror:sourceforge:tcl/tcl%v-src.tar.gz
+Source-MD5: 97c55573f8520bcab74e21bfd8d0aadc
+SourceDirectory: tcl%v
+Source2: mirror:sourceforge:tcl/tk%v-src.tar.gz
+Source2-MD5: 602a47ad9ecac7bf655ada729d140a94
+PatchFile: %n.patch
+PatchFile-MD5: fa90f0d1f5d62da177c8a5b8c2c97938
+PatchScript: <<
+	%{default_script}
+	# patch *ancient* darwin-ignorant autoconf
+	perl -pi -e 's/(a so sl)/dylib \1/' tk%v/unix/configure
+	# autoconf2.6ish patch for modern XQuartz paths
+	perl -pi -e "s|/usr/lpp/Xamples|/opt/X11|" tk%v/unix/configure
+<<
+NoSourceDirectory: true
+SetCPPFLAGS: -MD -g
+ConfigureParams: --enable-shared --enable-threads --disable-corefoundation --exec-prefix=%p --mandir=%p/share/man tcl_cv_type_64bit="long long"
+InfoTest: <<
+	TestScript: <<
+		cd tcl%v/unix;make -k test || exit 2
+		fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=%n-dev .
+	<<
+<<
+CompileScript: <<
+#!/bin/sh -ev
+
+	pushd tcl%v/unix
+		export COMMAND_MODE=legacy
+		./configure %c
+		make -w
+	popd
+
+	pushd tk%v/unix
+		export DYLD_FALLBACK_LIBRARY_PATH=%b/tcl%v/unix
+		export ac_cv_path_tclsh=%b/tcl%v/unix/tclsh
+		./configure %c
+#		make genstubs
+		make -w
+	popd
+
+	# Safety-check in case we missed any details in the patching:
+	# lots of config/build-encoded paths by various .m4 bits use
+	# -L/-l to find builddir things (risk of picking up installed
+	# incompatible files). Should always use actual file-path!
+	find . -name \*Config.sh | xargs grep -l -- '-L%b' && exit 2
+
+	fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=%n-dev .
+<<
+InstallScript: <<
+#!/bin/sh -ev
+	MAJORVER=8.6
+
+	mkdir -p %i/share/doc/%n
+	make -C tcl%v/unix INSTALL_ROOT=%d install
+	make -C tk%v/unix  INSTALL_ROOT=%d install
+
+	ln -s wish${MAJORVER}  %i/bin/wish
+	ln -s tclsh${MAJORVER} %i/bin/tclsh
+
+	ln -s tk${MAJORVER} %i/lib/tk
+	ln -s libtk${MAJORVER}.dylib %i/lib/libtk.dylib
+	ln -s libtkstub${MAJORVER}.a %i/lib/libtkstub.a
+	/usr/bin/ranlib %i/lib/libtclstub${MAJORVER}.a
+
+	ln -s tcl${MAJORVER} %i/lib/tcl
+	ln -s libtcl${MAJORVER}.dylib %i/lib/libtcl.dylib
+	ln -s libtclstub${MAJORVER}.a %i/lib/libtclstub.a
+	/usr/bin/ranlib %i/lib/libtkstub${MAJORVER}.a
+
+	# Fix pointer to static stub lib (don't accidentally point to
+	# include/ in later perl tricks)
+	perl -pi -e "s,%b/tk%v/unix/(libtkstub${MAJORVER}.a),%p/lib/\1," %i/lib/tkConfig.sh
+
+	for pkg in tcl tk; do
+		mkdir -p %i/include/tcltk-private/${pkg}${MAJORVER}/{generic,unix}
+		cp ${pkg}%v/generic/*.h %i/include/tcltk-private/${pkg}${MAJORVER}/generic
+		cp ${pkg}%v/unix/*.h    %i/include/tcltk-private/${pkg}${MAJORVER}/unix
+
+		pushd %i/include
+			for hdr in *.h ; do
+				if [ -f tcltk-private/${pkg}${MAJORVER}/generic/${hdr} ]; then
+					ln -sf ../../../${hdr} tcltk-private/${pkg}${MAJORVER}/generic
+				fi
+			done
+		popd
+
+		perl -pi -e "s,%b/${pkg}%v/unix,%p/lib,; s,%b,%p/include/tcltk-private,; s,/${pkg}%v,/${pkg}${MAJORVER},g" %i/lib/*Config.sh %i/lib/*/*Config.sh
+	done
+
+	# Fix paths that were in subdir during build but get installed
+	# into top-level
+	perl -pi -e 's,%p/lib/pkgs,%p/lib,' %i/lib/*/*Config.sh
+
+	# manually fix install names (fink wants full path even though
+	# private and dlopen'ed). Why are these .dylib not .so ?
+	chmod u+w %i/lib/thread2.8.5/libthread2.8.5.dylib
+	chmod u+w %i/lib/tdbcpostgres1.1.1/libtdbcpostgres1.1.1.dylib
+	for modulepath in \
+		itcl4.2.0/libitcl4.2.0.dylib \
+		sqlite3.30.1.2/libsqlite3.30.1.2.dylib \
+		tdbc1.1.1/libtdbc1.1.1.dylib \
+		tdbcmysql1.1.1/libtdbcmysql1.1.1.dylib \
+		tdbcodbc1.1.1/libtdbcodbc1.1.1.dylib \
+		tdbcpostgres1.1.1/libtdbcpostgres1.1.1.dylib \
+		thread2.8.5/libthread2.8.5.dylib \
+	; do
+		install_name_tool -id %p/lib/$modulepath %i/lib/$modulepath
+	done
+<<
+DocFiles: <<
+	tcl%v/license.terms:LICENSE.tcl
+	tcl%v/README.md:README.tcl
+	tcl%v/ChangeLog:ChangeLog.tcl
+	tcl%v/changes:changes.tcl
+	tk%v/license.terms:LICENSE.tk
+	tk%v/README.md:README.tk
+	tk%v/ChangeLog:ChangeLog.tk 
+<<
+SplitOff: <<
+	Package: %N-shlibs
+	Depends: <<
+		fontconfig2-shlibs (>= 2.10.0-1),
+		freetype219-shlibs (>= 2.6-1),
+		x11-shlibs,
+		xft2-shlibs (>= 2.2.0-1)
+	<<
+	Files: <<
+		lib/libtcl8.6.dylib
+		lib/libtk8.6.dylib
+		lib/itcl4.2.0/libitcl4.2.0.dylib
+		lib/sqlite3.30.1.2/libsqlite3.30.1.2.dylib
+		lib/tdbc1.1.1/libtdbc1.1.1.dylib
+		lib/tdbcmysql1.1.1/libtdbcmysql1.1.1.dylib
+		lib/tdbcodbc1.1.1/libtdbcodbc1.1.1.dylib
+		lib/tdbcpostgres1.1.1/libtdbcpostgres1.1.1.dylib
+		lib/thread2.8.5/libthread2.8.5.dylib
+	<<
+	Shlibs: <<
+		%p/lib/libtcl8.6.dylib 8.6.0 %n (>= 8.6.0-1)
+		%p/lib/libtk8.6.dylib 8.6.0 %n (>= 8.6.0-1)
+		!%p/lib/itcl4.2.0/libitcl4.2.0.dylib
+		!%p/lib/sqlite3.30.1.2/libsqlite3.30.1.2.dylib
+		!%p/lib/tdbc1.1.1/libtdbc1.1.1.dylib
+		!%p/lib/tdbcmysql1.1.1/libtdbcmysql1.1.1.dylib
+		!%p/lib/tdbcodbc1.1.1/libtdbcodbc1.1.1.dylib
+		!%p/lib/tdbcpostgres1.1.1/libtdbcpostgres1.1.1.dylib
+		!%p/lib/thread2.8.5/libthread2.8.5.dylib
+	<<
+	DocFiles: <<
+		tcl%v/license.terms:LICENSE.tcl
+		tcl%v/README.md:README.tcl
+		tcl%v/ChangeLog:ChangeLog.tcl
+		tcl%v/changes:changes.tcl
+		tk%v/license.terms:LICENSE.tk
+		tk%v/README.md:README.tk
+		tk%v/ChangeLog:ChangeLog.tk 
+	<<
+<<
+SplitOff2: <<
+	Package: %N-dev
+	BuildDependsOnly: True
+	Depends: %N (= %e:%v-%r), %N-shlibs (= %e:%v-%r)
+	Conflicts: system-tcltk-dev
+	Replaces: %N (<< 1:8.6.5-1), system-tcltk-dev
+	Files: <<
+		lib/*Config.sh
+		include
+		lib/libtcl*
+		lib/libtk*
+		lib/pkgconfig
+		share/man/man3
+		share/man/mann
+	<<
+	DocFiles: <<
+		tcl%v/license.terms:LICENSE.tcl
+		tcl%v/README.md:README.tcl
+		tcl%v/ChangeLog:ChangeLog.tcl
+		tcl%v/changes:changes.tcl
+		tk%v/license.terms:LICENSE.tk
+		tk%v/README.md:README.tk
+		tk%v/ChangeLog:ChangeLog.tk
+	<<
+	DescUsage: <<
+Packages that want to use the supplied internal-interface headers
+should BuildDepends on %n of at least epoch 1 or higher.
+	<<
+<<
+Description: Tool Command Language and the Tk toolkit
+DescPort: <<
+	We add /System/Library/Tcl and /usr/lib to TCL_PACKAGE_PATH so
+	that Tcl packages (such as darwinports) installed in the
+	standard system locations will be found.
+
+	What is COMMAND_MODE?
+
+	Pass CPPFLAGS so it works as everyone expects (*after* local
+	flags), despite how build system incorrectly reimplements it
+	differently.
+<<
+DescPackaging: <<
+	tcl and tk are build in separate/parallel dirs. Clearer to do
+	NoSourceDirectory and have them both subdirs of %b than to
+	have one be %b and keep having to 'cd ..'
+
+	Make sure tk build finds tclsh from current build rather than
+	different-version one from installed fink package or different
+	arch and build-options one from OS X. Thanks pogma for helping
+	make sure tclsh finds its libtcl
+
+	Don't try xft's older detection method. And fink's (newer) xft
+	detection publishes x11 flags, so don't also pass them
+	explicitly (unix/Makefile mis-orders them before fink's)
+
+	Installed *Config.sh scripts encode build-dir paths as well as
+	runtime paths, which other packages may read and then try to
+	access. We cannot allow that (no guarantee that they exist, or
+	where they exist, or that they are the correct arch or build-
+	options, etc), so adjust to point to the installed locations.
+
+	Building extensions sometimes needs access to internal
+	headers, so install them in a private location. Point
+	*Config.sh vars accordingly. Thanks fedora!
+
+	As of 1:8.6.5-1, some build-time config files moved %N->%N-dev
+<<
+DescDetail: <<
+Tcl provides a portable scripting environment for Unix, Windows,
+and Macintosh that supports string processing and pattern matching,
+native file system access, shell-like control over other programs,
+TCP/IP networking, timers, and event-driven I/O.
+
+Tcl has traditional programming constructs like variables, loops,
+procedures, namespaces, error handling, script packages, 
+and dynamic loading of DLLs.
+
+Tk provides portable GUIs on UNIX, Windows, and Macintosh.
+A powerful widget set and the concise scripting interface to Tk make
+it a breeze to develop sophisticated user interfaces.
+<<
+PostInstScript: <<
+	update-alternatives --remove Object.3 %p/share/man/man3/Object.3.tcltk
+<<
+License: BSD
+Homepage: http://www.tcl.tk
+Maintainer: Daniel Macks <dmacks@netspace.org>
