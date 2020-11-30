@@ -1,21 +1,30 @@
+# -*- coding: ascii; tab-width: 4 -*-
 Info2: <<
 
 Package: jupyter-client-py%type_pkg[python]
-Version: 4.1.1
+Version: 5.2.4
 Revision: 1
-Maintainer: Kurt Schwehr <goatbar@users.sourceforge.net>
+Maintainer: Derek Homeier <dhomeie@gwdg.de>
 License: BSD
-Type: python (2.7 3.4 3.5 3.6)
+Type: python (2.7 3.5 3.6 3.7)
 Homepage:https://pypi.python.org/pypi/jupyter_client
 
-Source: https://pypi.python.org/packages/source/j/jupyter_client/jupyter_client-%v.tar.gz
-Source-MD5: 2a90f6d3ebe6e7f3602aa2a3956f613d
+Source: https://files.pythonhosted.org/packages/source/j/jupyter_client/jupyter_client-%v.tar.gz
+Source-Checksum: SHA256(b5f9cb06105c1d2d30719db5ffb3ea67da60919fb68deaefa583deccd8813551)
 
 Depends: <<
-  python%type_pkg[python]-shlibs,
-  jupyter-core-py%type_pkg[python]
+    python%type_pkg[python]-shlibs,
+    dateutil-py%type_pkg[python] (>= 2.2-1),
+    jupyter-core-py%type_pkg[python] (>= 4.4.0-1),
+    traitlets-py%type_pkg[python] (>= 4.2.1-1),
+    zmq-py%type_pkg[python] (>= 16.0.1-1)
 <<
-BuildDepends: python%type_pkg[python], setuptools-tng-py%type_pkg[python]
+BuildDepends: <<
+    python%type_pkg[python],
+    setuptools-tng-py%type_pkg[python],
+    sphinx-py%type_pkg[python] (>= 1.6.2-1),
+    sphinxcontrib-github-alt-py%type_pkg[python]
+<<
 
 Description: Jupyter protocol implementation
 
@@ -32,28 +41,65 @@ Jupyter protocol:
 http://jupyter-client.readthedocs.org/en/latest/messaging.html
 <<
 
-DocFiles: docs
+DocFiles: README.md CONTRIBUTING.md COPYING.md PKG-INFO docs/_build/html
 
-CompileScript: true
+# Hard code kernel name to specific Python version
+PatchScript: perl -pi -e 's|(NATIVE_KERNEL_NAME = .)(python3)(.)(.*$)|${1}python%type_raw[python]${3}|;' jupyter_client/kernelspec.py
+
+CompileScript: <<
+    %p/bin/python%type_raw[python] setup.py build
+    make -C docs LANG=en_US.UTF-8 PYTHONPATH=%b/build/lib PYTHON=%p/bin/python%type_raw[python] SPHINXBUILD=%p/bin/sphinx-build%type_raw[python] html
+<<
+
+InfoTest: <<
+    TestDepends: <<
+        pytest-py%type_pkg[python],
+        ipython-py%type_pkg[python] (>= 5.7.0-1),
+        ipykernel-py%type_pkg[python],
+        mock-py%type_pkg[python],
+        zmq-py%type_pkg[python] (>= 17.0.0-1)
+    <<
+    TestScript: <<
+        PYTHONPATH=%b/build/lib %p/bin/python%type_raw[python] -B -m pytest || exit 2
+        # '-B' option does not prevent creation of byte-compiled files (by spawned subprocesses?)
+        find build -name __pycache__ -or -name '*.py[oc]' -exec rm -r {} \;
+    <<
+    TestSuiteSize: medium
+<<
+
 InstallScript: <<
-#!/bin/bash -ev
- %p/bin/python%type_raw[python] setup.py install --root=%d
- for file in %i/bin/*; do
-   echo mv ${file}{,%type_raw[python]}
-   mv ${file}{,%type_raw[python]}
- done
+    #!/bin/bash -ev
+    %p/bin/python%type_raw[python] setup.py install --root=%d
+    for file in %i/bin/*; do
+        echo mv ${file}{,-py%type_pkg[python]}
+        mv ${file}{,-py%type_pkg[python]}
+    done
 <<
 
 PostInstScript: <<
-  update-alternatives --install %p/bin/jupyter-kernelspec jupyter-kernelspec %p/bin/jupyter-kernelspec%type_raw[python] %type_pkg[python]
+    # Remove the old if they exist
+    update-alternatives --auto jupyter-kernel
+
+    # Now the new setup
+    update-alternatives --verbose --install %p/bin/jupyter-kernel jupyter-kernel %p/bin/jupyter-kernel-py%type_pkg[python] %type_pkg[python] \
+                        --slave %p/bin/jupyter-kernelspec jupyter-kernelspec %p/bin/jupyter-kernelspec-py%type_pkg[python] \
+                        --slave %p/bin/jupyter-run jupyter-run %p/bin/jupyter-run-py%type_pkg[python]
+    echo "The scripts 'jupyter-kernel', 'jupyter-kernel' and 'jupyter-serverextension'"
+    echo "installed in %p/bin/ are symlinks automatically updated by the"
+    echo "update-alternatives utility."
+    echo "If you install multiple flavours of jupyter-client, the symlinks"
+    echo "will point to the higher flavour by default."
+    echo "You can inspect the links by running:"
+    echo "  update-alternatives --list jupyter-kernel"
+    echo "  update-alternatives --display jupyter-kernel"
 <<
 
 PreRmScript: <<
-  if [ $1 != "upgrade" ]; then
-     update-alternatives --verbose --remove jupyter-kernelspec %p/bin/jupyter-kernelspec%type_raw[python]
-  else
-    echo "Do not remove during upgrade"
-  fi
+    if [ $1 != "upgrade" ]; then
+         update-alternatives --verbose --remove jupyter-kernel %p/bin/jupyter-kernel-py%type_pkg[python]
+    else
+        echo "Do not remove during upgrade"
+    fi
 <<
 
 # Info2
