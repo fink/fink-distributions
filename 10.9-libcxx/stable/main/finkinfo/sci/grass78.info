@@ -1,0 +1,346 @@
+Info2: <<
+Package: grass78%type_pkg[gui]
+Type: gui (-x11 -mac), grass_ver (7.8), py_ver (2.7)
+Version: 7.8.5
+Revision: 1
+
+Description: Powerful GIS software
+License: GPL
+Homepage: http://grass.osgeo.org/
+Maintainer:BABA Yoshihiko <babayoshihiko@mac.com>
+DescDetail: Very Powerful Geographical Information System with CLI and GUI. 
+DescUsage: Open GRASS%type_pkg[gui]-%type_raw[grass_ver].app in %p/Applications
+
+# Dependencies.
+RuntimeDepends: <<
+  numpy-py%type_pkg[py_ver]
+<<
+Depends: <<
+  %n-shlibs (= %v-%r),
+  freetype219-shlibs (>= 2.10.2-1),
+  gdal2-shlibs,
+  libgeos3.6.1-shlibs,
+  libodbc3-shlibs,
+  libpng16-shlibs,
+  libproj19-shlibs,
+  postgresql12-shlibs,
+  readline7-shlibs,
+  sqlite3-shlibs,
+  (%type_pkg[gui] = -x11) x11
+<<
+BuildDepends: <<
+  cairo (>= 1.12.14-1),
+  fftw3,
+  fink (>= 0.32),
+  fink-package-precedence,
+  fontconfig2-dev (>= 2.10.0-1),
+  freetype219 (>= 2.10.2-1),
+  gdal2-dev,
+  libgeos3.6.1,
+  libiconv-dev,
+  libodbc3-dev,
+  libpng16,
+  libproj19,
+  libtiff5,
+  postgresql12-dev,
+  python%type_pkg[py_ver],
+  readline7,
+  sqlite3-dev,
+  (%type_pkg[gui] = -mac) wxwidgets300-osxcocoa, (%type_pkg[gui] = -mac) wxpython300-py%type_pkg[py_ver]-dev,
+  (%type_pkg[gui] = -x11) wxwidgets300-gtk2,
+  (%type_pkg[gui] = -x11) x11-dev, (%type_pkg[gui] = -x11) gtk+2-dev
+<<
+GCC: 4.0
+
+Source: http://grass.osgeo.org/grass78/source/grass-%{v}.tar.gz
+Source-MD5: 91f4830a5164cea703384814cd89cdf9
+
+PatchFile: %{ni}.patch
+PatchFile-MD5: 03c15e061374c3634754777a4fe9d6ca
+
+# Fix/work around python3ism in python2 code. See:
+# https://github.com/OSGeo/grass/issues/1241
+PatchFile2: %{ni}-python27.patch
+PatchFile2-MD5: 02596fd1a510d9ff724c9b9a840f45dd
+
+# Patch Phase.
+PatchScript: <<
+#!/bin/bash -xe
+  
+  patch -p1 < %{PatchFile}
+  patch -p1 < %{PatchFile2}
+  
+  # force to use Fink's python
+  # this may not be necessary, but for consistency...
+  grep -r -I -s "/usr/bin/env python" * | cut -d: -f1 | while
+  read -r line ; do
+    perl -pi -e "s|/usr/bin/env python\d*|%p/bin/python%type_raw[py_ver]|" $line
+  done
+  perl -pi -e 's|python3|%p/bin/python%type_raw[py_ver]|' include/Make/Platform.make.in lib/init.grass.{py,sh} lib/python/script/setup.py
+  
+  # grass.sh.in
+  perl -pi -e "s|\@PREFIX\@|%p|" macosx/app/grass.sh.in
+  perl -pi -e "s|\@GUI\@|%type_raw[gui]|" macosx/app/grass.sh.in
+  perl -pi -e "s|\@PY_VER\@|%type_raw[py_ver]|" macosx/app/grass.sh.in
+
+  # rewrite python wrapper
+  echo "exec \"%p/bin/python%type_raw[py_ver]\" \"\$@\"" >macosx/app/python_wrapper
+  chmod 0755 macosx/app/python_wrapper
+
+  # patch *ancient* darwin-ignorant autoconf
+  perl -pi -e 's/(a so sl)/dylib \1/' configure
+  # autoconf2.6ish patch for modern XQuartz paths
+  perl -pi -e "s|/usr/lpp/Xamples|/opt/X11|" configure
+<<
+
+# Compile Phase.
+SetCFLAGS: -MD
+SetCXXFLAGS: -MD
+
+ConfigureParams: <<
+  (%type_pkg[gui] = -x11) --with-x \
+  (%type_pkg[gui] = -x11) --with-wxwidgets=%p/lib/wxwidgets300-gtk2/wx/config/gtk2-unicode-3.0 \
+  (%type_pkg[gui] = -x11) --with-opengl=x11 \
+  \
+  (%type_pkg[gui] = -mac) --without-x \
+  (%type_pkg[gui] = -mac) --with-wxwidgets=%p/lib/wxwidgets300-osxcocoa/wx/config/osx_cocoa-unicode-3.0 \
+  (%type_pkg[gui] = -mac) --with-opengl=macosx \
+  (%type_pkg[gui] = -mac) --with-opengl-framework=/System/Library/Frameworks/OpenGL.framework \
+  \
+  --with-freetype \
+  --with-freetype-includes=%p/include/freetype2 \
+  --with-freetype-libs=%p/lib \
+  --with-gdal=%p/bin/gdal-config \
+  --with-proj --with-proj-includes=%p/include --with-proj-libs=%p/lib --with-proj-share=%p/share/proj \
+  --with-geos=%p/opt/libgeos3.6.1/bin/geos-config \
+  --with-jpeg-includes=%p/include --with-jpeg-libs=%p/lib \
+  --with-png-includes=%p/include --with-png-libs=%p/lib \
+  --with-tiff-includes=%p/include --with-tiff-libs=%p/lib \
+  --with-postgres --with-postgres-includes=%p/opt/postgresql-12/include --with-postgres-libs=%p/opt/postgresql-12/lib \
+  --without-mysql --with-odbc --with-sqlite \
+  --with-sqlite-libs=%p/lib --with-sqlite-includes=%p/include \
+  --with-fftw-includes=%p/include --with-fftw-libs=%p/lib \
+  --with-cxx \
+  --with-readline \
+  --enable-macosx-app \
+  --without-zstd
+<<
+
+CompileScript: <<
+#!/bin/bash -xe
+  DARWIN_VER=`uname -r`
+
+  # work around still-hella-broken x11 tests
+  if [[ '%type_pkg[gui]' == -x11 ]]; then
+    export CPPFLAGS="${CPPFLAGS} -I/opt/X11/include"
+    export LDFLAGS="${LDFLAGS} -L/opt/X11/lib"
+  fi
+
+  ./configure %c
+  
+  make         INST_DIR=%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS \
+               PREFIX_TARGET=%b/Applications \
+               GISBASE=%b/dist.x86_64-apple-darwin${DARWIN_VER} \
+               RUN_GISBASE=%b/dist.x86_64-apple-darwin${DARWIN_VER} \
+               GISBASE_SYSTEM=%b/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib \
+               PYTHON=%p/bin/python%type_raw[py_ver] \
+               GRASS_PYTHON=%p/bin/python%type_raw[py_ver] \
+  
+  make install UNIX_BIN=%b/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS \
+               INST_DIR=%b/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS \
+               PREFIX_TARGET=%b/Applications \
+               GISBASE=%b/dist.x86_64-apple-darwin${DARWIN_VER} \
+               RUN_GISBASE=%b/dist.x86_64-apple-darwin${DARWIN_VER} \
+               MACOSX_APP_NAME=GRASS%type_pkg[gui]-%type_raw[grass_ver].app \
+               MACOSX_SUPPDIR=%b/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib \
+               GISBASE_SYSTEM=%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib \
+               PYTHON=%p/bin/python%type_raw[py_ver] \
+               GRASS_PYTHON=%p/bin/python%type_raw[py_ver]
+                 
+  # Recompile python scripts to fix path (because 'make install' is
+  # called with path to staging directory that masks runtime location)
+  perl -pi -e 's|%b|%p|g' %b/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/etc/python/grass/lib/*.py
+  for pydir in etc/python/grass \
+  			   etc/python/grass/exceptions \
+  			   etc/python/grass/gunittest \
+  			   etc/python/grass/imaging \
+  			   etc/python/grass/lib \
+  			   etc/python/grass/pydispatch \
+               etc/python/grass/pygrass \
+               etc/python/grass/script \
+               etc/python/grass/temporal \
+               etc/r.in.wms \
+               gui/wxpython \
+               gui/wxpython/* \
+               tools
+    do
+      %p/bin/python%type_raw[py_ver]    %p/lib/python%type_raw[py_ver]/compileall.py \
+      										-f -d %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/$pydir \
+                                            %b/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/$pydir
+      %p/bin/python%type_raw[py_ver] -O %p/lib/python%type_raw[py_ver]/compileall.py \
+      										-f -d %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/$pydir \
+                                            %b/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/$pydir
+    done
+  
+  for libname in  arraystats bitmap btree btree2 cairodriver calc ccmath cdhc cluster datetime \
+                  dbmibase dbmiclient dbmidriver dbstubs dgl dig2 display driver dspf g3d \
+                  gis gmath gpde gproj htmldriver imagery interpdata interpfl iortho lidar \
+                  linkm lrs manage neta pngdriver psdriver qtree raster rli rowio rtree \
+                  segment shape sim sqlp stats symb temporal vector vedit 
+    do
+      install_name_tool -id %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_${libname}.dylib \
+                                %b/dist.x86_64-apple-darwin${DARWIN_VER}/lib/libgrass_${libname}.dylib
+    done
+    
+    # 7.0.2 removed in 7.2.0
+    # perl -pi -e 's|src/fink.build/grass72%type_pkg[gui]-%v-%r/grass-%v||' \
+    # %b/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/grass%type_pkg[grass_ver]
+
+    fink-package-precedence --depfile-ext='\.d' .
+<<
+
+
+
+# Install Phase.
+InstallScript: <<
+#!/bin/sh -xe
+  echo "Nothing to install..."
+<<
+AppBundles: Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app
+
+SplitOff2: <<
+  Package: %N-shlibs
+  Description: GRASS Shared Libraries
+  RuntimeDepends: <<
+    (%type_pkg[gui] = -mac) opengl-nox-py%type_pkg[py_ver],
+    (%type_pkg[gui] = -x11) opengl-py%type_pkg[py_ver]
+  <<
+  Depends: <<
+    cairo-shlibs (>= 1.12.14-1),
+    fftw3-shlibs,
+    fontconfig2-shlibs (>= 2.10.0-1),
+    freetype219-shlibs (>= 2.10.2-1),
+    gdal2-shlibs,
+    libgeos3.6.1-shlibs,
+    libiconv,
+    libpng16-shlibs,
+    libproj19-shlibs,
+    libtiff5-shlibs,
+    postgresql12-shlibs,
+    python%type_pkg[py_ver],
+    (%type_raw[gui] = -mac) wxwidgets300-osxcocoa-shlibs, (%type_pkg[gui] = -mac) wxpython300-py%type_pkg[py_ver],
+    (%type_pkg[gui] = -x11) gtk+2-shlibs, (%type_pkg[gui] = -x11) wxwidgets300-gtk2-shlibs,
+    (%type_pkg[gui] = -x11) x11-shlibs
+  <<
+
+  Files: Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_*.dylib
+  Shlibs: <<
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_arraystats.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_bitmap.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_btree.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_btree2.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_cairodriver.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_calc.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_ccmath.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_cdhc.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_cluster.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_datetime.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dbmibase.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dbmiclient.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dbmidriver.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dbstubs.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dgl.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dig2.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_display.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_driver.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dspf.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_g3d.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_gis.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_gmath.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_gpde.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_gproj.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_htmldriver.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_imagery.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_interpdata.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_interpfl.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_iortho.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_lidar.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_linkm.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_lrs.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_manage.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_neta.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_nviz.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_ogsf.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_pngdriver.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_psdriver.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_qtree.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_raster.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_rli.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_rowio.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_rtree.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_segment.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_shape.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_sim.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_sqlp.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_stats.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_symb.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_temporal.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_vector.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+    %p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_vedit.%type_raw[grass_ver].dylib  7.8.0 %n (>=7.8.0-1)
+
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_arraystats.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_bitmap.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_btree.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_btree2.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_cairodriver.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_calc.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_ccmath.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_cdhc.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_cluster.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_datetime.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dbmibase.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dbmiclient.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dbmidriver.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dbstubs.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dgl.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dig2.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_display.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_driver.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_dspf.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_g3d.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_gis.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_gmath.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_gpde.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_gproj.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_htmldriver.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_imagery.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_interpdata.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_interpfl.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_iortho.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_lidar.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_linkm.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_lrs.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_manage.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_neta.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_nviz.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_ogsf.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_pngdriver.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_psdriver.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_qtree.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_raster.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_rli.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_rowio.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_rtree.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_segment.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_shape.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_sim.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_sqlp.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_stats.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_symb.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_temporal.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_vector.dylib
+    !%p/Applications/GRASS%type_pkg[gui]-%type_raw[grass_ver].app/Contents/MacOS/lib/libgrass_vedit.dylib
+  <<
+<<
+
+<<
