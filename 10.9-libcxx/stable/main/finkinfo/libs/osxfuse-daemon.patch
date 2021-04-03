@@ -1,0 +1,78 @@
+based on commit 7728b36a83fe20b366b1b6e72f3d0906ca89840c
+--- a/lib/helper.c	2021-04-02 12:33:31.000000000 -0500
++++ b/lib/helper.c	2021-04-02 12:35:51.000000000 -0500
+@@ -199,14 +199,39 @@
+ 
+ int fuse_daemonize(int foreground)
+ {
+-	int res;
+-
+ 	if (!foreground) {
+-		res = daemon(0, 0);
+-		if (res == -1) {
+-			perror("fuse: failed to daemonize program\n");
++		int nullfd;
++
++		/*
++		 * demonize current process by forking it and killing the
++		 * parent.  This makes current process as a child of 'init'.
++		 */
++		switch(fork()) {
++		case -1:
++			perror("fuse_daemonize: fork");
++			return -1;
++		case 0:
++			break;
++		default:
++			_exit(0);
++		}
++
++		if (setsid() == -1) {
++			perror("fuse_daemonize: setsid");
+ 			return -1;
+ 		}
++
++
++		(void) chdir("/");
++
++		nullfd = open("/dev/null", O_RDWR, 0);
++		if (nullfd != -1) {
++			(void) dup2(nullfd, 0);
++			(void) dup2(nullfd, 1);
++			(void) dup2(nullfd, 2);
++			if (nullfd > 2)
++				close(nullfd);
++		}
+ #ifdef __APPLE__
+ 		did_daemonize = 1;
+ #endif
+diff --git a/util/ulockmgr_server.c b/util/ulockmgr_server.c
+index 583fcf9..baef45d 100644
+--- a/util/ulockmgr_server.c
++++ b/util/ulockmgr_server.c
+@@ -352,11 +352,24 @@ int main(int argc, char *argv[])
+ 	if (*end)
+ 		goto out_inval;
+ 
+-	if (daemon(0, 1) == -1) {
+-		perror("ulockmgr_server: daemon");
++	/* demonize current process */
++	switch(fork()) {
++	case -1:
++		perror("ulockmgr_server: fork");
+ 		exit(1);
++	case 0:
++		break;
++	default:
++		_exit(0);
+ 	}
+ 
++	if (setsid() == -1) {
++		perror("ulockmgr_server: setsid");
++		exit(1);
++	}
++
++	(void) chdir("/");
++
+ 	sigemptyset(&empty);
+ 	sigprocmask(SIG_SETMASK, &empty, NULL);
