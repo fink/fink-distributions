@@ -1,0 +1,118 @@
+diff -Nurd visual-5.74_release.orig/include/GL/glext.h visual-5.74_release/include/GL/glext.h
+--- visual-5.74_release.orig/include/GL/glext.h	2012-04-11 17:03:38.000000000 -0400
++++ visual-5.74_release/include/GL/glext.h	2021-07-11 17:29:01.000000000 -0400
+@@ -3408,7 +3408,7 @@
+ #ifndef GL_ARB_shader_objects
+ /* GL types for handling shader object handles and program/shader text */
+ typedef char GLcharARB;		/* native character */
+-typedef unsigned int GLhandleARB;	/* shader object handle */
++typedef void *GLhandleARB;	/* shader object handle */
+ #endif
+ 
+ /* GL types for "half" precision (s10e5) float data in host memory */
+diff -Nurd visual-5.74_release.orig/include/util/shader_program.hpp visual-5.74_release/include/util/shader_program.hpp
+--- visual-5.74_release.orig/include/util/shader_program.hpp	2012-04-11 17:03:38.000000000 -0400
++++ visual-5.74_release/include/util/shader_program.hpp	2021-07-11 17:29:26.000000000 -0400
+@@ -33,7 +33,7 @@
+ 	
+ 	std::string source;
+ 	std::map<std::string, int> uniforms;
+-	int program;
++	GLhandleARB program;
+ 	PFNGLDELETEOBJECTARBPROC glDeleteObjectARB;
+ };
+ 
+@@ -49,7 +49,7 @@
+ 
+  private:
+ 	const view& v;
+-	int oldProgram;
++	GLhandleARB oldProgram;
+ 	bool m_ok;
+ 	void init( shader_program* program );
+ };
+diff -Nurd visual-5.74_release.orig/src/core/util/shader_program.cpp visual-5.74_release/src/core/util/shader_program.cpp
+--- visual-5.74_release.orig/src/core/util/shader_program.cpp	2012-04-11 17:03:38.000000000 -0400
++++ visual-5.74_release/src/core/util/shader_program.cpp	2021-07-11 17:51:40.000000000 -0400
+@@ -5,18 +5,18 @@
+ namespace cvisual {
+ 
+ shader_program::shader_program( const std::string& source )
+- : source(source), program(-1)
++  : source(source), program((GLhandleARB)-1)
+ {
+ }
+ 
+ shader_program::~shader_program() {
+-	if (program > 0)
+-		on_gl_free.free( boost::bind( &shader_program::gl_free, glDeleteObjectARB, program ) );
++  if ((intptr_t)program > 0)
++	  on_gl_free.free( boost::bind( &shader_program::gl_free, glDeleteObjectARB, (intptr_t)program ) );
+ }
+ 
+ int shader_program::get_uniform_location( const view& v, const char* name ) {
+ 	// TODO: change interface to cache the uniforms we actually want and avoid string comparisons
+-	if (program <= 0 || !v.glext.ARB_shader_objects) return -1;
++  if ((intptr_t)program <= 0 || !v.glext.ARB_shader_objects) return -1;
+ 	int& cache = uniforms[ name ];
+ 	if (cache == 0)
+ 		cache = 2 + v.glext.glGetUniformLocationARB( program, name );
+@@ -32,7 +32,7 @@
+ }
+ 
+ void shader_program::realize( const view& v ) {
+-	if (program != -1) return;
++  if ((intptr_t)program != -1) return;
+ 
+ 	if ( !v.enable_shaders ) return;
+ 
+@@ -94,11 +94,11 @@
+ 	// since they might run in a different context, even though the program _handle_ is shared.  Plus
+ 	// this is kind of ugly.
+ 	glDeleteObjectARB = v.glext.glDeleteObjectARB;
+-	on_gl_free.connect( boost::bind( &shader_program::gl_free, v.glext.glDeleteObjectARB, program ) );
++	on_gl_free.connect( boost::bind( &shader_program::gl_free, v.glext.glDeleteObjectARB, (intptr_t)program ) );
+ }
+ 
+ void shader_program::compile( const view& v, int type, const std::string& source ) {
+-	int shader = v.glext.glCreateShaderObjectARB( type );
++	GLhandleARB shader = v.glext.glCreateShaderObjectARB( type );
+ 	const char* str = source.c_str();
+ 	GLint len = source.size();
+ 	v.glext.glShaderSourceARB( shader, 1, &str, &len );
+@@ -136,7 +136,7 @@
+ void
+ shader_program::gl_free( PFNGLDELETEOBJECTARBPROC glDeleteObjectARB, int program )
+ {
+-	glDeleteObjectARB(program);
++  glDeleteObjectARB((GLhandleARB)program);
+ }
+ 
+ use_shader_program::use_shader_program( const view& v, shader_program& program )
+@@ -154,7 +154,7 @@
+ void use_shader_program::init(shader_program* program) {
+ 	m_ok = false;
+ 	if (!program || !v.glext.ARB_shader_objects || !v.enable_shaders) {
+-		oldProgram = -1;
++	  oldProgram = (GLhandleARB)-1;
+ 		return;
+ 	}
+ 
+@@ -162,7 +162,7 @@
+ 
+ 	// For now, nested shader invocations aren't supported.
+ 	//oldProgram = v.glext.glGetHandleARB( GL_PROGRAM_OBJECT_ARB );
+-	oldProgram = 0;
++	oldProgram = (GLhandleARB)0;
+ 
+ 	v.glext.glUseProgramObjectARB( program->program );
+ 	check_gl_error();
+@@ -171,7 +171,7 @@
+ }
+ 
+ use_shader_program::~use_shader_program() {
+-	if (oldProgram<0 || !v.glext.ARB_shader_objects) return;
++  if ((intptr_t)oldProgram<0 || !v.glext.ARB_shader_objects) return;
+ 	v.glext.glUseProgramObjectARB( oldProgram );
+ }
+ 

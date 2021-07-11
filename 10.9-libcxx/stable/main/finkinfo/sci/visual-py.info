@@ -1,7 +1,9 @@
 Info2: <<
+# needs hacking for boost>=1.65 (boost/python/numeric.hpp dropped)
+# debian dropped it as orphaned+buggy
 Package: visual-py%type_pkg[python]
 Version: 5.74
-Revision: 3
+Revision: 5
 Type: python (2.7)
 #Source: mirror:sourceforge:visualpython/visual-%v_release.tar.bz2
 Source: http://vpython.org/contents/download/visual-%v_release.tar.bz2
@@ -12,9 +14,10 @@ Depends: <<
   python%type_pkg[python],
   numpy-py%type_pkg[python],
   atk1-shlibs,
-  boost1.58-nopython-shlibs, boost1.58-python%type_pkg[python]-shlibs,
+  boost1.63-nopython-shlibs, boost1.63-python%type_pkg[python]-shlibs,
   cairo-shlibs,
   cairomm1-shlibs,
+  fontconfig2-shlibs,
   freetype219-shlibs,
   glib2-shlibs,
   glibmm2.4-shlibs,
@@ -22,7 +25,6 @@ Depends: <<
   gtkglext1-shlibs,
   gtkglextmm-shlibs,
   gtkmm2.4-shlibs,
-  libgettext8-shlibs,
   libglade2-shlibs,
   libglademm2.4-shlibs,
   libsigc++2-shlibs,
@@ -36,8 +38,11 @@ Depends: <<
 BuildDepends: <<
   x11-dev, pkgconfig,  
   atk1,
-  boost1.58-nopython, boost1.58-python%type_pkg[python],
+  boost1.63-nopython, boost1.63-python%type_pkg[python],
   cairo, cairomm1,
+  fink (>= 0.30.0),
+  fink-package-precedence,
+  fontconfig2-dev,
   freetype219,
   glib2-dev,
   glibmm2.4-dev,
@@ -45,7 +50,6 @@ BuildDepends: <<
   gtkglext1,
   gtkglextmm,
   gtkmm2.4-gtk-dev,
-  libgettext8-dev,
   libglade2,
   libglademm2.4,
   libsigc++2,
@@ -55,23 +59,39 @@ BuildDepends: <<
 <<
 Conflicts: visual-py%type_pkg[python]
 Replaces: visual-py%type_pkg[python]
+PatchFile: %{ni}.patch
+PatchFile-MD5: 368fe6b6d4a25697977e9d8533a1354e
+PatchFile2: %{ni}-gl.patch
+PatchFile2-MD5: 13e44c60839289e6eff666127d8cb20b
 PatchScript: <<
 #!/bin/sh -ev
+	patch -p1 < %{PatchFile}
 # With python2.6, the -bundle_loader link flag cannot be used, because the symbol PyExc_TypeError
 # is no longer defined in the python executable. The latter is linked with libpython anyway, however.
 # One has to use -undefined dynamic_lookup instead. This is incompatible with python2.5
-# Also: virtualize an explicit /sw.
- perl -pi.bak -e 's|\-bundle_loader \$\(PYTHON\)|-undefined dynamic_lookup|;s|/sw|%p|' src/Makefile.in
+	perl -pi.bak -e 's|\-bundle_loader \$\(PYTHON\)|-undefined dynamic_lookup|' src/Makefile.in
 # Ugly hack to work around an internal inconsistency in opengl header
-#  Thia replaces "GLenum" by "GLint" on OSX 10.7 and 10.8; does nothing on 10.6.
+#  This replaces "GLenum" by "GLint" on OSX 10.7 and 10.8; does nothing on 10.6.
  arg3=`grep -a "glTexImage3D " /System/Library/Frameworks/OpenGL.framework/Headers/gl.h | egrep -o 'GL[a-z]* internalformat'`
  /usr/bin/sed -i".bak" -e "/PFNGLTEXIMAGE3DEXTPROC/s|GLenum internalformat|$arg3|" include/GL/glext.h 
+# Sync included glext.h with system gltypes.h (else FTBFS
+# typedef-redefinition error). Why are we explicitly defining it
+# anyway? But for the fix:
+# http://www.meandmark.com/blog/2011/11/sdl-opengl-typedef-redefinition-error-on-mac-os-x-10-7/
+# https://github.com/BruceSherwood/vpython-wx/commit/c288add2ed8df2f98cf5f643ae96c37ebab4d2b6
+	patch -p1 < %{PatchFile2}
+# Upsream fix for newer boost. See:
+# https://github.com/vpython/visual/issues/3
+	perl -pi -e 's/TIME_UTC/TIME_UTC_/g' dependencies/threadpool/include/threadpool/task_adaptors.hpp
 <<
-SetCXXFLAGS: -O2 -g -finline-functions -I%p/opt/boost-1_58/include
-SetCFLAGS: -O3 -g
-ConfigureParams: PYTHON=%p/bin/python%type_raw[python]
+SetCXXFLAGS: -O2 -g -finline-functions -I%p/opt/boost-1_63/include
+SetLDFLAGS: -L%p/opt/boost-1_63/lib
+ConfigureParams: PYTHON=%p/bin/python%type_raw[python] PKG_CONFIG_PATH=%p/lib/glib-2.0/pkgconfig-strict:$PKG_CONFIG_PATH
+CompileScript: <<
+	%{default_script}
+	fink-package-precedence --depfile-ext='\.d' .
+<<
 InstallScript: <<
-#!/bin/sh -ex
  mkdir -p %i/bin
  make install DESTDIR=%d 
  mkdir -p %i/share/doc/%n
