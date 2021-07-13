@@ -1,0 +1,152 @@
+diff -ruN kio-5.29.0-orig/src/core/ksambashare.cpp kio-5.29.0/src/core/ksambashare.cpp
+--- kio-5.29.0-orig/src/core/ksambashare.cpp	2016-12-10 09:26:14.000000000 -0600
++++ kio-5.29.0/src/core/ksambashare.cpp	2016-12-28 20:40:08.000000000 -0600
+@@ -41,7 +41,7 @@
+ static const char *const DefaultSambaConfigFilePathList[] = {
+     "/etc/samba/smb.conf",
+     "/etc/smb.conf",
+-    "/usr/local/etc/smb.conf",
++    "@FINK_PREFIX@/etc/smb.conf",
+     "/usr/local/samba/lib/smb.conf",
+     "/usr/samba/lib/smb.conf",
+     "/usr/lib/smb.conf",
+@@ -69,7 +69,7 @@
+ bool KSambaSharePrivate::isSambaInstalled()
+ {
+     if (QFile::exists(QStringLiteral("/usr/sbin/smbd"))
+-            || QFile::exists(QStringLiteral("/usr/local/sbin/smbd"))) {
++            || QFile::exists(QStringLiteral("@FINK_PREFIX@/sbin/smbd"))) {
+         return true;
+     }
+ 
+diff -ruN kio-5.29.0-orig/src/ioslaves/http/kcookiejar/kcookiewin.cpp kio-5.29.0/src/ioslaves/http/kcookiejar/kcookiewin.cpp
+--- kio-5.29.0-orig/src/ioslaves/http/kcookiejar/kcookiewin.cpp	2016-12-10 09:26:14.000000000 -0600
++++ kio-5.29.0/src/ioslaves/http/kcookiejar/kcookiewin.cpp	2016-12-28 20:59:54.000000000 -0600
+@@ -64,7 +64,11 @@
+     setModal(true);
+     setObjectName(QStringLiteral("cookiealert"));
+     setWindowTitle(i18n("Cookie Alert"));
+-    setWindowIcon(QIcon::fromTheme(QStringLiteral("preferences-web-browser-cookies")));
++    setWindowIcon(QIcon::fromTheme(QStringLiteral("preferences-web-browser-cookies"), windowIcon()));
++#ifdef Q_OS_MACOS
++    // make sure the user notices our dialog; windowIds() is useless on this platform
++    KWindowSystem::forceActiveWindow(winId());
++#else
+     // all cookies in the list should have the same window at this time, so let's take the first
+     if (cookieList.first().windowIds().count() > 0) {
+         KWindowSystem::setMainWindow(this, cookieList.first().windowIds().first());
+@@ -73,6 +77,7 @@
+         KWindowSystem::setState(winId(), NET::KeepAbove);
+         KUserTimestamp::updateUserTimestamp();
+     }
++#endif
+ 
+     const int count = cookieList.count();
+     const KHttpCookie &cookie = cookieList.first();
+diff -ruN kio-5.29.0-orig/src/kioexec/CMakeLists.txt kio-5.29.0/src/kioexec/CMakeLists.txt
+--- kio-5.29.0-orig/src/kioexec/CMakeLists.txt	2016-12-10 09:26:14.000000000 -0600
++++ kio-5.29.0/src/kioexec/CMakeLists.txt	2016-12-28 21:00:55.000000000 -0600
+@@ -16,6 +16,9 @@
+ if (HAVE_X11)
+     target_link_libraries(kioexec Qt5::X11Extras)
+ endif()
++if (APPLE)
++   target_link_libraries(kioexec "-Wl,-framework,CoreFoundation")
++endif ()
+ 
+ install(TARGETS kioexec DESTINATION ${KDE_INSTALL_LIBEXECDIR_KF5} )
+ 
+diff -ruN kio-5.29.0-orig/src/kioexec/main.cpp kio-5.29.0/src/kioexec/main.cpp
+--- kio-5.29.0-orig/src/kioexec/main.cpp	2016-12-10 09:26:14.000000000 -0600
++++ kio-5.29.0/src/kioexec/main.cpp	2016-12-28 21:01:55.000000000 -0600
+@@ -51,6 +51,10 @@
+ #include <QX11Info>
+ #endif
+ 
++#ifdef Q_OS_MACOS
++#include <CoreFoundation/CoreFoundation.h>
++#endif
++
+ static const char description[] =
+     I18N_NOOP("KIO Exec - Opens remote files, watches modifications, asks for upload");
+ 
+@@ -257,6 +261,20 @@
+ 
+ int main(int argc, char **argv)
+ {
++#ifdef Q_OS_MACOS
++    CFBundleRef mainBundle = CFBundleGetMainBundle();
++    if (mainBundle) {
++        // get the application's Info Dictionary. For app bundles this would live in the bundle's Info.plist,
++        // for regular executables it is obtained in another way.
++        CFMutableDictionaryRef infoDict = (CFMutableDictionaryRef) CFBundleGetInfoDictionary(mainBundle);
++        if (infoDict) {
++            // Add or set the "LSUIElement" key with/to value "1". This can simply be a CFString.
++            CFDictionarySetValue(infoDict, CFSTR("LSUIElement"), CFSTR("1"));
++            // That's it. We're now considered as an "agent" by the window server, and thus will have
++            // neither menubar nor presence in the Dock or App Switcher.
++        }
++    }
++#endif
+     QApplication app(argc, argv);
+     KAboutData aboutData(QStringLiteral("kioexec"), i18n("KIOExec"), QStringLiteral(KIO_VERSION_STRING),
+                          i18n(description), KAboutLicense::GPL,
+diff -ruN kio-5.29.0-orig/src/kioslave/CMakeLists.txt kio-5.29.0/src/kioslave/CMakeLists.txt
+--- kio-5.29.0-orig/src/kioslave/CMakeLists.txt	2016-12-10 09:26:14.000000000 -0600
++++ kio-5.29.0/src/kioslave/CMakeLists.txt	2016-12-28 21:06:40.000000000 -0600
+@@ -4,5 +4,8 @@
+ target_link_libraries(kioslave
+    KF5::KIOCore
+ )
++if (APPLE)
++   target_link_libraries(kioslave "-Wl,-framework,CoreFoundation")
++endif ()
+ 
+ install(TARGETS kioslave DESTINATION ${KDE_INSTALL_LIBEXECDIR_KF5} )
+diff -ruN kio-5.29.0-orig/src/kioslave/kioslave.cpp kio-5.29.0/src/kioslave/kioslave.cpp
+--- kio-5.29.0-orig/src/kioslave/kioslave.cpp	2016-12-10 09:26:14.000000000 -0600
++++ kio-5.29.0/src/kioslave/kioslave.cpp	2016-12-28 20:51:28.000000000 -0600
+@@ -46,6 +46,10 @@
+ #endif
+ #endif
+ 
++#ifdef Q_OS_MACOS
++#include <CoreFoundation/CoreFoundation.h>
++#endif
++
+ #ifndef Q_OS_WIN
+ /* These are to link libkio even if 'smart' linker is used */
+ #include <kio/authinfo.h>
+@@ -57,6 +61,20 @@
+ 
+ int main(int argc, char **argv)
+ {
++#ifdef Q_OS_MACOS
++    CFBundleRef mainBundle = CFBundleGetMainBundle();
++    if (mainBundle) {
++        // get the application's Info Dictionary. For app bundles this would live in the bundle's Info.plist,
++        // for regular executables it is obtained in another way.
++        CFMutableDictionaryRef infoDict = (CFMutableDictionaryRef) CFBundleGetInfoDictionary(mainBundle);
++        if (infoDict) {
++            // Add or set the "LSUIElement" key with/to value "1". This can simply be a CFString.
++            CFDictionarySetValue(infoDict, CFSTR("LSUIElement"), CFSTR("1"));
++            // That's it. We're now considered as an "agent" by the window server, and thus will have
++            // neither menubar nor presence in the Dock or App Switcher.
++        }
++    }
++#endif
+     if (argc < 5) {
+         fprintf(stderr, "Usage: kioslave <slave-lib> <protocol> <klauncher-socket> <app-socket>\n\nThis program is part of KDE.\n");
+         return 1;
+diff -ruN kio-5.29.0-orig/src/kpasswdserver/kpasswdserver.cpp kio-5.29.0/src/kpasswdserver/kpasswdserver.cpp
+--- kio-5.29.0-orig/src/kpasswdserver/kpasswdserver.cpp	2016-12-10 09:26:14.000000000 -0600
++++ kio-5.29.0/src/kpasswdserver/kpasswdserver.cpp	2016-12-28 20:54:34.000000000 -0600
+@@ -571,7 +571,7 @@
+             connect(dlg, SIGNAL(finished(int)), this, SLOT(retryDialogDone(int)));
+             connect(this, SIGNAL(destroyed(QObject*)), dlg, SLOT(deleteLater()));
+             dlg->setWindowTitle(i18n("Retry Authentication"));
+-            dlg->setWindowIcon(QIcon::fromTheme(QStringLiteral("dialog-password")));
++            dlg->setWindowIcon(QIcon::fromTheme(QStringLiteral("dialog-password"), dlg->windowIcon()));
+             dlg->setObjectName(QStringLiteral("warningOKCancel"));
+             QDialogButtonBox* buttonBox = new QDialogButtonBox(QDialogButtonBox::Yes|QDialogButtonBox::Cancel);
+             buttonBox->button(QDialogButtonBox::Yes)->setText(i18nc("@action:button filter-continue", "Retry"));

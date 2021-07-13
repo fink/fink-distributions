@@ -1,0 +1,147 @@
+diff -ruN kinit-5.29.0-orig/org.finkproject.kdeinit5.plist kinit-5.29.0/org.finkproject.kdeinit5.plist
+--- kinit-5.29.0-orig/org.finkproject.kdeinit5.plist	1969-12-31 18:00:00.000000000 -0600
++++ kinit-5.29.0/org.finkproject.kdeinit5.plist	2016-12-29 04:54:11.000000000 -0600
+@@ -0,0 +1,31 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0">
++<dict>
++    <key>Label</key>
++        <string>org.finkproject.kdeinit5</string>
++    <key>ProgramArguments</key>
++    <array>
++        <string>@KF5_BINDIR@/kdeinit5</string>
++        <string>--suicide</string>
++        <string>--nofork</string>
++    </array>
++    <key>EnvironmentVariables</key>
++        <dict>
++            <key>KDE_SESSION_VERSION</key>
++            <string>5</string>
++        </dict>
++    <key>Disabled</key>
++        <true/>
++    <key>RunAtLoad</key>
++        <true/>
++    <key>KeepAlive</key>
++        <dict>
++            <key>OtherJobEnabled</key>
++                <dict>
++                    <key>org.freedesktop.dbus-session</key>
++                    <true/>
++                </dict>
++        </dict>
++</dict>
++</plist>
+diff -ruN kinit-5.29.0-orig/src/klauncher/klauncher.cpp kinit-5.29.0/src/klauncher/klauncher.cpp
+--- kinit-5.29.0-orig/src/klauncher/klauncher.cpp	2016-12-03 15:04:16.000000000 -0600
++++ kinit-5.29.0/src/klauncher/klauncher.cpp	2016-12-29 04:49:41.000000000 -0600
+@@ -539,6 +539,56 @@
+     memcpy(ba.data() + sz, &l, sizeof(long));
+ }
+ 
++bool QTimeoutProcess::startDetached(const QString &exe, const QStringList &args,
++                          const QString &cwd, qint64 *pid, int timeoutMs)
++{
++    bool ret = false;
++#ifdef Q_OS_MACOS
++    QProcess *proc = new QTimeoutProcess;
++    connect(proc, SIGNAL(finished(int,QProcess::ExitStatus)), proc, SLOT(slotFinished(int,QProcess::ExitStatus)));
++    if (!cwd.isEmpty()) {
++        proc->setWorkingDirectory(cwd);
++    }
++    proc->start(exe, args);
++    if (proc->waitForStarted()) {
++        ret = true;
++        if (pid) {
++            *pid = proc->pid();
++        }
++        if (timeoutMs > 0) {
++            proc->startTimer(timeoutMs);
++        }
++    }
++#endif
++    return ret;
++}
++
++QTimeoutProcess::~QTimeoutProcess()
++{
++#ifdef Q_OS_MACOS
++    if (state() == QProcess::Running) {
++        // prevent the parent dtor from yelling because the process still runs
++        kill();
++        waitForFinished(500);
++    }
++#endif
++}
++
++void QTimeoutProcess::timerEvent(QTimerEvent *)
++{
++#ifdef Q_OS_MACOS
++    terminate();
++    deleteLater();
++#endif
++}
++
++void QTimeoutProcess::slotFinished(int exitCode, QProcess::ExitStatus exitStatus)
++{
++#ifdef Q_OS_MACOS
++    deleteLater();
++#endif
++}
++
+ void
+ KLauncher::requestStart(KLaunchRequest *request)
+ {
+@@ -585,6 +635,27 @@
+ #endif
+         QByteArray data((char *)&request->pid, sizeof(int));
+         processRequestReturn(LAUNCHER_OK, data);
++#ifdef Q_OS_MACOS
++        // we now know that 'process' started successfully, so we can start a background
++        // process that will wait a preconfigured time for the <executable> to launch
++        // and activate it (= bring to foreground). The only way to do this in combination
++        // with QProcess is to use AppleScript
++        QStringList osacommand;
++        osacommand << QStringLiteral("-e")
++            << QStringLiteral(
++                "delay 0.5\n"
++                "tell application \"System Events\"\n"
++                " repeat\n"
++                "  if (exists application process \"%1\") then\n"
++                "   tell application \"%1\" to activate\n"
++                "   exit repeat\n"
++                "  end if\n"
++                "  delay 0.2\n"
++                " end repeat\n"
++                "end tell").arg(QFileInfo(executable).baseName());
++        bool osaOK = QTimeoutProcess::startDetached(QStringLiteral("/usr/bin/osascript"), osacommand, QString(), Q_NULLPTR, 2000);
++        qCDebug(KLAUNCHER) << "osascript" << osacommand << ":" << osaOK;
++#endif
+     }
+     return;
+ 
+diff -ruN kinit-5.29.0-orig/src/klauncher/klauncher.h kinit-5.29.0/src/klauncher/klauncher.h
+--- kinit-5.29.0-orig/src/klauncher/klauncher.h	2016-12-03 15:04:16.000000000 -0600
++++ kinit-5.29.0/src/klauncher/klauncher.h	2016-12-29 04:49:41.000000000 -0600
+@@ -274,4 +274,20 @@
+     XCBConnection getXCBConnection(const QByteArray &displyName);
+ #endif
+ };
++
++// For Q_OS_MACOS:
++class QTimeoutProcess : public QProcess
++{
++    Q_OBJECT
++public:
++    static bool startDetached(const QString &exe, const QStringList &args,
++                              const QString &cwd = QString(), qint64 *pid = 0,
++                              int timeoutMs = 0);
++    virtual ~QTimeoutProcess();
++protected:
++    void timerEvent(QTimerEvent *) Q_DECL_OVERRIDE;
++protected Q_SLOTS:
++    void slotFinished(int exitCode, QProcess::ExitStatus exitStatus);
++};
++
+ #endif
