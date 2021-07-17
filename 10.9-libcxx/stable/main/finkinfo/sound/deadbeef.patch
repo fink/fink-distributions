@@ -1,0 +1,117 @@
+diff -ruNp deadbeef-1.8.7-orig/Makefile.am deadbeef-1.8.7/Makefile.am
+--- deadbeef-1.8.7-orig/Makefile.am	2021-02-06 11:42:31.000000000 -0600
++++ deadbeef-1.8.7/Makefile.am	2021-07-15 07:25:08.000000000 -0500
+@@ -52,14 +52,16 @@ deadbeef_SOURCES =\
+ 	sort.c sort.h\
+ 	logger.c logger.h\
+ 	external/wcwidth/wcwidth.c external/wcwidth/wcwidth.h\
+-	playmodes.c playmodes.h
+-	
++	playmodes.c playmodes.h\
++	plugins/coreaudio/coreaudio.c plugins/nullout/nullout.c
++
+ #	ConvertUTF/ConvertUTF.c ConvertUTF/ConvertUTF.h
+ 
+ sdkdir = $(pkgincludedir)
+ sdk_HEADERS = deadbeef.h
+ 
+-deadbeef_LDADD = $(LDADD) $(DEPS_LIBS) $(ICONV_LIB) $(DL_LIBS) -lm -lpthread $(INTL_LIBS) shared/libctmap.a plugins/libparser/libparser.a
++deadbeef_LDADD = $(LDADD) $(DEPS_LIBS) $(ICONV_LIB) $(DL_LIBS) -lm -lpthread $(INTLLIBS) $(COREAUDIO_LIBS) shared/libctmap.a plugins/libparser/libparser.a
++deadbeef_LDFLAGS = -Wl,-framework,IOKit
+ 
+ AM_CFLAGS = $(DEPS_CFLAGS) -std=c99 -DLOCALEDIR=\"@localedir@\"
+ AM_CPPFLAGS = $(DEPS_CFLAGS)
+diff -ruNp deadbeef-1.8.7-orig/configure.ac deadbeef-1.8.7/configure.ac
+--- deadbeef-1.8.7-orig/configure.ac	2021-02-06 11:42:31.000000000 -0600
++++ deadbeef-1.8.7/configure.ac	2021-07-13 05:53:26.000000000 -0500
+@@ -245,14 +245,14 @@ AS_IF([test "${enable_gtk2}" = "yes" -o 
+     ])
+ ])
+ 
+-AS_IF([test "${enable_staticlink}" != "no"], [
+-    ], [
+-    AC_CHECK_LIB([dispatch], [main], [HAVE_DISPATCH=yes])
+-])
+-DISPATCH_CFLAGS=-fblocks
+-DISPATCH_LIBS=-ldispatch
+-AC_SUBST(DISPATCH_CFLAGS)
+-AC_SUBST(DISPATCH_LIBS)
++#AS_IF([test "${enable_staticlink}" != "no"], [
++#    ], [
++#    AC_CHECK_LIB([dispatch], [main], [HAVE_DISPATCH=yes])
++#])
++#DISPATCH_CFLAGS=-fblocks
++#DISPATCH_LIBS=-ldispatch
++#AC_SUBST(DISPATCH_CFLAGS)
++#AC_SUBST(DISPATCH_LIBS)
+ 
+ AS_IF([test "${enable_gtk2}" = "yes"], [
+     AS_IF([test "${enable_staticlink}" != "no"], [
+diff -ruNp deadbeef-1.8.7-orig/junklib.c deadbeef-1.8.7/junklib.c
+--- deadbeef-1.8.7-orig/junklib.c	2021-02-06 11:42:31.000000000 -0600
++++ deadbeef-1.8.7/junklib.c	2021-07-13 06:58:07.000000000 -0500
+@@ -32,9 +32,6 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #if HAVE_ICONV
+-  #ifndef __MINGW32__
+-  #define LIBICONV_PLUG
+-  #endif
+   #include <iconv.h>
+ #elif HAVE_ICU
+   #warning icu
+diff -ruNp deadbeef-1.8.7-orig/plugins/gtkui/ddb_splitter.c deadbeef-1.8.7/plugins/gtkui/ddb_splitter.c
+--- deadbeef-1.8.7-orig/plugins/gtkui/ddb_splitter.c	2021-02-06 11:42:31.000000000 -0600
++++ deadbeef-1.8.7/plugins/gtkui/ddb_splitter.c	2021-07-14 20:27:03.000000000 -0500
+@@ -23,6 +23,8 @@
+ #include "support.h"
+ #include "ddb_splitter.h"
+ 
++#define gtk_widget_get_mapped(widget) (GTK_WIDGET_MAPPED(widget))
++
+ /**
+  * SECTION: ddb-splitter
+  * @title: DdbSplitter
+@@ -642,10 +644,9 @@ ddb_splitter_realize (GtkWidget *widget)
+             gdk_cursor_unref (attributes.cursor);
+         }
+ 
+-        gtk_widget_style_attach (widget);
+-        //gtk_style_attach (widget, parent);
+-        //widget->style = gtk_style_attach (widget->style, widget->window);
+-
++#if !GTK_CHECK_VERSION(3,0,0)
++        widget->style = gtk_style_attach (widget->style, widget->window);
++#endif
+         if (ddb_splitter_children_visible (splitter)) {
+             gdk_window_show (splitter->priv->handle);
+         }
+diff -ruNp deadbeef-1.8.7-orig/plugins/gtkui/gtkui.c deadbeef-1.8.7/plugins/gtkui/gtkui.c
+--- deadbeef-1.8.7-orig/plugins/gtkui/gtkui.c	2021-02-06 11:42:31.000000000 -0600
++++ deadbeef-1.8.7/plugins/gtkui/gtkui.c	2021-07-15 20:13:12.000000000 -0500
+@@ -1318,7 +1318,13 @@ gtkui_mainwin_init(void) {
+         // try loading icon from $prefix/deadbeef.png (for static build)
+         char iconpath[1024];
+         snprintf (iconpath, sizeof (iconpath), "%s/deadbeef.png", deadbeef->get_system_dir(DDB_SYS_DIR_PREFIX));
+-        gtk_window_set_icon_from_file (GTK_WINDOW (mainwin), iconpath, NULL);
++        struct stat st = {0};
++        if (stat (iconpath, &st)) {
++            snprintf (iconpath, sizeof (iconpath), "%s/deadbeef.png", deadbeef->get_system_dir(DDB_SYS_DIR_PLUGIN_RESOURCES));
++        }
++        if (!stat (iconpath, &st)) {
++            gtk_window_set_icon_from_file (GTK_WINDOW (mainwin), iconpath, NULL);
++        }
+     }
+ 
+     gtkui_on_configchanged (NULL);
+diff -ruNp deadbeef-1.8.7-orig/plugins/gtkui/support.h deadbeef-1.8.7/plugins/gtkui/support.h
+--- deadbeef-1.8.7-orig/plugins/gtkui/support.h	2021-02-06 11:42:31.000000000 -0600
++++ deadbeef-1.8.7/plugins/gtkui/support.h	2021-07-14 06:20:12.000000000 -0500
+@@ -149,6 +149,7 @@ gchar *gtk_combo_box_text_get_active_tex
+ 
+ #define gtk_widget_get_visible(widget) (GTK_WIDGET_VISIBLE(widget))
+ #define gtk_widget_get_has_window(widget) (!GTK_WIDGET_NO_WINDOW(widget))
++#define gtk_widget_get_mapped(widget) (GTK_WIDGET_MAPPED(widget))
+ void gtk_widget_set_window(GtkWidget *widget, GdkWindow *window);
+ #endif
+ 
