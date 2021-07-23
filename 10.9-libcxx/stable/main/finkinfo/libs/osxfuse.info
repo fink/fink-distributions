@@ -2,7 +2,12 @@ Package: osxfuse
 Version: 2.7.0
 Revision: 1
 BuildDepends: <<
-  autoconf2.6 | autoconf, automake1.15, gettext-tools, libiconv-dev, libtool2
+	autoconf2.6,
+	automake1.15,
+	fink (>= 0.32.0),
+	gettext-tools,
+	libiconv-dev,
+	libtool2
 <<
 Depends: pkgconfig
 
@@ -15,7 +20,14 @@ Source2: https://github.com/osxfuse/fuse/tarball/98b9960
 Source2-MD5: a5b8b43d09834c2bf279e2ccba67d85b
 Source2Rename: osxfuse-fuse-98b9960.tar.gz
 
+PatchFile: %n.patch
+PatchFile-MD5: 92b15c4d5bd473686cc1eb3f3a1b3002
+PatchFile2: %n-kext.patch
+PatchFile2-MD5: ed0be5a90822e2f6f52f69ec3da5f795
+PatchFile3: %n-daemon.patch
+PatchFile3-MD5: 373bfa2110ca620e786c3ee187d8620f
 PatchScript: <<
+#!/bin/sh -ev
 sed -i.bak -e 's,/Library/Filesystems/,%p/lib/,' common/fuse_param.h
 sed -i.bak -e 's,llvmgcc42,llvm.clang.1_0,' osxfusefs.xcodeproj/project.pbxproj
 
@@ -23,12 +35,27 @@ mv ../osxfuse-fuse-98b9960 ../osxfuse-fuse
 sed -i.bak -e 's,/usr/local,%p,' ../osxfuse-fuse/darwin_configure.sh
 
 perl -pi -e 's/(AM_INIT_AUTOMAKE)/\1(subdir-objects)/' ../osxfuse-fuse/configure.in
+
+# fix for 10.12+
+patch -p2 < %{PatchFile2}
+
+# non-kext fixes
+cd ../osxfuse-fuse
+patch -p1 < %{PatchFile}
+patch -p1 < %{PatchFile3}
+
 <<
 CompileScript: <<
 #!/bin/sh -ev
 osxversion=`sw_vers -productVersion | cut -d. -f1-2`
-xcodebuild MACOSX_DEPLOYMENT_TARGET=$osxversion SDKROOT=macosx$osxversion
+xcodebuild -UseNewBuildSystem=NO -sdkroot=`xcodebuild -version -sdk macosx Path` -arch x86_64 MACOSX_DEPLOYMENT_TARGET=$osxversion
+
 cd ../osxfuse-fuse
+# for macOS 10.14+, ensure full SDK is available.
+if [ "$(uname -r | cut -d. -f1)" -ge 18 ]; then
+	SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
+	export CPPFLAGS="$CPPFLAGS -I$SDK_PATH/usr/include -F$SDK_PATH/System/Library/Frameworks"
+fi
 COMPILER=com.apple.compilers.llvm.clang.1_0 OSXFUSE_SRCROOT=%b DARWIN=1 ./darwin_configure.sh
 make
 <<
@@ -100,7 +127,6 @@ SplitOff2: <<
   <<
 <<
 
-
 Description: File System in User Space (FUSE for OS X)
 DescDetail: <<
 FUSE for OS X allows you to extend OS X's native file handling
@@ -112,7 +138,13 @@ These are the fuse header and library files required for building FUSE
 filesystems.
 <<
 DescPackaging: <<
-Patch for clang
+Patch for clang and multiple implicit declarations.
+
+From modified upstream commit 7728b36a83fe20b366b1b6e72f3d0906ca89840c
+Move from deprecated daemon() to fork()
+
+kext needs patching for macOS12+
+3926813b125c278825702da2895f0d0c3d52f5e1
 <<
 License: BSD
 Homepage: http://osxfuse.github.io/

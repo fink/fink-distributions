@@ -1,0 +1,168 @@
+Package: podofo9-shlibs
+# each upstream %v in the 0.x series is a new install_name (explicitly
+# not guaranteed to be stable interface) and debian concurs with a
+# separate soname package for each
+#
+# LIBIDN2 FTBFS; https://sourceforge.net/p/podofo/mailman/message/36224376
+Version: 0.9.2
+Revision: 10
+Source: mirror:sourceforge:podofo/podofo-%v.tar.gz
+Source-MD5: 41966c57fa4266ac5cef80bfade0c8e7
+License: GPL/LGPL
+DescPackaging: <<
+	Former maintainer: Martin Costabel <costabel@wanadoo.fr>
+
+	Upstream patches for newer-cmake compatibility. See for
+	example: https://sourceforge.net/p/podofo/tickets/24/
+
+	-std=c++11 to fix FTBFS against cppunit1.15.1. But that also
+	requires fixing some narrowing-conversion errors, using
+	upstream patches. See:
+	https://sourceforge.net/p/podofo/code/1726
+	https://sourceforge.net/p/podofo/code/1727
+<<
+Depends: <<
+	fontconfig2-shlibs (>= 2.10.0-1),
+	freetype219-shlibs (>= 2.10.2-1),
+	libidn-shlibs,
+	libjpeg9-shlibs,
+	libpng16-shlibs,
+	libtiff5-shlibs
+<<
+BuildDepends: <<
+	cmake (>= 2.6.0-1),
+	cppunit1.15.1,
+	fink (>= 0.32),
+	fink-package-precedence,
+	fontconfig2-dev (>= 2.10.0-1),
+	freetype219 (>= 2.10.2-1),
+	libidn,
+	libjpeg9,
+	libpng16,
+	libtiff5,
+	lua51-dev
+<<
+GCC: 4.0
+# despite hackery, cmake's flag spaghetti still picks up an existing
+# installed version's headers ahead of the source directory being
+# built
+BuildConflicts: podofo9-dev, podofo0.9.7-dev
+Conflicts: podofo9-dev (<< 0.9.2-10)
+Replaces: podofo9-dev (<< 0.9.2-10)
+PatchFile: %n.patch
+PatchFile-MD5: f1ebf5351222b3a15bdcd2ac3480978d
+PatchFile2: %n-c++11.patch
+PatchFile2-MD5: df38072aee437ffc16557c4516d0668f
+PatchScript: <<
+#!/bin/sh -ex
+	%{default_script}
+	perl -pi -e 's|^INCLUDE_DIRECTORIES\($|$&\n\$\{PoDoFo_SOURCE_DIR\}|' CMakeLists.txt
+	# Virtualize explicit '/sw' in sources
+	perl -pi -e 's,/sw,%p,g' cmake/modules/FindLua51.cmake
+	# add forgotten man pages to the list so they get installed
+	perl -pi -e 's|INSTALL.*|$&\n  podofocolor.1\n  podofogc.1|' debian/man/CMakeLists.txt 
+	# make it work on 10.7: include headers that really exist
+	perl -pi.bak -e's|CommonCrypto.h>|CommonDigest.h>\n#include <CommonCrypto/CommonCryptor.h>|' src/base/PdfEncrypt.cpp
+	# make it work with libc++: remove irritating and apparently
+	# unnecessary forward declaration
+	/usr/bin/sed -i".bak" -e '/class ios_base/d' src/base/PdfLocale.h
+<<
+CompileScript: <<
+#!/bin/sh -ev
+	mkdir build
+	cd build
+	cmake --debug-output -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
+		-DCMAKE_INSTALL_PREFIX:PATH=%p \
+		-DCMAKE_INCLUDE_PATH:PATH=%p/include \
+		-DCMAKE_LIBRARY_PATH:PATH=%p/lib \
+		-DPODOFO_BUILD_STATIC:BOOL=FALSE \
+		-DCMAKE_INSTALL_NAME_DIR:STRING=%p/lib \
+		-DCMAKE_BUILD_WITH_INSTALL_RPATH:BOOL=ON \
+		-DCMAKE_INSTALL_RPATH:STRING=%p/lib \
+		-DCMAKE_EXE_LINKER_FLAGS:STRING="" \
+		-DFONTCONFIG_INCLUDE_DIR:PATH=%p/lib/fontconfig2/include \
+		-DFONTCONFIG_LIBRARIES:FILEPATH=%p/lib/fontconfig2/lib/libfontconfig.dylib \
+		-DLIBCRYPTO_LIBRARY_RELEASE:FILEPATH=/usr/lib/libSystem.B.dylib \
+		-DFREETYPE_DIR:PATH=%p/lib/freetype219 \
+		-DFREETYPE_INCLUDE_DIR_FT2BUILD:PATH=%p/include/freetype2 \
+		-DFREETYPE_INCLUDE_DIR_FTHEADER:PATH=%p/include/freetype2 \
+		-DFREETYPE_LIBRARY:FILEPATH=%p/lib/libfreetype.dylib \
+		-DCMAKE_CXX_FLAGS="-MD" \
+	..
+
+	# evil hack to find installed headers after the headers in the
+	# source if you know how to do this more elegantly in cmake,
+	# please tell me
+	perl -pi -e 's|(\-I%p/include )(\S* )|-I.. \2\1|g' `find . -name flags.make`
+
+	# Hack for finding not-yet-installed dylibs during making.
+	# Cmake's method via CMAKE_BUILD_WITH_INSTALL_RPATH=OFF is
+	# still half-baked; doesn't work for the podofo binary
+	# executables
+	export DYLD_LIBRARY_PATH=`pwd`/bin
+
+	make
+	cd ..
+	fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=podofo9-dev,podofo0.9.7-dev .
+<< 
+InstallScript: <<
+#!/bin/sh -ev
+	pushd build
+	make install DESTDIR=%d
+	popd
+
+	pushd %i
+	rm -r include
+	rm lib/libpodofo.dylib
+	popd
+<<
+DocFiles: AUTHORS CO* ChangeLog FAQ.html README.html TODO
+Shlibs: %p/lib/libpodofo.0.9.1.dylib 0.9.1 %n (>= 0.9.1-1)
+SplitOff2: <<
+	Package: podofo
+	Depends: <<
+		%N (>= %v-%r),
+		fontconfig2-shlibs (>= 2.10.0-1),
+		freetype219-shlibs (>= 2.10.2-1),
+		libidn-shlibs,
+		libjpeg-bin,
+		libjpeg9-shlibs,
+		libtiff5-shlibs,
+		lua51-shlibs
+	<<
+	Files: <<
+		bin
+		share/man
+	<<
+	DocFiles: AUTHORS CO* ChangeLog FAQ.html README.html TODO
+<<
+SplitOff3: <<
+	Package: podofo9
+	Description: OBSOLETE: use podofo
+	RuntimeDepends: <<
+		fink-obsolete-packages,
+		podofo (>= %v-%r)
+	<<
+	InstallScript: <<
+		mkdir -p %i/share/doc/installed-packages
+		touch %i/share/doc/installed-packages/%n
+	<<
+<<
+Description: Library and tools for PDF files
+DescDetail: <<
+The PoDoFo library is a free, portable C++ library which includes
+classes to parse PDF files and modify their contents into memory. The
+changes can be written back to disk easily. The parser can also be
+used to extract information from a PDF file (for example the parser
+could be used in a PDF viewer). Besides parsing PoDoFo includes also
+very simple classes to create your own PDF files. All classes are
+documented so it is easy to start writing your own application using
+PoDoFo.
+
+The PoDoFo tools are simple tools built around the PoDoFo library.
+These tools are first of all examples on how to use the PoDoFo library
+in your own projects. But secondly they offer also features for
+working with PDF files.
+<<
+Maintainer: Daniel Macks <dmacks@netspace.org>
+Homepage: http://podofo.sourceforge.net/

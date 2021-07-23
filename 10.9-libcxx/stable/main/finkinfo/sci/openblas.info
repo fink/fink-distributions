@@ -1,7 +1,7 @@
 # -*- coding: ascii; tab-width: 4 -*-
 Info2: <<
 Package: openblas
-Version: 0.3.9
+Version: 0.3.10
 Revision: 1
 Type: gcc (10)
 Maintainer: Derek Homeier <dhomeie@gwdg.de>
@@ -11,10 +11,10 @@ BuildDepends: fink (>= 0.30.0), gcc%type_raw[gcc]-compiler
 Depends: %N-shlibs (= %v-%r)
 
 Source: https://github.com/xianyi/OpenBLAS/archive/v%v.tar.gz
-Source-MD5: 28cc19a6acbf636f5aab5f10b9a0dfe1
+Source-MD5: 4727a1333a380b67c8d7c7787a3d9c9a
 SourceRename: OpenBLAS-%v.tar.gz
 PatchFile: %n.patch
-PatchFile-MD5: c8465ba2b714cd59678c4ea627990234
+PatchFile-MD5: 38268179357f21681e208c3467e6869c
 
 PatchScript: sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
 
@@ -35,7 +35,15 @@ CompileScript: <<
 	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 libs netlib shared
 	cd benchmark
 	mkdir -m 755 bin
-	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 FOPENMP=-fopenmp veclib goto smallscaling
+	# 6 tests require clock_gettime, disable if missing (on 10.11)
+	if [ "$darwin_vers" -lt 16 ]; then
+		mv Makefile Makefile.orig
+		egrep -v 'saxpy.*daxpy.*.caxpy\.|scopy.*dcopy.*ccopy\.|st[pr][ms]v.*dt[pr][ms]v.*ct[pr][ms]v\.' Makefile.orig > Makefile
+	fi
+	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 FOPENMP=-fopenmp LIBSUFFIX=dylib veclib goto smallscaling
+	for x in smallscaling *.goto; do
+		install_name_tool -change %b/exports/../libopenblas.0.dylib %p/lib/libopenblas.0.dylib $x
+	done
 	mv *.veclib *.goto smallscaling bin
 <<
 
@@ -72,9 +80,9 @@ InfoTest: <<
 		echo OpenBLAS
 		for x in *.goto; do
 			echo OPENBLAS_NUM_THREADS=$ncore OMP_NUM_THREADS=1 $x
-			OPENBLAS_NUM_THREADS=$ncore OMP_NUM_THREADS=1 ./$x 2>&1 | awk '(NR < 4)||((NR-2)%%20 == 0)'
+			DYLD_LIBRARY_PATH=%b OPENBLAS_NUM_THREADS=$ncore OMP_NUM_THREADS=1 ./$x 2>&1 | awk '(NR < 4)||((NR-2)%%20 == 0)'
 		done
-		OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=$ncore ./smallscaling
+		DYLD_LIBRARY_PATH=%b OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=$ncore ./smallscaling
 	<<
 <<
 
@@ -142,6 +150,10 @@ identical assembler and object code.)
   Including, but not using patches for build with clang without -fopenmp option;
   for that FOPENMP needs to be set instead to
   "-I$(ls -d %p/lib/gcc%type_raw[gcc]/lib/gcc/x86_64-*/%type_raw[gcc]*/include) -L%p/lib/gcc%type_raw[gcc]/lib -lgomp"
+0.3.10: 6 benchmarks axpy, copy, tpmv, tpsv, trmv, trsv also using clock_gettime now
+  and failing on 10.11; disabled since substitute function from smallscaling.c does
+  not seem to produce accurate enough timings
+  Build dynamically linked benchmarks (static versions grew to > 1.5 GB).
 <<
 # Info2
 <<

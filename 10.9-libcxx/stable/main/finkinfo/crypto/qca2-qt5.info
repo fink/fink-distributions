@@ -1,0 +1,157 @@
+Info3: <<
+Package: qca2-qt5-%type_pkg[qca]
+Version: 2.3.1
+Revision: 3
+Description: Cross-platform Crypto API
+Type: qca (mac)
+License: LGPL
+Maintainer: Hanspeter Niederstrasser <nieder@users.sourceforge.net>
+
+Depends: %N-shlibs (= %v-%r)
+BuildDepends: <<
+	cyrus-sasl2.3-dev,
+	fink (>= 0.32),
+	fink-package-precedence,
+	libgcrypt20,
+	libgpg-error,
+	openssl110-dev,
+	qt5-%type_pkg[qca]-qtbase,
+	(%type_pkg[qca] = x11) x11-dev
+<<
+BuildDependsOnly: true
+GCC: 4.0
+
+Source: https://download.kde.org/stable/qca/%v/qca-%v.tar.xz
+Source-Checksum: SHA256(c13851109abefc4623370989fae3a745bf6b1acb3c2a13a8958539823e974e4b)
+Source2: http://archive.ubuntu.com/ubuntu/pool/universe/q/qca2/qca2_%v-1.debian.tar.xz
+Source2-MD5: 497017574492ad1b0566b9717462bf8f
+#PatchFile: qca2.patch
+#PatchFile-MD5: 3b0058b8220fe6f0aefd081d7a30572a
+PatchScript: <<
+	patch -p1 < ../debian/patches/define_qca_export.diff
+	patch -p1 < ../debian/patches/pipeunittest_more_wait.diff
+	patch -p1 < ../debian/patches/kubuntu_ignore_filewatch_test.diff
+<<
+CompileScript: <<
+	#!/bin/sh -ev
+	QTDIR="%p/lib/qt5-%type_pkg[qca]"
+	export PATH="%b:$QTDIR/bin:$PATH"
+	. %p/sbin/fink-buildenv-cmake.sh
+	mkdir finkbuild
+	pushd finkbuild
+	cmake \
+		$FINK_CMAKE_ARGS \
+		-DCMAKE_CXX_FLAGS=-MD \
+		-DCMAKE_LINKER_FLAGS="-headerpad_max_install_names" \
+		-DOSX_FRAMEWORK:BOOL=OFF \
+		-DBUILD_PLUGINS="cyrus-sasl;gcrypt;gnupg;logger;ossl;softstore" \
+		-DCMAKE_INSTALL_PREFIX=$QTDIR \
+		-DQCA_PLUGINS_INSTALL_DIR=$QTDIR/plugins \
+		-DQCA_LIBRARY_INSTALL_DIR=$QTDIR/lib \
+		-DQCA_BINARY_INSTALL_DIR=$QTDIR/bin \
+		-DQCA_FEATURE_INSTALL_DIR=$QTDIR/share/qt5/mkspecs/features \
+		-DQCA_INCLUDE_INSTALL_DIR=$QTDIR/include \
+		-DQCA_PRIVATE_INCLUDE_INSTALL_DIR=$QTDIR/include \
+		-DQCA_DOC_INSTALL_DIR=$QTDIR=/share/doc/qt5 \
+		-DQCA_MAN_INSTALL_DIR=%p/share/man \
+		-DPKGCONFIG_INSTALL_PREFIX=$QTDIR/lib/pkgconfig \
+		-DSASL2_INCLUDE_DIR:PATH=%p/include \
+		-DSASL2_LIBRARIES:FILEPATH=%p/lib/libsasl2.dylib \
+		-Dqca_CERTSTORE=%p/etc/ssl/cert.pem \
+		-LAH \
+	..
+# botan plugin needs botan-2
+#		-DCMAKE_INSTALL_NAME_DIR=%p/opt/qca2/%type_pkg[qca]/lib \
+	make -w
+	popd
+	fink-package-precedence --depfile-ext='\.d' .
+<<
+InfoTest: <<
+	TestDepends: <<
+		qt5-%type_pkg[qca]-qtcore-shlibs (>= 4.7.3-1),
+		qt5-%type_pkg[qca]-qtnetwork-shlibs (>= 4.7.3-1),
+		qt5-%type_pkg[qca]-qttest-shlibs (>= 4.7.3-1)
+	<<
+	TestScript: <<
+		#!/bin/sh -ev
+		QTDIR="%p/lib/qt5-%type_pkg[qca]"
+		pushd finkbuild
+			# point the test programs to the uninstalled library in %b
+			for testprog in bin/*test bin/clientplugin bin/cms bin/keybundle bin/keystore bin/pkits; do
+				install_name_tool -change $QTDIR/lib/libqca-qt5.2.dylib %b/finkbuild/lib/libqca-qt5.2.dylib $testprog
+			done
+			make -j1 test || exit 2
+			# restore install_names to test programs (needed since they're not installed?)
+			install_name_tool -change %b/finkbuild/lib/libqca-qt5.2.dylib $QTDIR/lib/libqca-qt5.2.dylib $testprog
+		popd
+	<<
+<<
+
+InstallScript: <<
+#!/bin/sh -ev
+	pushd finkbuild
+	QTDIR="%p/lib/qt5-%type_pkg[qca]"
+	QCADIR="$QTDIR"
+	make install DESTDIR="%d"
+	popd
+
+	install -d -m 755 %i/share/doc/%N
+	mv examples %i/share/doc/%N/
+<<
+DocFiles: COPYING INSTALL README TODO
+SplitOff: <<
+	Package: %N-shlibs
+	Description: Shared libraries for QCA
+	Depends: <<
+		qt5-%type_pkg[qca]-qtcore-shlibs,
+		ca-bundle
+	<<
+	Recommends: <<
+		%N (>= %v-%r),
+		%N-plugin (>= %v-%r)
+	<<
+	DocFiles: COPYING
+	Files: lib/qt5-mac/lib/libqca-qt5.2*.dylib
+	Shlibs: %p/lib/qt5-mac/lib/libqca-qt5.2.dylib 2.0.0 %n (>= 2.3.1-1)
+<<
+SplitOff2: <<
+	Package: %N-plugins
+	Description: Crypto plugins for QCA
+	Depends: <<
+		%N-shlibs (>= %v-%r),
+		cyrus-sasl2.3-shlibs,
+		libgcrypt20-shlibs,
+		libgpg-error-shlibs,
+		openssl110-shlibs,
+		qt5-%type_pkg[qca]-qtcore-shlibs
+	<<
+	DocFiles: COPYING
+	Files: lib/qt5-%type_pkg[qca]/plugins/crypto
+<<
+SplitOff3: <<
+	Package: %N-utils
+	Description: Command line tools for QCA
+	Depends: <<
+		%N-shlibs (>= %v-%r),
+		qt5-%type_pkg[qca]-qtcore-shlibs
+	<<
+	Replaces: %N (<< 2.1.3-1)
+	DocFiles: COPYING
+	Files: <<
+		lib/qt5-%type_pkg[qca]/bin
+		share/man
+	<<
+<<
+Homepage: https://userbase.kde.org/QCA
+DescDetail: <<
+Taking a hint from the similarly-named Java Cryptography Architecture,
+QCA aims to provide a straightforward and cross-platform crypto API,
+using Qt datatypes and conventions.  QCA separates the API from the
+implementation, using plugins known as Providers.  The advantage of
+this model is to allow applications to avoid linking to or explicitly
+depending on any particular cryptographic library.  This allows one
+to easily change or upgrade crypto implementations without even
+needing to recompile the application!
+<<
+<<
+
