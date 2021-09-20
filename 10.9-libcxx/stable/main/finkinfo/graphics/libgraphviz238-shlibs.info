@@ -1,8 +1,10 @@
 Info3: <<
 Package: libgraphviz238%type_pkg[var]-shlibs
-Type: var (. -nox), ruby (2.5)
-Version: 2.46.0
-Revision: 4
+Type: var (. -nox), ruby (2.6), guile (2.2)
+Version: 2.49.3
+# FTBFS (ocaml/swig): https://gitlab.com/graphviz/graphviz/-/issues/2128
+# ...so ocaml disabled for now
+Revision: 1
 License: OSI-Approved
 # License: Common Public License 1.0
 Maintainer: David Fang <fangism@users.sourceforge.net>
@@ -19,14 +21,10 @@ Replaces: <<
 	libgraphviz238-dev (<= 2.46.0-1),
 	libgraphviz238-nox-dev (<= 2.46.0-1)
 <<
-
-# No upstream actual release tarball with version-string in filename.
-# See: https://gitlab.com/graphviz/graphviz/issues/1371
-Source: https://gitlab.com/graphviz/graphviz/-/package_files/6163716/download
-SourceRename: graphviz-%v.tar.gz
-Source-MD5: 75470780bb336b98334c085479cd0149
+Source: https://gitlab.com/api/v4/projects/4207231/packages/generic/graphviz-releases/%v/graphviz-%v.tar.xz
+Source-MD5: 9b92d271ced2648b9d68c8a32b6a42f9
 PatchFile: %{ni}.patch
-PatchFile-MD5: 0c6d630a9517c8e37e4ae99367f7e2e5
+PatchFile-MD5: 346843a54a35a6b29bd97616c78ad65b
 PatchScript: <<
 	#!/bin/sh -ev
 	# named for libversion (compatibility with -shlibs pkg naming)
@@ -64,6 +62,11 @@ PatchScript: <<
 	#    cairo-xlib)
 	#  * plugin/ming/*: graphviz-ming.patch from pld-linux
 	#  * a ton of other Makefile.in
+
+	# pkg-config spaghetti for guile hard-codes checks for 2.0 and
+	# 1.8 even though it accepts anything newer. Fix for our
+	# preferred.
+	perl -pi -e 's/guile-2.0/guile-2.2/' configure
 <<
 GCC: 4.0
 Depends: <<
@@ -82,7 +85,7 @@ Depends: <<
 	fontconfig2-shlibs (>= 2.10.0-1),
 	freetype219-shlibs (>= 2.10.2-1),
 	gc-shlibs,
-	guile20-shlibs, 
+	guile%type_pkg[guile]-shlibs,
 	libann-shlibs,
 	libming1-shlibs,
 	libpng16-shlibs,
@@ -97,7 +100,7 @@ BuildDepends: <<
 	(%type_raw[var] = .) cairo (>= 1.12.14-1),
 	(%type_raw[var] = .) freeglut2, 
 	(%type_raw[var] = .) gd3-bin,
-	(%type_raw[var] = .) gd3,
+	(%type_raw[var] = .) gd3 (>= 2.3.3-1),
 	(%type_raw[var] = .) gettext-tools,
 	(%type_raw[var] = .) glib2-dev (>= 2.22.0-1), 
 	(%type_raw[var] = .) gtk+2-dev (>= 2.18.0-1),
@@ -108,15 +111,15 @@ BuildDepends: <<
 	(%type_raw[var] = .) pango1-xft2-ft219-dev (>= 1.24.5-4),
 	(%type_raw[var] = .) x11-dev, 
 	expat1 (>= 2.0.0-1), 
-	fink (>= 0.28),
+	fink (>= 0.32),
 	fink-package-precedence,
 	fontconfig2-dev (>= 2.10.0-1),
 	freetype219 (>= 2.10.2-1),
 	gawk (>= 3.1.2-12), 
 	gc,
 	gmp5, 
-	guile20-dev, 
-	guile20,
+	guile%type_pkg[guile]-dev,
+	guile%type_pkg[guile],
 	libann-dev,
 	libming1-dev,
 	libpng16,
@@ -124,14 +127,17 @@ BuildDepends: <<
 	libwebp7,
 	lua53-dev,
 	lua53,
-	ocaml,
+#	ocaml (>= 4.12.0-1),
 	pkgconfig (>= 0.20-1),
 	poppler8-glib,
 	ruby%type_pkg[ruby]-dev,
-	swig (>= 3.0.11-1),
+	swig4 (>= 4.0.2-1),
 	system-java,
 	system-tcltk-dev
 <<
+# ocaml < 4.12.0 has .h that conflicts with newer xcode
+# gd3 2.3.2 has a ton of stray Requires.private in .pc
+# swig < 4.0.2 has const mismatches vs ocaml >= 4.09.0
 # dmacks: no idea why both variants give "Error: attempt to add
 # non-widget child..." but X11's (even two-level) works.
 BuildConflicts: libxt, libxt-flat
@@ -180,7 +186,9 @@ ConfigureParams: <<
 	--disable-python \
 	--disable-python2 \
 	--disable-python3 \
-	GUILE=%p/bin/guile-2.0 \
+	GUILE=%p/bin/guile-%type_raw[guile] \
+	GUILE_CONFIG=%p/bin/guile-%type_raw[guile]-config \
+	--disable-ocaml \
 	RUBY=%p/bin/ruby-%type_raw[ruby] \
 	RUBY_CFLAGS="-I%p/include/ruby-%type_raw[ruby] -I%p/include/ruby-%type_raw[ruby]/%m-darwin" \
 	RUBY_LIBS=-lruby.%type_raw[ruby]
@@ -193,7 +201,6 @@ ConfigureParams: <<
 CompileScript: <<
 	#!/bin/sh -ev
 
-	export PATH=%p/share/guile/2.0/scripts/binoverride:$PATH
 	# handle java
 	JAVA_VERSION=`javac -version  2>&1 >/dev/null | cut -d ' ' -f 2`
 	JAVA_RELEASE=`javac -version  2>&1 >/dev/null | cut -d ' ' -f 2 | cut -d. -f1-2`
@@ -240,6 +247,10 @@ InstallScript: <<
 	#!/bin/sh -ev
 	make DESTDIR=%d install
 	# remove links in /usr
+	# These are at least sane for php and tcl because we use
+	# Apple's interps, but lua should be in %p because we use
+	# fink's interp. See
+	# https://gitlab.com/graphviz/graphviz/-/issues/2152
 	rm -rf %d/usr
 	rm -rf %d/Library
 	#mkdir -p %i/lib/perl5/darwin-thread-multi-2level/%n
@@ -248,7 +259,7 @@ InstallScript: <<
 	mv %i/share/graphviz/doc/* %i/share/doc/%n 
 	mv %i/share/graphviz/{demo,graphs} %i/share/doc/%n
 	rm -rf %i/share/graphviz/doc
-	# mkdir -p %i/lib/ruby/1.8/%n
+	# mkdir -p %i/lib/ruby/%type_pkg[ruby]/%n
 	# didn't find any .rb files?
 	# not bothering with %p/lib/php
 	# move pkgconfig into location
@@ -399,7 +410,6 @@ Adding lighter -nox variant with fewer dependencies, having stripped out
 all of gnome, gtk, and glib, and pangocairo (many thanks to fink-core
 team for guidance).
 * Rendering libraries, such as rsvg, have been removed for -nox.
-Contains patch to workaround issue using newer ocaml 4.0
 
 TODO: separate out extension language plug-ins
 
@@ -411,5 +421,8 @@ Permission granted by Google to contribute packaging.
 
 The plugins are runtime-loadable modules (dlopen), so they are fully
 in the runtime package (not .la in -dev)...".dylib" is a misnomer.
+
+As of 2.49.3, lefty is omitted. But see related packaging issue:
+https://gitlab.com/graphviz/graphviz/-/issues/2153
 <<
 <<
