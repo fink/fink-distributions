@@ -1,44 +1,162 @@
-From 9c443671982d155ad6935b1fb65ee25fac9cf1e1 Mon Sep 17 00:00:00 2001
-From: Stanislav Levin <slev@altlinux.org>
-Date: Thu, 30 May 2019 12:42:26 +0300
-Subject: [PATCH] Fix Pytest4.x compatibility error
+From: =?utf-8?q?Miro_Hron=C4=8Dok?= <miro@hroncok.cz>
+Date: Sat, 8 Aug 2020 13:39:22 +0200
+Subject: Use Node.from_parent() constructor to support pytest 6
 
-According to pytest docs:
-```
-marks in pytest.mark.parametrize
-Removed in version 4.0.
+Add a wrapper not to break pytest 4 (needed for Python 2 support).
 
-Applying marks to values of a pytest.mark.parametrize call is now deprecated.
-...
+    ============================= test session starts ==============================
+    platform linux -- Python 3.9.0b5, pytest-6.0.1, py-1.9.0, pluggy-0.13.1
+    rootdir: /builddir/build/BUILD/html5lib-1.1, configfile: pytest.ini
+    plugins: expect-1.1.0
+    collected 0 items / 1 error
 
-This was considered hard to read and understand, and also its implementation
-presented problems to the code preventing further internal improvements in the
-marks architecture.
+    ==================================== ERRORS ====================================
+    ________________________ ERROR collecting test session _________________________
+    /usr/lib/python3.9/site-packages/pluggy/hooks.py:286: in __call__
+        return self._hookexec(self, self.get_hookimpls(), kwargs)
+    /usr/lib/python3.9/site-packages/pluggy/manager.py:93: in _hookexec
+        return self._inner_hookexec(hook, methods, kwargs)
+    /usr/lib/python3.9/site-packages/pluggy/manager.py:84: in <lambda>
+        self._inner_hookexec = lambda hook, methods, kwargs: hook.multicall(
+    html5lib/tests/conftest.py:105: in pytest_collect_file
+        return TokenizerFile(path, parent)
+    /usr/lib/python3.9/site-packages/_pytest/nodes.py:95: in __call__
+        warnings.warn(NODE_USE_FROM_PARENT.format(name=self.__name__), stacklevel=2)
+    E   pytest.PytestDeprecationWarning: Direct construction of TokenizerFile has been deprecated, please use TokenizerFile.from_parent.
+    E   See https://docs.pytest.org/en/stable/deprecations.html#node-construction-changed-to-node-from-parent for more details.
 
-To update the code, use pytest.param
-```
-
-Signed-off-by: Stanislav Levin <slev@altlinux.org>
+Fixes https://github.com/html5lib/html5lib-python/issues/505
 ---
- html5lib/tests/test_stream.py | 8 +++++---
- 1 file changed, 5 insertions(+), 3 deletions(-)
+ html5lib/tests/conftest.py          | 15 ++++++++++++---
+ html5lib/tests/sanitizer.py         |  2 +-
+ html5lib/tests/tokenizer.py         | 10 +++++-----
+ html5lib/tests/tree_construction.py | 20 ++++++++++----------
+ requirements-test.txt               |  2 +-
+ 5 files changed, 29 insertions(+), 20 deletions(-)
 
-diff --git a/html5lib/tests/test_stream.py b/html5lib/tests/test_stream.py
-index 27c39538..efe9b472 100644
---- a/html5lib/tests/test_stream.py
-+++ b/html5lib/tests/test_stream.py
-@@ -308,9 +308,11 @@ def test_invalid_codepoints(inp, num):
-                           ("'\\uD800\\uD800\\uD800'", 3),
-                           ("'a\\uD800a\\uD800a\\uD800a'", 3),
-                           ("'\\uDFFF\\uDBFF'", 2),
--                          pytest.mark.skipif(sys.maxunicode == 0xFFFF,
--                                             ("'\\uDBFF\\uDFFF'", 2),
--                                             reason="narrow Python")])
-+                          pytest.param(
-+                              "'\\uDBFF\\uDFFF'", 2,
-+                              marks=pytest.mark.skipif(
-+                                  sys.maxunicode == 0xFFFF,
-+                                  reason="narrow Python"))])
- def test_invalid_codepoints_surrogates(inp, num):
-     inp = eval(inp)  # pylint:disable=eval-used
-     fp = StringIO(inp)
+diff --git a/html5lib/tests/conftest.py b/html5lib/tests/conftest.py
+index dad167c..fffeb50 100644
+--- a/html5lib/tests/conftest.py
++++ b/html5lib/tests/conftest.py
+@@ -99,10 +99,19 @@ def pytest_collect_file(path, parent):
+ 
+     if _tree_construction in dir_and_parents:
+         if path.ext == ".dat":
+-            return TreeConstructionFile(path, parent)
++            return TreeConstructionFile.from_parent(parent, fspath=path)
+     elif _tokenizer in dir_and_parents:
+         if path.ext == ".test":
+-            return TokenizerFile(path, parent)
++            return TokenizerFile.from_parent(parent, fspath=path)
+     elif _sanitizer_testdata in dir_and_parents:
+         if path.ext == ".dat":
+-            return SanitizerFile(path, parent)
++            return SanitizerFile.from_parent(parent, fspath=path)
++
++
++# Tiny wrapper to allow .from_parent constructors on older pytest for PY27
++if not hasattr(pytest.Item.__base__, "from_parent"):
++    @classmethod
++    def from_parent(cls, parent, **kwargs):
++        return cls(parent=parent, **kwargs)
++
++    pytest.Item.__base__.from_parent = from_parent
+diff --git a/html5lib/tests/sanitizer.py b/html5lib/tests/sanitizer.py
+index bb48342..16e5386 100644
+--- a/html5lib/tests/sanitizer.py
++++ b/html5lib/tests/sanitizer.py
+@@ -13,7 +13,7 @@ class SanitizerFile(pytest.File):
+         with codecs.open(str(self.fspath), "r", encoding="utf-8") as fp:
+             tests = json.load(fp)
+         for i, test in enumerate(tests):
+-            yield SanitizerTest(str(i), self, test=test)
++            yield SanitizerTest.from_parent(self, name=str(i), test=test)
+ 
+ 
+ class SanitizerTest(pytest.Item):
+diff --git a/html5lib/tests/tokenizer.py b/html5lib/tests/tokenizer.py
+index 47264cc..cc9897a 100644
+--- a/html5lib/tests/tokenizer.py
++++ b/html5lib/tests/tokenizer.py
+@@ -192,7 +192,7 @@ class TokenizerFile(pytest.File):
+             tests = json.load(fp)
+         if 'tests' in tests:
+             for i, test in enumerate(tests['tests']):
+-                yield TokenizerTestCollector(str(i), self, testdata=test)
++                yield TokenizerTestCollector.from_parent(self, name=str(i), testdata=test)
+ 
+ 
+ class TokenizerTestCollector(pytest.Collector):
+@@ -207,10 +207,10 @@ class TokenizerTestCollector(pytest.Collector):
+     def collect(self):
+         for initialState in self.testdata["initialStates"]:
+             initialState = capitalize(initialState)
+-            item = TokenizerTest(initialState,
+-                                 self,
+-                                 self.testdata,
+-                                 initialState)
++            item = TokenizerTest.from_parent(self,
++                                             name=initialState,
++                                             test=self.testdata,
++                                             initialState=initialState)
+             if self.testdata["input"] is None:
+                 item.add_marker(pytest.mark.skipif(True, reason="Relies on lone surrogates"))
+             yield item
+diff --git a/html5lib/tests/tree_construction.py b/html5lib/tests/tree_construction.py
+index 1ef6e72..fb0657b 100644
+--- a/html5lib/tests/tree_construction.py
++++ b/html5lib/tests/tree_construction.py
+@@ -26,7 +26,7 @@ class TreeConstructionFile(pytest.File):
+     def collect(self):
+         tests = TestData(str(self.fspath), "data")
+         for i, test in enumerate(tests):
+-            yield TreeConstructionTest(str(i), self, testdata=test)
++            yield TreeConstructionTest.from_parent(self, name=str(i), testdata=test)
+ 
+ 
+ class TreeConstructionTest(pytest.Collector):
+@@ -48,11 +48,11 @@ class TreeConstructionTest(pytest.Collector):
+                 nodeid = "%s::parser::namespaced" % treeName
+             else:
+                 nodeid = "%s::parser::void-namespace" % treeName
+-            item = ParserTest(nodeid,
+-                              self,
+-                              self.testdata,
+-                              treeAPIs["builder"] if treeAPIs is not None else None,
+-                              namespaceHTMLElements)
++            item = ParserTest.from_parent(self,
++                                          name=nodeid,
++                                          test=self.testdata,
++                                          treeClass=treeAPIs["builder"] if treeAPIs is not None else None,
++                                          namespaceHTMLElements=namespaceHTMLElements)
+             item.add_marker(getattr(pytest.mark, treeName))
+             item.add_marker(pytest.mark.parser)
+             if namespaceHTMLElements:
+@@ -61,10 +61,10 @@ class TreeConstructionTest(pytest.Collector):
+ 
+     def _getTreeWalkerTests(self, treeName, treeAPIs):
+         nodeid = "%s::treewalker" % treeName
+-        item = TreeWalkerTest(nodeid,
+-                              self,
+-                              self.testdata,
+-                              treeAPIs)
++        item = TreeWalkerTest.from_parent(self,
++                                          name=nodeid,
++                                          test=self.testdata,
++                                          treeAPIs=treeAPIs)
+         item.add_marker(getattr(pytest.mark, treeName))
+         item.add_marker(pytest.mark.treewalker)
+         yield item
+diff --git a/requirements-test.txt b/requirements-test.txt
+index 703d0e6..57f8f61 100644
+--- a/requirements-test.txt
++++ b/requirements-test.txt
+@@ -3,7 +3,7 @@
+ tox>=3.15.1,<4
+ flake8>=3.8.1,<3.9
+ pytest>=4.6.10,<5 ; python_version < '3'
+-pytest>=5.4.2,<6 ; python_version >= '3'
++pytest>=5.4.2,<7 ; python_version >= '3'
+ coverage>=5.1,<6
+ pytest-expect>=1.1.0,<2
+ mock>=3.0.5,<4 ; python_version < '3.6'
