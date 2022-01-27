@@ -1,0 +1,258 @@
+From c6e63b90d855c8a11a892681f2ec63461a269977 Mon Sep 17 00:00:00 2001
+From: Jon Dufresne <jon.dufresne@gmail.com>
+Date: Sun, 16 Feb 2020 12:27:01 -0800
+Subject: [PATCH] Fix handling of different path types
+
+In Python, a path can normally be either type bytes, str, or
+pathlib.Path. Coercing a bytes object to str results in using the repr
+value.
+
+Add tests for all path types.
+---
+ imagesize.py        | 12 ++++---
+ test/test_get.py    | 84 ++++++++++++++++++++++++++++++++++++++++++++
+ test/test_getdpi.py | 85 +++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 177 insertions(+), 4 deletions(-)
+
+diff --git a/imagesize.py b/imagesize.py
+index d185a62..65a93d1 100644
+--- a/imagesize.py
++++ b/imagesize.py
+@@ -84,7 +84,7 @@ def get(filepath):
+     """
+     Return (width, height) for a given img file content
+     no requirements
+-    :type filepath: Union[str, pathlib.Path]
++    :type filepath: Union[bytes, str, pathlib.Path]
+     :rtype Tuple[int, int]
+     """
+     height = -1
+@@ -93,7 +93,7 @@ def get(filepath):
+     if isinstance(filepath, io.BytesIO):  # file-like object
+         fhandle = filepath
+     else:
+-        fhandle = open(str(filepath), 'rb')
++        fhandle = open(filepath, 'rb')
+ 
+     try:
+         head = fhandle.read(24)
+@@ -260,12 +260,16 @@ def getDPI(filepath):
+     """
+     Return (x DPI, y DPI) for a given img file content
+     no requirements
+-    :type filepath: Union[str, pathlib.Path]
++    :type filepath: Union[bytes, str, pathlib.Path]
+     :rtype Tuple[int, int]
+     """
+     xDPI = -1
+     yDPI = -1
+-    with open(str(filepath), 'rb') as fhandle:
++
++    if not isinstance(filepath, bytes):
++        filepath = str(filepath)
++
++    with open(filepath, 'rb') as fhandle:
+         head = fhandle.read(24)
+         size = len(head)
+         # handle GIFs
+diff --git a/test/test_get.py b/test/test_get.py
+index 71255b5..d786296 100644
+--- a/test/test_get.py
++++ b/test/test_get.py
+@@ -2,7 +2,14 @@
+ import os
+ import imagesize
+ 
++try:
++    from pathlib import Path
++except ImportError:
++    # Python 2
++    Path = None
++
+ imagedir = os.path.join(os.path.dirname(__file__), "images")
++imagedir_bytes = imagedir.encode("utf-8")
+ 
+ 
+ class GetTest(unittest.TestCase):
+@@ -61,3 +68,80 @@ def test_netpbm(self):
+                 width, height = imagesize.get(test_file)
+                 self.assertEqual(width, 65)
+                 self.assertEqual(height, 20)
++
++    def test_load_png_bytes(self):
++        width, height = imagesize.get(os.path.join(imagedir_bytes, b"test.png"))
++        self.assertEqual(width, 802)
++        self.assertEqual(height, 670)
++
++    def test_load_jpeg_bytes(self):
++        width, height = imagesize.get(os.path.join(imagedir_bytes, b"test.jpg"))
++        self.assertEqual(width, 802)
++        self.assertEqual(height, 670)
++
++    def test_load_jpeg2000_bytes(self):
++        width, height = imagesize.get(os.path.join(imagedir_bytes, b"test.jp2"))
++        self.assertEqual(width, 802)
++        self.assertEqual(height, 670)
++
++    def test_load_gif_bytes(self):
++        width, height = imagesize.get(os.path.join(imagedir_bytes, b"test.gif"))
++        self.assertEqual(width, 802)
++        self.assertEqual(height, 670)
++
++    def test_bigendian_tiff_bytes(self):
++        width, height = imagesize.get(os.path.join(imagedir_bytes, b"test.tiff"))
++        self.assertEqual(width, 802)
++        self.assertEqual(height, 670)
++
++    def test_load_svg_bytes(self):
++        width, height = imagesize.get(os.path.join(imagedir_bytes, b"test.svg"))
++        self.assertEqual(width, 90)
++        self.assertEqual(height, 60)
++
++    def test_littleendian_tiff_bytes(self):
++        width, height = imagesize.get(os.path.join(imagedir_bytes, b"multipage_tiff_example.tif"))
++        self.assertEqual(width, 800)
++        self.assertEqual(height, 600)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_load_png_path(self):
++        width, height = imagesize.get(Path(imagedir, "test.png"))
++        self.assertEqual(width, 802)
++        self.assertEqual(height, 670)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_load_jpeg_path(self):
++        width, height = imagesize.get(Path(imagedir, "test.jpg"))
++        self.assertEqual(width, 802)
++        self.assertEqual(height, 670)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_load_jpeg2000_path(self):
++        width, height = imagesize.get(Path(imagedir, "test.jp2"))
++        self.assertEqual(width, 802)
++        self.assertEqual(height, 670)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_load_gif_path(self):
++        width, height = imagesize.get(Path(imagedir, "test.gif"))
++        self.assertEqual(width, 802)
++        self.assertEqual(height, 670)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_bigendian_tiff_path(self):
++        width, height = imagesize.get(Path(imagedir, "test.tiff"))
++        self.assertEqual(width, 802)
++        self.assertEqual(height, 670)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_load_svg_path(self):
++        width, height = imagesize.get(Path(imagedir, "test.svg"))
++        self.assertEqual(width, 90)
++        self.assertEqual(height, 60)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_littleendian_tiff_path(self):
++        width, height = imagesize.get(Path(imagedir, "multipage_tiff_example.tif"))
++        self.assertEqual(width, 800)
++        self.assertEqual(height, 600)
+diff --git a/test/test_getdpi.py b/test/test_getdpi.py
+index 0aabdcf..d9ce4c8 100644
+--- a/test/test_getdpi.py
++++ b/test/test_getdpi.py
+@@ -2,7 +2,15 @@
+ import os
+ import imagesize
+ 
++try:
++    from pathlib import Path
++except ImportError:
++    # Python 2
++    Path = None
++
++
+ imagedir = os.path.join(os.path.dirname(__file__), "images")
++imagedir_bytes = imagedir.encode("utf-8")
+ 
+ 
+ class GetDPITest(unittest.TestCase):
+@@ -40,3 +48,80 @@ def test_littleendian_tiff(self):
+         xdpi, ydpi = imagesize.getDPI(os.path.join(imagedir, "multipage_tiff_example.tif"))
+         self.assertEqual(xdpi, -1)
+         self.assertEqual(ydpi, -1)
++
++    def test_png_bytes(self):
++        xdpi, ydpi = imagesize.getDPI(os.path.join(imagedir_bytes, b"test.png"))
++        self.assertEqual(xdpi, 72)
++        self.assertEqual(ydpi, 72)
++
++    def test_jpeg_bytes(self):
++        xdpi, ydpi = imagesize.getDPI(os.path.join(imagedir_bytes, b"test.jpg"))
++        self.assertEqual(xdpi, 72)
++        self.assertEqual(ydpi, 72)
++
++    def test_jpeg2000_bytes(self):
++        xdpi, ydpi = imagesize.getDPI(os.path.join(imagedir_bytes, b"test.jp2"))
++        self.assertEqual(xdpi, -1)
++        self.assertEqual(ydpi, -1)
++
++    def test_gif_bytes(self):
++        xdpi, ydpi = imagesize.getDPI(os.path.join(imagedir_bytes, b"test.gif"))
++        self.assertEqual(xdpi, -1)
++        self.assertEqual(ydpi, -1)
++
++    def test_bigendian_tiff_bytes(self):
++        xdpi, ydpi = imagesize.getDPI(os.path.join(imagedir_bytes, b"test.tiff"))
++        self.assertEqual(xdpi, -1)
++        self.assertEqual(ydpi, -1)
++
++    def test_svg_bytes(self):
++        xdpi, ydpi = imagesize.getDPI(os.path.join(imagedir_bytes, b"test.svg"))
++        self.assertEqual(xdpi, -1)
++        self.assertEqual(ydpi, -1)
++
++    def test_littleendian_tiff_bytes(self):
++        xdpi, ydpi = imagesize.getDPI(os.path.join(imagedir_bytes, b"multipage_tiff_example.tif"))
++        self.assertEqual(xdpi, -1)
++        self.assertEqual(ydpi, -1)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_png_path(self):
++        xdpi, ydpi = imagesize.getDPI(Path(imagedir, "test.png"))
++        self.assertEqual(xdpi, 72)
++        self.assertEqual(ydpi, 72)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_jpeg_path(self):
++        xdpi, ydpi = imagesize.getDPI(Path(imagedir, "test.jpg"))
++        self.assertEqual(xdpi, 72)
++        self.assertEqual(ydpi, 72)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_jpeg2000_path(self):
++        xdpi, ydpi = imagesize.getDPI(Path(imagedir, "test.jp2"))
++        self.assertEqual(xdpi, -1)
++        self.assertEqual(ydpi, -1)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_gif_path(self):
++        xdpi, ydpi = imagesize.getDPI(Path(imagedir, "test.gif"))
++        self.assertEqual(xdpi, -1)
++        self.assertEqual(ydpi, -1)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_bigendian_tiff_path(self):
++        xdpi, ydpi = imagesize.getDPI(Path(imagedir, "test.tiff"))
++        self.assertEqual(xdpi, -1)
++        self.assertEqual(ydpi, -1)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_svg_path(self):
++        xdpi, ydpi = imagesize.getDPI(Path(imagedir, "test.svg"))
++        self.assertEqual(xdpi, -1)
++        self.assertEqual(ydpi, -1)
++
++    @unittest.skipIf(Path is None, "requires pathlib support")
++    def test_littleendian_tiff_path(self):
++        xdpi, ydpi = imagesize.getDPI(Path(imagedir, "multipage_tiff_example.tif"))
++        self.assertEqual(xdpi, -1)
++        self.assertEqual(ydpi, -1)
