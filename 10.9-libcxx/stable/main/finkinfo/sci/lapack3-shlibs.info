@@ -1,0 +1,180 @@
+Info4: <<
+Package: lapack3-shlibs
+Version: 3.10.0
+Revision: 1
+Type: gcc (11)
+Description: Reference L_APACK and BLAS libraries
+DescDetail: <<
+This package provides a reference implementation of the LAPACK and BLAS 
+libraries (as opposed to the optimized implementations from ATLAS or 
+Accelerate.framework).
+<<
+DescPackaging: <<
+Some deprecated functions from lapack350 were removed in later
+versions, so we might want to re-add those symbols here to avoid
+needing to keep that old version to support packages that are
+difficult to migrate.
+
+Includes some debian patches from lapack-3.10.0-2:
+* icamax_izamax_extended_precision.patch
+* CVE_2021_4048.patch
+<<
+Maintainer: None <fink-devel@lists.sourceforge.net>
+Homepage: http://www.netlib.org/lapack/
+
+BuildDepends: gcc%type_pkg[gcc]-compiler
+Depends: gcc%type_pkg[gcc]-shlibs
+
+#Source: http://www.netlib.org/lapack/lapack-%v.tar.gz
+Source: https://github.com/Reference-LAPACK/lapack/archive/refs/tags/v3.10.0.tar.gz
+SourceRename: lapack-%v.tar.gz
+Source-MD5: d70fc27a8bdebe00481c97c728184f09
+PatchFile: %n.patch
+PatchFile-MD5: 869f6276efa5e1b6e206a4a240f2103d
+
+PatchScript: <<
+#!/bin/sh -ev
+patch -p1 < %{PatchFile}
+perl -p -e "	s/gfortran/gfortran-fsf-%type_raw[gcc]/ ; \
+				s/-O2/-O2 -fimplicit-none -funroll-loops -fPIC -m64 / ; \
+				s/gcc/gcc-fsf-%type_raw[gcc]/" \
+													< make.inc.example > make.inc
+perl -pi -e '	s,\@CMAKE_INSTALL_FULL_LIBDIR\@,%p/lib/lapack, ; \
+				s,\@CMAKE_INSTALL_FULL_INCLUDEDIR\@,%p/include/lapack, ; \
+				s,\@LAPACK_VERSION\@,%v, ; \
+				s,-llapack,-lreflapack,' 			< lapack.pc.in > lapack.pc
+perl -pi -e '	s,\@CMAKE_INSTALL_FULL_LIBDIR\@,%p/lib/lapack, ; \
+				s,\@CMAKE_INSTALL_FULL_INCLUDEDIR\@,%p/include/lapack, ; \
+				s,\@LAPACK_VERSION\@,%v, ; \
+				s,-l\@LAPACKELIB\@,-llapacke, ; \
+				s,\@LAPACKLIB\@,lapack,'			< LAPACKE/lapacke.pc.in > lapacke.pc
+perl -pi -e '	s,\@CMAKE_INSTALL_FULL_LIBDIR\@,%p/lib/lapack, ; \
+				s,\@CMAKE_INSTALL_FULL_INCLUDEDIR\@,%p/include/lapack, ; \
+				s,\@LAPACK_VERSION\@,%v, ; \
+				s,-l\@BLASLIB\@,-lrefblas,' 			< BLAS/blas.pc.in > blas.pc
+perl -pi -e 's,/usr/bin/env python3,%p/bin/python3.10,' lapack_testing.py
+<<
+
+CompileScript: <<
+	#!/bin/sh -ev
+	/usr/bin/make blaslib 
+	/usr/bin/make variants 
+	/usr/bin/make lapackelib
+	/usr/bin/make lib 
+	/usr/bin/make lapack_install
+	# build dylibs the old-fashioned way
+	# do librefblas first
+	compilerlib="-L%p/lib/gcc%type_raw[gcc]/lib -lgfortran"
+	gfc='gfortran-fsf-%type_raw[gcc] -O2 -fimplicit-none -funroll-loops -fPIC -fno-common -m64'
+	ldf='-Wl,-dead_strip_dylibs -dynamiclib -single_module -install_name '
+	gccc='gcc-fsf-%type_raw[gcc] -O3  -fno-common -m64'
+	libdir=%p/lib/lapack
+	soext="3.dylib"
+	$gfc  $ldf $libdir/librefblas.$soext   $compilerlib -all_load librefblas.a -o librefblas.$soext
+	$gfc  $ldf $libdir/libreflapack.$soext $compilerlib -all_load liblapack.a  -o libreflapack.$soext librefblas.$soext
+	$gfc  $ldf $libdir/libtmglib.$soext    $compilerlib -all_load libtmglib.a  -o libtmglib.$soext    librefblas.$soext libreflapack.$soext
+	$gccc $ldf $libdir/liblapacke.$soext   $compilerlib -all_load liblapacke.a -o liblapacke.$soext   librefblas.$soext libreflapack.$soext
+	for statlib in SRC/VARIANTS/*.a ; do
+		dynlib=lib`basename $statlib .a`.$soext
+		$gfc $ldf $libdir/$dynlib $compilerlib -all_load $statlib -o $dynlib librefblas.$soext libreflapack.$soext
+	done
+<<
+
+InfoTest: <<
+	TestDepends: python310
+	TestScript: /usr/bin/make -j1 blas_testing lapack_testing variants_testing || exit 2
+<<
+InstallScript: <<
+	#!/bin/sh -ev
+	mkdir -p %i/include/lapack
+	install LAPACKE/include/*.h %i/include/lapack
+	mkdir -p %i/lib/lapack/pkgconfig
+	install *.pc %i/lib/lapack/pkgconfig
+	mkdir -p %i/lib/lapack
+	for d in *.dylib; do
+		libname=`echo $d | sed -e "s/.3.dylib$//"`
+		actualf=$libname.%v.dylib
+		install $d %i/lib/lapack/$actualf
+		ln -s $actualf %i/lib/lapack/$libname.3.dylib
+		ln -s $actualf %i/lib/lapack/$libname.dylib
+	done
+<<
+
+Shlibs: <<
+	%p/lib/lapack/libcholrl.3.dylib 0.0.0 %n (>=3.10.0-1)
+	%p/lib/lapack/libcholtop.3.dylib 0.0.0 %n (>=3.10.0-1)
+	%p/lib/lapack/libreflapack.3.dylib 0.0.0 %n (>=3.10.0-1)
+	%p/lib/lapack/liblapacke.3.dylib 0.0.0 %n (>=3.10.0-1)
+	%p/lib/lapack/liblucr.3.dylib 0.0.0 %n (>=3.10.0-1)
+	%p/lib/lapack/liblull.3.dylib 0.0.0 %n (>=3.10.0-1)
+	%p/lib/lapack/liblurec.3.dylib 0.0.0 %n (>=3.10.0-1)
+	%p/lib/lapack/libqrll.3.dylib 0.0.0 %n (>=3.10.0-1)
+	%p/lib/lapack/librefblas.3.dylib 0.0.0 %n (>=3.10.0-1)
+	%p/lib/lapack/libtmglib.3.dylib 0.0.0 %n (>=3.10.0-1)
+<<
+DocFiles: LICENSE DOCS/lapacke.pdf SRC/VARIANTS/README:README.variants
+License: BSD
+
+Splitoff: <<
+	Package: lapack3
+	BuildDependsOnly: true
+	Depends: %N (= %v-%r)
+	Conflicts: <<
+		lapack350,
+		lapack360,
+		lapack361,
+		lapack371,
+		lapack380,
+		lapack3
+	<<
+	Replaces: <<
+		lapack350,
+		lapack360,
+		lapack361,
+		lapack371,
+		lapack380,
+		lapack3
+	<<
+	Files: <<
+		include
+		lib/lapack/libcholrl.dylib
+		lib/lapack/libcholtop.dylib
+		lib/lapack/libreflapack.dylib
+		lib/lapack/liblapacke.dylib
+		lib/lapack/liblucr.dylib
+		lib/lapack/liblull.dylib
+		lib/lapack/liblurec.dylib
+		lib/lapack/libqrll.dylib
+		lib/lapack/librefblas.dylib
+		lib/lapack/libtmglib.dylib
+		lib/lapack/pkgconfig
+	<<
+	DocFiles: LICENSE DOCS/lapacke.pdf SRC/VARIANTS/README:README.variants
+<<
+DescUsage: <<
+	The libraries have been renamed to avoid collisions with their
+	counterparts from atlas:
+	  * libblas.dylib -> librefblas.dylib
+	  * liblapack.dylib -> libreflapack.dylib
+	and are buried in a lib/lapack subdir to avoid being detected
+	automatically.
+
+	You can either specify linker flags directly, e.g.:
+	
+	  LAPACK_LIBS="-L%p/lib/lapack -lrefblas -lreflapack"
+
+	or use pkg-config, e.g.:
+
+	  export PKG_CONFIG_PATH=%p/lib/lapack/pkgconfig:$PKG_CONFIG_PATH 
+	  LAPACK_LIBS="`pkg-config --libs lapack`"
+
+	As of v3.10.0, we do not supply the static libs (.a) and are
+	aiming to keep the same package-name with new versions rather
+	than a separate package-name for each (following Debian's lead
+	of lib-major-version 3).
+
+	The documentation is mostly installed by the atlas-doc
+	package.
+
+<<
+<<
