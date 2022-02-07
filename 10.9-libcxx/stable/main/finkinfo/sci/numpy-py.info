@@ -1,66 +1,79 @@
 # -*- coding: ascii; tab-width: 4; x-counterpart: numpy-py.patch -*-
 Info4: <<
 Package: numpy-py%type_pkg[python]
-Version: 1.22.1
+Version: 1.22.2
 Revision: 1
 # v1.22 drops support for py<38
 Maintainer: None <fink-devel@lists.sourceforge.net>
-Type: python (3.8 3.9 3.10)
+Type: python (3.8 3.9 3.10), gcc (11)
 Depends: <<
-	python%type_pkg[python]
+    python%type_pkg[python],
+    openblas-shlibs
 <<
 BuildDepends: <<
-	cython-py%type_pkg[python],
-	(%type_pkg[python] = 310) setuptools-tng-py%type_pkg[python] (>= 59.6.0-1),
-	setuptools-tng-py%type_pkg[python] (<< 60.0.0-1)
+    cython-py%type_pkg[python],
+    openblas,
+    (%type_pkg[python] = 310) setuptools-tng-py%type_pkg[python] (>= 59.6.0-1),
+    setuptools-tng-py%type_pkg[python] (<< 60.0.0-1)
 <<
+#Source: https://github.com/numpy/numpy/releases/download/v%v/numpy-%v.tar.gz
+#Source-Checksum: SHA256(093d513a460fd94f94c16193c3ef29b2d69a33e482071e3d6d6e561a700587a6)
 Source: https://pypi.io/packages/source/n/numpy/numpy-%v.zip
-Source-Checksum: SHA256(e348ccf5bc5235fc405ab19d53bec215bb373300e5523c7b476cc0da8a5e9973)
-#SourceRename: numpy-%v.zip
+Source-Checksum: SHA256(076aee5a3763d41da6bef9565fdf3cb987606f567cd8b104aded2b38b7b47abf)
 PatchFile: numpy-py.patch
-PatchFile-MD5: 6c2bdd945453d3a392728d376be0d28e
+PatchFile-MD5: 7c8380dfafafe713cda5dcc9f7f26a51
+# There probably never existed any py38+ versions of these:
 Conflicts: <<
-	f2py-py%type_pkg[python],
-	scipy-py%type_pkg[python] (<= 1:0.4)
+    f2py-py%type_pkg[python],
+    scipy-py%type_pkg[python] (<= 1:0.4)
 <<
 Replaces: <<
-	f2py-py%type_pkg[python],
-	scipy-py%type_pkg[python] (<= 1:0.4),
-	scipy-core-py%type_pkg[python] (<< 1.3.0-6)
+    f2py-py%type_pkg[python],
+    scipy-py%type_pkg[python] (<= 1:0.4),
+    scipy-core-py%type_pkg[python] (<< 1.3.0-6)
 <<
 Provides: f2py-py%type_pkg[python]
+SetCFLAGS: -mtune=intel
 PatchScript: sed 's|@FINKPREFIX@|%p|g' <%{PatchFile} | patch -p1
-# Per upstream notes, must avoid OS X's Accelerate framework because
-# it's buggy. For now, we're using the built-in methods, but someone
-# who cares could switch to the external OpenBLAS or ATLAS libraries.
+# Support for macOS's Accelerate framework was re-enabled in numpy/numpy#18874
+# as numpy can get by with LAPACK 3.2.1.
+# Nonetheless giving preference to external OpenBLAS here.
 CompileScript: <<
-	SHELL=/bin/sh NPY_BLAS_ORDER= NPY_LAPACK_ORDER= %p/bin/python%type_raw[python] setup.py build
-<<
-InstallScript: <<
-#!/bin/bash -ev
-	SHELL=/bin/sh NPY_BLAS_ORDER= NPY_LAPACK_ORDER= %p/bin/python%type_raw[python] setup.py install --root %d
-
- if [ -f %b/INSTALL_MAKE_CHECK ]; then
-   mkdir test
-   cd test
-   PATH=%i/bin:$PATH
-   PYTHONPATH=%i/lib/python%type_raw[python]/site-packages
-   LANG=en_US.UTF-8 SHELL=/bin/sh %p/bin/python%type_raw[python] ../runtests.py
- fi
- 
- # We don't supply py-unversioned of this tool (could do it via
- # update-alternatives if there is demand).
- rm %i/bin/{f2py,f2py3}
+    NPY_BLAS_ORDER=openblas,accelerate NPY_LAPACK_ORDER=openblas,accelerate ATLAS=None %p/bin/python%type_raw[python] setup.py build
 <<
 InfoTest: <<
-	TestDepends: <<
-		nose-py%type_pkg[python],
-		hypothesis-py%type_pkg[python],
-		pytest-py%type_pkg[python]
-	<<
-	TestScript: touch %b/INSTALL_MAKE_CHECK
+    TestDepends: <<
+        gcc%type_raw[gcc]-compiler,
+        hypothesis-py%type_pkg[python] (>= 6.24.1),
+        pytest-py%type_pkg[python]
+    <<
+    TestScript: touch %b/INSTALL_MAKE_CHECK
 <<
-DocFiles: LICENSE.txt
+InstallScript: <<
+    #!/bin/sh -ev
+    ATLAS=None %p/bin/python%type_raw[python] setup.py install --root %d
+
+    if [ -f %b/INSTALL_MAKE_CHECK ]; then
+        PATH=%i/bin:$PATH
+        # Point to gfortran executables for f2py tests.
+        export F90=gfortran-fsf-%type_raw[gcc]
+        export F77=$F90
+        export PYTHONPATH=%i/lib/python%type_raw[python]/site-packages
+        cd $PYTHONPATH
+        # For comparison, runtest.py has 17404 passed, 730 skipped, 1293 deselected, 28 xfailed, 8 xpassed, 1 warning
+        # pytest should have 18461-18537 passed, 966-889 skipped, 1 deselected, 27-28 xfailed, 8 xpassed, 230-246 warnings
+        # >       ForkingPickler(file, protocol).dump(obj)
+        # E       AttributeError: Can't pickle local object 'TestSaveTxt.test_large_zip.<locals>.check_large_zip'
+        # %p/lib/python3.10/multiprocessing/reduction.py:60: AttributeError
+        %p/bin/python%type_raw[python] -Bm pytest numpy -k 'not test_large_zip' || exit 1
+        rm -r numpy/.pytest_cache
+    fi
+ 
+    # We don't supply py-unversioned of this tool (could do it via
+    # update-alternatives if there is demand).
+    rm %i/bin/{f2py,f2py3}
+<<
+DocFiles: CITATION.bib INSTALL.rst.txt LICENSE.txt PKG-INFO README.md THANKS.txt doc benchmarks
 Description: N-dimensional array package for Python
 DescDetail: <<
 NumPy (formerly known as scipy_core) is the fundamental package needed
