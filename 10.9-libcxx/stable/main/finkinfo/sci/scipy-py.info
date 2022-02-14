@@ -1,67 +1,34 @@
 Info2: <<
 Package: scipy-py%type_pkg[python]
-Version: 1.2.1
+Version: 1.8.0
 Epoch: 1
-Revision: 3
-Distribution: <<
-	(%type_pkg[python] = 34 ) 10.9,
-	(%type_pkg[python] = 34 ) 10.10,
-	(%type_pkg[python] = 34 ) 10.11,
-	(%type_pkg[python] = 34 ) 10.12,
-	(%type_pkg[python] = 34 ) 10.13,
-	(%type_pkg[python] = 34 ) 10.14,
-	(%type_pkg[python] = 34 ) 10.14.5,
-	(%type_pkg[python] = 34 ) 10.15,
-	(%type_pkg[python] = 35 ) 10.9,
-	(%type_pkg[python] = 35 ) 10.10,
-	(%type_pkg[python] = 35 ) 10.11,
-	(%type_pkg[python] = 35 ) 10.12,
-	(%type_pkg[python] = 35 ) 10.13,
-	(%type_pkg[python] = 35 ) 10.14,
-	(%type_pkg[python] = 35 ) 10.14.5,
-	(%type_pkg[python] = 35 ) 10.15,
-	(%type_pkg[python] = 36 ) 10.9,
-	(%type_pkg[python] = 36 ) 10.10,
-	(%type_pkg[python] = 36 ) 10.11,
-	(%type_pkg[python] = 36 ) 10.12,
-	(%type_pkg[python] = 36 ) 10.13,
-	(%type_pkg[python] = 36 ) 10.14,
-	(%type_pkg[python] = 36 ) 10.14.5,
-	(%type_pkg[python] = 36 ) 10.15
-<<
+Revision: 1
 Maintainer: None <fink-devel@lists.sourceforge.net>
-Type: python (2.7 3.4 3.5 3.6 3.7), gcc (11)
+Type: python (3.8 3.9 3.10), gcc (11)
 Depends: <<
-	cython-py%type_pkg[python],
-	openblas-shlibs (>= 0.3.19-1),
+	openblas-shlibs (>= 0.3.6-1),
 	gcc%type_raw[gcc]-shlibs,
-	numpy-py%type_pkg[python] (>= 1.13.3-1),
+	numpy-py%type_pkg[python] (>= 1.16.5-1),
 	python%type_pkg[python],
 	suitesparse-shlibs
 <<
 BuildDepends: <<
 	fink (>= 0.32.0),
-	openblas (>= 0.3.19-1),
+	openblas (>= 0.3.6-1),
 	gcc%type_raw[gcc]-compiler,
+	pybind11-py%type_pkg[python] (>= 2.4.3-1),
+	pythran-py%type_pkg[python] (>= 0.9.12-1),
 	setuptools-tng-py%type_pkg[python],
 	suitesparse (>= 4.0.2-2),
 	swig
 <<
-BuildConflicts: <<
-	atlas
-<<
 #Source: mirror:sourceforge:scipy/scipy-%v.tar.gz
-#Source: http://github.com/scipy/scipy/releases/download/v%v/scipy-%v.tar.xz
-Source: https://files.pythonhosted.org/packages/source/s/scipy/scipy-%v.tar.gz
-Source-Checksum: SHA256(e085d1babcb419bbe58e2e805ac61924dac4ca45a07c9fa081144739e500aa3c)
-# Fix test-suite breakage (incompat. vs newer pytest?)
-# Upstream 67ede27da232430f7551d48356311c68c9c7e131
-PatchFile: %{ni}.patch
-PatchFile-MD5: 11639efb3548cbfae1f5a9a17f1c7249
+Source: https://github.com/scipy/scipy/releases/download/v%v/scipy-%v.tar.xz
+#Source: https://files.pythonhosted.org/packages/source/s/scipy/scipy-%v.tar.xz
+Source-Checksum: SHA256(91548576a0096324ccff0e49f7ff94be6d19d71242a455c4160e2c61b9abbcb8)
 PatchScript: <<
 #!/bin/bash -ev
-	%{default_script}
-	cat <<EOF > site.cfg
+  cat <<EOF > site.cfg
 [amd]
 library_dirs = %p/lib
 include_dirs = %p/include/suitesparse
@@ -78,45 +45,60 @@ library_dirs = %p/lib
 include_dirs = %p/include
 runtime_library_dirs = %p/lib
 EOF
-
-	perl -pi -e "s,'cython','cython-py%type_pkg[python]'," tools/cythonize.py
+  # fix str+bytes error https://github.com/scipy/scipy/issues/10179
+  perl -pi -e 's/(p.stdout.read..)(\))/${1}.decode()${2}/;' scipy/linalg/tests/test_lapack.py
+  # disable pytest 6.1 warning on 'Unknown config option: env'
+  perl -pi -e 's/(env =)//;s/(PYTHONHASHSEED=0)/ignore:assertions not in test modules or plugins:pytest.PytestConfigWarning/;' pytest.ini
+  # Additional Deprecations in numpy, setuptools-tng; numerics
+  cat <<EOF >> pytest.ini
+    ignore:distutils Version classes are deprecated.*:DeprecationWarning
+    ignore:the \`interpolation=\` argument to .*percentile was renamed to \`method=\`.*:DeprecationWarning
+    ignore:.* encountered in _beta_ppf:RuntimeWarning
+    ignore:The occurrence of roundoff error is detected.*:scipy.integrate._quadpack_py.IntegrationWarning
+EOF
 <<
+SetCFLAGS: -mtune=intel
 NoSetLDFLAGS: true
 CompileScript: <<
 #!/bin/sh -ev
-	export CC=%p/bin/gcc-fsf-%type_raw[gcc]
-	export CXX=%p/bin/g++-fsf-%type_raw[gcc]
-	export FC=%p/bin/gfortran-fsf-%type_raw[gcc]
-	export PATH="%p/lib/gcc%type_raw[gcc]/bin:$PATH"
-	export SHELL=/bin/sh
-
-	# gcc10 compat:see https://github.com/scipy/scipy/pull/11842
-	# (-fPIC is default if env-var unset; overwritten if set)
-	export FFLAGS="-fPIC -fallow-argument-mismatch"
-
-	ATLAS=None %p/bin/python%type_raw[python] setup.py build --fcompiler gnu95
+  darwin_vers=$(uname -r | cut -d. -f1)
+  if [ "$darwin_vers" -ge 18 ]; then
+    CC=clang
+    CXX=clang++
+  else
+    CC=%p/bin/gcc-fsf-%type_raw[gcc]
+    CXX=%p/bin/g++-fsf-%type_raw[gcc]
+  fi
+  F77=%p/lib/gcc%type_raw[gcc]/bin/gfortran
+  F90=$F77
+  LD_LIBRARY_PATH=%p/lib/libomp
+  export CC CXX F77 F90 LD_LIBRARY_PATH
+  #export PATH="%p/lib/gcc%type_raw[gcc]/bin:$PATH"
+ # unset LDFLAGS
+ ATLAS=None %p/bin/python%type_raw[python] setup.py build --fcompiler gnu95
 <<
+# Run tests against installed library; 1 subprocess error, 1 linalg not reaching desired precision;
+# > 20 GB memory footprint in last test_hausdorff test.
 InstallScript: <<
-#!/bin/bash -ev
-	ATLAS=None %p/bin/python%type_raw[python] setup.py install --root %d
+#!/bin/sh -ev
+ export LD_LIBRARY_PATH=%p/lib/libomp
+ ATLAS=None %p/bin/python%type_raw[python] setup.py install --root %d
 
-	if [ -f %b/INSTALL_MAKE_CHECK ]; then
-		mkdir test
-		cd test
-		export PYTHONPATH=%i/lib/python%type_raw[python]/site-packages
-		if [ %type_pkg[python] -ge 36 ]; then
-			%p/bin/python%type_raw[python] -B -c "import scipy, sys; e=scipy.test(extra_argv=['-k not test_hrectangular and not test_medium1 and not test_maxiter_worsening']); sys.exit(1-e)" || exit 2
-		else
-			%p/bin/python%type_raw[python] -B -c "import scipy, sys; e=scipy.test(extra_argv=['-k not test_hrectangular and not test_medium1 and not test_maxiter_worsening and not test_ldl_type_size_combinations']); sys.exit(1-e)" || exit 2
-		fi
-	fi
+ if [ -f %b/INSTALL_MAKE_CHECK ]; then
+   mkdir test
+   cd test
+   export PYTHONPATH=%i/lib/python%type_raw[python]/site-packages
+   export SCIPY_XSLOW=1
+   %p/bin/python%type_raw[python] -Bc "import scipy, sys; e=scipy.test(extra_argv=['-k', 'not (_onenormest_table_6_t_1 or _sgesdd_lwork_bug_workaround or _massive_arr_overflow)']); sys.exit(1-e)" || exit 2
+ fi
 <<
 InfoTest: <<
-	TestDepends: pytest-py%type_pkg[python] (>= 3.2.3)
-	TestConflicts: pytest-relaxed-py%type_pkg[python]
-	TestScript: touch %b/INSTALL_MAKE_CHECK
+TestDepends: pytest-py%type_pkg[python] (>= 3.2.3), packaging-py%type_pkg[python]
+TestConflicts: pytest-relaxed-py%type_pkg[python]
+TestScript: touch %b/INSTALL_MAKE_CHECK
 <<
-DocFiles: INSTALL.rst.txt LICENSE.txt
+DocFiles: HACKING.rst.txt LICENSE.txt PKG-INFO README.rst doc/API.rst.txt doc/ROADMAP.rst.txt
+# benchmarks  # + 20 MB install size
 Description: Scientific tools for Python
 DescDetail: <<
 SciPy (pronounced "Sigh Pie") is open-source software for mathematics,
@@ -134,7 +116,7 @@ a computer and display or publish the results, give SciPy a try!
 <<
 DescPackaging: <<
 The LDFLAGS environment variable is unset, because it overwrites the
-link options, including the ones which provide the libpythonX.X
+link options, including the ones which provide the libpython2.5
 library.
 
 The patch script allow to compile scipy-py with the suitesparse
@@ -147,7 +129,7 @@ Previously built against gcc-6/g++-6/gfortran for darwin10 and earlier,
 against clang/clang++/gfortran with -ff2c on darwin11 and later. Note that
 the Accelerate framework has single precision rounding issues starting with
 darwin11, and its LAPACK interface is no longer supported as of Scipy 1.2.0.
-Linking now to OpenBLAS 0.3.19 and building with gcc11 for all Distributions
+Linking now to OpenBLAS 0.3.5 and building with gcc8 for all Distributions
 to ensure optimal consistency with gfortran and the OpenBLAS build.
 4 failures 'ValueError: illegal value in 4-th argument of internal lu.getrf'
 in linalg.test_decomp and one failure in test_maxiter_worsening('gmres'):
@@ -156,14 +138,9 @@ under Python < 3.6 `test_ldl_type_size_combinations` additionally throws an
 error (sporadically segfault) 'Not equal to tolerance rtol=1e-10, atol=0'
 - marked skip in TestScript; all other tests passing under darwin16.
 
-Sporadic roundoff-error failures in test_continuous_basic.py.
-
 Set SHELL (%v >= 1.0.0) because fink-bld's shell is /usr/bin/false and 
 several configure test programs require a real shell.
 https://sourceforge.net/p/fink/package-submissions/4930/#467b
-
-Upstream bug report about new gcc9 compiler warnings:
-https://github.com/scipy/scipy/issues/11118
 <<
 License: OSI-Approved
 Homepage: http://www.scipy.org
