@@ -1,50 +1,88 @@
 Package: moria
-Version: 5.5.2
+Version: 5.7.15
 Revision: 7
 Description: Terminal-based dungeon exploration game
-License: GPL
+License: GPL3+
 Maintainer: None <fink-devel@lists.sourceforge.net>
 Depends: libncurses5-shlibs, passwd-games
-BuildDepends: libncurses5
-Source: mirror:custom:source/um%v.tar.Z
-SourceDirectory: umoria
-Source-Checksum: SHA256(fffab65703c77058a1aadd8647cc1f44bd4349065af0b334702986f36007b2ed)
-CustomMirror: <<
-# nam-US: ftp://ftp.greyhelm.com/pub/Games/Moria/
-Primary: http://beej.us/moria/files/
-eur-SE: http://www.funet.fi/pub/unix/games/moria/
-oce-AU: http://www.planetmirror.com/pub/roguelike/moria/
+BuildDepends: <<
+	cmake,
+	fink (>= 0.32),
+	fink-buildenv-modules,
+	fink-package-precedence,
+	libncurses5
 <<
-PatchFile: %n.patch
-PatchFile-MD5: 1851db8ff5c1e093d64b0fc46e582abb
+Source: https://github.com/dungeons-of-moria/umoria/archive/refs/tags/v%v.tar.gz
+SourceRename: %n-%v.tar.gz
+SourceDirectory: umoria-%v
+Source-Checksum: SHA256(97f76a68b856dd5df37c20fc57c8a51017147f489e8ee8866e1764778b2e2d57)
+Source2: http://archive.ubuntu.com/ubuntu/pool/universe/m/moria/moria_5.7.13-1.debian.tar.xz
+Source2-Checksum: SHA256(7f26b91183654f9798d4f95d10dd2192c2dd6f6e93adde40ea20b8a7828615ea)
+
 PatchScript: <<
-  sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
-  cp -Rp unix/* source/
-  perl -ni -e 'print unless / (get[ug]id|lseek)\(\);/' source/main.c source/unix.c source/death.c
-# perl -ni -e 'print unless /void sleep\(\);/' source/main.c source/signals.c source/io.c
-# perl -ni -e 'print unless s/char \*getenv\(\);' source/io.c
-  
+#!/bin/sh -ev
+	# patch Debian's patches to use our paths
+	perl -pi -e 's|/var/games/moria/scores.dat|%p/var/games/%n/files/scores|s' ../debian/patches/{set-scores-path,set-data-path}.patch
+	perl -pi -e 's|/usr/lib|%p/etc|s' ../debian/patches/set-data-path.patch
+	# apply Debian's patches
+	patch -p1 < ../debian/patches/set-scores-path.patch
+	patch -p1 < ../debian/patches/set-data-path.patch
+	patch -p1 < ../debian/patches/dont-reopen-scores-file.patch
+#	patch -p1 < ../debian/patches/remove-werror.patch
+#	patch -p1 < ../debian/patches/cross.patch
+
+for r in 64x64 96x96 128x128 256x256; do
+	uudecode -o ../debian/icons/moria-${r}.png ../debian/icons/moria-${r}.png.b64
+done
 <<
-SetCPPFLAGS: -Wall
-CompileScript: cd source && make LFLAGS="-L%p/lib"
+SetCXXFLAGS: -MD
+GCC: 4.0
+CompileScript: <<
+#!/bin/sh -ev
+	. %p/sbin/fink-buildenv-cmake.sh
+	mkdir finkbuild
+	pushd finkbuild
+		cmake \
+			$FINK_CMAKE_ARGS \
+			-DCURSES_CURSES_LIBRARY:FILEPATH=%p/lib/libcurses.dylib \
+			-DCURSES_FORM_LIBRARY:FILEPATH=%p/lib/libform.dylib \
+			-DCURSES_INCLUDE_PATH:PATH=%p/include \
+			-DCURSES_NCURSES_LIBRARY:FILEPATH=%p/lib/libncurses.dylib \
+			..
+		make -w
+		fink-package-precedence --depfile-ext='\.d' ..
+	popd
+<<
 InstallScript: <<
-  mkdir -p -m 0755 %i/var/games/%n/files/
-  cp files/{hours,news,*.hlp} %i/var/games/%n/files/
-  /usr/bin/install -m 0644 files/scores %i/var/games/%n/files/
+#!/bin/sh -ev
+	pushd finkbuild
 
-  mkdir -p -m 0755 %i/bin/
-  /usr/bin/install -m 4511 source/moria %i/bin/
+	mkdir -p -m 0755 %i/var/games/%n/files/
+	/usr/bin/install -m 0644 umoria/scores.dat %i/var/games/%n/files/scores
 
-  mkdir -p -m 0755 %i/share/doc/%n/doc/
-  cp -Rp doc/* %i/share/doc/%n/doc/
+	mkdir -p -m 0755 %i/bin/
+	/usr/bin/install -m 4511 umoria/umoria %i/bin/
 
-  mkdir -p -m 0755 %i/share/man/man6/
-  cp doc/moria.6 %i/share/man/man6/
+	mkdir -p -m 0755 %i/etc/games/moria
+	/usr/bin/install -m 644 umoria/data/* %i/etc/games/moria
+
+	mkdir -p -m 0755 %i/share/man/man6/
+	/usr/bin/install -m 644 %b/../debian/moria.6 %i/share/man/man6/
+
+	for r in 64x64 96x96 128x128 256x256; do
+		mkdir -p -m 0755 %i/share/icons/hicolor/${r}/apps
+		/usr/bin/install -m 644 %b/../debian/icons/moria-${r}.png %i/share/icons/hicolor/${r}/apps/moria.png;
+	done
+	mkdir -p -m 0755 %i/share/applications
+	mkdir -p -m 0755 %i/share/pixmaps
+	/usr/bin/install -m 644 %b/../debian/moria.desktop %i/share/applications
+	/usr/bin/install -m 644 %b/../debian/icons/moria.xpm %i/share/pixmaps
 <<
-DocFiles: OChanges OOChanges CHANGES.~1~ CHANGES ERRORS INSTALL README
+DocFiles: AUTHORS CHANGELOG.md CONTRIBUTING.md LICENSE README.md 
 PostInstScript: <<
 /usr/sbin/chown games %p/var/games/%n/files/scores
-/usr/sbin/chown games %p/bin/moria
+/usr/sbin/chown games %p/bin/umoria
+/bin/chmod -vv 4511 %p/bin/umoria
 <<
 ConfFiles: %p/var/games/%n/files/scores
 DescDetail: <<
@@ -52,10 +90,14 @@ Moria is a "graphical" dungeon adventure game using textual characters
 to represent the walls and floors of a dungeon and the inhabitants therein,
 in the vein of "rogue", "hack", "nethack", "angband", and "t.o.m.e.".
 <<
-DescPort: <<
- Add lots of missing #include. Don't define things that exist in the system.
+DescPackaging: <<
+Previously maintained by James Gibbs.
 
- signals.c: must return a value
+Although the package name is "moria" this is actually "umoria 5.7",
+which is the UNIX port of moria. Keeping "moria" name for consistency
+(and because Debian does as well).
+
+As of 5.7, upstream uses scores.dat, but we need to rename it to just
+"scores" for backwards compatibility.
 <<
-Homepage: http://beej.us/moria/
-DescPackaging: Previously maintained by James Gibbs.
+Homepage: https://umoria.org/
