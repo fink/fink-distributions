@@ -2,16 +2,18 @@ Package: gsasl19-shlibs
 # LIBIDN2 FTBFS
 # see https://lists.gnu.org/archive/html/help-gsasl/2018-01/msg00000.html
 # see https://lists.gnu.org/archive/html/help-gsasl/2021-05/msg00001.html
-Version: 2.0.1
+Version: 2.2.0
 Revision: 1
 ###
 Source: mirror:gnu:gsasl/gsasl-%v.tar.gz
-Source-Checksum: SHA256(322c7542008841bcd8ba4ae0933b220211d190a7b56a70dd61f6556decc01b7a)
+Source-Checksum: SHA256(79b868e3b9976dc484d59b29ca0ae8897be96ce4d36d32aed5d935a7a3307759)
 Depends: <<
 	libgettext8-shlibs,
 	libidn-shlibs
 <<
 BuildDepends: <<
+	autoconf2.6,
+	automake1.15,
 	fink (>= 0.32),
 	fink-package-precedence,
 	gawk,
@@ -23,6 +25,7 @@ BuildDepends: <<
 	libgpg-error,
 	libiconv-dev,
 	libidn,
+	libtool2,
 	libxslt-bin,
 	pkgconfig,
 	readline8
@@ -34,7 +37,8 @@ Replaces: gsasl9-dev (<< 0.2.8-1), gsasl, gsasl9 (<< 0.2.24-1005)
 # nieder migrated to gnutls30 (which buries its libs)
 # dmacks explicitly configured for heimdal (was the autodetected
 # determination, but safer to force it in case external lib availability
-# changes)
+# changes), and then later to GSS.framework (/usr/include/gssapi is
+# deprecated on OS X)
 SetLDFLAGS: -L%p/lib/gnutls30
 ConfigureParams: <<
 	--with-pic \
@@ -44,23 +48,35 @@ ConfigureParams: <<
 	--datadir=%p/share \
 	--mandir=%p/share/man \
 	--infodir=%p/share/info \
-	--with-gssapi-impl=heimdal \
+	--with-gssapi-impl=framework \
 	--disable-ntlm \
 	--disable-static \
 	--disable-silent-rules \
 	--disable-valgrind-tests \
 	--with-packager="Fink Project" \
 	--with-packager-version="Fink %f" \
-	--with-packager-bug-reports="https://github.com/fink/fink-distributions/issues"
+	--with-packager-bug-reports="https://github.com/fink/fink-distributions/issues" \
+	ac_cv_have_decl_GNUTLS_CB_TLS_EXPORTER=no
 <<
-
+# Disable GNUTLS_CB_TLS_EXPORTER (available in gnutls>= 3.7.2) for
+# consistent build results when our older libgnutls moves to that
+# version.
+#
+# * Implement use of GSS.framework:
+#   https://gitlab.com/gsasl/gsasl/-/issues/10
+# * fix a race in doc/Makefile (sporadic FTBFS if -j > 1):
+#   https://gitlab.com/gsasl/gsasl/-/issues/12
+PatchFile: %n.patch
+PatchFile-MD5: 0833e113f91bfc216ba5ca5728ffebfd
 PatchScript: <<
+	%{default_script}
 	# dmacks --with-package to lib-version the gettext catalog
 	perl -pi -e 's/PACKAGE/"gsasl-19"/ if (/domain/ || /dgettext/)' lib/src/error.c src/gsasl.c
 	perl -pi -e 's/^(DOMAIN\s*=).*/\1gsasl-19/' po/Makevars
 <<
 
 CompileScript: <<
+	autoreconf -fi
 	%{default_script}
 	fink-package-precedence --prohibit-bdep=gsasl19-dev .
 <<
@@ -73,6 +89,8 @@ InfoTest: <<
 InstallScript: <<
 	mv INSTALL INSTALL.txt
 	make install DESTDIR=%d AM_UPDATE_INFO_DIR=no
+	# fix linker flags
+	perl -pi -e "s/-framework\s*/-Wl,-framework,/g" %d/%p/lib/libgsasl.la
 <<
 DocFiles: AUTHORS COPYING COPYING.LIB ChangeLog NEWS README THANKS
 Shlibs: %p/lib/libgsasl.18.dylib 19.0.0 %n  (>= 2.0.0-1)
@@ -165,7 +183,10 @@ support client and server mode, and the IMAP and SMTP protocols, fits
 in under 60kb on an Intel x86 platform, without any modifications to
 the code.
 <<
-###
+DescPackaging: <<
+	Ignoring deprecation warnings from /usr/include/gssapi. See:
+	https://gitlab.com/gsasl/gsasl/-/issues/10
+<<
 License: GPL 
 Maintainer: Darian Lanx <dmalloc@users.sourceforge.net>
 Homepage: https://www.gnu.org/software/gsasl/ 
