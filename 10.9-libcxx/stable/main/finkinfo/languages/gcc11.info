@@ -1,15 +1,18 @@
 Info2: <<
 Package: gcc11
 Version: 11.3.0
-Revision: 2
+Revision: 3
 Type: gccver (11)
 Source: mirror:gnu:gcc/gcc-%v/gcc-%v.tar.xz
 Source-Checksum: SHA256(b47cf2818691f5b1e21df2bb38c795fac2cfbd640ede2d0a5e1c89e338a3ac39)
 PatchFile: %n-arm.patch
 PatchFile-MD5: 9988f59fbeb6d88b1d45d7ab7d243389
+PatchFile2: %n-ventura.patch
+PatchFile2-MD5: 2961dece6a860f8952addf52798e9e72
 PatchScript: <<
 	#!/bin/sh -ev
 	patch -p1 < %{PatchFile}
+	patch -p1 < %{PatchFile2}
 	# don't update live infodoc dir
 	find . -name Makefile.in | xargs perl -pi -e 's/install-info --version/false/g'
 <<
@@ -40,6 +43,7 @@ BuildDepends: <<
 	fink-package-precedence,
 	gettext-tools,
 	gmp5 (>= 6.0.0a-3),
+	install-info,
 	isl22,
 	libgettext8-dev,
 	libiconv-dev,
@@ -185,13 +189,14 @@ InstallScript: <<
 	for infofile in $(find %i/lib/gcc%type_num[gccver]/info -name '*.info*'); do
 		infobase=$(basename $infofile)
 		case $infofile in
-			*info) /usr/bin/install-info --infodir=%i/lib/gcc%type_num[gccver]/info ${infofile} ;;
+			*info) %p/bin/install-info --infodir=%i/lib/gcc%type_num[gccver]/info ${infofile} ;;
 		esac
 		ln -s %p/lib/gcc%type_num[gccver]/info/$infobase %i/share/info/$infobase
 	done
 
 	# remove build path from .la files
 	perl -pi -e "s, \-L[^ ']*/%n-%v-%r/darwin_objdir/[^ ']*,,g" `find %i/lib/gcc%type_num[gccver]/lib -name '*.la'`
+
 	if [ "%m" = "arm" ]; then
 		arch=aarch64
 	else
@@ -199,13 +204,19 @@ InstallScript: <<
 		perl -pi -e "s, /[^ ']*/%n-%v-%r/darwin_objdir/[^ ']*,,g" `find %i/lib/gcc%type_num[gccver]/lib -name 'libasan.la'`
 		perl -pi -e "s, /[^ ']*/%n-%v-%r/darwin_objdir/[^ ']*,,g" `find %i/lib/gcc%type_num[gccver]/lib -name 'libubsan.la'`
 	fi
-	cp %b/gcc/config/darwin-sections.def %i/lib/gcc%type_num[gccver]/lib/gcc/${arch}-apple-darwin${darwinvers}/%v/plugin/include/config
+
 	# @rpath install_names are required for aarch64 build, but break some linked binaries
-	# - enforce actual install path here
+	# - enforce actual install paths here; take care to update the cross-referenced dylibs.
 	cd %d
 	for dylib in .%p/lib/gcc%type_num[gccver]/lib/lib*.[0-9].dylib; do
 		install_name_tool -id ${dylib#.} $dylib
+		install_name_tool -change @rpath/libgcc_s.1.1.dylib %p/lib/libgcc_s.1.1.dylib \
+				-change @rpath/libstdc++.6.dylib %p/lib/libstdc++.6.dylib \
+				-change @rpath/libquadmath.0.dylib %p/lib/libquadmath.0.dylib $dylib
 	done
+	otool -L .%p/lib/gcc%type_num[gccver]/lib/lib*.[0-9].dylib | grep '@rpath' && exit 2
+
+	cp %b/gcc/config/darwin-sections.def %i/lib/gcc%type_num[gccver]/lib/gcc/${arch}-apple-darwin${darwinvers}/%v/plugin/include/config
 <<
 SplitOff: <<
 	Package: %N-shlibs
@@ -294,10 +305,12 @@ DescPackaging: <<
  need to add it's own -isysroot flag.
  https://gcc.gnu.org/bugzilla/show_bug.cgi?id=79885
 
- Homebrew patches for arm/aarch64 build from
- https://github.com/Homebrew/formula-patches/blob/master/gcc/gcc-11.3.0-arm.diff
- - libasan.* and libsubsan.* currently not built on that arch.
- There are both 1 and 1.1 versions of libgcc_s.dylib now, but only 1 on arm.
+ Homebrew patches for arm/aarch64 build and macOS 13 from
+ https://github.com/Homebrew/formula-patches/blob/master/gcc/gcc-%v-{arm,ventura}.diff
+ - libasan.* and libsubsan.* currently not built on arm.
+ There are both "1" and "1.1" versions of libgcc_s.dylib now, but only "1" on arm.
+ Manual fixes of @rpath install_names required for aarch64 build to maintain downstream
+ package compatibility.
 <<
 Homepage: http://gcc.gnu.org/
 Maintainer: None <fink-devel@lists.sourceforge.net>
