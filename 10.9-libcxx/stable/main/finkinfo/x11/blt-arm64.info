@@ -1,0 +1,137 @@
+Package: blt
+Version: 2.4z
+Revision: 162
+Maintainer: William Scott <wgscott@users.sourceforge.net>
+Architecture: arm64
+BuildDepends: <<
+	fink (>= 0.30.0),
+	libjpeg9,
+	tcltk-dev (>= 8.4.1-1),
+	x11-dev
+<<
+Depends: <<
+	%N-shlibs (= %v-%r),
+	libjpeg9-shlibs,
+	tcltk (>= 8.4.1-1),
+	x11
+<<
+Source: mirror:sourceforge:%N/BLT%v.tar.gz
+Source-Checksum: SHA256(6de705eccf2ec676b4071b74ec9e211c590477fadf6f05566cfd8ed6a03c60da)
+SourceDirectory: %N%v
+PatchFile: %n.patch
+PatchFile-MD5: a67c731b15722966555b5df2f5fffb52
+PatchFile2: %n-tk-internals.patch
+PatchFile2-MD5: 3a22da4a4818e269d7469dffaa607840
+PatchFile3: %n-parabuild.patch
+PatchFile3-MD5: 76d9f5764c478e12dadc0adaed6ed2f8
+UseMaxBuildJobs: false
+ConfigureParams: --mandir=%p/share/man --with-tcllibs=%p/lib --with-tklibs=%p/lib --enable-jpeg 
+PatchScript:<<
+#!/bin/zsh -ev
+patch -p1 < %{PatchFile}
+patch -p1 < %{PatchFile2}
+OSXVERSION=$(sw_vers -productVersion |perl -p -e 's|10.||g')
+if (( $OSXVERSION >= 9. )); then
+	perl -pi -e 's|FINITE|isfinite|g' src/bltVector.c src/bltVecMath.c src/bltGrElem.c src/bltGrLine.c
+fi
+patch -p1 < %{PatchFile3}
+
+# patch *ancient* darwin-ignorant autoconf
+perl -pi -e 's/(a so sl)/dylib \1/' configure
+
+# autoconf2.6ish patch for modern XQuartz paths
+perl -pi -e "s|/usr/lpp/Xamples|/opt/X11|" configure
+
+# Patch autoconf2.13 for direct x11 detection. See:
+# https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=327655
+perl -pi -e 's/x_direct_test_library=Xt/x_direct_test_library=X11/' configure
+<<
+CompileScript: <<
+#!/bin/zsh -ev
+if [[ -f %p/include/tcltk-private/tk8.6/generic/tkInt.h ]];then 
+	TK_INCLUDEDIR=%p/include/tcltk-private/tk8.6
+else
+	TK_INCLUDEDIR=%p/include/tcltk-private/tk8.5
+fi
+export CFLAGS="-O3 -fno-common -Wall -fno-strict-aliasing -I$TK_INCLUDEDIR/generic -I$TK_INCLUDEDIR/unix"
+./configure %c 
+make
+<<
+InstallScript: <<
+	#!/bin/sh -ev
+	mkdir -p %i/share/man
+	make install INSTALL_ROOT=%d
+	ln -s libBLT.2.dylib %i/lib/libBLT.dylib
+	ln -s libBLTlite.2.dylib %i/lib/libBLTlite.dylib
+	for f in bitmap container graph; do
+		mv %i/share/man/mann/$f.n %i/share/man/mann/$f.nblt
+	done
+	perl -pi -e "s|../src/bltwish|%p/bin/bltwish|g" %i/lib/blt2.4/demos/*.tcl
+	perl -pi -e "s|../bltwish|%p/bin/bltwish|g" %i/lib/blt2.4/demos/scripts/xcolors.tcl
+	perl -pi -e "s|vmstat 1|vm_stat 1|g"  %i/lib/blt2.4/demos/bgexec1.tcl
+	perl -pi -e "s|length 80|length 100|g"  %i/lib/blt2.4/demos/bgexec1.tcl
+
+	# rename busy.n to avoid conflict with tcltk 8.6
+	mv %i/share/man/mann/busy.n %i/share/man/mann/blt-busy.n
+<<
+DocFiles: NEWS PROBLEMS README
+SplitOff: <<
+ Package: %N-shlibs
+ Depends: <<
+	libjpeg9-shlibs,
+	tcltk-shlibs (>= 8.4.1-1),
+	x11
+ <<
+ Files: lib/*.*.dylib
+ Shlibs: <<
+  %p/lib/libBLT.2.dylib 2.0.0 %n (>= 2.4z-1)
+  %p/lib/libBLTlite.2.dylib 2.0.0 %n (>= 2.4z-1)
+ <<
+ DocFiles: NEWS PROBLEMS README
+<<
+SplitOff2: <<
+ Package: %N-dev
+ Depends: %N-shlibs (= %v-%r)
+ Replaces: blt-man (<< 2.4z-15)
+ Conflicts: blt-man (<< 2.4z-15)
+ Files: include lib/*.a lib/*.dylib share/man
+ DocFiles: NEWS PROBLEMS README
+ BuildDependsOnly: True
+<<
+Description: Toolkit for tcl/tk
+DescPort: <<
+Patches so the tcl/tk libraries can be found and shared libraries can be
+built.
+
+Patches and hand-tweaks for some OS X platform-dependent stuff.
+
+Fix blt usage in pymol apbstools by using FreeBSD patch from
+http://svnweb.freebsd.org/ports/head/x11-toolkits/blt/files/patch-use-tkInt?revision=300897
+and adding tcl/tk 8.6.0 internal headers for build on 10.9 and later. 
+Also added misc patches to eliminate warnings on Clang 5.0.
+
+Fix parallel build with 
+http://svnweb.freebsd.org/ports/head/x11-toolkits/blt/files/patch-parabuild?revision=300897
+
+Formerly maintained by Matt Stephenson and Jack Howarth.
+<<
+DescPackaging: <<
+Multiple patches to ensure everything is installed in the deb and not
+directly into the fink directory.
+
+	Rename a manpage that collides with one in tcllib (had been
+	same-named but placed in blt-man until 2.4z-15)
+
+	Rename a manpage that collides with one in tcltk (had been
+	not installed in blt/blt-man until 2.4z-15)
+
+	Add blt2.4z-patch-64 from Fedora blt rpm for x86_64 build
+
+    Added the differences in the gentoo blt2.4z-8.5.2 tarball, 
+    a patch to fix uinter_ptr casts and a final patch for the 
+    define of casting BLT_ONE_WORD_KEYS which reduces the
+    warnings to a minimum. Improves functioning with Pmw but
+    can still segfault on cleanup. Thanks to Jack Howarth.
+<<
+License: BSD
+Homepage: http://sourceforge.net/projects/blt
