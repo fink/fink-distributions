@@ -1,9 +1,9 @@
 # -*- coding: ascii; tab-width: 4 -*-
 Info2: <<
 Package: openblas
-Version: 0.3.19
+Version: 0.3.21
 Revision: 1
-Type: gcc (11)
+Type: gcc (12)
 Maintainer: Derek Homeier <dhomeie@gwdg.de>
 
 BuildDependsOnly: true
@@ -11,14 +11,12 @@ BuildDepends: fink (>= 0.30.0), gcc%type_raw[gcc]-compiler
 Depends: %N-shlibs (= %v-%r)
 
 Source: https://github.com/xianyi/OpenBLAS/archive/v%v.tar.gz
-Source-Checksum: SHA256(947f51bfe50c2a0749304fbe373e00e7637600b0a47b78a51382aeb30ca08562)
+Source-Checksum: SHA256(f36ba3d7a60e7c8bcc54cd9aaa9b1223dd42eaf02c811791c37e8ca707c241ca)
 SourceRename: OpenBLAS-%v.tar.gz
 PatchFile: %n.patch
-PatchFile-MD5: e9d16e8a2772758bbd37e29e3c25c0f8
+PatchFile-MD5: c2249f0373477783e310f83c97c2d565
 
 PatchScript: sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
-
-SetCC: gcc-fsf-%type_raw[gcc]
 
 CompileScript: <<
 	#!/bin/sh -ev
@@ -26,15 +24,19 @@ CompileScript: <<
 	# remove excessive truncating of $hostarch https://github.com/xianyi/OpenBLAS/commit/00ce353
 	perl -pi -e 's|;chop..hostarch.;|;|' c_check
 	# set arch to minimum model supported in OS version
+	CC=gcc-fsf-%type_raw[gcc]
 	darwin_vers=$(uname -r | cut -d. -f1)
-	if [ "$darwin_vers" -ge 18 ]; then
-		perl -pi -e "s|(COMMON_OPT = -O2)|\$1 -mtune=cascadelake -march=ivybridge|g;" Makefile.system
-		export DYNAMIC_LIST="SANDYBRIDGE HASWELL SKYLAKEX"
+	if [ "%m" = "arm64" ]; then
+		perl -pi -e "s|(COMMON_OPT = -O2)|\$1 -mtune=native -march=armv8.5-a|g;" Makefile.system
+		export CC=clang DYNAMIC_ARCH=0 TARGET=VORTEX DYNAMIC_LIST="ARMV8 NEOVERSEN1"  # "ARMV8SVE NEOVERSEN2" require sve instruction support
+	elif [ "$darwin_vers" -ge 18 ]; then
+		perl -pi -e "s|(COMMON_OPT = -O2)|\$1 -mtune=intel|g;" Makefile.system
+		export DYNAMIC_LIST="SANDYBRIDGE HASWELL SKYLAKEX COOPERLAKE"
 	else
-		perl -pi -e "s|(COMMON_OPT = -O2)|\$1 -mtune=skylake-avx512 -march=core2|g;" Makefile.system
+		perl -pi -e "s|(COMMON_OPT = -O2)|\$1 -mtune=intel -march=core2|g;" Makefile.system
 		export DYNAMIC_LIST="CORE2 PENRYN NEHALEM SANDYBRIDGE HASWELL"
 	fi
-	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 libs netlib shared
+	make CC=$CC FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 libs netlib shared
 	cd benchmark
 	mkdir -m 755 bin
 	mv Makefile Makefile.orig
@@ -45,8 +47,9 @@ CompileScript: <<
 		egrep -v 'saxpy\.veclib.*daxpy\.veclib.*.caxpy\.veclib' Makefile.orig > Makefile
 	fi
 	# For some reason #define RETURN_BY_STACK 1 is not properly recognised in zdot-intel.c...
-	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 FOPENMP=-fopenmp LIBSUFFIX=dylib CFLAGS+=-DRETURN_BY_STACK=1 {c,z}dot-intel.o
-	make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 FOPENMP=-fopenmp LIBSUFFIX=dylib veclib goto smallscaling
+	# Always compile executables with gcc for OpenMP support.
+	make CC=gcc-fsf-%type_raw[gcc] FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 FOPENMP=-fopenmp LIBSUFFIX=dylib CFLAGS+=-DRETURN_BY_STACK=1 {c,z}dot-intel.o
+	make CC=gcc-fsf-%type_raw[gcc] FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 FOPENMP=-fopenmp LIBSUFFIX=dylib veclib goto smallscaling
 	for x in smallscaling *.goto; do
 		install_name_tool -change %b/exports/../libopenblas.0.dylib %p/lib/libopenblas.0.dylib $x
 	done
@@ -60,23 +63,16 @@ InstallScript: <<
 <<
 
 InfoTest: <<
-	TestDepends: atlas
 	TestScript: <<
 		#!/bin/sh -ev
 		make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 tests | tee tests.log
 		grep -il fail tests.log && grep -i fail tests.log
 		grep -c PASSED tests.log
 		cd benchmark
-		make FC=gfortran-fsf-%type_raw[gcc] USE_THREAD=1 FOPENMP=-fopenmp atlas
 		# use hw.physicalcpu to run without hyperthreading
 		ncore=$(sysctl -n hw.logicalcpu)
 		# created a ton of *.veclib, *.goto, *.atlas executables to be compared in performance...
 		# just filter results for a sample of matrix sizes and run a little suite of comparisons of threaded vs. openmp speedup
-		echo ATLAS
-		for x in *.atlas; do
-			echo OPENBLAS_NUM_THREADS=$ncore OMP_NUM_THREADS=1 $x
-			OPENBLAS_NUM_THREADS=$ncore OMP_NUM_THREADS=1 ./$x 2>&1 | awk '(NR < 4)||((NR-2)%%20 == 0)'
-		done
 		cd bin
 		echo VecLib
 		for x in *.veclib; do
