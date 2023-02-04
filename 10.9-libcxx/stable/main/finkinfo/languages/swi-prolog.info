@@ -1,86 +1,130 @@
 Info3: <<
 Package: swi-prolog
-# OPENSSL110 FTBFS (does not detect); new upstream might support, but
-# also has /local/ pathname entanglement
-Version: 7.2.3
-Revision: 5
+Version: 9.0.4
+Revision: 1
 Source: http://www.swi-prolog.org/download/stable/src/swipl-%v.tar.gz
-Source-Checksum: SHA256(43657d51b7c5887bc2d2bced50a9822b86a08a6841399b8e76ee877f51d646b5)
+Source-Checksum: SHA256(feb2815a51d34fa81cb34e8149830405935a7e1d1c1950461239750baa8b49f0)
 BuildDepends: <<
-  fink-package-precedence,
-  fontconfig2-dev,
-  freetype219,
-  gmp5,
-  libarchive31,
-  libjpeg9,
-  libncursesw5,
-  libodbc3-dev,
-  openssl100-dev,
-  pkgconfig,
-  readline8,
-  uuid,
-  x11-dev,
-  xft2-dev,
+	cmake,
+	db60-aes,
+	fink (>= 0.28),
+	fink-package-precedence,
+	fontconfig2-dev (>= 2.10.0-1),
+	freetype219 (>= 2.10.2-1),
+	gmp5,
+	libarchive31,
+	libjpeg9,
+	libncurses5,
+	libodbc3-dev,
+	libpcre2,
+	libxt,
+	libyaml,
+	openssl300-dev,
+	readline8,
+	uuid,
+	x11-dev,
+	xft2-dev
 <<
 # bad -I ordering picks up installed version instead of source-dist
-BuildConflicts: swi-prolog-dev
-# should remove junit dep in 64bit mode (hence also comment out "export JUNIT=..." below..), since I can't build junit there..
-# assume junit only TestDepends (w/o that export I run into many java errors in make check)
-Depends: %N-shlibs (= %v-%r)
+BuildConflicts: swi-prolog-dev, swi-prolog9-dev
+# Should remove junit dep in 64bit mode, since I can't build junit
+# there. Assume junit only TestDepends (w/o that export I run into
+# many java errors in make check) -- Jesse Alama, from on or before
+# 7.2.3-5
+Depends: %N9-shlibs (>= %v-%r)
 PatchFile: %n.patch
-PatchFile-MD5: f7b5a3ab1c2f5c750cbae8011017510d
+PatchFile-MD5: 8ffd839ddbda670657bd043dbf25800f
 PatchScript: <<
-  %{default_script}
-  sed -i.bak -e 's/ARCH=.*/ARCH=%m-darwin/' -e 's,-no-cpp-precomp,-Wall,' \
-	-e 's;-flat_namespace -undefined suppress;-bundle_loader %b/src/swipl -undefined dynamic_lookup -Wl,-x -dead-strip;' \
-	src/configure{,.in}
-	# autoconf2.6ish patch for modern XQuartz paths
-	perl -pi -e "s|/usr/lpp/Xamples|/opt/X11|" packages/xpce/src/configure
+	%{default_script}
+	# Debian swi-prolog-9.0.4+dfsg-1 disable_http_proxy_test.diff
+	perl -pi -e 's/proxy// if /test_libs/' packages/http/CMakeLists.txt
+	# TODO: Debian swi-prolog-9.0.4+dfsg-1 use-local-jquery.diff
+
+	# In 7.x.x, libraries were type BUNDLE but .dylib extension.
+	# In 9.x.x, they are ext .so, which makes more sense. But
+	# jpl/CMakeFiles.txt for APPLE instead explicitly sets type
+	# DYLIB, and a self-consistent ext .dylib. No idea if this ext
+	# is a thing (why isn't is .jnlib?) but it's clearly not
+	# dyld-loaded, so we keep it a BUNDLE just like it is on other
+	# platforms.
+	perl -ni -e 'print unless /JPLTYPE SHARED/' packages/jpl/CMakeLists.txt
 <<
-SetCPPFLAGS: -MD
-ConfigureParams: --mandir=%p/share/man --with-world JAVAC=javac
-# set javac, otherwise it would detect fink's gcj and that does not work
 CompileScript: <<
 #!/bin/sh -ev
-# export JUNIT=%p/share/java/junit/junit.jar
- export CIFLAGS="-I%p/include";
- %{default_script}
- fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=%n-dev .
+	. %p/sbin/fink-buildenv-cmake.sh
+	mkdir finkbuild
+	pushd finkbuild
+	# SWIPL_* are based on Debian's 'rules' file
+	cmake \
+		$FINK_CMAKE_ARGS \
+		\
+		-DSWIPL_INSTALL_DIR=swi-prolog \
+		-DSWIPL_INSTALL_IN_LIB=ON \
+		-DSWIPL_INSTALL_IN_SHARE=ON \
+		-DSWIPL_PACAKGES_QT=OFF \
+		\
+		-DMACOSX_DEPENDENCIES_FROM=%p \
+		-DCURSES_INCLUDE_DIR=%p/include \
+		-DCURSES_LIBRARY=%p/lib/libcurses.dylib \
+		-DLibArchive_INCLUDE_DIR=%p/include \
+		-DLibArchive_LIBRARY=%p/lib/libarchive.dylib \
+		-DODBC_INCLUDE_DIR=%p/include \
+		-DODBC_LIBRARY=%p/lib/libiodbc.dylib \
+		-DReadline_ROOT=%p \
+		-DBDB_INCLUDE_DIR=%p/include/db5 \
+		-DBDB_LIBRARY=%p/lib/libdb.dylib \
+		-DCMAKE_DISABLE_FIND_PACKAGE_Qt5Widgets=TRUE \
+		..
+	make
+	popd
+	fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=swi-prolog-dev,swi-prolog9-dev .
 <<
 #InfoTest: <<
-# # To run tests, run the tests under x11, and not from fink (since fink destroys your environment, a.o. DISPLAY)
-# TestScript: make -ik check || :
+# To run tests, run the tests under x11, and not from fink (since fink
+# destroys your environment, a.o. DISPLAY) -- Jesse Alama from on or
+# before 7.2.3-5
+#	TestScript: <<
+#	#!/bin/sh -ev
+#		pushd finkbuild
+#		export USE_PUBLIC_NETWORK_TESTS=false
+#		ctest -V || exit 2
+#	<<
 #<<
 InstallScript: <<
- make install DESTDIR=%d
- mkdir -p %i/share/doc/%N
- mv %i/lib/swipl-%v/doc/Manual %i/share/doc/%N
- rm -fR %i/lib/swipl-%v/doc
- ln -s ../%N-shlibs/COPYING %i/share/doc/%N
+#!/bin/sh -ev
+	pushd finkbuild
+	make install DESTDIR=%d
 <<
-DocFiles: README README.doc VERSION
+DocFiles: Code-of-Conduct.md LICENSE README.md
 Splitoff: <<
- Package: %N-dev
- BuildDependsOnly: true
- Depends: %N-shlibs (= %v-%r)
- Files: lib/pkgconfig
- InstallScript: <<
- #!/bin/sh -ev
-	mkdir -p %i/lib %i/include %i/share/doc
-	ln -s swipl-%v/lib/%m-darwin %i/lib/%N
-	ln -s %N %i/lib/swipl
-	ln -s %N/libpl.dylib %i/lib
-	mv %I/lib/swipl-%v/include/* %i/include
-	ln -s %p/lib/swipl-%v/xpce/include/pce %i/include
-	ln -s %N-shlibs %i/share/doc/%n
- <<
+	Package: %N9-dev
+	BuildDependsOnly: true
+	Depends: %N9-shlibs (= %v-%r)
+	Conflicts: <<
+		swi-prolog-dev,
+		swi-prolog9-dev
+	<<
+	Replaces: <<
+		swi-prolog-dev,
+		swi-prolog9-dev
+	<<
+	Files: <<
+		lib/cmake
+		lib/swi-prolog/include
+		lib/libswipl.dylib
+		share/pkgconfig
+	<<
+	DocFiles: Code-of-Conduct.md LICENSE README.md
 <<
 Splitoff2: <<
- Package: %N-shlibs
- Depends: fontconfig2-shlibs, gmp5-shlibs, libarchive31-shlibs, libjpeg9-shlibs, libncursesw5-shlibs, libodbc3-shlibs, openssl100-shlibs, readline8-shlibs, uuid-shlibs, x11-shlibs, xft2-shlibs
- Files: lib
- Shlibs: %p/lib/swipl-%v/lib/%m-darwin/libswipl.dylib	0.0.0	%n	(>= 5.6.64-1)
- DocFiles: COPYING
+	Package: %N9-shlibs
+	Depends: <<
+		gmp5-shlibs,
+		libncurses5-shlibs
+	<<
+	Files: lib/libswipl.*.dylib
+	Shlibs: %p/lib/libswipl.9.dylib 9.0.0 %n (>= 9.0.4-1)
+	DocFiles: Code-of-Conduct.md LICENSE README.md
 <<
 License: LGPL/OpenSSL
 Description: SWI Prolog interpreter
@@ -114,12 +158,8 @@ once)."
 
 <<
 DescPort: <<
-Without the patch to the link commands, 'essentially' no linking was done:
-no undefined symbol had a "from"; with it, all have.
-This still has to be communicated upstream.
-
 There do remain errors when running make check; please contribute
-fixes _ to the info-file and upstream.
+fixes _ to the info-file and upstream. -- Jesse Alama
 
 Formerly maintained by Rob Braun and Adrian Prantl.
 <<
