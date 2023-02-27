@@ -37,7 +37,7 @@ BuildDepends: <<
 	readline8,
 	sqlite3-dev (>= 3.30.1-1),
 	openssl300-dev (>= 3.0.1-1),
-	pkgconfig (>= 0.9.0-1),
+	pkgconf,
 	tcltk-dev (>= 8.4.1-1),
 	x11-dev
 <<
@@ -52,7 +52,7 @@ Source: https://www.python.org/ftp/python/%v/Python-%v.tar.xz
 Source-Checksum: SHA256(d85dbb3774132473d8081dcb158f34a10ccad7a90b96c7e50ea4bb61f5ce4562)
 
 PatchFile: %n.patch
-PatchFile-MD5: 25181b340fc83818ea6d910b64481f0b
+PatchFile-MD5: f286c8ce64870c408d860c698eba626a
 
 PatchScript: <<
 	#!/bin/sh -ex
@@ -78,22 +78,26 @@ ConfigureParams: <<
 	--with-tcltk-includes="-I%p/include -I/opt/X11/include" \
 	--with-tcltk-libs="-L%p/lib -ltcl -ltk" \
 	--with-dtrace \
-	--without-ensurepip
+	--without-ensurepip \
+	PKG_CONFIG=%p/bin/pkgconf
 <<
 
 CompileScript: <<
 #!/bin/sh -ex
+	darwinvers=$(uname -r | cut -d. -f1)
 	SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 	# for OS X 10.14, ensure full SDK is available, but include it after any fink specific versions.
-	if [ "$(uname -r | cut -d. -f1)" -ge 18 ]; then
+	if [ $darwinvers -ge 18 ]; then
 		export CFLAGS="-Wno-nullability-completeness -Wno-expansion-to-defined"
-		#export CPPFLAGS="-I%p/include -I%p/include/ncursesw -I$SDK_PATH/usr/include"
-		#perl -pi -e "s|/usr/include|$SDK_PATH/usr/include|" setup.py
+	fi
+	# https://github.com/python/cpython/issues/97897
+	if [ $darwinvers -eq 21 ]; then
+		MKFIFOAT_CONFIG_PARAMS="ac_cv_func_mkfifoat=no ac_cv_func_mknodat=no"
 	fi
 
 	# https://bugs.python.org/issue28456 and radar://28372390
 	# https://daniel.haxx.se/blog/2016/10/11/poll-on-mac-10-12-is-broken/
-	./configure %c $DIST_CONFIG_PARAMS
+	./configure %c $MKFIFOAT_CONFIG_PARAMS $DIST_CONFIG_PARAMS
 	perl -pi -e 's|\#define HAVE_POLL 1||' ./pyconfig.h
 	perl -pi -e 's|\#define HAVE_POLL_H 1||g' ./pyconfig.h
 	perl -pi -e 's|\#define HAVE_SYS_POLL_H 1||g' ./pyconfig.h
@@ -171,6 +175,8 @@ InstallScript: <<
 	# install some docs and other useful tidbits
 	rm -rf Misc/RPM
 	/bin/cp -R Misc Tools %i/lib/python%type_raw[python]
+	pushd %i/lib/python%type_raw[python]
+	DYLD_LIBRARY_PATH=%i/lib %i/bin/python%type_raw[python] -m compileall Tools/[a-su]* Tools/tz || exit 1
 
 # Doc tarball missing upstream.
 #	mkdir -p %i/share/doc/%n/html
