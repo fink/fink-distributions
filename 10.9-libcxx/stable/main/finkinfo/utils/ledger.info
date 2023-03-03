@@ -1,62 +1,83 @@
-Info3: <<
 Package: ledger
-Version: 3.1
-Revision: 7
+Version: 3.3.1
+Revision: 1
 Source: https://github.com/ledger/ledger/archive/v%v.tar.gz
 SourceRename: %n-%v.tar.gz
 Maintainer: Jesse Alama <jessealama@fastmail.fm>
 Homepage: http://ledger-cli.org/
 License: BSD
 Description: Maintain double-entry ledgers
-Source-Checksum: SHA256(eeb5d260729834923fc94822bcc54ca3080c434f81466a3f5dc4274b357ce694)
-# dmacks: includes lots of upstream patching for newer boost
+Source-Checksum: SHA256(c18341020552fa221203afdf0c0eade1bfa9aa4b7e1ab82a0e456c06b56d1ce4)
 PatchFile: %n.patch
-PatchFile-MD5: 729280a0ada96ef9b979d922edca3d0c
-PatchScript: sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
+PatchFile-MD5: da02b127cbc1fc12818a895565ac5b9f
+PatchScript: <<
+#!/bin/sh -ev
+	sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
+
+#	# acprep is a python script; try to divine what system-python
+#	# to use rather than having a BDep on specific fink python
+#	# (though that would at least be a stable pyXX version!)
+#	#
+#	# inspect.getargspec() is available in python2-python3.5; the
+#	# replacement inspect.getfullargspec() is only available in
+#	# python3.
+#	if [ -x /usr/bin/python ]; then
+#		# assume 'python' is python2
+#		perl -pi -e 's|/usr/bin/env python|/usr/bin/python|' acprep
+#		perl -pi -e 's/getfullargspec/getargspec/' acprep
+#	else
+#		# assume 'python3' exists if 'python' (that is python2) does not
+#		perl -pi -e 's|/usr/bin/env python|/usr/bin/python3|' acprep
+#	fi
+#^-- acprep is a python script around ninja and cmake that autodetects
+# MacPorts and Homebrew and doesn't seem flexible enough to build
+# everything we want directly. And it still requires that we set
+# manual paths and flags in various ways. Let's just call cmake
+# directly. --dmacks as of 3.3.1-1
+<<
+# detects python3, but doesn't use it
 BuildDepends: <<
-  gmp5,
-  libicu55-dev,
-  libmpfr4,
-  cmake,
-  ninja,
-  boost1.68-nopython,
-  fink (>= 0.28),
-  gmp5-shlibs,
+	fink-buildenv-modules,
+	boost1.78-nopython,
+	cmake,
+	gmp5,
+	gmp5-shlibs,
+	libicu72-dev,
+	libmpfr4,
+	texinfo
 <<
 Conflicts: ledger26
 Replaces: ledger26
 GCC: 4.0
 Depends: <<
-  libicu55-shlibs,
-  libmpfr4-shlibs,
-  boost1.68-nopython-shlibs,
-  ledger-shlibs,
+	%n-shlibs,
+	boost1.78-nopython-shlibs,
+	libicu72-shlibs,
+	libmpfr4-shlibs
 <<
 Suggests: gnuplot
-SetCXXFLAGS: -I%p/include -I%p/opt/boost-1_68/include -L%p/opt/boost-1_68/lib
 InfoDocs: ledger3.info
 CompileScript: <<
-./acprep --ninja --output=build --boost-include=%p/opt/boost-1_68/include --boost-suffix=-mt --prefix=%p opt make -- -DCMAKE_OSX_DEPLOYMENT_TARGET=
-/usr/bin/makeinfo --no-split doc/ledger3.texi
-/usr/bin/makeinfo --no-split doc/ledger-mode.texi
+	#!/bin/sh -ev
+	. %p/sbin/fink-buildenv-cmake.sh
+	mkdir finkbuild
+	pushd finkbuild
+	cmake \
+		$FINK_CMAKE_ARGS \
+		-DCMAKE_CXX_FLAGS:STRING=-MD \
+		-DBoost_DIR=%p/opt/boost-1_78 \
+		-DBoost_INCLUDE_DIR=%p/opt/boost-1_78/include \
+		-DBUILD_DOCS=true \
+		..
+	make -w
+	make -w doc
+	popd
+	fink-package-precedence --depfile-ext='\.d' .
 <<
 InstallScript: <<
-cmake -DCMAKE_INSTALL_PREFIX=%i -P build/cmake_install.cmake
-# info
-mkdir -p %i/share/info
-install -m 644 ledger3.info %i/share/info
-# emacs
-mkdir -p %i/share/emacs/site-lisp/ledger
-find lisp -mindepth 1 -maxdepth 1 -type f -name '*.el' -exec install -m 644 {} %i/share/emacs/site-lisp/ledger ';'
-install -m 644 ledger-mode.info %i/share/info
-mkdir -p %i/lib/emacsen-common/packages/install
-mkdir -p %i/lib/emacsen-common/packages/remove
-install -m 755 fink/emacsen-install %i/lib/emacsen-common/packages/install/%n
-install -m 755 fink/emacsen-remove %i/lib/emacsen-common/packages/remove/%n
-mkdir -p %i/etc/emacs/site-start.d
-install -m 644 fink/50ledger.el %i/etc/emacs/site-start.d
+	make -C finkbuild install DESTDIR=%d
 <<
-DocFiles: doc/LICENSE doc/LICENSE-utfcpp doc/grammar.y doc/GLOSSARY.md doc/NEWS
+DocFiles: CONTRIBUTING.md LICENSE.md NEWS.md README.md
 DescDetail: <<
 Ledger is a command-line accounting tool for maintaing doubly-entry
 ledgers.  The syntax for ledger files is simple (see the file
@@ -64,48 +85,21 @@ ledgers.  The syntax for ledger files is simple (see the file
 documentation directory) and can be maintained using only a text
 editor.
 <<
-SplitOff: <<
-  Package: ledger-el
-  Depends: emacsen-common, ledger
-  Conflicts: ledger26-el
-  Replaces: ledger26-el
-  Description: Maintain a double-entry ledger with Emacs
-  Files: <<
-    share/emacs/site-lisp/ledger
-    lib/emacsen-common
-    etc
-    share/info/ledger-mode.info
-  <<
-  InfoDocs: ledger-mode.info
-  PreRmScript: <<
-    mkdir -p %p/share/doc/ledger-el
-    %p/lib/emacsen-common/emacs-package-remove %n
-  <<
-  PostInstScript: <<
-    mkdir -p %p/share/doc/ledger-el
-    %p/lib/emacsen-common/emacs-package-install %n
-  <<
-  DescDetail: <<
-Issue the command `M-x ledger-mode' when you're visiting ledger files
-to turn on ledger mode.  A useful tip: put a file-local variable
-
-; -*- mode: ledger-mode; -*-
-
-into the top or bottom of your ledger files to get emacs to
-automatically turn on ledger-mode when visiting ledger files.
-<<
-<<
+# ledger-el offloaded to own .info when upstream offloaded it to a
+# separate distro as of 3.1.2 -- dmacks
 SplitOff2: <<
-  Package: ledger-dev
+  Package: %N-dev
+  Depends: %N-shlibs (= %v-%r)
   Description: Header files for Ledger
   Conflicts: ledger26-dev
   Replaces: ledger26-dev
   BuildDependsOnly: true
-  Files: include
+  Files: include lib/libledger.dylib
+  DocFiles: CONTRIBUTING.md LICENSE.md NEWS.md README.md
 <<
 SplitOff3: <<
-  Package: ledger-shlibs
+  Package: %N-shlibs
   Files: lib/libledger.3.dylib
   Shlibs: %p/lib/libledger.3.dylib 3.0.0 %n (>= 3.1-6)
-<<
+  DocFiles: CONTRIBUTING.md LICENSE.md NEWS.md README.md
 <<
