@@ -1,0 +1,176 @@
+# -*- coding: ascii; tab-width: 4 -*-
+Info2: <<
+Package: ruby32
+Version: 3.2.1
+Revision: 1
+Type: ruby (3.2)
+Description: Interpreted, object-oriented language
+License: BSD
+Homepage: https://www.ruby-lang.org/
+Maintainer: None <fink-devel@lists.sourceforge.net>
+
+# Dependencies.
+Depends: <<
+	%N-shlibs (= %v-%r),
+	gmp5-shlibs,
+	libffi8-shlibs,
+	libyaml-shlibs (>= 0.2.5-1),
+	openssl300-shlibs,
+	readline8-shlibs
+<<
+BuildDepends: <<
+	bison,
+	fink (>= 0.32),
+	gmp5,
+	libffi8,
+	libyaml (>= 0.2.5-1),
+	openssl300-dev,
+	readline8
+<<
+
+# Unpack Phase.
+Source: https://cache.ruby-lang.org/pub/ruby/3.2/ruby-%v.tar.xz
+Source-Checksum: SHA256(746c8661ae25449cbdc5297d1092702e93e66f365a75fecb740d4f292ced630c)
+
+# Patch Phase.
+PatchFile: %n.patch
+PatchFile-MD5: 161b11f7e6965a0de8d9622428ea830d
+PatchScript: <<
+	%{default_script}
+	# Keep validator happy.
+	perl -pi -e 's/-framework CoreFoundation/-Wl,-framework,CoreFoundation/' configure
+	perl -pi -e 's/-framework Foundation/-Wl,-framework,Foundation/' configure
+	perl -pi -e 's/-framework Security/-Wl,-framework,Security/' configure
+	# This test doesn't work right in fink's build environment.
+	perl -pi -e 's/ unless user//' test/ruby/test_file_exhaustive.rb
+	# Testing sockets can be problematic.
+	rm test/socket/test_socket.rb
+	# Don't look for the unversioned 'gem' command
+	perl -pi -e 's|\[\"gem\"|\[\"gem%type_raw[ruby]\"|g' lib/bundler/gem_helper.rb
+	perl -pi -e 's|gem pristine|gem%type_raw[ruby]|g' lib/rubygems/basic_specification.rb lib/rubygems/commands/help_command.rb test/rubygems/test_gem.rb test/rubygems/test_gem_specification.rb test/rubygems/test_gem_stub_specification.rb
+<<
+
+# Compile Phase.
+ConfigureParams: <<
+	--program-suffix=%type_raw[ruby] \
+	--docdir='${datarootdir}/doc/${PACKAGE}%type_pkg[ruby]' \
+	--disable-install-capi \
+	--enable-shared \
+	--with-ruby-version=minor \
+	--build=%m-apple-darwin \
+	LIBS="-L%p/lib" \
+	ac_cv_path_mkdir=/bin/mkdir ac_cv_path_install=/usr/bin/install ac_cv_path_GREP=/usr/bin/grep
+<<
+
+SetLDFLAGS: -Wl,-dead_strip_dylibs
+CompileScript: <<
+	./configure %c LIBPATHENV=DYLD_LIBRARY_PATH EXTLDFLAGS="-Wl,-dead_strip_dylibs -L%p/lib"
+	make
+<<
+
+# Test Phase
+InfoTest: <<
+	TestSource: https://rubygems.org/downloads/bundler-2.4.5.gem
+	TestSource-Checksum: SHA256(5af8faaf09666d59ccdf1a8e461f17bbc5c4e49badb2dcaee174659f8c87d44a)
+	TestSource2: https://rubygems.org/downloads/rspec-support-3.12.0.gem
+	TestSource2-Checksum: SHA256(dd4d44b247ff679b95b5607ac5641d197a5f9b1d33f916123cb98fc5f917c58b)
+	TestSource3: https://rubygems.org/downloads/diff-lcs-1.5.0.gem
+	TestSource3-Checksum: SHA256(49b934001c8c6aedb37ba19daec5c634da27b318a7a3c654ae979d6ba1929b67)
+	TestSource4: https://rubygems.org/downloads/rspec-mocks-3.12.3.gem
+	TestSource4-Checksum: SHA256(cc0a1176707e641a2c66c71fe769486fec57d7df8ec7e34320f8957a1363026b)
+	TestSource5: https://rubygems.org/downloads/rspec-expectations-3.12.2.gem
+	TestSource5-Checksum: SHA256(8652db70b25ae3378b7274477a906b6ad1833a7b7cfbb001a03f49dd1c1d6a0d)
+	TestSource6: https://rubygems.org/downloads/rspec-core-3.12.0.gem
+	TestSource6-Checksum: SHA256(c466f4137966526e177d2156ca45c249eeecc7ed519b23ae2fb80c4675406bc5)
+	TestSource7: https://rubygems.org/downloads/rspec-3.12.0.gem
+	TestSource7-Checksum: SHA256(ccc41799a43509dc0be84070e3f0410ac95cbd480ae7b6c245543eb64162399c)
+	TestScript: <<
+		#!/bin/sh -ev
+		cp %b/../*.gem .bundle/cache
+		# Change install_name of lib during tests since DYLD_LIBRARY_PATH doesn't work on 10.11+.
+		install_name_tool -change %p/lib/libruby.%type_raw[ruby].dylib %b/libruby.%type_raw[ruby].dylib ruby%type_raw[ruby]
+		/usr/bin/find .ext/%m-darwin* -name *.bundle -exec install_name_tool -change %p/lib/libruby.%type_raw[ruby].dylib %b/libruby.%type_raw[ruby].dylib {} \;
+		install_name_tool -id %b/libruby.%type_raw[ruby].dylib libruby.%type_raw[ruby].dylib
+		
+		export LANG=en_US.UTF-8
+		export PATH="%b:$PATH"
+		make check || exit 2
+		
+		# Put install_name back.
+		install_name_tool -change %b/libruby.%type_raw[ruby].dylib %p/lib/libruby.%type_raw[ruby].dylib ruby%type_raw[ruby]
+		/usr/bin/find .ext/%m-darwin* -name *.bundle -exec install_name_tool -change %b/libruby.%type_raw[ruby].dylib %p/lib/libruby.%type_raw[ruby].dylib {} \;
+		install_name_tool -id %p/lib/libruby.%type_raw[ruby].dylib libruby.%type_raw[ruby].dylib
+	<<
+<<
+
+# Install Phase.
+InstallScript: <<
+	make -j1 install DESTDIR=%d
+	perl -pi -e 's| -lgmp||' %i/lib/ruby/%type_raw[ruby]/%m-darwin*/rbconfig.rb
+<<
+DocFiles: BSDL COPYING COPYING.ja ChangeLog GPL LEGAL NEWS.md README* sample
+
+SplitOff2: <<
+  Package: %N-dev
+  Description: Ruby %type_raw[ruby] dev files (mkmf.rb, *.h and *.dylib)
+  BuildDependsOnly: True
+  Depends: %N (= %v-%r)
+  Files: <<
+    lib/ruby/%type_raw[ruby]/mkmf.rb
+    lib/pkgconfig
+    include
+  <<
+  DocFiles: BSDL COPYING COPYING.ja ChangeLog GPL LEGAL NEWS.md README*
+<<
+
+SplitOff3: <<
+  Package: ri%type_pkg[ruby]
+  Description: Ruby %type_raw[ruby] documentation
+  Depends: %N (= %v-%r)
+  Files: <<
+    bin/ri%type_raw[ruby]
+    share/ri/%type_raw[ruby]
+  <<
+  DocFiles: BSDL COPYING COPYING.ja ChangeLog GPL LEGAL NEWS.md README*
+<<
+
+SplitOff4: <<
+  Package: %N-shlibs
+  Depends: gmp5-shlibs
+  Shlibs: %p/lib/libruby.%type_raw[ruby].dylib 3.2.0 %n (>= 3.2.0-1)
+  Description: Ruby %type_raw[ruby] shared libraries
+  Files: lib/libruby.%type_raw[ruby].dylib
+  DocFiles: BSDL COPYING COPYING.ja ChangeLog GPL LEGAL NEWS.md README*
+<<
+
+DescDetail: <<
+- It has many features to process text files and to do system
+  management tasks (as in Perl).
+- It is simple, straight-forward, extensible, and portable, and free.
+- It has simple syntax, partially inspired by Eiffel and Ada.
+- All data in Ruby is an object, not in the sense of Python or Perl,
+  but in the sense of Smalltalk: no exceptions.
+<<
+DescPackaging: <<
+The Ruby tcltk extension is packaged separately and links against Fink's X11
+version of tcltk. It could be replaced with a version linked against an Aqua
+tcltk if someone packaged it.
+
+Packages should depend on ruby32 to run scripts. The shared library
+does not provide many of the stdlib features, they are implemented in
+the bundled extensions.
+
+The extensions would link and probably run with Apple's libraries but
+since Fink has its own version of ncurses, readline, etc. it should
+always link with Fink's to get consistent results.
+
+Move mkmf script into -dev to make extension configuration error out
+instead of failing all tests.
+<<
+DescPort: <<
+* Use Debian's patch to not download things during configure.
+* Gem3.2 (from bundled rubygems-3.4.0) does an internet  check during gem
+install. To skip it, set RUBYGEMS_PREVENT_UPDATE_SUGGESTION=1 during the
+gem install.
+<<
+<<

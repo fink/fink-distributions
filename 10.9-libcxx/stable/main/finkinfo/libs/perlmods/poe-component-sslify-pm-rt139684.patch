@@ -1,0 +1,126 @@
+From bbf443c3a90e5f50574b030ff3eecbc3a9681678 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Petr=20P=C3=ADsa=C5=99?= <ppisar@redhat.com>
+Date: Wed, 13 Oct 2021 11:48:58 +0200
+Subject: [PATCH] Adapt to OpenSSL 3
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+OpenSSL 3 changed handling of I/O errors in SSL_accept(). That became
+visible when a client disconnected to early. As a result
+t/simple_parallel.t started failing randomly:
+
+    #   Failed test 'SERVER: SSLify_Options 156: private key
+    # '
+    #   at t/simple_parallel.t line 52.
+    #   Failed test 'SERVER: Server_SSLify Please do SSLify_Options() first ( or pass in a $ctx object ) at /builddir/build/BUILD/POE-Component
+    -SSLify-1.012/blib/lib/POE/Component/SSLify.pm line 247.
+    # '
+    #   at t/simple_parallel.t line 55.
+    Can't use an undefined value as a symbol reference at /builddir/build/BUILD/POE-Component-SSLify-1.012/blib/lib/POE/Component/SSLify.pm line 457.
+    # Tests were run but no plan was declared and done_testing() was not seen.
+    # Looks like your test exited with 22 just after 94.
+    t/simple_parallel.t ...........
+    Dubious, test returned 22 (wstat 5632, 0x1600)
+    Failed 2/94 subtests
+
+This patch fixes these bugs in POE-Component-SSLify:
+
+TIEHANDLE() did not properly handled ERROR_WANT_READ/ERROR_WANT_WRITE
+soft errors of Net::SSLeay::accept().
+
+Various Net::SSLeay calls inspected a global error stack instead of
+the actual return value. That lead to misreporting errors at a wrong
+place. Expecially after CTX_set_options() which cannot error.
+
+The test retried SSLify_Options() with wrong file paths.
+
+This patch should fix all of them.
+
+CPAN RT#139684
+
+Signed-off-by: Petr Písař <ppisar@redhat.com>
+---
+ lib/POE/Component/SSLify.pm              | 16 +++++++++-------
+ lib/POE/Component/SSLify/ServerHandle.pm | 21 ++++++++++++++++-----
+ t/simple_parallel.t                      |  1 -
+ 3 files changed, 25 insertions(+), 13 deletions(-)
+
+diff --git a/lib/POE/Component/SSLify.pm b/lib/POE/Component/SSLify.pm
+index d41bc8e..7f5fb4a 100644
+--- a/lib/POE/Component/SSLify.pm
++++ b/lib/POE/Component/SSLify.pm
+@@ -380,20 +380,21 @@ sub _createSSLcontext {
+ 	# do we need to set options?
+ 	if ( defined $options ) {
+ 		Net::SSLeay::CTX_set_options( $context, $options );
+-		die_if_ssl_error( 'ssl ctx set options' ) if ! $IGNORE_SSL_ERRORS;
+ 	}
+ 
+ 	# do we need to set key/etc?
+ 	if ( defined $key ) {
+ 		# Following will ask password unless private key is not encrypted
+-		Net::SSLeay::CTX_use_RSAPrivateKey_file( $context, $key, FILETYPE_PEM );
+-		die_if_ssl_error( 'private key' ) if ! $IGNORE_SSL_ERRORS;
++		unless ( Net::SSLeay::CTX_use_RSAPrivateKey_file( $context, $key, FILETYPE_PEM ) ) {
++			die_if_ssl_error( "private key $key: $!" ) if ! $IGNORE_SSL_ERRORS;
++		}
+ 	}
+ 
+ 	# Set the cert file
+ 	if ( defined $cert ) {
+-		Net::SSLeay::CTX_use_certificate_chain_file( $context, $cert );
+-		die_if_ssl_error( 'certificate' ) if ! $IGNORE_SSL_ERRORS;
++		unless ( Net::SSLeay::CTX_use_certificate_chain_file( $context, $cert ) ) {
++			die_if_ssl_error( 'certificate' ) if ! $IGNORE_SSL_ERRORS;
++		}
+ 	}
+ 
+ 	# TLS 1.3 server sends session tickets after a handshake as part of
+diff --git a/lib/POE/Component/SSLify/ServerHandle.pm b/lib/POE/Component/SSLify/ServerHandle.pm
+index d62c4ab..ca00762 100644
+--- a/lib/POE/Component/SSLify/ServerHandle.pm
++++ b/lib/POE/Component/SSLify/ServerHandle.pm
+@@ -26,11 +26,22 @@ sub TIEHANDLE {
+ 
+ 	Net::SSLeay::set_fd( $ssl, $fileno );
+ 
+-	# Socket is in non-blocking mode, so accept() will return immediately.
+-	# die_if_ssl_error won't die on non-blocking errors. We don't need to call accept()
+-	# again, because OpenSSL I/O functions (read, write, ...) can handle that entirely
+-	# by self (it's needed to accept() once to determine connection type).
+-	my $res = Net::SSLeay::accept( $ssl ) and die_if_ssl_error( 'ssl accept' );
++	# Socket is in non-blocking mode, so accept() will usually return immediately.
++	# die_if_ssl_error() would die on non-blocking errors. The accept() call
++	# will be repeated in _check_status() invoked by READ()/WRITE() handlers.
++	my $res = Net::SSLeay::accept( $ssl );
++	if ( $res == -1 ) {
++		my $error = Net::SSLeay::get_error( $ssl, $res );
++		if ( $error != ERROR_WANT_READ && $error != ERROR_WANT_WRITE ) {
++			# Cannot use die_if_ssl_error(). get_error() already
++			# popped the error stack. Mimic the output here.
++			$error = Net::SSLeay::ERR_error_string( $error );
++			die( "$$: ssl accept: $error" );
++		}
++		# else accept() retried later in _check_status().
++	} elsif ( $res == 0 || $res < -1 ) {
++		die_if_ssl_error( 'ssl accept' );
++	}
+ 
+ 	my $self = bless {
+ 		'ssl'		=> $ssl,
+diff --git a/t/simple_parallel.t b/t/simple_parallel.t
+index 006ccd0..f0d3848 100644
+--- a/t/simple_parallel.t
++++ b/t/simple_parallel.t
+@@ -48,7 +48,6 @@ POE::Component::Server::TCP->new
+ 	ClientPreConnect	=> sub
+ 	{
+ 		eval { SSLify_Options('mylib/example.key', 'mylib/example.crt', 'default') };
+-		eval { SSLify_Options('../mylib/example.key', '../mylib/example.crt', 'default') } if ($@);
+ 		ok(!$@, "SERVER: SSLify_Options $@");
+ 
+ 		my $socket = eval { Server_SSLify($_[ARG0]) };
+-- 
+2.31.1
+
