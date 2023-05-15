@@ -1,0 +1,190 @@
+diff -Nurd -x'*~' postgis-1.5.8.orig/configure postgis-1.5.8/configure
+--- postgis-1.5.8.orig/configure	2012-11-15 14:05:30.000000000 -0500
++++ postgis-1.5.8/configure	2020-12-09 02:19:30.000000000 -0500
+@@ -16293,7 +16293,7 @@
+ 			{ $as_echo "$as_me:${as_lineno-$LINENO}: result: Using user-specified proj directory: $PROJDIR" >&5
+ $as_echo "Using user-specified proj directory: $PROJDIR" >&6; }
+ 
+-						PROJ_CPPFLAGS="-I$PROJDIR/include"
++						PROJ_CPPFLAGS="-I$PROJDIR/include -DACCEPT_USE_OF_DEPRECATED_PROJ_API_H=1"
+ 			PROJ_LDFLAGS="-L$PROJDIR/lib"
+ 		else
+ 			as_fn_error $? "the --with-projdir directory \"$PROJDIR\" cannot be found" "$LINENO" 5
+@@ -16303,7 +16303,7 @@
+ 
+ 
+ CPPFLAGS_SAVE="$CPPFLAGS"
+-CPPFLAGS="$PROJ_CPPFLAGS"
++CPPFLAGS="$PROJ_CPPFLAGS -DACCEPT_USE_OF_DEPRECATED_PROJ_API_H=1"
+ ac_fn_c_check_header_mongrel "$LINENO" "proj_api.h" "ac_cv_header_proj_api_h" "$ac_includes_default"
+ if test "x$ac_cv_header_proj_api_h" = xyes; then :
+ 
+@@ -16326,6 +16326,7 @@
+ 		#ifdef HAVE_STDINT_H
+         		#include <stdio.h>
+ 		#endif
++		#define ACCEPT_USE_OF_DEPRECATED_PROJ_API_H 1
+ 		#include "proj_api.h"
+ 
+ int
+diff -Nurd -x'*~' postgis-1.5.8.orig/java/jdbc/src/org/postgis/DriverWrapper.java postgis-1.5.8/java/jdbc/src/org/postgis/DriverWrapper.java
+--- postgis-1.5.8.orig/java/jdbc/src/org/postgis/DriverWrapper.java	2007-01-08 05:48:31.000000000 -0500
++++ postgis-1.5.8/java/jdbc/src/org/postgis/DriverWrapper.java	2020-12-09 02:09:18.000000000 -0500
+@@ -26,6 +26,7 @@
+ 
+ import java.sql.Connection;
+ import java.sql.SQLException;
++import java.sql.SQLFeatureNotSupportedException;
+ import java.util.Properties;
+ import java.util.logging.Level;
+ import java.util.logging.Logger;
+@@ -318,4 +319,8 @@
+             pgconn.addDataType("geometry", org.postgis.PGgeometryLW.class);
+         }
+     }
++
++    public Logger getParentLogger() throws SQLFeatureNotSupportedException {
++        throw new UnsupportedOperationException("Not supported yet.");
++    }
+ }
+diff -Nurd -x'*~' postgis-1.5.8.orig/java/jdbc/src/org/postgis/java2d/Java2DWrapper.java postgis-1.5.8/java/jdbc/src/org/postgis/java2d/Java2DWrapper.java
+--- postgis-1.5.8.orig/java/jdbc/src/org/postgis/java2d/Java2DWrapper.java	2005-10-20 14:07:37.000000000 -0400
++++ postgis-1.5.8/java/jdbc/src/org/postgis/java2d/Java2DWrapper.java	2020-12-09 02:09:18.000000000 -0500
+@@ -30,7 +30,9 @@
+ 
+ import java.sql.Connection;
+ import java.sql.SQLException;
++import java.sql.SQLFeatureNotSupportedException;
+ import java.util.Properties;
++import java.util.logging.Logger;
+ 
+ /**
+  * Java2DWrapper
+@@ -132,7 +134,6 @@
+      * 
+      * @return the drivers major version number
+      */
+-
+     public int getMajorVersion() {
+         return super.getMajorVersion();
+     }
+@@ -152,4 +153,8 @@
+     public static String getVersion() {
+         return "Java2DWrapper " + REVISION + ", wrapping " + Driver.getVersion();
+     }
++
++    public Logger getParentLogger() throws SQLFeatureNotSupportedException {
++        throw new UnsupportedOperationException("Not supported yet.");
++    }
+ }
+diff -Nurd -x'*~' postgis-1.5.8.orig/postgis/Makefile.in postgis-1.5.8/postgis/Makefile.in
+--- postgis-1.5.8.orig/postgis/Makefile.in	2012-01-20 03:42:43.000000000 -0500
++++ postgis-1.5.8/postgis/Makefile.in	2020-12-09 02:09:18.000000000 -0500
+@@ -19,6 +19,7 @@
+ 
+ # SQL objects (files requiring C pre-processing)
+ SQL_OBJS=postgis.sql.in uninstall_postgis.sql.in
++SQL_CPP=$(CPP)
+ 
+ # PostgreSQL objects
+ PG_OBJS=lwgeom_pg.o \
+@@ -69,8 +70,8 @@
+ # to an existing liblwgeom.so in the PostgreSQL $libdir supplied by an
+ # older version of PostGIS, rather than with the static liblwgeom.a 
+ # supplied with newer versions of PostGIS
+-PG_CPPFLAGS+=@CPPFLAGS@ -I../liblwgeom
+-SHLIB_LINK+=@SHLIB_LINK@ ../liblwgeom/liblwgeom.a
++PG_CPPFLAGS+=@CPPFLAGS@ @PGSQL_FE_CPPFLAGS@ -I../liblwgeom
++SHLIB_LINK+=@SHLIB_LINK@ @PGSQL_FE_LDFLAGS@ ../liblwgeom/liblwgeom.a
+ 
+ # Extra files to remove during 'make clean'
+ EXTRA_CLEAN=$(SQL_OBJS)
+@@ -117,5 +118,5 @@
+ 
+ # Generate any .sql.in files from .sql.in.c files by running them through the C pre-processor 
+ $(SQL_OBJS): %.in: %.in.c
+-	$(CPP) -traditional-cpp $< | grep -v '^#' > $@
++	$(SQL_CPP) -traditional-cpp $< | grep -v '^#' > $@
+ 
+diff -Nurd -x'*~' postgis-1.5.8.orig/postgis/lwgeom_accum.c postgis-1.5.8/postgis/lwgeom_accum.c
+--- postgis-1.5.8.orig/postgis/lwgeom_accum.c	2011-05-18 22:32:27.000000000 -0400
++++ postgis-1.5.8/postgis/lwgeom_accum.c	2020-12-09 02:09:18.000000000 -0500
+@@ -103,17 +103,19 @@
+ 		        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+ 		         errmsg("could not determine input data type")));
+ 
++#if POSTGIS_PGSQL_VERSION == 84
+ 	if (fcinfo->context && IsA(fcinfo->context, AggState))
++	{
+ 		aggcontext = ((AggState *) fcinfo->context)->aggcontext;
+-#if POSTGIS_PGSQL_VERSION == 84
++	}
+ 	else if (fcinfo->context && IsA(fcinfo->context, WindowAggState))
++	{
+ 		aggcontext = ((WindowAggState *) fcinfo->context)->wincontext;
+-#endif
+-#if POSTGIS_PGSQL_VERSION > 84
+-	else if (fcinfo->context && IsA(fcinfo->context, WindowAggState))
+-		aggcontext = ((WindowAggState *) fcinfo->context)->aggcontext;
+-#endif
++	}
+ 	else
++#else
++	if ( ! AggCheckCallContext(fcinfo, &aggcontext) )
++#endif
+ 	{
+ 		/* cannot be called directly because of dummy-type argument */
+ 		elog(ERROR, "array_agg_transfn called in non-aggregate context");
+diff -Nurd -x'*~' postgis-1.5.8.orig/postgis/lwgeom_estimate.c postgis-1.5.8/postgis/lwgeom_estimate.c
+--- postgis-1.5.8.orig/postgis/lwgeom_estimate.c	2012-10-29 14:00:32.000000000 -0400
++++ postgis-1.5.8/postgis/lwgeom_estimate.c	2020-12-09 02:09:18.000000000 -0500
+@@ -26,6 +26,9 @@
+ #if POSTGIS_PGSQL_VERSION >= 92
+ #include "utils/rel.h"
+ #endif
++#if POSTGIS_PGSQL_VERSION > 92
++#include <access/htup_details.h>
++#endif
+ 
+ #include <math.h>
+ #if HAVE_IEEEFP_H
+diff -Nurd -x'*~' postgis-1.5.8.orig/postgis/lwgeom_transform.c postgis-1.5.8/postgis/lwgeom_transform.c
+--- postgis-1.5.8.orig/postgis/lwgeom_transform.c	2012-11-15 13:46:31.000000000 -0500
++++ postgis-1.5.8/postgis/lwgeom_transform.c	2020-12-09 02:20:22.000000000 -0500
+@@ -29,6 +29,7 @@
+ Datum postgis_proj_version(PG_FUNCTION_ARGS);
+ 
+ 
++#define ACCEPT_USE_OF_DEPRECATED_PROJ_API_H 1
+ #include "proj_api.h"
+ #include "utils/memutils.h"
+ #include "executor/spi.h"
+diff -Nurd -x'*~' postgis-1.5.8.orig/postgis/lwgeom_transform.h postgis-1.5.8/postgis/lwgeom_transform.h
+--- postgis-1.5.8.orig/postgis/lwgeom_transform.h	2009-10-29 14:40:34.000000000 -0400
++++ postgis-1.5.8/postgis/lwgeom_transform.h	2020-12-09 02:20:37.000000000 -0500
+@@ -13,6 +13,7 @@
+ #include "postgres.h"
+ #include "liblwgeom.h"
+ #include "lwgeom_pg.h"
++#define ACCEPT_USE_OF_DEPRECATED_PROJ_API_H 1
+ #include "proj_api.h"
+ 
+ projPJ make_project(char *str1);
+diff -Nurd -x'*~' postgis-1.5.8.orig/topology/Makefile.in postgis-1.5.8/topology/Makefile.in
+--- postgis-1.5.8.orig/topology/Makefile.in	2008-11-06 10:15:06.000000000 -0500
++++ postgis-1.5.8/topology/Makefile.in	2020-12-09 02:09:18.000000000 -0500
+@@ -7,6 +7,7 @@
+ 
+ # SQL objects (files requiring C pre-processing)
+ SQL_OBJS=topology.sql.in
++SQL_CPP=$(CPP)
+ 
+ # Extra files to remove during 'make clean'
+ EXTRA_CLEAN=$(SQL_OBJS)
+@@ -24,5 +25,5 @@
+ 
+ # Generate any .sql.in files from .sql.in.c files by running them through the C pre-processor 
+ $(SQL_OBJS): %.in: %.in.c
+-	$(CPP) -traditional-cpp $< | grep -v '^#' > $@
++	$(SQL_CPP) -traditional-cpp $< | grep -v '^#' > $@
+ 

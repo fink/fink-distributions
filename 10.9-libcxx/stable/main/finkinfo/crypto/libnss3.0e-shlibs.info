@@ -1,0 +1,148 @@
+Package: libnss3.0e-shlibs
+Version: 3.74
+Revision: 1
+# gyp version to avoid needing BuildDepends:xcode.app (Issue #865)
+BuildDepends: <<
+	fink (>= 0.28),
+	gyp-py27 (>=  0.1+20210831gitd6c5dd5-1),
+	ninja,
+	nspr.0f,
+	python27,
+	sqlite3-dev
+<<
+GCC: 4.0
+Depends: <<
+	nspr.0f-shlibs,
+	sqlite3-shlibs
+<<
+Source: https://ftp.mozilla.org/pub/security/nss/releases/NSS_3_74_RTM/src/nss-%v.tar.gz
+Source-Checksum: SHA256(88928811f9f40f87d42e2eaccdf6e454562e51486067f2ddbe90aa47ea6cd056)
+SourceDirectory: nss-%v
+PatchFile: %n.patch
+PatchFile-MD5: 47ea72df5a1dc6f6a3a83b7e61341d60
+PatchScript: <<
+	%{default_script}
+	# fix install_name to have absolute path to libdir
+	perl -pi -e 's,\@executable_path,%p/lib/nss3.0e,g' nss/coreconf/Darwin.mk nss/lib/freebl/config.mk nss/coreconf/config.gypi
+	# match executable to python we know we have
+	perl -pi -e 's,\(python ,\(%p/bin/python2.7 ,' nss/build.sh
+<<
+CompileScript: <<
+#!/bin/sh -ev
+	pushd nss
+	./build.sh \
+		--with-nspr=%p/include/nspr:%p/lib/nspr.0f \
+		--system-sqlite \
+		-v
+	popd
+
+	pushd nss/pkg/pkg-config
+	for f in nss-config nss.pc; do
+		sed 's,@prefix@,%p,; s,@MOD_MAJOR_VERSION@,3,; s,@MOD_TRIPLET_VERSION@,%v,; s,@NSPR_VERSION@,4.33,;  s,@prefix@,%p,' $f.in > $f
+	done
+	popd
+<<
+InstallScript: <<
+#!/bin/sh -ev
+	mkdir -p %i/lib/nss3.0e
+	for f in \
+		libnss3 libnssutil3 libsmime3 libssl3 \
+		libfreebl3 libsoftokn3 libnssckbi \
+	; do
+		install -m 644 dist/Debug/lib/$f.dylib %i/lib/nss3.0e
+	done
+
+	mkdir -p %i/include
+	cp -r dist/public/nss %i/include/nss3
+
+	# Easier to do this in the SplitOff so that we don't
+	# accidentally miss any or grab nss-config)
+	#cp -r dist/Debug/bin %i
+
+	mkdir -p %i/lib/pkgconfig
+	install -m 644 nss/pkg/pkg-config/nss.pc %i/lib/pkgconfig
+	mkdir -p %i/bin
+	install -m 755 nss/pkg/pkg-config/nss-config %i/bin
+
+	mkdir -p %i/share/man/man1
+	install -m 644 nss/doc/nroff/* %i/share/man/man1
+<<
+DocFiles: nss/COPYING
+Shlibs: <<
+	%p/lib/nss3.0e/libnss3.dylib 1.0.0 %n (>= 3.74-1)
+	%p/lib/nss3.0e/libnssutil3.dylib 1.0.0 %n (>= 3.74-1)
+	%p/lib/nss3.0e/libsmime3.dylib 1.0.0 %n (>= 3.74-1)
+	%p/lib/nss3.0e/libssl3.dylib 1.0.0 %n (>= 3.74-1)
+	!%p/lib/nss3.0e/libfreebl3.dylib
+	!%p/lib/nss3.0e/libsoftokn3.dylib
+	!%p/lib/nss3.0e/libnssckbi.dylib
+<<
+SplitOff: <<
+	Package: libnss3.0e
+	Depends: <<
+		%N (= %v-%r),
+		pkgconfig
+	<<
+	BuildDependsOnly: true
+	# nss.1d and libnss.1d haven't existed since 10.4ish (10.6 at the latest)
+	Conflicts: <<
+		libnss3,
+		libnss3.0e
+	<<
+	Replaces: <<
+		libnss3,
+		libnss3.0e
+	<<
+	Files: <<
+		bin
+		include
+		lib/pkgconfig
+	<<
+	DocFiles: nss/COPYING
+<<
+SplitOff2: <<
+	Package: nss-bin
+	Replaces: nss.1d-bin
+	Depends: <<
+		%N (>= %v-%r),
+		nspr.0f-shlibs,
+		sqlite3-shlibs
+	<<
+	Files: <<
+		share/man
+	<<
+	InstallScript: <<
+		mkdir -p %i
+		cp -r dist/Debug/bin %i
+	<<
+	DocFiles: nss/COPYING
+<<
+Description: Network Security Service
+DescDetail: <<
+This is a set of libraries designed to support cross-platform
+development of security-enabled client and server applications. It can
+support SSLv2 and v4, TLS, PKCS #5, #7, #11, #12, S/MIME, X.509 v3
+certificates and other security standards.
+<<
+DescPackaging: <<
+	API is not stable
+
+	Bury library files so don't accidentally find them (avoid
+	masking other pkgs' buried libs with a top-level one).
+
+	nss uses nspr to handle runtime dll loading, which expects
+	.dylib not .so on darwin.
+
+	Follow Debian's lead about which .dylib are dyld-linkable libs
+	vs runtime-loadable modules (their libnss3 stashes apparent
+	modules in subdir but MacPorts does not) so we'll keep it
+	flattened for now (they seem to get runtime-loaded properly).
+
+	Hard to get local-then-global -I ordering, but because we bury
+	the headers, a pre-installed version's files are not visible.
+
+	nss-config uses pkg-config at runtime
+<<
+License: GPL/LGPL
+Maintainer: Daniel Macks <dmacks@netspace.org>
+Homepage: http://www.mozilla.org/projects/security/pki/nss/
