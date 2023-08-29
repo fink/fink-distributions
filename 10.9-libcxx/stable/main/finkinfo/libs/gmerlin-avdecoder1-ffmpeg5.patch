@@ -1,0 +1,494 @@
+diff -ruN gmerlin-avdecoder-1.2.0-orig/include/avdec_private.h gmerlin-avdecoder-1.2.0/include/avdec_private.h
+--- gmerlin-avdecoder-1.2.0-orig/include/avdec_private.h	2012-06-08 06:51:28.000000000 -0500
++++ gmerlin-avdecoder-1.2.0/include/avdec_private.h	2023-05-06 05:04:01.000000000 -0500
+@@ -22,6 +22,7 @@
+ #include "config.h"
+ 
+ #include <avdec.h>
++#include <libavcodec/version.h>
+ 
+ #include <stdio.h> /* Needed for fileindex stuff */
+ 
+diff -ruN gmerlin-avdecoder-1.2.0-orig/lib/demux_ffmpeg.c gmerlin-avdecoder-1.2.0/lib/demux_ffmpeg.c
+--- gmerlin-avdecoder-1.2.0-orig/lib/demux_ffmpeg.c	2012-06-08 06:51:34.000000000 -0500
++++ gmerlin-avdecoder-1.2.0/lib/demux_ffmpeg.c	2023-05-06 05:08:19.000000000 -0500
+@@ -82,7 +82,7 @@
+ 
+ typedef struct
+   {
+-  AVInputFormat *avif;
++  const AVInputFormat *avif;
+   AVFormatContext *avfc;
+ #ifdef NEW_IO_API
+ #define BUFFER_SIZE 1024 * 4
+@@ -170,7 +170,7 @@
+ 
+ /* Demuxer functions */
+ 
+-static AVInputFormat * get_format(bgav_input_context_t * input)
++static const AVInputFormat * get_format(bgav_input_context_t * input)
+   {
+   uint8_t data[PROBE_SIZE];
+   AVProbeData avpd;
+@@ -189,7 +189,7 @@
+ 
+ static int probe_ffmpeg(bgav_input_context_t * input)
+   {
+-  AVInputFormat * format;
++  const AVInputFormat * format;
+   /* This sucks */
+   av_register_all();
+   format= get_format(input);
+@@ -540,12 +540,22 @@
+   if(!s->data.audio.block_align &&
+      map->bits)
+     {
+-    s->data.audio.block_align = ((map->bits + 7) / 8) * codec->channels;
++    s->data.audio.block_align = ((map->bits + 7) / 8) * 
++#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(59, 24, 100)
++        codec->ch_layout.nb_channels;
++#else
++        codec->channels;
++#endif
+     }
+   
+   s->timescale = st->time_base.den;
+   
+-  s->data.audio.format.num_channels = codec->channels;
++  s->data.audio.format.num_channels = 
++#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(59, 24, 100)
++        codec->ch_layout.nb_channels;
++#else
++        codec->channels;
++#endif
+   s->data.audio.format.samplerate = codec->sample_rate;
+   
+   bgav_stream_set_extradata(s, codec->extradata, codec->extradata_size);
+@@ -826,7 +836,9 @@
+   int i_tmp;
+   uint32_t * pal_i;
+ 
+-#if LIBAVCODEC_VERSION_MAJOR >= 54
++#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(58, 130, 100)
++  size_t pal_i_len;
++#elif LIBAVCODEC_VERSION_MAJOR >= 54
+   int pal_i_len;
+ #else
+   const int pal_i_len = AVPALETTE_COUNT;
+--- gmerlin_avdecoder/lib/demux_ffmpeg.c
++++ gmerlin_avdecoder/lib/demux_ffmpeg.c
+@@ -508,14 +508,14 @@
+   bgav_stream_t * s;
+   int i;
+   audio_codec_map_t * map = NULL;
+-  AVCodecContext *codec= st->codec;
++  AVCodecParameters *params= st->codecpar;
+   
+   /* Get fourcc */
+   for(i = 0; i < sizeof(audio_codecs)/sizeof(audio_codecs[0]); i++)
+     {
+-    if((audio_codecs[i].id == st->codec->codec_id) &&
++    if((audio_codecs[i].id == params->codec_id) &&
+        (!audio_codecs[i].codec_tag ||
+-        (audio_codecs[i].codec_tag == st->codec->codec_tag)))
++        (audio_codecs[i].codec_tag == params->codec_tag)))
+       {
+       map = &audio_codecs[i];
+       break;
+@@ -534,16 +534,16 @@
+ #if LIBAVCODEC_VERSION_INT < ((52<<16)+(0<<8)+0)
+     s->data.audio.bits_per_sample = codec->bits_per_sample;
+ #else
+-    s->data.audio.bits_per_sample = codec->bits_per_coded_sample;
++    s->data.audio.bits_per_sample = params->bits_per_coded_sample;
+ #endif
+   
+-  s->data.audio.block_align = codec->block_align;
++  s->data.audio.block_align = params->block_align;
+   if(!s->data.audio.block_align &&
+      map->bits)
+     {
+     s->data.audio.block_align = ((map->bits + 7) / 8) * 
+ #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(59, 24, 100)
+-        codec->ch_layout.nb_channels;
++        params->ch_layout.nb_channels;
+ #else
+         codec->channels;
+ #endif
+@@ -553,15 +553,15 @@
+   
+   s->data.audio.format.num_channels = 
+ #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(59, 24, 100)
+-        codec->ch_layout.nb_channels;
++        params->ch_layout.nb_channels;
+ #else
+         codec->channels;
+ #endif
+-  s->data.audio.format.samplerate = codec->sample_rate;
++  s->data.audio.format.samplerate = params->sample_rate;
+   
+-  bgav_stream_set_extradata(s, codec->extradata, codec->extradata_size);
++  bgav_stream_set_extradata(s, params->extradata, params->extradata_size);
+   
+-  s->container_bitrate = codec->bit_rate;
++  s->container_bitrate = params->bit_rate;
+   s->stream_id = index;
+   
+   }
+@@ -564,13 +564,13 @@
+   video_codec_map_t * map = NULL;
+   int i;
+   uint32_t tag;
+-  AVCodecContext *codec= st->codec;
++  AVCodecParameters *params= st->codecpar;
+ 
+   tag   =
+-    ((st->codec->codec_tag & 0x000000ff) << 24) |
+-    ((st->codec->codec_tag & 0x0000ff00) << 8) |
+-    ((st->codec->codec_tag & 0x00ff0000) >> 8) |
+-    ((st->codec->codec_tag & 0xff000000) >> 24);
++    ((params->codec_tag & 0x000000ff) << 24) |
++    ((params->codec_tag & 0x0000ff00) << 8) |
++    ((params->codec_tag & 0x00ff0000) >> 8) |
++    ((params->codec_tag & 0xff000000) >> 24);
+   
+ 
+   if(tag)
+@@ -583,7 +583,7 @@
+     {
+     for(i = 0; i < sizeof(video_codecs)/sizeof(video_codecs[0]); i++)
+       {
+-      if(video_codecs[i].id == st->codec->codec_id)
++      if(video_codecs[i].id == params->codec_id)
+         {
+         map = &video_codecs[i];
+         break;
+@@ -598,34 +598,34 @@
+   st->discard = AVDISCARD_NONE;
+   
+   
+-  s->data.video.format.image_width = codec->width;
+-  s->data.video.format.image_height = codec->height;
+-  s->data.video.format.frame_width = codec->width;
+-  s->data.video.format.frame_height = codec->height;
+-
+-  if(codec->time_base.den && codec->time_base.num)
+-    {
+-    s->data.video.format.timescale      = codec->time_base.den;
+-    s->data.video.format.frame_duration = codec->time_base.num;
++  s->data.video.format.image_width = params->width;
++  s->data.video.format.image_height = params->height;
++  s->data.video.format.frame_width = params->width;
++  s->data.video.format.frame_height = params->height;
++
++  if(st->time_base.den && st->time_base.num)
++    {
++    s->data.video.format.timescale      = st->time_base.den;
++    s->data.video.format.frame_duration = st->time_base.num;
+     }
+   
+   s->timescale = st->time_base.den;
+   
+-  s->data.video.format.pixel_width = codec->sample_aspect_ratio.num;
+-  s->data.video.format.pixel_height = codec->sample_aspect_ratio.den;
++  s->data.video.format.pixel_width = params->sample_aspect_ratio.num;
++  s->data.video.format.pixel_height = params->sample_aspect_ratio.den;
+   if(!s->data.video.format.pixel_width) s->data.video.format.pixel_width = 1;
+   if(!s->data.video.format.pixel_height) s->data.video.format.pixel_height = 1;
+ #if LIBAVCODEC_VERSION_INT < ((52<<16)+(0<<8)+0)
+-  s->data.video.depth = codec->bits_per_sample;
++  s->data.video.depth = params->bits_per_sample;
+ #else
+-  s->data.video.depth = codec->bits_per_coded_sample;
+-#endif
+-  bgav_stream_set_extradata(s, codec->extradata, codec->extradata_size);
+-    
+-  s->container_bitrate = codec->bit_rate;
++  s->data.video.depth = params->bits_per_coded_sample;
++#endif
++  bgav_stream_set_extradata(s, params->extradata, params->extradata_size);
++    
++  s->container_bitrate = params->bit_rate;
+   s->stream_id = index;
+ #if 0
+-  if(codec->palctrl)
++  if(params->palctrl)
+     {
+     s->priv = calloc(AVPALETTE_COUNT, sizeof(bgav_palette_entry_t));
+     s->data.video.palette = s->priv;
+@@ -725,15 +725,15 @@
+   
+   for(i = 0; i < avfc->nb_streams; i++)
+     {
+-    switch(avfc->streams[i]->codec->codec_type)
++    switch(avfc->streams[i]->codecpar->codec_type)
+       {
+-      case CODEC_TYPE_AUDIO:
++      case AVMEDIA_TYPE_AUDIO:
+         init_audio_stream(ctx, avfc->streams[i], i);
+         break;
+-      case CODEC_TYPE_VIDEO:
++      case AVMEDIA_TYPE_VIDEO:
+         init_video_stream(ctx, avfc->streams[i], i);
+         break;
+-      case CODEC_TYPE_SUBTITLE:
++      case AVMEDIA_TYPE_SUBTITLE:
+         break;
+       default:
+         break;
+@@ -843,7 +843,7 @@
+   s = bgav_track_find_stream(ctx, pkt.stream_index);
+   if(!s)
+     {
+-    av_free_packet(&pkt);
++    av_packet_unref(&pkt);
+     return 1;
+     }
+   
+@@ -866,8 +866,8 @@
+   /* Handle palette */
+   if((s->type == BGAV_STREAM_VIDEO) &&
+ #if LIBAVCODEC_VERSION_MAJOR < 54
+-     avs->codec->palctrl &&
+-     avs->codec->palctrl->palette_changed
++     avs->params->palctrl &&
++     avs->params->palctrl->palette_changed
+ #else
+      (pal_i = (uint32_t*)av_packet_get_side_data(&pkt,
+                                                  AV_PKT_DATA_PALETTE,
+@@ -877,7 +877,7 @@
+     {
+     
+ #if LIBAVCODEC_VERSION_MAJOR < 54
+-    pal_i = avs->codec->palctrl->palette;
++    pal_i = avs->params->palctrl->palette;
+ #else
+     pal_i_len /= 4;
+ 
+@@ -897,14 +897,14 @@
+       pal[i].b = i_tmp | i_tmp << 8;
+       }
+ #if LIBAVCODEC_VERSION_MAJOR < 54
+-    avs->codec->palctrl->palette_changed = 0;
++    avs->params->palctrl->palette_changed = 0;
+ #endif
+     }
+   if(pkt.flags&PKT_FLAG_KEY)
+     PACKET_SET_KEYFRAME(p);
+   bgav_stream_done_packet_write(s, p);
+   
+-  av_free_packet(&pkt);
++  av_packet_unref(&pkt);
+   
+   return 1;
+   }
+--- a/lib/video_ffmpeg.c	2023-05-06 20:26:32.000000000 -0500
++++ b/lib/video_ffmpeg.c	2023-05-06 20:49:52.000000000 -0500
+@@ -46,18 +46,6 @@
+ #include <dvframe.h>
+ #include <mpeg4_header.h>
+ 
+-#ifdef HAVE_LIBPOSTPROC
+-#include POSTPROC_HEADER
+-
+-# if (defined HAVE_PP_CONTEXT) && (!defined HAVE_PP_CONTEXT_T)
+-#  define pp_context_t pp_context
+-# endif
+-# if (defined HAVE_PP_MODE) && (!defined HAVE_PP_MODE_T)
+-#  define pp_mode_t pp_mode
+-# endif
+-
+-#endif
+-
+ #ifdef HAVE_LIBSWSCALE
+ #include SWSCALE_HEADER
+ #endif
+@@ -135,12 +123,6 @@
+   
+   int flags;
+ 
+-#ifdef HAVE_LIBPOSTPROC
+-  int do_pp;
+-  pp_context_t *pp_context;
+-  pp_mode_t    *pp_mode;
+-#endif
+-
+ #ifdef HAVE_LIBSWSCALE
+   struct SwsContext *swsContext;
+ #endif
+@@ -319,10 +301,6 @@
+ static void get_format(AVCodecContext * ctx, gavl_video_format_t * format);
+ static void put_frame(bgav_stream_t * s, gavl_video_frame_t * f);
+ 
+-#ifdef HAVE_LIBPOSTPROC
+-static void init_pp(bgav_stream_t * s);
+-#endif
+-
+ /* Codec specific hacks */
+ 
+ static void handle_dv(bgav_stream_t * s, bgav_packet_t * p);
+@@ -1101,12 +1079,6 @@
+   
+   if(priv->extradata)
+     free(priv->extradata);
+-#ifdef HAVE_LIBPOSTPROC
+-  if(priv->pp_mode)
+-    pp_free_mode(priv->pp_mode);
+-  if(priv->pp_context)
+-    pp_free_context(priv->pp_context);
+-#endif
+   
+ #ifdef HAVE_LIBSWSCALE
+   if(priv->swsContext)
+@@ -2204,73 +2176,7 @@
+     }
+   }
+ 
+-#ifdef HAVE_LIBPOSTPROC
+-static void init_pp(bgav_stream_t * s)
+-  {
+-  int accel_flags;
+-  int pp_flags;
+-  int level;
+-  ffmpeg_video_priv * priv;
+-  priv = s->data.video.decoder->priv;
+-
+-  
+-  /* Initialize postprocessing */
+-  if(s->opt->pp_level > 0.0)
+-    {
+-    switch(priv->info->ffmpeg_id)
+-      {
+-      case AV_CODEC_ID_MPEG4:
+-      case AV_CODEC_ID_MSMPEG4V1:
+-      case AV_CODEC_ID_MSMPEG4V2:
+-      case AV_CODEC_ID_MSMPEG4V3:
+-      case AV_CODEC_ID_WMV1:
+-      case AV_CODEC_ID_WMV2:
+-      case AV_CODEC_ID_WMV3:
+-        priv->do_pp = 1;
+-        accel_flags = gavl_accel_supported();
+-
+-        if(s->data.video.format.pixelformat != GAVL_YUV_420_P)
+-          {
+-          bgav_log(s->opt, BGAV_LOG_WARNING, LOG_DOMAIN,
+-                   "Unsupported pixelformat for postprocessing");
+-          priv->do_pp = 0;
+-          break;
+-          }
+-        pp_flags = PP_FORMAT_420;
+-            
+-        if(accel_flags & GAVL_ACCEL_MMX)
+-          pp_flags |= PP_CPU_CAPS_MMX;
+-        if(accel_flags & GAVL_ACCEL_MMXEXT)
+-          pp_flags |= PP_CPU_CAPS_MMX2;
+-        if(accel_flags & GAVL_ACCEL_3DNOW)
+-          pp_flags |= PP_CPU_CAPS_3DNOW;
+-
+-        priv->pp_context =
+-          pp_get_context(priv->ctx->width, priv->ctx->height,
+-                         pp_flags);
+-
+-        level = (int)(s->opt->pp_level * 6.0 + 0.5);
+-
+-        if(level > 6)
+-          level = 6;
+-        
+-        priv->pp_mode = pp_get_mode_by_name_and_quality("hb:a,vb:a,dr:a",
+-                                                        level);
+-        
+-        if(priv->flags & FLIP_Y)
+-          priv->flip_frame = gavl_video_frame_create(&s->data.video.format);
+-            
+-        break;
+-      default:
+-        priv->do_pp = 0;
+-        break;
+-      }
+-        
+-    }
+-  }
+-#endif
+-
+-/* Copy/postprocess/flip internal frame to output */
++/* Copy/flip internal frame to output */
+ static void put_frame(bgav_stream_t * s, gavl_video_frame_t * f)
+   {
+ #ifndef HAVE_LIBSWSCALE
+@@ -2320,32 +2226,6 @@
+ #endif
+   else if(!priv->do_convert)
+     {
+-#ifdef HAVE_LIBPOSTPROC
+-    if(priv->do_pp)
+-      {
+-      if(priv->flags & FLIP_Y)
+-        {
+-        pp_postprocess((const uint8_t**)priv->frame->data, priv->frame->linesize,
+-                       priv->flip_frame->planes, priv->flip_frame->strides,
+-                       priv->ctx->width, priv->ctx->height,
+-                       priv->frame->qscale_table, priv->frame->qstride,
+-                       priv->pp_mode, priv->pp_context,
+-                       priv->frame->pict_type);
+-        gavl_video_frame_copy_flip_y(&s->data.video.format,
+-                                     f, priv->flip_frame);
+-        }
+-      else
+-        pp_postprocess((const uint8_t**)priv->frame->data, priv->frame->linesize,
+-                       f->planes, f->strides,
+-                       priv->ctx->width, priv->ctx->height,
+-                       priv->frame->qscale_table, priv->frame->qstride,
+-                       priv->pp_mode, priv->pp_context,
+-                       priv->frame->pict_type);
+-            
+-      }
+-    else
+-      {
+-#endif
+       priv->gavl_frame->planes[0]  = priv->frame->data[0];
+       priv->gavl_frame->planes[1]  = priv->frame->data[1];
+       priv->gavl_frame->planes[2]  = priv->frame->data[2];
+@@ -2386,9 +2266,6 @@
+         }
+       else
+         gavl_video_frame_copy(&s->data.video.format, f, priv->gavl_frame);
+-#ifdef HAVE_LIBPOSTPROC
+-      }
+-#endif
+     }
+   else
+     {
+--- a/tests/Makefile.am	2023-05-06 21:12:56.000000000 -0500
++++ b/tests/Makefile.am	2023-05-06 21:13:02.000000000 -0500
+@@ -15,8 +15,31 @@
+ count_samples \
+ seektest
+ 
++if HAVE_LIBAVCODEC
++avcodec_cflags =  @AVCODEC_CFLAGS@
++avcodec_libs =    @AVCODEC_LIBS@
++avcodec_sources = audio_ffmpeg.c video_ffmpeg.c
++else
++avcodec_cflags =
++avcodec_libs =
++avcodec_sources =
++endif
++
++if HAVE_LIBAVFORMAT
++avformat_cflags =  @AVFORMAT_CFLAGS@
++avformat_libs =    @AVFORMAT_LIBS@
++else
++avformat_cflags =
++avformat_libs =
++endif
++
++AM_CFLAGS = \
++$(avcodec_cflags) \
++$(avformat_cflags)
++
+ bgavdump_SOURCES = bgavdump.c
+ bgavdump_LDADD = $(top_builddir)/lib/libgmerlin_avdec.la
++bgavdump_CFLAGS = $(AM_CFLAGS)
+ 
+ bgavdemux_SOURCES = bgavdemux.c
+ bgavdemux_LDADD = $(top_builddir)/lib/libgmerlin_avdec.la

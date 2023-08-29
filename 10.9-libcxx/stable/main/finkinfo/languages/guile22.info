@@ -1,41 +1,52 @@
 Info3: <<
 Package: guile22
 Version: 2.2.7
-Revision: 1
+Revision: 5
 BuildDepends: <<
 	fink (>= 0.32),
 	fink-package-precedence,
-	gc (>= 7.2d-2),
+	gc (>= 8.2.2-1),
 	gettext-tools,
 	gmp5,
-	libffi6,
+	libffi8,
 	libgettext8-dev,
 	libiconv-dev,
 	libncurses5 (>= 5.4-20041023-1006),
 	libtool2 (>= 2.4-1),
-	libunistring2, 
-	readline7
+	libunistring2,
+	readline8
 <<
 Depends: <<
 	%N-shlibs (= %v-%r),
 	%N-libs (= %v-%r),
-	# needed by guile-2.2-config
+	gmp5-shlibs,
+	libffi8-shlibs,
+	libgettext8-shlibs,
+	libiconv,
 	libtool2-shlibs,
+	libunistring2-shlibs,
 	# needed by guile-2.2-config
 	pkgconfig
 <<
-# prevent from building against old installed library
-# BuildConflicts: guile22-dev
 GCC: 4.0
 Source: mirror:gnu:guile/guile-%v.tar.xz
-Source-MD5: 7a7e8def41678c567148c26a8a0a0873
-Source2: http://archive.ubuntu.com/ubuntu/pool/main/g/guile-2.2/guile-2.2_2.2.6+1-1.debian.tar.xz
-Source2-MD5: 9542eac69576e054a3e46004e0e14b96
-#PatchFile: %n.patch
-#PatchFile-MD5: 2dbc4ca9cc216dd0418b0482f8a8d3a6
+Source-Checksum: SHA256(cdf776ea5f29430b1258209630555beea6d2be5481f9da4d64986b077ff37504)
+Source2: http://archive.ubuntu.com/ubuntu/pool/main/g/guile-2.2/guile-2.2_%v+1-6build2.debian.tar.xz
+Source2-Checksum: SHA256(3daac51730495746b5ff0dd0004698c0d49223219e4400c237a7eaf78a331e30)
+# Fix -I ordering:
+# * Pass .pc BDW_GC_CFLAGS via automake foo_CPPFLAGS not CFLAGS,
+#   completing the idea of
+#   https://git.savannah.gnu.org/cgit/guile.git/commit?id=abd7e37ab734eef8520965f2c3f52d5138584ca0
+# * Don't put abs_src_dir in CPPFLAGS (it's automatic in automake, and
+#   would wind up in wrong order), redoing correctly
+#   https://git.savannah.gnu.org/cgit/guile.git/commit?id=da7e43a6e0dadb2f96e6e33163bb4d94715f7498
+# * Don't put redundant -I in testsuite build, upgrading the idea of
+#   https://git.savannah.gnu.org/cgit/guile.git/commit?id=a66480374ed6dfc2d012c6df39c1382ba87ed9d0
+PatchFile: %n.patch
+PatchFile-MD5: cc7410b6d5f4548544711ce66ca635a0
 PatchScript: <<
 #!/bin/sh -ev
-#%{default_script}
+%{default_script}
 perl -i -pe 's|(lt_dlinit\s*\(\s*\))|\1; lt_dladdsearchdir("\%p/lib")|' libguile/dynl.c
 # When LIBICONV_PLUG is not defined (normal) iconv, iconv_open, iconv_close
 # are all #defined to libiconv* in <iconv.h>, but this #undef messes it up.
@@ -59,11 +70,14 @@ echo 'eval "$@"'
 } > guile22-build
 chmod +x guile22-build
 ### apply debian patches, which mostly deal with known possible failing tests
+# Remove 0007-Mark-test-out-of-memory-as-an-expected-failure-for-n.patch because it patches Makefile.am which regenerates things and fails (non-existent automake-1.16). This test runs OK for us as is.
+rm ../debian/patches/0007-Mark-test-out-of-memory-as-an-expected-failure-for-n.patch
 for patch in ../debian/patches/*.patch; do
 	patch -p1 < $patch
 done
 <<
 ConfigureParams: <<
+	--disable-silent-rules \
 	--disable-static \
 	--infodir=%p/share/info \
 	--program-transform-name="s|guile|guile-2.2|g; s|guild|guild-2.2|g" \
@@ -94,7 +108,7 @@ InfoTest: <<
 <<
 InstallScript: <<
  #!/bin/sh -ev
- cd build
+ pushd build
  make -j1 install DESTDIR=%d
  install -m 755 ../guile22-build %i/bin/guile22-build
  pkgdatadir=%i/share/guile/2.2
@@ -108,11 +122,11 @@ InstallScript: <<
 SplitOff: <<
   Package: %N-shlibs
   Depends: <<
-    gc-shlibs (>= 7.2d-2),
+    gc-shlibs (>= 8.2.2-1),
     gmp5-shlibs,
-    libffi6-shlibs,
-    libncurses5-shlibs (>= 5.4-20041023-1006),
+    libffi8-shlibs,
     libgettext8-shlibs,
+    libiconv,
     libtool2-shlibs (>= 2.4-1),
     libunistring2-shlibs
   <<
@@ -127,6 +141,9 @@ SplitOff: <<
 <<
 SplitOff2: <<
   Package: %N-libs
+  # extensions/*.la was in -dev for a while, but it's for .so runtime
+  # loading, not compile-time linking
+  Replaces: %N-dev
   Files: <<
     share/guile/2.2/[A-Za-rt-z]*
     share/guile/2.2/scripts/[A-Zac-z]*
@@ -136,12 +153,20 @@ SplitOff2: <<
     lib/guile/2.2/ccache/scripts/[A-Zac-z]*
     lib/guile/2.2/ccache/srfi
     lib/guile/2.2/ccache/sxml
-    lib/guile/2.2/extensions/guile-readline*so
+    lib/guile/2.2/extensions
   <<
   DocFiles: COPYING.LESSER
   Depends: <<
     %N-shlibs (= %v-%r),
-    readline7-shlibs
+    gc-shlibs (>= 8.2.2-1),
+    gmp5-shlibs,
+    libffi8-shlibs,
+    libgettext8-shlibs,
+    libiconv,
+    libncurses5-shlibs (>= 5.4-20041023-1006),
+    libtool2-shlibs (>= 2.4-1),
+    libunistring2-shlibs,
+    readline8-shlibs
   <<
   Description: Scheme libraries and modules for guile22
   DescPackaging: <<
@@ -170,7 +195,6 @@ SplitOff3: <<
   Files: <<
     include
     share/aclocal
-    lib/guile/2.2/extensions/guile-readline.*a
     lib/libguile-2.2.la
     lib/libguile-2.2.dylib
     lib/pkgconfig
@@ -209,16 +233,16 @@ DocFiles: README COPYING.LESSER AUTHORS HACKING NEWS THANKS
 #
 Description: Embedable Scheme interpreter
 DescPort: <<
-* Made the main packages not conflict with guile-1.4, -1.6, -1.8, -2.0.
-* Make sure to declare the darwinish _environ symbol before using it.
 * 10.7's libffi is missing symbols, resulting in undefined references,
 thus we use fink's libffi.
 <<
 DescPackaging: <<
+Made main packages not conflict among different guile-X.X versions
+
 Since 1.9.13-2, bumped gmp to gmp5.
 Matthias Neeracher <neeracher@mac.com> maintains guile18 and guile16.
 <<
 License: LGPL
-Homepage: http://www.gnu.org/software/guile/
+Homepage: https://www.gnu.org/software/guile/
 Maintainer: David Fang <fangism@users.sourceforge.net>
 <<

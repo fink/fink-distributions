@@ -1,0 +1,122 @@
+diff -uNr numpy-1.14.5-orig/numpy/distutils/command/build_ext.py numpy-1.14.5/numpy/distutils/command/build_ext.py
+--- numpy-1.14.5-orig/numpy/distutils/command/build_ext.py	2018-06-12 14:28:52.000000000 -0500
++++ numpy-1.14.5/numpy/distutils/command/build_ext.py	2018-08-09 18:48:48.000000000 -0500
+@@ -432,6 +432,11 @@
+             unlinkable_fobjects = []
+             objects = c_objects + f_objects
+ 
++        if sys.platform=='darwin':
++           ext.extra_link_args.append('-Wl,-undefined -Wl,dynamic_lookup -Wl,-bundle')
++        else:
++           ext.extra_link_args.append('-shared')
++
+         if ext.extra_objects:
+             objects.extend(ext.extra_objects)
+         extra_args = ext.extra_link_args or []
+diff -uNr numpy-1.14.5-orig/numpy/distutils/exec_command.py numpy-1.14.5/numpy/distutils/exec_command.py
+--- numpy-1.14.5-orig/numpy/distutils/exec_command.py	2018-06-12 14:28:52.000000000 -0500
++++ numpy-1.14.5/numpy/distutils/exec_command.py	2018-08-09 21:09:50.000000000 -0500
+@@ -231,7 +231,7 @@
+ 
+     if os.name == 'posix' and use_shell:
+         # On POSIX, subprocess always uses /bin/sh, override
+-        sh = os.environ.get('SHELL', '/bin/sh')
++        sh = '/bin/sh'
+         if is_sequence(command):
+             command = [sh, '-c', ' '.join(command)]
+         else:
+diff -uNr numpy-1.14.5-orig/numpy/distutils/system_info.py numpy-1.14.5/numpy/distutils/system_info.py
+--- numpy-1.14.5-orig/numpy/distutils/system_info.py	2018-06-12 14:28:52.000000000 -0500
++++ numpy-1.14.5/numpy/distutils/system_info.py	2018-08-09 18:48:48.000000000 -0500
+@@ -85,8 +85,8 @@
+ Example:
+ ----------
+ [ALL]
+-library_dirs = /usr/lib:/usr/local/lib:/opt/lib
+-include_dirs = /usr/include:/usr/local/include:/opt/include
++library_dirs = @FINKPREFIX@/lib:/usr/lib
++include_dirs =  @FINKPREFIX@/include:/usr/include
+ src_dirs = /usr/local/src:/opt/src
+ # search static libraries (.a) in preference to shared ones (.so)
+ search_static_first = 0
+@@ -97,7 +97,7 @@
+ # if the above aren't found, look for {s,d}fftw_libs and {s,d}fftw_opt_libs
+ 
+ [atlas]
+-library_dirs = /usr/lib/3dnow:/usr/lib/3dnow/atlas
++library_dirs = 
+ # for overriding the names of the atlas libraries
+ atlas_libs = lapack, f77blas, cblas, atlas
+ 
+@@ -262,20 +262,16 @@
+             add_system_root(os.path.join(conda_dir, 'Library'))
+                         
+ else:
+-    default_lib_dirs = libpaths(['/usr/local/lib', '/opt/lib', '/usr/lib',
+-                                 '/opt/local/lib', '/sw/lib'], platform_bits)
++    default_lib_dirs = libpaths(['@FINKPREFIX@/lib',
++                                 '/usr/lib'], platform_bits)
+     default_runtime_dirs = []
+-    default_include_dirs = ['/usr/local/include',
+-                            '/opt/include', '/usr/include',
+-                            # path of umfpack under macports
+-                            '/opt/local/include/ufsparse',
+-                            '/opt/local/include', '/sw/include',
+-                            '/usr/include/suitesparse']
+-    default_src_dirs = ['.', '/usr/local/src', '/opt/src', '/sw/src']
++    default_include_dirs = ['@FINKPREFIX@/include',
++                            '/usr/include']
++    default_src_dirs = ['.']
+ 
+-    default_x11_lib_dirs = libpaths(['/usr/X11R6/lib', '/usr/X11/lib',
++    default_x11_lib_dirs = libpaths(['/opt/X11/lib', '/usr/X11/lib',
+                                      '/usr/lib'], platform_bits)
+-    default_x11_include_dirs = ['/usr/X11R6/include', '/usr/X11/include',
++    default_x11_include_dirs = ['/opt/X11/include', '/usr/X11/include',
+                                 '/usr/include']
+ 
+     if os.path.exists('/usr/lib/X11'):
+diff --git a/numpy/random/tests/test_random.py b/numpy/random/tests/test_random.py
+index 711270072bc..121c7dd8ce6 100644
+--- a/numpy/random/tests/test_random.py
++++ b/numpy/random/tests/test_random.py
+@@ -515,7 +515,7 @@ def test_beta(self):
+ 
+     def test_binomial(self):
+         np.random.seed(self.seed)
+-        actual = np.random.binomial(100.123, .456, size=(3, 2))
++        actual = np.random.binomial(100, .456, size=(3, 2))
+         desired = np.array([[37, 43],
+                             [42, 48],
+                             [46, 45]])
+@@ -612,7 +612,7 @@ def test_gumbel_0(self):
+ 
+     def test_hypergeometric(self):
+         np.random.seed(self.seed)
+-        actual = np.random.hypergeometric(10.1, 5.5, 14, size=(3, 2))
++        actual = np.random.hypergeometric(10, 5, 14, size=(3, 2))
+         desired = np.array([[10, 10],
+                             [10, 10],
+                             [9, 9]])
+@@ -923,6 +923,8 @@ class ThrowingInteger(np.ndarray):
+             def __int__(self):
+                 raise TypeError
+ 
++            __index__ = __int__
++
+         throwing_int = np.array(1).view(ThrowingInteger)
+         assert_raises(TypeError, np.random.hypergeometric, throwing_int, 1, 1)
+ 
+diff --git a/numpy/tests/test_warnings.py b/numpy/tests/test_warnings.py
+index aa6f69f7eea..f5560a099a1 100644
+--- a/numpy/tests/test_warnings.py
++++ b/numpy/tests/test_warnings.py
+@@ -44,7 +44,7 @@ def visit_Call(self, node):
+             if p.ls[-1] == 'warn' and (
+                     len(p.ls) == 1 or p.ls[-2] == 'warnings'):
+ 
+-                if "testing/tests/test_warnings.py" is self.__filename:
++                if "testing/tests/test_warnings.py" == self.__filename:
+                     # This file
+                     return
+ 

@@ -1,11 +1,11 @@
 Package: freetype219
-Version: 2.10.4
-Revision: 1
+Version: 2.12.1
+Revision: 4
 BuildDepends: <<
 	bzip2-dev,
 	fink (>= 0.32.0),
 	fink-package-precedence,
-	libpng16 (>= 1.6.34-1),
+	libpng16 (>= 1.6.38-1),
 	libbrotli1
 <<
 Depends: %N-shlibs (= %v-%r)
@@ -14,19 +14,49 @@ Conflicts: %N-hinting, %N-32bit
 Replaces: %N-hinting, %N-default, %N-32bit
 BuildDependsOnly: True
 Source: http://download.savannah.gnu.org/releases/freetype/freetype-%v.tar.xz
-Source-MD5: 0e6c0e9b218be3ba3e26e1d23b1c80dd
-Source2: mirror:debian:pool/main/f/freetype/freetype_%v+dfsg-1.debian.tar.xz
-Source2-MD5: 08cdf1ec1fe2b281c55986f41c48f3af
+Source-Checksum: SHA256(4766f20157cc4cf0cd292f80bf917f92d1c439b243ac3018debf6b9140c41a7f)
+Source2: mirror:debian:pool/main/f/freetype/freetype_%v+dfsg-4.debian.tar.xz
+Source2-Checksum: SHA256(05ada04cbc7cb18e087d6abffaa748ecc7fa0f6c9537edaffb41c863ec4fb5f5)
 PatchFile: %n.patch
-PatchFile-MD5: 4a95e7bc7641e79e46d490b0f8498de1
+PatchFile-MD5: bb4dd321e8157bc038429403ac8601a2
+PatchFile2: %n-ATS_stubs.patch
+PatchFile2-MD5: ce5029e65d3c2f487e7e76a4ed8a9069
 PatchScript: <<
 	%{default_script}
 	patch -p1 < ../debian/patches/enable-gxvalid-otvalid.patch
 	patch -p1 < ../debian/patches/enable-subpixel-rendering.patch
-	patch -p1 < ../debian/patches/remove-gstatic-code.patch
+	# We don't import the separate ftdocs tarball (but see alt
+	# approach later in PatchScript for the fonts)
+	#patch -p1 < ../debian/patches/no-web-fonts.patch
+	#patch -p1 < ../debian/patches/hide-donations-information.patch
+	# We don't import the separate ft2demos tarball
+	#patch -p1 < ../debian/patches/CVE-2022-31782.patch
+	patch -p1 < ../debian/patches/fix-wild-free-svg.patch
+
+	# Equivalent to Debian's old remove-gstatic-code.patch (we do
+	# have upstream's docs)
+	perl -ni -e 'print unless /https:\/\/fonts\.g/' docs/reference/*.html
+
+	# Work-around for Apple finally scrapping ATS.framework.
+	# Should we only do this where needed (if we can figure out
+	# where that is) and keep the upstream code on older
+	# platforms? That would mean separate %r due to different
+	# binaries. For now we keep in sync, which means as of
+	# 2.12.1-2 support for FOND (old font suitcases, etc.) is
+	# disabled on all platforms.
+	# We simply fall through to the main function.
+	mv src/base/ftmac{,_real}.c
+	mv src/base/ftmac{_unimplemented,}.c
 <<
 SetCPPFLAGS: -MD
-ConfigureParams: --libdir=%p/lib/freetype219/lib --with-old-mac-fonts --disable-static --enable-freetype-config --without-harfbuzz
+ConfigureParams: <<
+	--libdir=%p/lib/freetype219/lib \
+	--with-old-mac-fonts \
+	--disable-static \
+	--enable-freetype-config \
+	--without-harfbuzz \
+	--without-librsvg
+<<
 CompileScript: <<
 	%{default_script}
 	fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=%n .
@@ -52,18 +82,18 @@ SplitOff: <<
 	Package: %N-shlibs
 	Depends: <<
 		bzip2-shlibs,
-		libpng16-shlibs (>= 1.6.34-1),
+		libpng16-shlibs (>= 1.6.38-1),
 		libbrotli1-shlibs
 	<<
 	Replaces:  freetype219-hinting-shlibs, freetype2 (<< 2.0.8-2)
 	Conflicts: freetype219-hinting-shlibs
 	Files: lib/%N/lib/libfreetype.6*dylib
-	Shlibs: %p/lib/%N/lib/libfreetype.6.dylib 24.0.0 %n (>= 2.10.2-1)
-	DocFiles: ChangeLog* README docs/LICENSE.TXT
+	Shlibs: %p/lib/%N/lib/libfreetype.6.dylib 25.0.0 %n (>= 2.12.1-4)
+	DocFiles: ChangeLog docs/oldlogs/ChangeLog* LICENSE.TXT README
 	Description: TrueType font rendering library, shared libs
 <<
 
-DocFiles: ChangeLog* README docs/LICENSE.TXT
+DocFiles: ChangeLog docs/oldlogs/ChangeLog* LICENSE.TXT README
 Description: TrueType font rendering library, headers
 DescDetail: <<
 FreeType 2 is a library that provides access to and rendering of a
@@ -80,6 +110,12 @@ DescPort: <<
 	2006-08-06 Benjamin Reed <rangerrick@users.sourceforge.net>
 	  - integrated patches from debian's freetype-2.2.1 for
 	    backwards-compatibility with 2.1.9 and earlier
+
+	Not fixing lots of FS* obsolete Carbon functions. But...
+	Apple's ATS.framework is deprecated and eventually removed, so
+	we stub those down on the latest platforms, which removes the
+	use of FS*, via a replacement ftmac.c file. See:
+	https://gitlab.freedesktop.org/freetype/freetype/-/issues/448
 <<
 DescPackaging: <<
 	Previous versions by Christoph Pfisterer
@@ -92,16 +128,18 @@ DescPackaging: <<
 	No longer supply static (as of 2.4.4-2), therefore no longer
 	need to propagate any non-public-interface dependencies
 
-	Not fixing lots of FS* obsolete Carbon functions. See:
-	https://savannah.nongnu.org/bugs/?41411
-
 	Disable attempted removal of previous-version's headers during
 	'make install' (we use virgin staging dir and fink handles
 	old-version removal during live-system upgrades) See:
 	https://savannah.nongnu.org/bugs/index.php?44019
 	Don't confuse builders with non-"failure" error messages (vs
 	not failing when an error is actually a problem)
+
+	Disable harfbuzz because its package Depends:freetype219
+
+	Disable rsvg because its package Depends:freetype219 (only
+	used for demos, which we don't build, anyway).
 <<
 License: OSI-Approved
-Homepage: http://www.freetype.org/
+Homepage: https://www.freetype.org/
 Maintainer: The Gnome Core Team <fink-gnome-core@lists.sourceforge.net>
