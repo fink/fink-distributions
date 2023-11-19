@@ -1,0 +1,98 @@
+From aee9f7f94b4486d972cfea651fe131aed4d1c887 Mon Sep 17 00:00:00 2001
+From: tomaszg <tomaszg@alpha.uwb.edu.pl>
+Date: Mon, 6 Jan 2014 22:50:13 +0100
+Subject: [PATCH] Disable forced ffmpeg.c downmixing of multichannel data
+
+---
+ decoder_plugins/ffmpeg/ffmpeg.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/decoder_plugins/ffmpeg/ffmpeg.c b/decoder_plugins/ffmpeg/ffmpeg.c
+index d4f6ca9..36f2120 100644
+--- a/decoder_plugins/ffmpeg/ffmpeg.c
++++ b/decoder_plugins/ffmpeg/ffmpeg.c
+@@ -901,7 +901,7 @@ static void *ffmpeg_open (const char *file)
+ 	}
+ #endif
+ 
+-	set_downmixing (data);
++//	set_downmixing (data);
+ 	if (data->codec->capabilities & AV_CODEC_CAP_TRUNCATED)
+ 		data->enc->flags |= AV_CODEC_FLAG_TRUNCATED;
+ 
+-- 
+GitLab
+
+From 27370f900c95e4a7759d153dd33b225e8d1b9f95 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Felix=20Neum=C3=A4rker?= <xdch47@posteo.de>
+Date: Sat, 7 Oct 2023 15:32:29 +0200
+Subject: [PATCH] Fix: FFmpeg add compatibility for version 6.
+
+AV_CODEC_CAP_TRUNCATED and  AV_CODEC_FLAG_TRUNCATED have been removed
+after deprecation.
+
+FFmpeg commit dd846bc4a91:
+    lavc: deprecate AV_CODEC_(FLAG|CAP)_TRUNCATED
+
+    It is supported only by a few decoders (h263, h263p, mpeg(1|2|)video
+    and mpeg4) and is entirely redundant with parsers. Furthermore, using
+    it leads to missing frames, as flushing the decoder at the end does not
+    work properly.
+
+The cur_dts field of AVStream has been removed as it is considered as a
+private field. (FFmpeg commit 591b88e6787).
+
+Removing the AVSEEK_FLAG_BACKWARD flag, since this code path seems to be broken
+(due to caching?) - the current time is not the time actually played be the
+server.
+---
+ decoder_plugins/ffmpeg/ffmpeg.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/decoder_plugins/ffmpeg/ffmpeg.c b/decoder_plugins/ffmpeg/ffmpeg.c
+index c94864c..9fae71a 100644
+--- a/decoder_plugins/ffmpeg/ffmpeg.c
++++ b/decoder_plugins/ffmpeg/ffmpeg.c
+@@ -32,6 +32,7 @@
+ #include <stdint.h>
+ #include <errno.h>
+ 
++#include <libavcodec/avcodec.h>
+ #include <libavformat/avformat.h>
+ #include <libavutil/mathematics.h>
+ #if HAVE_LIBAVUTIL_CHANNEL_LAYOUT_H
+@@ -762,8 +763,10 @@ static void *ffmpeg_open_internal (struct ffmpeg_data *data)
+ 	}
+ 
+ //	set_downmixing (data);
++#if LIBAVCODEC_VERSION_MAJOR < 60
+ 	if (data->codec->capabilities & AV_CODEC_CAP_TRUNCATED)
+ 		data->enc->flags |= AV_CODEC_FLAG_TRUNCATED;
++#endif
+ 
+ 	if (avcodec_open2 (data->enc, data->codec, NULL) < 0)
+ 	{
+@@ -1172,7 +1175,7 @@ static bool seek_in_stream (struct ffmpeg_data *data)
+ static bool seek_in_stream (struct ffmpeg_data *data, int sec)
+ #endif
+ {
+-	int rc, flags = AVSEEK_FLAG_ANY;
++	int rc;
+ 	int64_t seek_ts;
+ 
+ #if SEEK_IN_DECODER
+@@ -1198,10 +1201,7 @@ static bool seek_in_stream (struct ffmpeg_data *data, int sec)
+ 		seek_ts += data->stream->start_time;
+ 	}
+ 
+-	if (data->stream->cur_dts > seek_ts)
+-		flags |= AVSEEK_FLAG_BACKWARD;
+-
+-	rc = av_seek_frame (data->ic, data->stream->index, seek_ts, flags);
++	rc = av_seek_frame (data->ic, data->stream->index, seek_ts, AVSEEK_FLAG_ANY);
+ 	if (rc < 0) {
+ 		log_errno ("Seek error", rc);
+ 		return false;
+-- 
+GitLab
+
