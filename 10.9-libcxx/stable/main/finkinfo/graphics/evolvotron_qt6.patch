@@ -1,0 +1,297 @@
+From 439c614921f91ea3d379f07fc1d49fe04e23e7e1 Mon Sep 17 00:00:00 2001
+From: Karl Robillard <wickedsmoke@users.sourceforge.net>
+Date: Sat, 8 Apr 2023 23:19:17 -0400
+Subject: [PATCH] Support Qt 6.
+
+---
+ libevolvotron/evolvotron_main.cpp         | 27 +++++++---
+ libevolvotron/mutatable_image.cpp         | 66 +++++++++++++++--------
+ libevolvotron/mutatable_image_display.cpp | 10 +++-
+ project.b                                 |  4 --
+ 4 files changed, 73 insertions(+), 34 deletions(-)
+
+diff --git a/libevolvotron/evolvotron_main.cpp b/libevolvotron/evolvotron_main.cpp
+index a3b5377..7a08cd9 100644
+--- a/libevolvotron/evolvotron_main.cpp
++++ b/libevolvotron/evolvotron_main.cpp
+@@ -242,15 +242,22 @@ EvolvotronMain::EvolvotronMain
+ 
+   _dialog_favourite=new DialogFavourite(this);
+ 
++#if QT_VERSION >= 0x060400
++#define KEY_ACTION(menu, L, M, K)   menu->addAction(L, K, this, M)
++#else
++#define KEY_ACTION(menu, L, M, K)   menu->addAction(L, this, M, K)
++#endif
++
+   _popupmenu_file=menuBar()->addMenu("&File");
+-  _popupmenu_file->addAction("Reset (Reset mutation parameters, clear locks)",this,SLOT(reset_cold()),QKeySequence("r"));
+-  _popupmenu_file->addAction("Restart (Preserve mutation parameters and locks)",this,SLOT(reset_warm()),QKeySequence("t"));
+-  _popupmenu_file->addAction("Remix (Randomize function weights and restart)",this,SLOT(reset_randomized()),QKeySequence("x"));
++  KEY_ACTION(_popupmenu_file, "Reset (Reset mutation parameters, clear locks)", SLOT(reset_cold()), QKeySequence("r"));
++  KEY_ACTION(_popupmenu_file, "Restart (Preserve mutation parameters and locks)", SLOT(reset_warm()), QKeySequence("t"));
++  KEY_ACTION(_popupmenu_file, "Remix (Randomize function weights and restart)", SLOT(reset_randomized()), QKeySequence("x"));
+   _popupmenu_file->addSeparator();
+-  _popupmenu_file->addAction("&Quit", this, SLOT(close()), QKeySequence::Quit);
++  KEY_ACTION(_popupmenu_file, "&Quit", SLOT(close()), QKeySequence::Quit);
+ 
+   _popupmenu_edit=menuBar()->addMenu("&Edit");
+-  _popupmenu_edit_undo_action=_popupmenu_edit->addAction("Undo",this,SLOT(undo()),QKeySequence("u"));
++  _popupmenu_edit_undo_action=
++      KEY_ACTION(_popupmenu_edit, "Undo", SLOT(undo()), QKeySequence("u"));
+   _popupmenu_edit_undo_action->setEnabled(false);
+   _popupmenu_edit->addSeparator();
+   _popupmenu_edit->addAction("Simplify all functions",this,SLOT(simplify_constants()));
+@@ -266,10 +273,12 @@ EvolvotronMain::EvolvotronMain
+ 
+   _popupmenu_settings->addSeparator();
+ 
+-  _menu_action_fullscreen=_popupmenu_settings->addAction("Fullscreen",this,SLOT(toggle_fullscreen()),QKeySequence(Qt::CTRL + Qt::Key_F));
++  _menu_action_fullscreen=
++      KEY_ACTION(_popupmenu_settings, "Fullscreen", SLOT(toggle_fullscreen()), QKeySequence(Qt::CTRL | Qt::Key_F));
+   _menu_action_fullscreen->setCheckable(true);
+   _menu_action_fullscreen->setChecked(start_fullscreen);
+-  _menu_action_hide_menu=_popupmenu_settings->addAction("Hide menu and statusbar",this,SLOT(toggle_hide_menu()),QKeySequence(Qt::CTRL + Qt::Key_M));
++  _menu_action_hide_menu=
++      KEY_ACTION(_popupmenu_settings, "Hide menu and statusbar", SLOT(toggle_hide_menu()), QKeySequence(Qt::CTRL | Qt::Key_M));
+   _menu_action_hide_menu->setCheckable(true);
+   _menu_action_hide_menu->setChecked(start_menuhidden);
+ 
+@@ -278,7 +287,9 @@ EvolvotronMain::EvolvotronMain
+ 
+   _popupmenu_help=menuBar()->addMenu("&Help");
+   _popupmenu_help->addAction("Quick &Reference",_dialog_help_short,SLOT(show()));
+-  _popupmenu_help->addAction("User &Manual",_dialog_help_long,SLOT(show()),QKeySequence::HelpContents);
++  QAction* act =
++      _popupmenu_help->addAction("User &Manual",_dialog_help_long,SLOT(show()));
++  act->setShortcut(QKeySequence::HelpContents);
+   _popupmenu_help->addSeparator();
+   _popupmenu_help->addAction("&About",_dialog_about,SLOT(show()));
+ 
+diff --git a/libevolvotron/mutatable_image.cpp b/libevolvotron/mutatable_image.cpp
+index 2f84e47..ccdb815 100644
+--- a/libevolvotron/mutatable_image.cpp
++++ b/libevolvotron/mutatable_image.cpp
+@@ -212,6 +212,13 @@ std::ostream& MutatableImage::save_function(std::ostream& out) const
+   return out;
+ }
+ 
++#if QT_VERSION >= 0x060000
++#define QStringRef  QStringView
++#define QS_EQUAL(SV,C)  SV == QLatin1StringView(C)
++#else
++#define QS_EQUAL(SR,C)  SR == C
++#endif
++
+ /*! Evolvotron XML Reader.
+   Expects to see an `<evolvotron-image>` followed by nested `<f>`...`</f>`
+   wrapping `<type>`...`</type>`, `<i>`...`</i>`, `<p>`...`</p>` and more
+@@ -272,22 +279,23 @@ class LoadHandler : public QXmlStreamReader
+     }
+     return true;
+   }
+-  
++
+   //! Called for start elements.
+   bool startElement(const QStringRef& localName,
+                     const QXmlStreamAttributes& atts)
+   {
+     if (_expect_characters)
+     {
+-      QString msg = "Error: Expected character data but got start element \""
+-                    + localName + "\"\n";
++      QString msg("Error: Expected character data but got start element \"");
++      msg.append(localName);
++      msg.append("\"\n");
+       raiseError(msg);
+       return false;
+     }
+ 
+     if (_expect_top_level_element)
+     {
+-      if (localName=="evolvotron-image-function")
++      if (QS_EQUAL(localName, "evolvotron-image-function"))
+       {
+         _expect_top_level_element=false;
+ 
+@@ -296,9 +304,11 @@ class LoadHandler : public QXmlStreamReader
+         {
+           warning += "Warning: File does not include evolvotron version\n";
+         }
+-        else if (version != APP_VERSION)
++        else if (version != QString(APP_VERSION))
+         {
+-          warning += "Warning: File saved from a different evolvotron version: "+version+"\n(This is version "+APP_VERSION+")\n";
++          warning += "Warning: File saved from a different evolvotron version: ";
++          warning += version;
++          warning += "\n(This is version " APP_VERSION ")\n";
+         }
+ 
+         QStringRef zsweep = atts.value(QString(), "zsweep");
+@@ -315,7 +325,9 @@ class LoadHandler : public QXmlStreamReader
+             *_ret_sinusoidal_z=false;
+           else
+           {
+-            QString msg = "Error: zsweep attribute expected \"sinusoidal\" or \"linear\", but got \""+zsweep+"\"\n";
++            QString msg("Error: zsweep attribute expected \"sinusoidal\" or \"linear\", but got \"");
++            msg.append(zsweep);
++            msg.append("\"\n");
+             raiseError(msg);
+             return false;
+           }
+@@ -335,7 +347,9 @@ class LoadHandler : public QXmlStreamReader
+             *_ret_spheremap=false;
+           else
+           {
+-            QString msg = "Error: projection attribute expected \"spheremap\" or \"planar\", but got \""+projection+"\"\n";
++            QString msg("Error: projection attribute expected \"spheremap\" or \"planar\", but got \"");
++            msg.append(projection);
++            msg.append("\"\n");
+             raiseError(msg);
+             return false;
+           }
+@@ -343,14 +357,16 @@ class LoadHandler : public QXmlStreamReader
+       }
+       else
+       {
+-        QString msg = "Error: Expected <evolvotron-image-function> but got \""+localName+"\"\n";
++        QString msg("Error: Expected <evolvotron-image-function> but got \"");
++        msg.append(localName);
++        msg.append("\"\n");
+         raiseError(msg);
+         return false;
+       }
+     }
+     else
+     {
+-      if (localName=="f")
++      if (QS_EQUAL(localName, "f"))
+       {
+         std::unique_ptr<FunctionNodeInfo> f(new FunctionNodeInfo());
+         if (_stack.empty())
+@@ -373,25 +389,26 @@ class LoadHandler : public QXmlStreamReader
+           _stack.push(it);
+         }
+       }
+-      else if (localName=="type")
++      else if (QS_EQUAL(localName, "type"))
+       {
+         _expect_characters=true;
+         _expect_characters_type=true;
+       }
+-      else if (localName=="i")
++      else if (QS_EQUAL(localName, "i"))
+       {
+         _expect_characters=true;
+         _expect_characters_iterations=true;
+       }
+-      else if (localName=="p")
++      else if (QS_EQUAL(localName, "p"))
+       {
+         _expect_characters=true;
+         _expect_characters_parameter=true;
+       }
+       else
+       {
+-        QString msg = "Error: Expected <f>, <type>, <i> or <p> but got \""
+-                      + localName + "\"\n";
++        QString msg("Error: Expected <f>, <type>, <i> or <p> but got \"");
++        msg.append(localName);
++        msg.append("\"\n");
+         raiseError(msg);
+         return false;
+       }
+@@ -405,13 +422,14 @@ class LoadHandler : public QXmlStreamReader
+   {
+     if (_expect_characters)
+     {
+-      QString msg = "Error: Expected character data but got end element \""
+-                    + localName + "\"\n";
++      QString msg("Error: Expected character data but got end element \"");
++      msg.append(localName);
++      msg.append("\"\n");
+       raiseError(msg);
+       return false;
+     }
+ 
+-    if (localName=="f")
++    if (QS_EQUAL(localName, "f"))
+         _stack.pop();
+     return true;
+   }
+@@ -427,7 +445,9 @@ class LoadHandler : public QXmlStreamReader
+     {
+       if (!_expect_characters)
+       {
+-        QString msg = "Error: Unexpected character data : \"" + s + "\"\n";
++        QString msg("Error: Unexpected character data : \"");
++        msg.append(s);
++        msg.append("\"\n");
+         raiseError(msg);
+         return false;
+       }
+@@ -447,7 +467,9 @@ class LoadHandler : public QXmlStreamReader
+       _expect_characters_iterations=false;
+       if (!ok)
+       {
+-        QString msg = "Error: Couldn't parse \"" + s + "\" as an integer\n";
++        QString msg("Error: Couldn't parse \"");
++        msg.append(s);
++        msg.append("\" as an integer\n");
+         raiseError(msg);
+         return false;
+       }
+@@ -459,7 +481,9 @@ class LoadHandler : public QXmlStreamReader
+       _expect_characters_parameter=false;
+       if (!ok)
+       {
+-        QString msg = "Error: Couldn't parse \"" + s + "\" as a real\n";
++        QString msg("Error: Couldn't parse \"");
++        msg.append(s);
++        msg.append("\" as a real\n");
+         raiseError(msg);
+         return false;
+       }
+diff --git a/libevolvotron/mutatable_image_display.cpp b/libevolvotron/mutatable_image_display.cpp
+index 1b3d051..92236f1 100644
+--- a/libevolvotron/mutatable_image_display.cpp
++++ b/libevolvotron/mutatable_image_display.cpp
+@@ -506,6 +506,14 @@ void MutatableImageDisplay::snapshot(const char* name)
+   main().history().end_action();
+ }
+ 
++#if QT_VERSION >= 0x060000
++#define POS_X(ev)   int(ev->position().x())
++#define POS_Y(ev)   int(ev->position().y())
++#else
++#define POS_X(ev)   ev->x()
++#define POS_Y(ev)   ev->y()
++#endif
++
+ void MutatableImageDisplay::mousePressEvent(QMouseEvent* event)
+ {
+   if (event->button()==Qt::RightButton)
+@@ -521,7 +529,7 @@ void MutatableImageDisplay::mousePressEvent(QMouseEvent* event)
+     }
+   else if (_full_functionality && event->button()==Qt::LeftButton)
+     {
+-      if (event->x() > (width() - 32) && event->y() < 32)
++      if (POS_X(event) > (width() - 32) && POS_Y(event) < 32)
+       {
+         menupick_lock();
+       }
+diff --git a/project.b b/project.b
+index 89bb9b4..9085c42 100644
+--- a/project.b
++++ b/project.b
+@@ -12,10 +12,6 @@ application: does [
+     qt [widgets]
+ ]
+ 
+-default [
+-    cxxflags "-std=c++11"
+-]
+-
+ lib %function [
+     include_from %libfunction
+     sources_cpp %libfunction
