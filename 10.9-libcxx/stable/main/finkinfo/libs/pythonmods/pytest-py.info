@@ -1,19 +1,9 @@
 # -*- coding: ascii; tab-width: 4 -*-
 Info4: <<
 Package: pytest-py%type_pkg[python]
-Version: 6.2.5
-Revision: 3
-Distribution: <<
-	(%type_pkg[python] = 36 ) 10.9,
-	(%type_pkg[python] = 36 ) 10.10,
-	(%type_pkg[python] = 36 ) 10.11,
-	(%type_pkg[python] = 36 ) 10.12,
-	(%type_pkg[python] = 36 ) 10.13,
-	(%type_pkg[python] = 36 ) 10.14,
-	(%type_pkg[python] = 36 ) 10.14.5,
-	(%type_pkg[python] = 36 ) 10.15
-<<
-Type: python (3.6 3.7 3.8 3.9 3.10)
+Version: 7.4.4
+Revision: 1
+Type: python (3.7 3.8 3.9 3.10)
 
 Description: Cross-project testing tool for Python
 DescDetail: <<
@@ -30,21 +20,22 @@ License: BSD
 Homepage: http://pytest.org/
 
 Source: https://files.pythonhosted.org/packages/source/p/pytest/pytest-%v.tar.gz
-Source-Checksum: SHA256(131b36680866a76e6781d13f101efb86cf674ebb9762eb70d3082b6f29889e89)
+Source-Checksum: SHA256(2cf0005922c6ace4a3e2ec8b4080eb0d9753fdc93107415332f50ce9e7994280)
 
 Depends: <<
 	attrs-py%type_pkg[python] (>= 19.2.0-1),
-	(%type_pkg[python] = 36) importlib-metadata-py%type_pkg[python],
+	exceptiongroup-py%type_pkg[python],
 	(%type_pkg[python] = 37) importlib-metadata-py%type_pkg[python],
 	iniconfig-py%type_pkg[python],
 	packaging-py%type_pkg[python],
 	pluggy-py%type_pkg[python] (>= 0.12.0-1),
 	py-py%type_pkg[python] (>= 1.8.2-1),
 	python%type_pkg[python],
-	toml-py%type_pkg[python],
+	tomli-py%type_pkg[python] (>= 1.0.0),
 	wcwidth-py%type_pkg[python]
 <<
 BuildDepends: <<
+	bootstrap-modules-py%type_pkg[python],
 	fink (>= 0.32),
 	setuptools-tng-py%type_pkg[python],
 	setuptools-scm-py%type_pkg[python]
@@ -67,35 +58,47 @@ PatchScript: <<
 	#perl -pi -e 's|(coverage)( -r[eu])|%p/bin/${1}-%type_raw[python]${2}|g;' tox.ini
 <<	
 
-CompileScript: %p/bin/python%type_raw[python] setup.py build
+CompileScript: <<
+	PYTHONPATH=%p/share/bootstrap-modules-python%type_pkg[python] %p/bin/python%type_raw[python] -m build --wheel --no-isolation --skip-dependency-check
+<<
 
-# tox will download and pip-install a gazillion of extra deps, even those already installed as packages.
-# I give up running tests. Requires net access to download multiple packages
-# which is against fink policy.
-#InfoTest: <<
-#	#TestDepends: yaml-py%type_pkg[python]
-#	TestDepends: coverage-py%type_pkg[python], hypothesis-py%type_pkg[python] (>= 3.56.0-1), nose-py%type_pkg[python], mock-py%type_pkg[python], requests-py%type_pkg[python]
-#	TestScript: <<
-#		#!/bin/bash -ev
-#		#mkdir -p build/bin
-#		#python%type_raw[python] setup.py install_scripts -d build/bin
-#		#python%type_raw[python] setup.py egg_info
-#		pushd bench
-#		PYTHONPATH=%b/build/lib python%type_raw[python] bench.py
-#		popd
-#		if [ -x %p/bin/tox-py%type_pkg[python] ]; then
-#			%p/bin/tox-py%type_pkg[python] -e py%type_pkg[python] || exit 2
-#		else
-#			echo "tox-py%type_pkg[python] is not installed. Skipping tests."
-#		fi
-#	<<
-#<<
+InfoTest: <<
+		#pytest-cov-py%type_pkg[python] (>= 4.1.0),
+	TestDepends: <<
+		argcomplete-py%type_pkg[python],
+		coverage-py%type_pkg[python],
+		hypothesis-py%type_pkg[python] (>= 3.56.0-1),
+		mock-py%type_pkg[python],
+		nose-py%type_pkg[python],
+		pygments-py%type_pkg[python] (>= 2.7.2),
+		xmlschema-py%type_pkg[python]
+	<<
+	TestScript: <<
+		#!/bin/bash -ev
+		# need pytest-cov for tests, but pytest-cov needs pytest. Avoid circular deps by only running if pytest-cov is already present (and correct version)
+		if [[ $(%p/bin/python%type_raw[python] -c "import pytest_cov; print(pytest_cov.__version__)" | cut -f 1 -d .) -ge "4" ]]; then 
+			echo "good pytest-cov present. Will run tests."
+		else
+			echo "pytest-cov missing or too old. Will not run tests" ||:
+			exit 0
+		fi
+		# install the wheel to a temp location, then use that to run tests
+		PYTHONPATH=%p/share/bootstrap-modules-python%type_pkg[python] %p/bin/python%type_raw[python] -m installer --destdir %b/testdist dist/*.whl
+		# testing/test_debugging.py: test_pdb_* connection failures
+		# testing/io/test_terminalwriter.py::test_code_highlight: gh:pytest-dev/pytest/#10503
+		# testing/test_terminal.py: gh:pytest-dev/pytest/#10503
+		# testing/test_helpconfig.py::test_version_verbose: needs current pytest to be installed
+		# testing/test_junitxml.py::test_random_report_log_xdist: gh:pytest-dev/pytest/#10443
+		# testing/test_junitxml.py::test_runs_twice_xdist: gh:pytest-dev/pytest/#10443
+		PYTHONPATH=%b/testdist/%p/lib/python%type_raw[python]/site-packages:%p/lib/python%type_raw[python]/site-packages %b/testdist/%p/bin/pytest -vv -k "not (testing/test_debugging.py or test_code_highlight or testing/test_terminal.py or test_version_verbose or test_random_report_log_xdist or test_runs_twice_xdist)" || exit 2
+	<<
+<<
 
 InstallScript: <<
 	# Clean up the droppings from tests
 	/usr/bin/find . -name '*.py[co]' -delete
 
-	%p/bin/python%type_raw[python] setup.py install --root=%d
+	PYTHONPATH=%p/share/bootstrap-modules-python%type_pkg[python] %p/bin/python%type_raw[python] -m installer --destdir %d dist/*.whl
 	mv %i/bin/py.test %i/bin/py.test-%type_raw[python]
 	mv %i/bin/pytest %i/bin/pytest-%type_raw[python]
 <<
