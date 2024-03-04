@@ -1,11 +1,11 @@
-# -*- coding: ascii; tab-width: 4; x-counterpart: python39.patch -*-
+# -*- coding: ascii; tab-width: 4; x-counterpart: python310.patch -*-
 Info2: <<
 Package: python%type_pkg[python]
-Version: 3.9.15
+Version: 3.11.2
 Revision: 1
-Type: python 3.9
+Type: python 3.11
 # Free to modify, update, and take over
-Maintainer: Hanspeter Niederstrasser <nieder@users.sourceforge.net>
+Maintainer: Derek Homeier <dhomeie@gwdg.de>
 Depends: <<
 	%N-shlibs (= %v-%r),
 	blt-shlibs,
@@ -57,10 +57,10 @@ Provides: <<
 <<
 
 Source: https://www.python.org/ftp/python/%v/Python-%v.tar.xz
-Source-Checksum: SHA256(12daff6809528d9f6154216950423c9e30f0e47336cb57c6aa0b4387dd5eb4b2)
+Source-Checksum: SHA256(29e4b8f5f1658542a8c13e2dd277358c9c48f2b2f7318652ef1675e402b9d2af)
 
 PatchFile: %n.patch
-PatchFile-MD5: 6b0f35b27d642e094ba06a0a8fc8e472
+PatchFile-MD5: 715d1755da4ce630c6f063c19fe72c24
 
 PatchScript: <<
 	#!/bin/sh -ex
@@ -81,12 +81,12 @@ ConfigureParams: <<
 	--with-pkgconfig=yes \
 	--with-system-expat \
 	--with-system-ffi \
-	--with-tcltk-includes="-I%p/include -I/opt/X11/include" \
-	--with-tcltk-libs="-L%p/lib -ltcl -ltk" \
 	--with-dtrace \
 	--without-ensurepip \
 	--enable-ipv6 \
-	PKG_CONFIG=%p/bin/pkgconf
+	PKG_CONFIG=%p/bin/pkgconf \
+	TCLTK_CFLAGS="-I%p/include -I/opt/X11/include" \
+	TCLTK_LIBS="-L%p/lib -ltcl -ltk"
 <<
 
 CompileScript: <<
@@ -125,10 +125,12 @@ InfoTest: <<
 
 		# test_socket can fail with some DNS settings.
 		# multiprocessing_spawn fails on "KeyboardInterrupt not raised by wait",
-		# test_ctypes is currently broken on 11.0 (py3.9.9)
+		# test_ctypes is currently broken on 12.0 (py3.10.1)
 		# test_tcl and test_idle require an active $DISPLAY
+		# test_select is missing attribute 'poll'
 		# test_pkgutil fails on HFS+ https://bugs.python.org/issue41154 (marked resolved)
-		EXTRATESTOPTS='-w -unone -x test_idle test_tcl'
+		# test_grp was failing on 3.10
+		EXTRATESTOPTS='-w -unone -x test_idle test_select test_tcl'
 		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS="$EXTRATESTOPTS" || TESTRETURN=$?
 
 		# Put install_name back.
@@ -138,7 +140,7 @@ InfoTest: <<
 
 		# remove leftovers from testing
 		# these dirs are empty and only created if tests are run
-		/usr/bin/find %b/Tools -name __pycache__ -type d -depth -exec rm -rf "{}" \;
+		find ./Tools -name __pycache__ -type d -depth -exec rm -rf "{}" \;
 		exit $TESTRETURN
 	<<
 <<
@@ -146,17 +148,18 @@ InfoTest: <<
 InstallScript: <<
 #!/bin/sh -ex
 	# Rebuild _sysconfigdata.py if we ran tests.
+	find ./build -name _sysconfigdata.py -delete
 	make
-	# _sysconfigdata.py contains build-time variables that point to %b.
-	# This is harmless but upsets fink's validator.
-	# Change to %p/lib to make fink happy.
-	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]-darwin,' `ls -d %b/build/lib*`/_sysconfigdata__darwin_darwin.py
-	# Don't propagate -lintl to other packages.
-	perl -pi -e 's/-lintl //' `ls -d %b/build/lib*`/_sysconfigdata__darwin_darwin.py
 	# Remove stray .pyc that get made during tests (including preliminary ones in CompileScript) to keep validator happy.
 	find ./Lib ./Parser ./Tools ./build -name '*.pyc' -delete
 	# Change interpreter name in scripts to versioned executable.
 	perl -pi -e 's|(/usr/bin/env python)(3?)$|${1}%type_raw[python]|' ./Tools/scripts/*
+	# _sysconfigdata.py contains build-time variables that point to %b.
+	# This is harmless but upsets fink's validator.
+	# Change to %p/lib to make fink happy.
+	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]-darwin,' `cat pybuilddir.txt`/_sysconfigdata__darwin_darwin.py
+	# Don't propagate -lintl to other packages.
+	perl -pi -e 's/-lintl //' `cat pybuilddir.txt`/_sysconfigdata__darwin_darwin.py
 	# install fails with -j greater than 1
 	export MAKEFLAGS=-j1
 	make install DESTDIR=%d
@@ -180,8 +183,11 @@ InstallScript: <<
 	# install some docs and other useful tidbits
 	rm -rf Misc/RPM
 	/bin/cp -R Misc Tools %i/lib/python%type_raw[python]
+
+	# Some stuff still seems to be rebuilt/byte-compiled after `make`; empty f-string error in c-analyzer/c_parser/parser/_delim.py
 	pushd %i/lib/python%type_raw[python]
-	DYLD_LIBRARY_PATH=%i/lib %i/bin/python%type_raw[python] -m compileall -o 0 -o 1 -o 2 Tools/[a-su]* Tools/tz || exit 1
+	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]-darwin,;s/-lintl //' _sysconfigdata__darwin_darwin.py
+	DYLD_LIBRARY_PATH=%i/lib %i/bin/python%type_raw[python] -m compileall -f -o 0 -o 1 -o 2 -x test2to3 _sysconfigdata__darwin_darwin.py Tools || exit 1
 
 # Doc tarball missing upstream.
 #	mkdir -p %i/share/doc/%n/html
@@ -194,7 +200,7 @@ SplitOff: <<
 		lib/libpython%type_raw[python].dylib
 		lib/python%type_raw[python]/config-%type_raw[python]-darwin/libpython%type_raw[python].dylib
 	<<
-	Shlibs: %p/lib/libpython%type_raw[python].dylib 3.9.0 %n (>= 3.9.9-1)
+	Shlibs: %p/lib/libpython%type_raw[python].dylib 3.11.0 %n (>= 3.11.0-1)
 	DocFiles: README.rst LICENSE
 <<
 SplitOff2: <<
@@ -233,7 +239,7 @@ DescDetail: <<
 	the "python3" command there is not guaranteed to be python%type_raw[python]!).
 <<
 DescUsage: <<
-	python%type_raw[python] changes the compiler options used to compile
+	Python 3.10+ changes the compiler options used to compile
 	third-party python modules. Please do not add %type_raw[python] variants
 	to them without actually testing that they build cleanly.
 <<
@@ -272,6 +278,8 @@ DescPort: <<
 
 	Call build executable by correct filename in test suite
 	(python on case-sensitive, python.exe on -insensitive file systems).
+
+	Apply _delim.py patch from https://github.com/python/cpython/pull/102066.
 <<
 License: OSI-Approved
 Homepage: https://www.python.org/
