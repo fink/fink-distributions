@@ -1,0 +1,580 @@
+Info4: <<
+Package: qt67-%type_pkg[qt]-qtbase
+# -glib looks for g_source_set_name (glib >= 2.26) NEWGLIB24
+# If we did not build with -openssl-linked, would have to deal with
+# dlopen/dlsym symbol-wrapper signatures also.
+Version: 6.7.0
+Revision: 1
+Distribution: 13.0, 14.0
+Description: Cross-Platform framework (%type_pkg[qt])
+Type: qt (mac)
+License: LGPL/OpenSSL
+Maintainer: None <fink-devel@lists.sourceforge.net>
+### First version 6.7.0 by Hanspeter Niederstrasser
+### Free to upgrade and modify parameters, but please discuss
+### first on the fink-devel list
+
+Depends: <<
+	qt67-%type_pkg[qt]-qtconcurrent-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qtcore-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qtdbus-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qtgui-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qtnetwork-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qtopengl-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qtopenglwidgets-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qtprintsupport-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qtsql-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qttest-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qtwidgets-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qtxml-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qpa-plugins (= %v-%r),
+	qt67-%type_pkg[qt]-qtsql-sqlite-plugins (= %v-%r)
+<<
+BuildDepends: <<
+	cmake,
+	dbus1.3-dev (>= 1.4.18-1),
+	fink (>= 0.34.4-1),
+	fink-buildenv-modules,
+	fink-package-precedence,
+	fontconfig2-dev,
+	freetype219,
+	libharfbuzz0-dev (>= 2.6.0),
+	libiconv-dev,
+	libicu72-dev,
+	libjpeg9,
+	libpcre2,
+	libpng16,
+	openssl300-dev,
+	pkgconfig,
+	sqlite3-dev,
+	xcode.app (>= 14.1) | xcode (>= 14.1)
+<<
+BuildConflicts: uuid, libevent1.4, libevent2, libev4, libev4
+BuildDependsOnly: true
+Source: https://download.qt.io/archive/qt/6.7/%v/submodules/qtbase-everywhere-src-%v.tar.xz
+Source-Checksum: SHA256(11b2e29e2e52fb0e3b453ea13bbe51a10fdff36e1c192d8868c5a40233b8b254)
+PatchFile: qt67-qtbase.patch
+PatchFile-MD5: 73de95e8e19f9cc3b58eb663574fa9aa
+PatchScript: <<
+	#!/bin/sh -ev
+	. %p/sbin/fink-buildenv-helper.sh
+	# convenience fix to be able to easily read sourcetree
+	chmod 755 .
+
+	unset X11_BASE_DIR
+	unset X11_INCLUDE_DIR
+	unset X11_LIBRARY_DIR
+	export QT_FINK_PREFIX=%p/lib/qt67-%type_pkg[qt]
+
+	sed -e 's|@FINK_ARCH@|%m|g' \
+		-e 's|@FINK_PREFIX@|%p|g' \
+		-e "s|@MACOSX_DEPLOYMENT_TARGET@|$MACOSX_DEPLOYMENT_TARGET|g" \
+		-e "s|@SDK_PATH@|$SDK_PATH|g" \
+		-e 's|@PATH_TO_PG_CONFIG@|/usr/bin|g' \
+		-e "s|@QT_PLUGINS_DIR@|$QT_FINK_PREFIX/plugins|g" < %{PatchFile} | patch -p1
+
+	perl -pi -e 's|QUIET||g' cmake/FindWrapDBus1.cmake
+	### X11 only patches
+	#if [ "%type_raw[qt]" == "x11" ]; then
+		#patch -p1 < %{PatchFile2}
+	#fi
+	### Fix glib detection in configure tests
+	#echo "QMAKE_CXXFLAGS += -I%p/include/freetype2" >> config.tests/unix/fontconfig/fontconfig.pro
+
+	# ATSFont* is long deprecated (10.8?), so don't define HAVE_ATS because trying it is now fatal in 12.x.
+	#perl -pi -e 's|#define HAVE_ATS|// $&|g' src/platformsupport/fontdatabases/mac/qcoretextfontdatabase_p.h
+<<
+
+#NoSetCPPFLAGS: true
+NoSetCFLAGS: true
+#NoSetCXXFLAGS: true
+SetCXXFLAGS: -MD
+
+GCC: 4.0
+CompileScript: <<
+	#!/bin/sh -ev
+	. %p/sbin/fink-buildenv-helper.sh
+	unset X11_BASE_DIR
+	unset X11_INCLUDE_DIR
+	unset X11_LIBRARY_DIR
+	export QT_FINK_PREFIX=%p/lib/qt67-%type_pkg[qt]
+	# CPATH %p/include/glib-2.0:%p/lib/glib-2.0/include:
+	export CPATH=%p/include/dbus-1.0:%p/lib/dbus-1.0/include:%p/include/freetype2:%p/include
+	export LIBRARY_PATH=%p/lib
+	# Don't use PKG_CONFIG_PATH to avoid finding X11
+	export PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1
+	export PKG_CONFIG_ALLOW_SYSTEM_LIBS=1
+	export PKG_CONFIG_LIBDIR=%p/lib/pkgconfig:%p/share/pkgconfig:/usr/lib/pkgconfig
+	if [ "%type_raw[qt]" == "mac" ]; then
+		PLATFORM_CONFIGS="-framework"
+	fi
+
+	mkdir finkbuild
+	pushd finkbuild
+	# options after the double-dash are directly passed to cmake
+	# Set CMAKE_INSTALL_NAME_DIR to avoid @rpath
+	../configure \
+		-prefix ${QT_FINK_PREFIX} \
+		-bindir ${QT_FINK_PREFIX}/bin \
+		-libexecdir ${QT_FINK_PREFIX}/libexec \
+		-headerdir ${QT_FINK_PREFIX}/include \
+		-libdir ${QT_FINK_PREFIX}/lib \
+		-plugindir ${QT_FINK_PREFIX}/plugins \
+		-qmldir ${QT_FINK_PREFIX}/share/qt6/qml \
+		-datadir ${QT_FINK_PREFIX}/share/qt6 \
+		-docdir ${QT_FINK_PREFIX}/share/doc/qt6 \
+		-translationdir ${QT_FINK_PREFIX}/share/qt6/translations \
+		-sysconfdir ${QT_FINK_PREFIX}/etc/qt6 \
+		-examplesdir ${QT_FINK_PREFIX}/share/qt6/examples \
+		-testsdir ${QT_FINK_PREFIX}/share/qt6/tests \
+		-hostdatadir ${QT_FINK_PREFIX}/share/qt6 \
+		-release \
+		-confirm-license \
+		-opensource \
+		-shared \
+		-no-sql-db2 \
+		-no-sql-ibase \
+		-no-sql-mysql \
+		-no-sql-oci \
+		-no-sql-odbc \
+		-no-sql-psql \
+		-no-sql-sqlite \
+		-plugin-sql-sqlite \
+		-pkg-config \
+		-system-sqlite \
+		-system-zlib \
+		-no-mtdev \
+		-system-libpng \
+		-system-libjpeg \
+		-system-freetype \
+		-system-harfbuzz \
+		-openssl-linked \
+		-system-pcre \
+		-no-glib \
+		-no-gtk \
+		-no-rpath \
+		-no-feature-relocatable \
+		-cups \
+		-no-evdev \
+		-icu \
+		-no-fontconfig \
+		-no-eglfs \
+		-no-directfb \
+		-no-linuxfb \
+		-no-kms \
+		-nomake examples \
+		-nomake tests \
+		-verbose \
+		-optimized-qmake \
+		-no-pch \
+		-dbus-linked \
+		${PLATFORM_CONFIGS} \
+		-- \
+		-DCMAKE_INSTALL_NAME_DIR=${QT_FINK_PREFIX}/lib \
+		-DFEATURE_icu=ON \
+		-DFEATURE_pcre2=ON \
+		-DFEATURE_system_pcre2=ON \
+		-DFEATURE_rpath=OFF \
+		-DFEATURE_relocatable=OFF \
+		-DDBus1_INCLUDE_DIR=%p/include/dbus-1.0 \
+		-DDBus1_LIBRARY=%p/lib/libdbus-1.dylib \
+		-DSQLite3_INCLUDE_DIR=%p/include \
+		-DSQLite3_LIBRARY=%p/lib/libsqlite3.dylib \
+		-DICU_INCLUDE_DIR=%p/include 
+
+	cmake --build . --parallel -v
+	popd
+	fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=%N .
+<<
+
+InstallScript: <<
+	#!/bin/sh -ev
+	export QT_FINK_PREFIX=%p/lib/qt67-%type_pkg[qt]
+
+	pushd finkbuild
+	DESTDIR=%d cmake --install .
+	popd
+
+# Qt6 by default doesn't create .pc files. No easy way to bring them back.
+#	### Make sure we have all the right packages (by probing .pc files)
+#	pushd %d/${QT_FINK_PREFIX}/lib/pkgconfig
+#		### keep <space> at end of the 'want' list of .pc files
+#		want="Qt6Bootstrap.pc Qt6Concurrent.pc Qt6Core.pc Qt6DBus.pc Qt6Gui.pc Qt6Network.pc Qt6OpenGL.pc Qt6OpenGLExtensions.pc Qt6OpenGLWidgets.pc Qt6PlatformSupport.pc Qt6PrintSupport.pc Qt6Sql.pc Qt6Test.pc Qt6Widgets.pc Qt6Xml.pc "
+#		have=`/bin/ls -1 | tr '\n' ' '`
+#	popd
+#	if [ "$want" != "$have" ]; then
+#		echo "Unexpected build results (mismatched list of .pc)"
+#		echo "  want: '$want'"
+#		echo "  have: '$have'"
+#		exit 1
+#	fi
+
+	### Clean up .la, .prl files
+	### remove build-dir location and fix '-framework ' -> '-Wl,-framework,'
+	find %d/${QT_FINK_PREFIX}/lib -name \*.prl -o -name \*.la | xargs \
+		perl -pi -e 's|%b/lib|%p/lib|g; s|-framework |-Wl,-framework,|g; s|QMAKE_PRL_BUILD_DIR \= (.*)$|QMAKE_PRL_BUILD_DIR = |g'
+
+	### Clean up .pc files
+	### fix '-framework ' -> '-Wl,-framework,'
+	### Not quite https://bugreports.qt.io/browse/QTBUG-47162
+#	find %d/${QT_FINK_PREFIX}/lib -name \*.pc | xargs \
+#		perl -pi -e 's|-framework |-Wl,-framework,|g'
+
+	### Fix includedir to point into framework dir instead of non-existent include/QtFOO
+	### https://bugreports.qt.io/browse/QTBUG-35256
+#	for QTLIB in Concurrent Core DBus Gui Network OpenGL OpenGLWidgets PrintSupport Sql Test Widgets Xml; do
+#		perl -pi -e "s|/Qt$QTLIB|/Qt$QTLIB.framework/Headers|g" %d/${QT_FINK_PREFIX}/lib/pkgconfig/Qt6$QTLIB.pc
+#		perl -pi -e 's|I\$\{includedir\}/Qt|F\$\{libdir\} -I\$\{libdir\}/Qt|g' %d/${QT_FINK_PREFIX}/lib/pkgconfig/Qt6$QTLIB.pc
+#	done
+	
+	### clean up Libs.private
+#	perl -ni -e 'print unless /Libs.private:/' %d/${QT_FINK_PREFIX}/lib/pkgconfig/*.pc
+
+	### do not point to our compiler wrapper
+	perl -pi -e "s|`which cc`|/usr/bin/cc|g" %d/${QT_FINK_PREFIX}/lib/cmake/Qt6/qt.toolchain.cmake
+	perl -pi -e "s|`which c++`|/usr/bin/c++|g" %d/${QT_FINK_PREFIX}/lib/cmake/Qt6/qt.toolchain.cmake
+	
+	# Do not store %d
+	perl -pi -e "s|%d|$QT_FINK_PREFIX/src|g" %d/${QT_FINK_PREFIX}/lib/cmake/Qt6BuildInternals/QtBuildInternalsExtra.cmake
+	
+	
+<<
+#AppBundles: 
+DocFiles: LICENSES
+
+SplitOff: <<
+	Package: qt67-%type_pkg[qt]-qtconcurrent-shlibs
+	Description: Qt Concurrent library (%type_pkg[qt])
+	Depends: qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r)
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtConcurrent.framework/Versions/A/QtConcurrent
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtConcurrent.framework/Versions/A/QtConcurrent       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: 
+<<
+SplitOff2: <<
+	Package: qt67-%type_pkg[qt]-qtcore-shlibs
+	Description: Qt Core library (%type_pkg[qt])
+	Depends: <<
+		libicu72-shlibs,
+		libpcre2-shlibs,
+		libzstd1-shlibs
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtCore.framework/Versions/A/QtCore
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtCore.framework/Versions/A/QtCore       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+The Qt Core module forms the foundation of all Qt-based applications
+with core non-graphical classes used by other modules.
+
+Key Functions
+* File IO, event and object handling
+* Multi-threading and concurrency
+* Plugins, setting management
+* Signals and Slots inter-object communications mechanism
+	<<
+<<
+SplitOff3: <<
+	Package: qt67-%type_pkg[qt]-qtdbus-shlibs
+	Description: Qt D-Bus library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r),
+		dbus1.3-shlibs (>= 1.4.18-1)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtDBus.framework/Versions/A/QtDBus
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtDBus.framework/Versions/A/QtDBus       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+The QtDBus module is a Unix-only library that you can use to make
+Inter-Process Communication using the D-BUS protocol.
+
+Applications using the QtDBus module can provide services to other,
+remote applications by exporting objects, as well as use services
+exported by those applications by placing calls and accessing
+properties.
+
+The QtDBus module provides an interface that extends the Qt Signals
+and Slots mechanism, allowing one to connect to a signal emitted
+remotely as well as to connect a local signal to remote slot.
+	<<
+<<
+SplitOff4: <<
+	Package: qt67-%type_pkg[qt]-qtgui-shlibs
+	Description: Qt GUI library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtdbus-shlibs (>= %v-%r),
+		freetype219-shlibs,
+		libharfbuzz0-shlibs,
+		libjpeg9-shlibs,
+		libpng16-shlibs
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtGui.framework/Versions/A/QtGui
+		lib/qt67-%type_pkg[qt]/plugins/imageformats/libq{gif,ico,jpeg}.dylib
+		lib/qt67-%type_pkg[qt]/plugins/platforms/libq{cocoa,minimal,offscreen}.dylib
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtGui.framework/Versions/A/QtGui       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: The QtGui module extends QtCore with GUI functionality.
+<<
+SplitOff5: <<
+	Package: qt67-%type_pkg[qt]-qtnetwork-shlibs
+	Description: Qt networking library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r),
+		libbrotli1-shlibs,
+		libzstd1-shlibs,
+		openssl300-shlibs
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtNetwork.framework/Versions/A/QtNetwork
+		lib/qt67-%type_pkg[qt]/plugins/networkinformation
+		lib/qt67-%type_pkg[qt]/plugins/tls
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtNetwork.framework/Versions/A/QtNetwork       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+The QtNetwork module provides classes to make network
+programming easier and portable.
+	<<
+<<
+SplitOff6: <<
+	Package: qt67-%type_pkg[qt]-qtopengl-shlibs
+	Description: Qt OpenGL library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-%r)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtOpenGL.framework/Versions/A/QtOpenGL
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtOpenGL.framework/Versions/A/QtOpenGL       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+The Qt OpenGL module makes it easy to use OpenGL in Qt applications.
+It provides an OpenGL widget class that can be used just like any
+other Qt widget, except that it opens an OpenGL display buffer where
+you can use the OpenGL API to render the contents.
+	<<
+<<
+SplitOff7: <<
+	Package: qt67-%type_pkg[qt]-qtopenglwidgets-shlibs
+	Description: Qt OpenGL Widgets library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtopengl-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtwidgets-shlibs (>= %v-%r)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtOpenGLWidgets.framework/Versions/A/QtOpenGLWidgets
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtOpenGLWidgets.framework/Versions/A/QtOpenGLWidgets       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+The Qt OpenGL Widgets module makes it easy to use OpenGL in Qt
+applications. It provides an OpenGL widget class that can be used just
+like any other Qt widget, except that it opens an OpenGL display buffer
+where you can use the OpenGL API to render the contents.
+	<<
+<<
+SplitOff8: <<
+	Package: qt67-%type_pkg[qt]-qtprintsupport-shlibs
+	Description: Qt PrintSupport library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtwidgets-shlibs (>= %v-%r)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtPrintSupport.framework/Versions/A/QtPrintSupport
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtPrintSupport.framework/Versions/A/QtPrintSupport       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+Qt6 print support module.
+	<<
+<<
+SplitOff9: <<
+	Package: qt67-%type_pkg[qt]-qtsql-shlibs
+	Description: Qt SQL library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtSql.framework/Versions/A/QtSql
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtSql.framework/Versions/A/QtSql       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+The QtSQL module provides support for accessing SQL
+databases in Qt.
+	<<
+<<
+SplitOff10: <<
+	Package: qt67-%type_pkg[qt]-qttest-shlibs
+	Description: Qt test library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtTest.framework/Versions/A/QtTest
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtTest.framework/Versions/A/QtTest       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+The QtTest module provides classes for unit testing
+Qt applications and libraries.
+	<<
+<<
+SplitOff11: <<
+	Package: qt67-%type_pkg[qt]-qtwidgets-shlibs
+	Description: Qt Widgets library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-%r)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtWidgets.framework/Versions/A/QtWidgets
+		lib/qt67-%type_pkg[qt]/plugins/styles/libqmacstyle.dylib
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtWidgets.framework/Versions/A/QtWidgets       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+
+	<<
+<<
+SplitOff12: <<
+	Package: qt67-%type_pkg[qt]-qtxml-shlibs
+	Description: Qt XML library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtXml.framework/Versions/A/QtXml
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtXml.framework/Versions/A/QtXml       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+The QtXml module provides a stream reader and writer
+for XML documents, and C++ implementations of SAX and DOM.
+	<<
+<<
+SplitOff13: <<
+	Package: qt67-%type_pkg[qt]-qtsql-sqlite-plugins
+	Description: Qt6 SQLite3 plugin (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtsql-shlibs (>= %v-%r),
+		sqlite3-shlibs
+	<<
+	Files: <<
+		lib/qt67-%type_pkg[qt]/plugins/sqldrivers/libqsqlite.dylib
+	<<
+	DescDetail: 
+<<
+SplitOff14: <<
+	Package: qt67-%type_pkg[qt]-qpa-plugins
+	Description: Qt6 QPA plugins (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtnetwork-shlibs (>= %v-%r)
+	<<
+	Files: <<
+		lib/qt67-%type_pkg[qt]/plugins/generic/libqtuiotouchplugin.dylib
+	<<
+	DescDetail: 
+<<
+SplitOff15: <<
+	Package: qt67-%type_pkg[qt]-qtbase-dev-tools
+	Description: Qt6 base developer programs (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtdbus-shlibs (>= %v-%r),
+		libpcre2-shlibs,
+		libzstd1-shlibs
+	<<
+	Files: <<
+		lib/qt67-%type_pkg[qt]/bin
+		lib/qt67-%type_pkg[qt]/libexec
+	<<
+	DescDetail: 
+<<
+Homepage: https://qt-project.org
+DescDetail: <<
+Qt is a cross-platform application and UI framework with APIs for
+C++ programming and Qt Quick for rapid UI creation.
+
+* Intuitive class libraries
+* Easy to use and learn
+* Produce highly readable, easily maintainable and reusable code
+* High runtime performance and small footprint
+<<
+DescUsage: <<
+To compile against this Qt6, you need to make sure that 
+"%p/lib/qt67-%type_pkg[qt]/bin" is first in your PATH and that qmake is 
+present. Qmake is provided by "qt67-%type_pkg[qt]-qtbase-dev-tools".
+
+For Qt6 projects built using cmake, the tools qt-cmake or
+qt-configure-module in the "qt67-%type_pkg[qt]-qtbase-dev-tools" package
+will configure your project.
+
+If you need to manually find the headers and libraries, you
+need your compiler flags to contain: 
+
+	-F%p/lib/qt67-%type_pkg[qt]/lib
+
+	or this:
+
+	-I%p/lib/qt67-%type_pkg[qt]/include
+
+...and your linker flags to contain:
+
+	-F%p/lib/qt67-%type_pkg[qt]/lib
+
+	or
+
+	-L%p/lib/qt67-%type_pkg[qt]/lib
+
+In this case, it's still a good idea to set your PATH to contain
+"%p/lib/qt67-%type_pkg[qt]/bin" as well.
+<<
+DescPackaging: <<
+We follow Ubuntu's lead in using the separate tarballs and separate most
+of the packages the same way they do.
+
+We keep libexec as such and not set to bin because some scripts hardcode
+libexec.
+<<
+DescPort: <<
+List of patched files and the reasoning
+---------------------------------------
+mkspecs/common/gcc-base-mac.conf
+mkspecs/common/mac.conf
+mkspecs/features/create_cmake.prf
+Plugins need to be -bundle, not -dynamiclib, and end in .so
+Adapted from (but not yet fully working on qt6):
+https://bugreports.qt.io/browse/QTBUG-2227
+
+<<
+<<
+# End Info4
