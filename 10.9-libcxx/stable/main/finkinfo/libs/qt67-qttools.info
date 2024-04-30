@@ -1,0 +1,366 @@
+Info4: <<
+Package: qt67-%type_pkg[qt]-qttools
+Version: 6.7.0
+Revision: 1
+Description: Cross-Platform framework (%type_pkg[qt])
+Type: qt (mac)
+License: LGPL
+Maintainer: None <fink-devel@lists.sourceforge.net>
+### First version 6.7.0 by Hanspeter Niederstrasser
+### Free to upgrade and modify parameters, but please discuss
+### first on the fink-devel list
+
+Depends: <<
+	qt67-%type_pkg[qt]-qtdesigner-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qtdesignercomponents-shlibs (= %v-%r),
+	qt67-%type_pkg[qt]-qthelp-shlibs (= %v-%r)
+<<
+BuildDepends: <<
+	qt67-%type_pkg[qt]-qtbase-dev-tools (>= %v-1),
+	qt67-%type_pkg[qt]-qtbase (>= %v-1),
+	qt67-%type_pkg[qt]-qtdeclarative (>= %v-1),
+	#qt67-%type_pkg[qt]-qtlocation (>= %v-1),
+	#qt67-%type_pkg[qt]-qtmultimedia (>= %v-1),
+	#qt67-%type_pkg[qt]-qtsensors (>= %v-1),
+	#qt67-%type_pkg[qt]-qtwebkit (>= %v-1),
+	cmake,
+	fink (>= 0.34.4-1),
+	fink-buildenv-modules,
+	fink-package-precedence,
+	ninja,
+	pkgconfig,
+	xcode.app (>= 14.1) | xcode (>= 14.1)
+<<
+BuildConflicts: uuid, libevent1.4, libevent2, libev4
+BuildDependsOnly: true
+Source: https://download.qt.io/archive/qt/6.7/%v/submodules/qttools-everywhere-src-%v.tar.xz
+Source-Checksum: SHA256(c8da6b239e82fe1e23465cbf0936c0da5a334438d3fb433e19c503cbb1abee7b)
+PatchScript: <<
+	# convenience fix to be able to easily read sourcetree
+	chmod 755 .
+<<
+NoSetCPPFLAGS: true
+NoSetCFLAGS: true
+NoSetCXXFLAGS: true
+
+GCC: 4.0
+CompileScript: <<
+	#!/bin/sh -ev
+	. %p/sbin/fink-buildenv-helper.sh
+	export QT_FINK_PREFIX=%p/lib/qt67-%type_pkg[qt]
+	export PATH=${QT_FINK_PREFIX}/bin:$PATH
+	export PKG_CONFIG_PATH=%p/lib/glib-2.0/pkgconfig-strict:$PKG_CONFIG_PATH
+	if [ "%type_raw[qt]" == "mac" ]; then
+		qmake_flags="QMAKE_CXXFLAGS+=\"-F%b/lib\""
+	fi
+	mkdir finkbuild
+	pushd finkbuild
+		qt-configure-module .. \
+			-- \
+			-DCMAKE_INSTALL_NAME_DIR=${QT_FINK_PREFIX}/lib \
+			--log-level=VERBOSE
+		cmake --build . --parallel -v
+	popd
+	fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=%N .
+<<
+
+InstallScript: <<
+	#!/bin/sh -ev
+	export QT_FINK_PREFIX=%p/lib/qt67-%type_pkg[qt]
+
+	pushd finkbuild
+	DESTDIR=%d cmake --install .
+	popd
+
+	### Make sure we have all the right packages (by probing .pc files)
+	#pushd %d/${QT_FINK_PREFIX}/lib/pkgconfig
+		### keep <space> at end of the 'want' list of .pc files
+	#	want="Qt5Designer.pc Qt5DesignerComponents.pc Qt5Help.pc Qt5UiTools.pc "
+	#	have=`/bin/ls -1 | tr '\n' ' '`
+	#popd
+	#if [ "$want" != "$have" ]; then
+	#	echo "Unexpected build results (mismatched list of .pc)"
+	#	echo "  want: '$want'"
+	#	echo "  have: '$have'"
+	#	exit 1
+	#fi
+
+	### Clean up .la, .prl files
+	### remove build-dir location and fix '-framework ' -> '-Wl,-framework,'
+	find %d/${QT_FINK_PREFIX}/lib -name \*.prl -o -name \*.la | xargs \
+	#	perl -pi -e 's|%b/lib|%p/lib|g; s|-framework |-Wl,-framework,|g; s|QMAKE_PRL_BUILD_DIR \= (.*)$|QMAKE_PRL_BUILD_DIR = |g'
+
+	### Clean up .pc files
+	### fix '-framework ' -> '-Wl,-framework,'
+	#find %d/${QT_FINK_PREFIX}/lib -name \*.pc | xargs \
+	#	perl -pi -e 's|-framework |-Wl,-framework,|g'
+	
+	### Fix includedir to point into framework dir instead of non-existent include/QtFOO
+	### https://bugreports.qt.io/browse/QTBUG-35256
+	#for QTLIB in Designer DesignerComponents Help; do
+	#	perl -pi -e "s|/Qt$QTLIB|/Qt$QTLIB.framework/Headers|g" %d/${QT_FINK_PREFIX}/lib/pkgconfig/Qt5$QTLIB.pc
+	#	perl -pi -e 's|I\$\{includedir\}/Qt|F\$\{libdir\} -I\$\{libdir\}/Qt|g' %d/${QT_FINK_PREFIX}/lib/pkgconfig/Qt5$QTLIB.pc
+	#done
+	
+	### clean up Libs.private
+	#perl -ni -e 'print unless /Libs.private:/' %d/${QT_FINK_PREFIX}/lib/pkgconfig/*.pc
+	
+	### Mac only
+	if [ "%type_raw[qt]" == "mac" ]; then
+	### Link .app bundles to %p/Applications/Qt6 (can't move because they hardcode some paths)
+		mkdir -p %i/Applications/Qt6
+		for qt_app in Assistant Designer Linguist pixeltool qdbusviewer; do
+			ln -s ${QT_FINK_PREFIX}/bin/${qt_app}.app %i/Applications/Qt6/${qt_app}.app
+		done
+	fi
+<<
+#AppBundles: 
+DocFiles: LICENSES
+
+SplitOff: <<
+	Package: qt67-%type_pkg[qt]-qtdesigner-shlibs
+	Description: Qt6 designer library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtopengl-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtopenglwidgets-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtwidgets-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtxml-shlibs (>= %v-1),
+		libzstd1-shlibs
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtDesigner.framework/Versions/A/QtDesigner
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtDesigner.framework/Versions/A/QtDesigner       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+The QtDesigner module provides classes that allow you to
+create your own custom widget plugins for Qt Designer, and
+classes that enable you to access Qt Designer's components.
+	<<
+<<
+SplitOff2: <<
+	Package: qt67-%type_pkg[qt]-qtdesignercomponents-shlibs
+	Description: Qt6 designer component library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtdesigner-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtopengl-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtopenglwidgets-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtwidgets-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtxml-shlibs (>= %v-1),
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtDesignerComponents.framework/Versions/A/QtDesignerComponents
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtDesignerComponents.framework/Versions/A/QtDesignerComponents       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+The QtDesigner module provides classes that allow you to
+create your own custom widget plugins for Qt Designer, and
+classes that enable you to access Qt Designer's components.
+	<<
+<<
+SplitOff3: <<
+	Package: qt67-%type_pkg[qt]-qthelp-shlibs
+	Description: Qt6 help library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtnetwork-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtsql-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtwidgets-shlibs (>= %v-1)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtHelp.framework/Versions/A/QtHelp
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtHelp.framework/Versions/A/QtHelp       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+The QtHelp module provides classes for integrating online
+documentation in applications.
+	<<
+<<
+SplitOff4: <<
+	Package: qt67-%type_pkg[qt]-qtuitools-shlibs
+	Description: Qt6 UI Tools library (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtopengl-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtopenglwidgets-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtwidgets-shlibs (>= %v-1)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) lib/qt67-%type_pkg[qt]/lib/QtUiTools.framework/Versions/A/QtUiTools
+	<<
+	Shlibs: <<
+		( %type_pkg[qt] = mac ) %p/lib/qt67-%type_pkg[qt]/lib/QtUiTools.framework/Versions/A/QtUiTools       6.0.0 %n (>= 6.7.0-1)
+	<<
+	DescDetail: <<
+The QtUiTools module provides classes to handle forms created with Qt
+Designer.
+	<<
+<<
+SplitOff5: <<
+	Package: qt67-%type_pkg[qt]-assistant
+	Description: Qt6 documentation tool (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qthelp-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtnetwork-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtprintsupport-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtsql-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtsql-sqlite-plugins (>= %v-1),
+		qt67-%type_pkg[qt]-qtwidgets-shlibs (>= %v-1)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) Applications/Qt6/Assistant*
+		lib/qt67-%type_pkg[qt]/bin/Assistant*
+	<<
+	DescDetail: Qt Assistant is a tool for presenting on-line documentation.
+<<
+SplitOff6: <<
+	Package: qt67-%type_pkg[qt]-designer
+	Description: Qt6 GUI design tool (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtdesigner-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtdesignercomponents-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtnetwork-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtopengl-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtprintsupport-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtwidgets-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtxml-shlibs (>= %v-1)
+	<<
+	Conflicts: <<
+		# Plugins from an earlier %v cause Designer.app to not run
+		qt67-%type_pkg[qt]-qtquick1-designer-plugins (<< %v-1),
+		qt67-%type_pkg[qt]-webengine-designer-plugins (<< %v-1)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) Applications/Qt6/Designer*
+		lib/qt67-%type_pkg[qt]/bin/Designer*
+		lib/qt67-%type_pkg[qt]/plugins/designer
+	<<
+	DescDetail: <<
+Qt Designer is Qt's tool for designing and building graphical user
+interfaces (GUIs) from Qt components.  You can compose and customize
+your widgets or dialogs in a what-you-see-is-what-you-get (WYSIWYG)
+manner, and test them using different styles and resolutions.
+
+Widgets and forms created with Qt Designer integrated seamlessly with
+programmed code, using Qt's signals and slots mechanism, that lets you
+easily assign behavior to graphical elements.  All properties set in Qt
+Designer can be changed dynamically within the code.  Furthermore,
+features like widget promotion and custom plugins allow you to use
+your own components with Qt Designer.
+	<<
+<<
+SplitOff7: <<
+	Package: qt67-%type_pkg[qt]-linguist
+	Description: Qt6 translation tool (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtopengl-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtopenglwidgets-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtprintsupport-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtuitools-shlibs (>= %v-%r),
+		qt67-%type_pkg[qt]-qtwidgets-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtxml-shlibs (>= %v-1)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) Applications/Qt6/Linguist*
+		lib/qt67-%type_pkg[qt]/bin/l*
+		lib/qt67-%type_pkg[qt]/bin/Linguist*
+		lib/qt67-%type_pkg[qt]/libexec/l*-pro
+		lib/qt67-%type_pkg[qt]/share/qt6/phrasebooks
+	<<
+	DescDetail: <<
+Qt provides excellent support for translating applications
+into local languages.  You can use Qt linguist to translate
+your application.
+	<<
+<<
+SplitOff8: <<
+	Package: qt67-%type_pkg[qt]-qttools-dev-tools
+	Description: Qt6 QtTools development tools (%type_pkg[qt])
+	Depends: <<
+		qt67-%type_pkg[qt]-qtcore-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtdbus-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtgui-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtnetwork-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtopengl-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtqml-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtqmlmodels-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtquick-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtwidgets-shlibs (>= %v-1),
+		qt67-%type_pkg[qt]-qtxml-shlibs (>= %v-1)
+	<<
+	Files: <<
+		( %type_pkg[qt] = mac ) Applications/Qt6/pixeltool.app
+		( %type_pkg[qt] = mac ) Applications/Qt6/qdbusviewer.app
+		lib/qt67-%type_pkg[qt]/bin
+		lib/qt67-%type_pkg[qt]/libexec
+	<<
+	DescDetail: <<
+	<<
+<<
+Homepage: https://qt-project.org
+DescDetail: <<
+Qt is a cross-platform application and UI framework with APIs for
+C++ programming and Qt Quick for rapid UI creation.
+
+* Intuitive class libraries
+* Easy to use and learn
+* Produce highly readable, easily maintainable and reusable code
+* High runtime performance and small footprint
+<<
+DescUsage: <<
+To compile against this Qt6, you need to make sure that 
+"%p/lib/qt67-%type_pkg[qt]/bin" is first in your PATH and that qmake is 
+present. Qmake is provided by "qt67-%type_pkg[qt]-qtbase-dev-tools".
+
+For Qt6 projects built using cmake, the tools qt-cmake or
+qt-configure-module in the "qt67-%type_pkg[qt]-qtbase-dev-tools" package
+will configure your project.
+
+If you need to manually find the headers and libraries, you
+need your compiler flags to contain: 
+
+	-F%p/lib/qt67-%type_pkg[qt]/lib
+
+	or this:
+
+	-I%p/lib/qt67-%type_pkg[qt]/include
+
+...and your linker flags to contain:
+
+	-F%p/lib/qt67-%type_pkg[qt]/lib
+
+	or
+
+	-L%p/lib/qt67-%type_pkg[qt]/lib
+
+In this case, it's still a good idea to set your PATH to contain
+"%p/lib/qt67-%type_pkg[qt]/bin" as well.
+<<
+DescPackaging: <<
+We follow Ubuntu's lead in using the separate tarballs and separate most
+of the packages the same way they do.
+Some primary tools are sent to own split offs. Other tools are lumped in
+qttools-dev-tools SplitOff for simplicity.
+
+QDoc needs clang's C and C++ libraries (via an llvm package), not just
+the Xcode provided clang/clang++ compilers.
+<<
+<<
+# End Info4
