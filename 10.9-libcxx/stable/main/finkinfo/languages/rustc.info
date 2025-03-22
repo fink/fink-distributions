@@ -1,7 +1,10 @@
+Info2: <<
 Package: rustc
 Version: 1.78.0
-Revision: 2
+Revision: 3
 Architecture: x86_64
+Type: bootstrap_d (2024-03-21), bootstrap_v (1.77.0), llvm_v (16)
+#Type: bootstrap_d (2025-01-09), bootstrap_v (1.84.0), llvm_v (18)
 Description: Safe Fast System Programming Language
 Maintainer: None <fink-devel@lists.sourceforge.net>
 License: BSD
@@ -13,20 +16,23 @@ Source: https://static.rust-lang.org/dist/rustc-%v-src.tar.xz
 Source-Checksum: SHA256(8065824f0255faa3901db8206e6f9423f6f8c07cec28bc6f2797c6c948310ece)
 SourceDirectory: rustc-%v-src
 
-# derived from src/stage0.json
-Source2: https://static.rust-lang.org/dist/2024-03-21/rust-std-1.77.0-%m-apple-darwin.tar.xz
+# derived from src/stage0 of the rustc tarball
+Source2: https://static.rust-lang.org/dist/%type_raw[bootstrap_d]/rust-std-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz
 Source2-Checksum: SHA256(95692e654b5ea16514b0d5558707b28c497b5c262c0d7c711d46e03033509f8c)
 # prevent automatic unpacking
-Source2Rename: rust-std-1.77.0-%m-apple-darwin.tar.xz.nounpack
+Source2Rename: rust-std-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz.nounpack
 
-Source3: https://static.rust-lang.org/dist/2024-03-21/rustc-1.77.0-%m-apple-darwin.tar.xz
+Source3: https://static.rust-lang.org/dist/%type_raw[bootstrap_d]/rustc-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz
 Source3-Checksum: SHA256(0bae384047cdb64200f4e87f8564238542504b45181870900f57745932c49d79)
-Source3Rename: rustc-1.77.0-%m-apple-darwin.tar.xz.nounpack
+Source3Rename: rustc-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz.nounpack
 
-Source4: https://static.rust-lang.org/dist/2024-03-21/cargo-1.77.0-%m-apple-darwin.tar.xz
+Source4: https://static.rust-lang.org/dist/%type_raw[bootstrap_d]/cargo-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz
 Source4-Checksum: SHA256(c95b98a306b26bf5f4f43d4d212c4535f3a09bbeda569ea0431bc54824a267b4)
-Source4Rename: cargo-bootstrap-1.77.0-%m-apple-darwin.tar.xz.nounpack
+Source4Rename: cargo-bootstrap-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz.nounpack
 
+Depends: <<
+	libstd-rust-dev (>= %v-%r)
+<<
 # uses liblzma5 at link time but then strips symbols?
 BuildDepends: <<
 	cmake,
@@ -46,11 +52,15 @@ BuildConflicts: <<
 	libiconv-dev
 <<
 
+#PatchFile: %n-submodule-tarball.patch
+#PatchFile-MD5: 2ce00fa9baeec5cd467b5b8a638b7416
 PatchScript: <<
 #!/bin/sh -ev
+#%{default_script}
+
 cat > config.toml <<EOF
 profile = "dist"
-change-id = 121754 # does this need to be changed every %v bump?
+change-id = 121754 # last commit from src/bootstrap/src/utils/change_tracker.rs
 
 [llvm]
 cflags = "-I%p/include"
@@ -65,6 +75,15 @@ python = "%p/bin/python3.10"
 #extended = true
 verbose = 1
 
+# from src/bootstrap/defaults/config.dist.toml
+# When compiling from source, you almost always want a full stage 2 build,
+# which has all the latest optimizations from nightly.
+build-stage = 2
+test-stage = 2
+doc-stage = 2
+# When compiling from source, you usually want all tools.
+extended = true
+
 [install]
 prefix = "%p"
 sysconfdir = "etc"
@@ -74,6 +93,13 @@ codegen-units = 0
 channel = "stable"
 description = "Fink/%v-%r"
 rpath = false
+# This greatly increases the speed of rebuilds, especially when there are only minor changes. However, it makes the initial build slightly slower.
+incremental = true
+
+# from src/bootstrap/defaults/config.dist.toml
+# Never download a rustc, distributions must build a fresh compiler.
+download-rustc = false
+
 EOF
 
 # these are from Debian
@@ -83,6 +109,7 @@ EOF
 # see https://github.com/alexcrichton/xz2-rs/issues/16
 # https://doc.rust-lang.org/cargo/reference/build-scripts.html
 # and update the checksum
+#cat > vendor/lzma-sys-0.1.20/build.rs <<EOF
 cat > vendor/lzma-sys/build.rs <<EOF
 fn main() {
     println!("cargo:rustc-link-search=%p/lib");
@@ -92,29 +119,31 @@ EOF
 # final SHASUM is variable because %p gets resolved
 SHASUM=`shasum -a 256 vendor/lzma-sys/build.rs | cut -f 1 -d ' '`
 perl -pi -e "s|052d600babd2f95d9549f2b846e6dcf1e39b1c15d4fa6a293797ce1c85199e24|$SHASUM|g" vendor/lzma-sys/.cargo-checksum.json
+#SHASUM=`shasum -a 256 vendor/lzma-sys-0.1.20/build.rs | cut -f 1 -d ' '`
+#perl -pi -e "s|052d600babd2f95d9549f2b846e6dcf1e39b1c15d4fa6a293797ce1c85199e24|$SHASUM|g" vendor/lzma-sys-0.1.20/.cargo-checksum.json
 
 <<
 GCC: 4.0
 CompileScript: <<
 #!/bin/sh -ev
 export TARGET_CFLAGS=$CFLAGS
-export TARGET_CXXFLAGS=$CPPFLAGS
-export TARGET_CPPFLAGS=$CPPFLAGS
-export TARGET_LDFLAGS=$LDFLAGS
+export TARGET_CXXFLAGS="$CPPFLAGS"
+export TARGET_CPPFLAGS="$CPPFLAGS"
+export TARGET_LDFLAGS="$LDFLAGS"
 #unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
 
 export LIBSSH2_SYS_USE_PKG_CONFIG=1
 
 export PYTHON=%p/bin/python3.10
 
-CACHEDIR=build/cache/2024-03-21
+CACHEDIR=build/cache/%type_raw[bootstrap_d]
 
 mkdir -p $CACHEDIR
-mv ../rust-std-1.77.0-%m-apple-darwin.tar.xz.nounpack $CACHEDIR/rust-std-1.77.0-%m-apple-darwin.tar.xz
-mv ../rustc-1.77.0-%m-apple-darwin.tar.xz.nounpack $CACHEDIR/rustc-1.77.0-%m-apple-darwin.tar.xz
-mv ../cargo-bootstrap-1.77.0-%m-apple-darwin.tar.xz.nounpack $CACHEDIR/cargo-1.77.0-%m-apple-darwin.tar.xz
+mv ../rust-std-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz.nounpack $CACHEDIR/rust-std-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz
+mv ../rustc-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz.nounpack $CACHEDIR/rustc-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz
+mv ../cargo-bootstrap-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz.nounpack $CACHEDIR/cargo-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz
 
-$PYTHON ./x.py dist
+$PYTHON ./x.py dist # -j1
 <<
 InstallScript: <<
 #!/bin/sh -ev
@@ -139,7 +168,15 @@ InstallScript: <<
 
   for tgt in %i/lib/*.dylib
   do
+    otool -L $tgt | head -n 2
+    file $tgt
     install_name_tool -id %p/lib/$(basename $tgt) $tgt
+  done
+  for tgt in %i/lib/rustlib/%m-apple-darwin/lib/*.dylib
+  do
+    otool -L $tgt | head -n 2
+    file $tgt
+    install_name_tool -id %p/lib/rustlib/%m-apple-darwin/lib/$(basename $tgt) $tgt
   done
 
   # https://github.com/rust-lang/rust/issues/39870
@@ -150,6 +187,7 @@ InstallScript: <<
   for tgt in %i/lib/rustlib/%m-apple-darwin/lib/*.dylib
   do
     lib=$(basename $tgt)
+    echo $lib
     if [ -f %i/lib/$lib ]
     then
       ln -sf %p/lib/$lib $tgt
@@ -197,7 +235,8 @@ SplitOff: <<
 SplitOff2: <<
 	Package: libstd-rust-dev
 	Description: Rust standard libraries - development files
-	BuildDependsOnly: true
+	# NOT BDO (see rustc)
+	#BuildDependsOnly: true
 	Depends: <<
 		rustc (= %v-%r)
 	<<
@@ -231,4 +270,11 @@ integrity, availability and concurrency.
 It supports a mixture of imperative procedural, concurrent actor,
 object-oriented and pure functional styles. Rust also supports generic
 programming and metaprogramming, in both static and dynamic styles.
+<<
+DescPort: <<
+Fix for 1.85.0 tarball missing submodules
+https://github.com/rust-lang/rust/issues/137332
+https://github.com/rust-lang/rust/pull/137338
+https://github.com/rust-lang/rust/pull/137340
+<<
 <<
