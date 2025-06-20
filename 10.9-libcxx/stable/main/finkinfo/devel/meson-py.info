@@ -1,0 +1,138 @@
+# -*- coding: ascii; tab-width: 4 -*-
+Info2: <<
+Package: meson-py%type_pkg[python]
+Version: 1.6.0
+Revision: 1
+Type: python (3.7 3.8 3.9 3.10)
+Depends: python%type_pkg[python], ninja (>= 1.8.2-1)
+BuildDepends: setuptools-tng-py%type_pkg[python]
+
+Source: https://files.pythonhosted.org/packages/source/m/meson/meson-%v.tar.gz
+Source-Checksum: SHA256(999b65f21c03541cf11365489c1fad22e2418bb0c3d50ca61139f2eec09d5496)
+
+PatchScript: <<
+    #!/bin/sh -ev
+    HDF5INC="$(ls -d %p/opt/hdf5.v1.12/include 2> /dev/null || echo '')"
+    perl -pi -e 's|(/bin/env python)(3)|${1}%type_raw[python]|;' *.py mesonbuild/*.py tools/*.py test*/*/*/*.py
+    perl -pi -e "s|(python)(3)(')|\${1}%type_raw[python]\${3}|;" test\ cases/python/[1345]*/meson.build
+    perl -pi -e "s|(python)(3)(')|\${1}-%type_raw[python]\${3}|;" test\ cases/python/2*/meson.build
+    if [ -n "$HDF5INC" ]; then
+        HDF5LIB=${HDF5INC%%/include}/lib
+        perl -pi -e "s|(h5c =)|add_project_arguments('-I${HDF5INC}', language: ['c', 'cpp'])\n\$1|;" "test cases/frameworks/25 hdf5/meson.build"
+        perl -pi -e "s|(h5c =)|add_project_link_arguments('-L${HDF5LIB}', language: ['c', 'cpp'])\n\$1|;" "test cases/frameworks/25 hdf5/meson.build"
+    fi
+<<
+
+CompileScript: <<
+    %p/bin/python%type_raw[python] setup.py build
+<<
+
+InstallScript: <<
+    %p/bin/python%type_raw[python] setup.py install --root %d
+    mv %i/bin/meson %i/bin/meson-py%type_pkg[python] 
+    mv %i/share/man/man1/meson.1 %i/share/man/man1/meson-py%type_pkg[python].1 
+    rm -r %i/share/polkit-1
+<<
+
+PostInstScript: <<
+    update-alternatives --install %p/bin/meson meson %p/bin/meson-py%type_pkg[python] %type_pkg[python] \
+          --slave %p/share/man/man1/meson.1 meson_man %p/share/man/man1/meson-py%type_pkg[python].1
+<<
+
+PreRmScript: <<
+    if [ $1 != "upgrade" ]; then
+        update-alternatives --verbose --remove meson %p/bin/meson-py%type_pkg[python]
+    fi
+<<
+
+UseMaxBuildJobs: true
+InfoTest: <<
+    TestDepends: <<
+        # Tests will use pytest if installed, but run without it as well.
+        cmake,
+        hdf5.200.v1.12,
+        hdf5-cpp.200.v1.12,
+        hdf5.200-gfortran.v1.12,
+        ninja (>= 1.10.0)
+    <<
+    TestScript: PATH=/usr/bin:$PATH %p/bin/python%type_raw[python] -B run_tests.py || exit 2
+    TestSuiteSize: medium
+<<
+
+DocFiles: COPYING PKG-INFO README.md contributing.md
+Description: Fast and user friendly build system
+DescDetail: <<
+Meson is an open source build system meant to be both extremely fast, and,
+even more importantly, as user friendly as possible.
+
+The main design point of Meson is that every moment a developer spends writing
+or debugging build definitions is a second wasted. So is every second spent
+waiting for the build system to actually start compiling code.
+
+Features
+
+ * multiplatform support for Linux, macOS, Windows, GCC, Clang, Visual Studio
+   and others
+ * supported languages include C, C++, D, Fortran, Java, Rust
+ * build definitions in a very readable and user friendly non-Turing complete
+   DSL
+ * cross compilation for many operating systems as well as bare metal
+ * optimized for extremely fast full and incremental builds without sacrificing
+   correctness
+ * built-in multiplatform dependency provider that works together with distro
+   packages
+ * fun!
+<<
+
+DescPackaging: <<
+Straightforward copy from Homebrew recipe; ninja only needed for Ninja backend
+(upstream docs say this is not optional, but setup.cfg has it in
+`extras_require`).
+Skipping hotdoc build of markdown docs for now.
+hdf5 tests are only run when installed, but need to be pointed to install loc;
+for consistency made hdf5.200.v1.12 TestDepends.
+
+Fixed some tests by setting python3 to the versioned executable, but 5 failures
+remaining (489 passing on 3.10); e.g. tests trying to use Framework Python.
+
+Further test analysis by Daniel Macks <dmacks@netspace.org>:
+
+	Some tests have large dep trees or that would be circular BDep on
+	meson so we can't require that they pass.
+
+	Some others fail due to creating a static archive with no members,
+	which isn't possible with darwin's 'ar'. See for example:
+		https://github.com/mesonbuild/meson/issues/3735
+		https://github.com/mesonbuild/meson/pull/3749
+
+	Ignoring test-failures relating to -m32. It's up to maintainers to
+	make sure their packages build for correct mode (and if they try
+	to do multilib, its their own damn fault because macOS no longer
+	has 32-bit libraries).
+
+	There appears to be a bug in the built-in pkg-config work-alike if
+	there's whitespace in the path, so don't do that (see failures like
+	`cc .. -g '[test ]cases/common/44 pkgconfig-gen'`).
+	I assume this feature also doesn't do fink flag-sorting, so maintainers
+	may need to provide work-arounds and should always use f-p-p
+	(some tests failing with unexpected flag order).
+
+	Some test-fails are known on OS X, such as:
+		https://github.com/mesonbuild/meson/issues/7835
+	that might be due to clocking:
+		https://github.com/mesonbuild/meson/pull/7736
+	which would explain why several other test-fails relate to
+	triggering rebuild based on timestamps
+
+	Some tests fail because they are based on hard-coded expectations
+	of how some unrelated external lib is configured (for example,
+	pkg-config for gio-2.0)
+
+Initially packaged by Leigh Smith <leigh@leighsmith.com>
+<<
+License: BSD
+Homepage: https://mesonbuild.com/
+Maintainer: Derek Homeier <dhomeie@gwdg.de>
+
+# Info2
+<<
