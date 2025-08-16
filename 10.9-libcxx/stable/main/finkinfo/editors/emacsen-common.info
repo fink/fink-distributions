@@ -1,42 +1,84 @@
 Package: emacsen-common
-Version: 1.4.15
-Revision: 6
+Version: 3.0.8
+Revision: 1
+BuildDepends: fink (>= 0.32)
 Suggests: emacsen
-Source: mirror:sourceforge:fink/%n_%v.tar.gz
-Source-Checksum: SHA256(659577da86a0c636831152a5597253fdc0a6315215beeb664d0687962e93195f)
+Source: mirror:debian:pool/main/e/%n/%n_%v.tar.xz
+Source-Checksum: SHA256(6145aba63f38a611ce99ee2c46c4213d3f76aa4760df1544dd29217fa95c6feb)
 SourceDirectory: %n-%v
-ConfFiles: %p/etc/emacs/site-start.el
+# ConfFiles: %p/etc/emacs/site-start.el
 PatchFile: %n.patch
-PatchFile-Checksum: SHA256(1533417a3512c1f61b7c0c2ee26014e51492059f7602a26c4fe8e0f4b116575b)
+PatchFile-Checksum: SHA256(1bc2385910e96102cb18976b0435df71285f2b892e6d2f50115d3fff8c11fad8)
 PatchScript: sed 's|@PREFIX@|%p|g' <%{PatchFile} | patch -p1
 DocFiles: debian/changelog debian-emacs-policy debian/copyright
 CompileScript: <<
   perl -wc emacs-install
+  perl -wc emacs-remove
   perl -wc emacs-package-install
-  perl -wc generate-install-list
+  perl -wc emacs-package-remove
+  perl -wc lib.pl
 <<
 InstallScript: <<
  mkdir -p %i/etc/emacs/site-start.d
  mkdir -p %i/etc/site-start.d
  mkdir -p %i/lib/%n/packages/install
  mkdir -p %i/lib/%n/packages/remove
+ mkdir -p %i/lib/%n/packages/compat
+ mkdir -p %i/var/lib/%n/state/flavor/installed
+ mkdir -p %i/var/lib/%n/state/package/installed
  mkdir -p %i/share/doc/%n
  mkdir -p %i/share/emacs/site-lisp
 
- install -m 644 site-start.el %i/etc/emacs/
- install -m 644 00debian-vars.el %i/etc/emacs/site-start.d/00fink-vars.el
  install -m 755 emacs-install %i/lib/%n/
+ install -m 755 emacs-remove %i/lib/%n/
  install -m 755 emacs-package-install %i/lib/%n/
- (cd %i/lib/%n/; ln -s emacs-install emacs-remove)
- (cd %i/lib/%n/; ln -s emacs-package-install emacs-package-remove)
- install -m 755 generate-install-list %i/lib/%n/
+ install -m 755 emacs-package-remove %i/lib/%n/
+ install -m 755 lib.pl %i/lib/%n/
  install -m 644 debian-startup.el %i/share/emacs/site-lisp/fink-startup.el
+ install -m 644 compat/emacsen-common %i/lib/%n/packages/compat/
 
  install -m 755 emacsen-common.install %i/lib/%n/packages/install/emacsen-common
  install -m 755 emacsen-common.remove %i/lib/%n/packages/remove/emacsen-common 
 <<
+PreInstScript: <<
+# When emacsen-common and add-ons are upgrading simultaneously,
+# emacsen-common can be unpacked but not configured when an add-on's
+# prerm runs. That causes the add-on's removal command to be skipped,
+# which is wrong and can cause the upgrade to fail. For example
+# https://bugs.debian.org/1106291
 #
+# For now, to ensure the removal commands are still run, remove all
+# emacs flavors here, keeping track of which flavors are actually
+# still installed in pending, and then restore them from the postinst,
+# when emacsen-common is ready again.
+#
+# Normally, it would be unsafe to depend on emacsen-common files like
+# this in the preinst, but our assumption for this mitigation is that
+# since emacs flavors depend on emacsen-common and since they should
+# have a installed/FLAVOR file if and only if they're "ready to go"
+# (i.e. via their postinst configure), then the emacs-remove script
+# will be available inside the loop.
 
+mkdir -p %p/var/lib/emacsen-common/state/flavor/pending
+for flavor in %p/var/lib/emacsen-common/state/flavor/installed/*[!~]; do
+    case "$flavor" in
+        */installed/\**) break ;; # no flavors
+    esac
+    flavor="$(basename "$flavor")"
+    echo "Removing emacsen flavor $flavor during emacsen-common upgrade" 1>&2
+    %p/lib/emacsen-common/emacs-remove "$flavor"
+    touch "%p/var/lib/emacsen-common/state/flavor/pending/$flavor"
+done
+
+# The emacsen-common package is a special case; we can't call
+# emacs-package-install from here since the new version hasn't been
+# unpacked yet, so just do the important bit that it would have done.
+installed_state_dir=%p/var/lib/emacsen-common/state/package/installed
+if test -d "$installed_state_dir"
+then
+  rm -f "$installed_state_dir"/emacsen-common
+fi
+<<
 PostInstScript: <<
 mkdir -p %p/var/lib/emacsen-common
 
@@ -70,33 +112,57 @@ then
   fi
 fi
 
-if [ ! -e %p/var/lib/emacsen-common/installed-flavors ]
+# Convert installed-flavors to flavor/installed/*.
+if [ -e %p/var/lib/emacsen-common/installed-flavors ]
+then
+  mkdir -p %p/var/lib/emacsen-common/state/flavor/installed
+  for flavor in $(cat %p/var/lib/emacsen-common/installed-flavors)
+  do
+    touch "%p/var/lib/emacsen-common/state/flavor/installed/$flavor"
+  done
+  rm -f %p/var/lib/emacsen-common/installed-flavors
+fi
+
+if [ ! -e %p/var/lib/emacsen-common/state/flavor/installed ]
 then
   if [ -e /usr/local/share/emacs ]
   then
     chmod 2775 /usr/local/share/emacs
   fi
-  /bin/echo "\c" > %p/var/lib/emacsen-common/installed-flavors
-  chmod 644 %p/var/lib/emacsen-common/installed-flavors
-  /bin/echo "\c" > %p/var/lib/emacsen-common/installed-flavors
+  mkdir -p %p/var/lib/emacsen-common/state/flavor/installed
 fi
-%p/lib/emacsen-common/emacs-package-install emacsen-common
+%p/lib/emacsen-common/emacs-package-install --postinst emacsen-common
+
+# Reinstall all flavors during upgrade.  See the comments in the
+# preinst and https://bugs.debian.org/1106291
+
+for flavor in %p/var/lib/emacsen-common/state/flavor/pending/*[!~]; do
+    case "$flavor" in
+        */pending/\**) break ;; # no flavors
+    esac
+    flavor="$(basename "$flavor")"
+    echo "Reinstalling emacsen flavor $flavor after emacsen-common upgrade" 1>&2
+    %p/lib/emacsen-common/emacs-install "$flavor"
+    rm "%p/var/lib/emacsen-common/state/flavor/pending/$flavor"
+done
+
 
 # Clean up dead emacs info entry...                                                                         
 #install-info --quiet --remove emacs
 <<
-
 PreRmScript: <<
-%p/lib/emacsen-common/emacs-package-remove emacsen-common
+%p/lib/emacsen-common/emacs-package-remove --prerm emacsen-common
+
+rm -rf %p/var/lib/emacsen-common/state/flavor/pending
 
 (rmdir /usr/local/share/emacs/site-lisp 2>/dev/null &&  rmdir /usr/local/share/emacs 2>/dev/null) || true
 <<
 PostRmScript: <<
 if [ "$1" = purge ]
 then
-  if [ -e %p/var/lib/emacsen-common/installed-flavors ]
+  if [ -e %p/var/lib/emacsen-common/state ]
   then
-    rm -f %p/var/lib/emacsen-common/installed-flavors
+    rm -rf %p/var/lib/emacsen-common/state
     rmdir %p/var/lib/emacsen-common
   fi
 fi
@@ -118,13 +184,6 @@ DescPort: <<
  of changes: 1) needs to be convinced to live under the fink prefix directory,
  and 2) elisp functions with debian in the name were changed to fink (e.g., 
  debian-startup became fink-startup).
-
- The file 00fink-vars.el does very little at this point (none of its Debian
- counterpart's functions are needed under OS X), but is being preserved for 
- future expansion.
-
- Patch generate-install-list to deal with fatal error as of perl5.30.
- See #855.
 <<
 DescUsage: <<
  The only current documentation is the debian-emacs-policy paper, which gives
