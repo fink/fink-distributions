@@ -1,6 +1,10 @@
+Info2: <<
 Package: rustc
-Version: 1.30.0
-Revision: 1
+Version: 1.78.0
+Revision: 3
+Architecture: x86_64
+Type: bootstrap_d (2024-03-21), bootstrap_v (1.77.0), llvm_v (16)
+#Type: bootstrap_d (2025-01-09), bootstrap_v (1.84.0), llvm_v (18)
 Description: Safe Fast System Programming Language
 Maintainer: None <fink-devel@lists.sourceforge.net>
 License: BSD
@@ -8,64 +12,188 @@ License: BSD
 Conflicts: rust (<< 1.11.0-2)
 Replaces: rust (<< 1.11.0-2)
 
-Source: https://static.rust-lang.org/dist/rustc-%v-src.tar.gz
-Source-Checksum: SHA256(cd0ba83fcca55b64c0c9f23130fe731dfc1882b73ae21bef96be8f2362c108ee)
+Source: https://static.rust-lang.org/dist/rustc-%v-src.tar.xz
+Source-Checksum: SHA256(8065824f0255faa3901db8206e6f9423f6f8c07cec28bc6f2797c6c948310ece)
 SourceDirectory: rustc-%v-src
 
-Source2: https://static.rust-lang.org/dist/2018-10-12/rust-std-1.29.2-x86_64-apple-darwin.tar.gz
-Source2-Checksum: SHA256(72cd953cb8ea05667f5d58f5c4ba615a564611a86303c0f8f9235e7a53852692)
+# derived from src/stage0 of the rustc tarball
+Source2: https://static.rust-lang.org/dist/%type_raw[bootstrap_d]/rust-std-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz
+Source2-Checksum: SHA256(95692e654b5ea16514b0d5558707b28c497b5c262c0d7c711d46e03033509f8c)
 # prevent automatic unpacking
-Source2Rename: rust-std-1.29.2-x86_64-apple-darwin.tar.gz.nounpack
+Source2Rename: rust-std-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz.nounpack
 
-# derived from src/stage0.txt
-Source3: https://static.rust-lang.org/dist/2018-10-12/rustc-1.29.2-x86_64-apple-darwin.tar.gz
-Source3-Checksum: SHA256(d9c0dd8127ed632e27d751f051bca933578317ffe891e39155ae721bc1d3ec05)
-Source3Rename: rustc-1.29.2-x86_64-apple-darwin.tar.gz.nounpack
+Source3: https://static.rust-lang.org/dist/%type_raw[bootstrap_d]/rustc-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz
+Source3-Checksum: SHA256(0bae384047cdb64200f4e87f8564238542504b45181870900f57745932c49d79)
+Source3Rename: rustc-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz.nounpack
 
-Source4: https://static.rust-lang.org/dist/2018-10-12/cargo-0.30.0-x86_64-apple-darwin.tar.gz
-Source4-Checksum: SHA256(defc1ba047f09219a50ff39032b5d7aaf26563f6bed528b93055622eedfddabf)
-Source4Rename: cargo-bootstrap-0.30.0-x86_64-apple-darwin.tar.gz.nounpack
+Source4: https://static.rust-lang.org/dist/%type_raw[bootstrap_d]/cargo-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz
+Source4-Checksum: SHA256(c95b98a306b26bf5f4f43d4d212c4535f3a09bbeda569ea0431bc54824a267b4)
+Source4Rename: cargo-bootstrap-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz.nounpack
 
-BuildDepends: cmake, fink (>= 0.28)
+Depends: <<
+	libstd-rust-dev (>= %v-%r)
+<<
+#	clang-%type_pkg[llvm_v],
+#	clang-tools-%type_pkg[llvm_v],
+#	libc++-%type_pkg[llvm_v]-dev,
+#	libclang-common-%type_pkg[llvm_v]-dev,
+#	libllvm%type_pkg[llvm_v]-dev,
+#	lld-%type_pkg[llvm_v],
+#	llvm-%type_pkg[llvm_v],
+#	llvm-%type_pkg[llvm_v]-dev,
+#	llvm-%type_pkg[llvm_v]-tools,
+# uses liblzma5 at link time but then strips symbols?
+BuildDepends: <<
+	cmake,
+	fink (>= 0.32),
+	libcurl4,
+	liblzma5,
+	python310,
+	openssl300-dev,
+	pkgconfig
+<<
+Suggests: <<
+	cargo
+<<
+# insists on using system-libiconv headers, but fink-libiconv.dylib
+# If find way to add %p/include to internal CPPFLAGS, promote this to Dep/BDep instead.
+BuildConflicts: <<
+	libiconv-dev
+<<
 
+#PatchFile: %n-submodule-tarball.patch
+#PatchFile-MD5: 2ce00fa9baeec5cd467b5b8a638b7416
 PatchScript: <<
 #!/bin/sh -ev
+#%{default_script}
+
 cat > config.toml <<EOF
+profile = "dist"
+change-id = 121754 # last commit from src/bootstrap/src/utils/change_tracker.rs
+
+[llvm]
+cflags = "-I%p/include"
+cxxflags = "-I%p/include"
+ldflags = "-L%p/lib"
+# generate a dylib for internal LLVM (smaller downstream binaries)
+# see [target.%m-apple-darwin] below for using system-llvm
+#link-shared = true
+# link rustc statically to its internal LLVM (avoid collision with system-llvm)
+link-shared = false
+
+# from src/bootstrap/defaults/config.dist.toml
+# Most users installing from source want to build all parts of the project from source.
+download-ci-llvm = false
+
 [build]
 vendor = true
+python = "%p/bin/python3.10"
 #extended = true
+verbose = 1
+
+# from src/bootstrap/defaults/config.dist.toml
+# When compiling from source, you almost always want a full stage 2 build,
+# which has all the latest optimizations from nightly.
+build-stage = 2
+test-stage = 2
+doc-stage = 2
+# When compiling from source, you usually want all tools.
+extended = true
 
 [install]
-prefix = "%i"
+prefix = "%p"
+sysconfdir = "etc"
 
 [rust]
 codegen-units = 0
 channel = "stable"
+description = "Fink/%v-%r"
 rpath = false
-EOF
-<<
+# This greatly increases the speed of rebuilds, especially when there are only minor changes. However, it makes the initial build slightly slower.
+incremental = true
 
+# from src/bootstrap/defaults/config.dist.toml
+# Never download a rustc, distributions must build a fresh compiler.
+download-rustc = false
+
+#[target.x86_64-apple-darwin]
+#cc = "%p/lib/llvm-%type_pkg[llvm_v]/bin/clang"
+#cxx = "%p/lib/llvm-%type_pkg[llvm_v]/bin/clang++"
+#ar = "/usr/bin/ar"
+#ranlib = "/usr/bin/ranlib"
+
+# Path to the 'llvm-config' binary of the installation of a custom LLVM to link
+# against. Note that if this is specified we don't compile LLVM at all for this
+# target.
+#llvm-config = "%p/lib/llvm-%type_pkg[llvm_v]/bin/llvm-config"
+# Normally the build system can find LLVM's FileCheck utility, but if
+# not, you can specify an explicit file name for it.
+#llvm-filecheck = "%p/lib/llvm-%type_pkg[llvm_v]/bin/FileCheck"
+
+EOF
+
+# these are from Debian
+# don't care about lock changes
+#rm -f Cargo.lock src/bootstrap/Cargo.lock src/tools/rust-analyzer/Cargo.lock src/tools/cargo/Cargo.lock
+# Link against system liblzma,
+# see https://github.com/alexcrichton/xz2-rs/issues/16
+# https://doc.rust-lang.org/cargo/reference/build-scripts.html
+# and update the checksum
+#cat > vendor/lzma-sys-0.1.20/build.rs <<EOF
+cat > vendor/lzma-sys/build.rs <<EOF
+fn main() {
+    println!("cargo:rustc-link-search=%p/lib");
+    println!("cargo:rustc-link-lib=lzma");
+}
+EOF
+# final SHASUM is variable because %p gets resolved
+SHASUM=`shasum -a 256 vendor/lzma-sys/build.rs | cut -f 1 -d ' '`
+perl -pi -e "s|052d600babd2f95d9549f2b846e6dcf1e39b1c15d4fa6a293797ce1c85199e24|$SHASUM|g" vendor/lzma-sys/.cargo-checksum.json
+#SHASUM=`shasum -a 256 vendor/lzma-sys-0.1.20/build.rs | cut -f 1 -d ' '`
+#perl -pi -e "s|052d600babd2f95d9549f2b846e6dcf1e39b1c15d4fa6a293797ce1c85199e24|$SHASUM|g" vendor/lzma-sys-0.1.20/.cargo-checksum.json
+
+<<
+GCC: 4.0
 CompileScript: <<
 #!/bin/sh -ev
-CACHEDIR=build/cache/2018-10-12
+export TARGET_CFLAGS=$CFLAGS
+export TARGET_CXXFLAGS="$CPPFLAGS"
+export TARGET_CPPFLAGS="$CPPFLAGS"
+export TARGET_LDFLAGS="$LDFLAGS"
+#unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+
+export LIBSSH2_SYS_USE_PKG_CONFIG=1
+
+#export PATH=%p/lib/llvm-%type_pkg[llvm_v]/bin:$PATH
+#export LLVM_LIBRARY_PATH=%p/lib/llvm-%type_pkg[llvm_v]/lib
+
+export PYTHON=%p/bin/python3.10
+
+CACHEDIR=build/cache/%type_raw[bootstrap_d]
 
 mkdir -p $CACHEDIR
-mv ../rust-std-1.29.2-x86_64-apple-darwin.tar.gz.nounpack $CACHEDIR/rust-std-1.29.2-x86_64-apple-darwin.tar.gz
-mv ../rustc-1.29.2-x86_64-apple-darwin.tar.gz.nounpack $CACHEDIR/rustc-1.29.2-x86_64-apple-darwin.tar.gz
-mv ../cargo-bootstrap-0.30.0-x86_64-apple-darwin.tar.gz.nounpack $CACHEDIR/cargo-0.30.0-x86_64-apple-darwin.tar.gz
+mv ../rust-std-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz.nounpack $CACHEDIR/rust-std-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz
+mv ../rustc-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz.nounpack $CACHEDIR/rustc-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz
+mv ../cargo-bootstrap-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz.nounpack $CACHEDIR/cargo-%type_raw[bootstrap_v]-%m-apple-darwin.tar.xz
 
-./x.py dist
+$PYTHON ./x.py dist # -j1
 <<
 InstallScript: <<
 #!/bin/sh -ev
-  ./x.py install
+  export PYTHON=%p/bin/python3.10
+  DESTDIR=%d $PYTHON ./x.py install
 
-  mv %i/share/doc/rust %i/share/doc/%n
+  mv %i/share/doc/docs %i/share/doc/rust-doc
   
-  # lib path is in build tree
-  for tgt in %i/bin/* %i/lib/*.dylib %i/lib/rustlib/x86_64-apple-darwin/codegen-backends/*.dylib
+  for tgt in %i/bin/* %i/lib/*.dylib %i/lib/rustlib/%m-apple-darwin/lib/*.dylib %i/libexec/* 
   do
+    # lib path is in build tree
     for lib in $(otool -L $tgt | grep %b | awk '{print $1}')
+    do
+      install_name_tool -change $lib %p/lib/$(basename $lib) $tgt
+    done
+    # @rpath -> full path
+    for lib in $(otool -L $tgt | grep rpath | awk '{print $1}')
     do
       install_name_tool -change $lib %p/lib/$(basename $lib) $tgt
     done
@@ -73,7 +201,15 @@ InstallScript: <<
 
   for tgt in %i/lib/*.dylib
   do
+    otool -L $tgt | head -n 2
+    file $tgt
     install_name_tool -id %p/lib/$(basename $tgt) $tgt
+  done
+  for tgt in %i/lib/rustlib/%m-apple-darwin/lib/*.dylib
+  do
+    otool -L $tgt | head -n 2
+    file $tgt
+    install_name_tool -id %p/lib/rustlib/%m-apple-darwin/lib/$(basename $tgt) $tgt
   done
 
   # https://github.com/rust-lang/rust/issues/39870
@@ -81,61 +217,83 @@ InstallScript: <<
   # the same shared lib as in the root, and bad things happen if
   # a binary ends up linking to both copies. So just replace the
   # rustlib version with a symlink to the parent.
-  for tgt in %i/lib/rustlib/x86_64-apple-darwin/lib/*.dylib
+  for tgt in %i/lib/rustlib/%m-apple-darwin/lib/*.dylib
   do
     lib=$(basename $tgt)
+    echo $lib
     if [ -f %i/lib/$lib ]
     then
       ln -sf %p/lib/$lib $tgt
     fi
   done
 
-  install_name_tool -id %p/lib/rustlib/x86_64-apple-darwin/lib/libLLVM.dylib %i/lib/rustlib/x86_64-apple-darwin/lib/libLLVM.dylib
-  install_name_tool -id %p/lib/rustlib/x86_64-apple-darwin/codegen-backends/librustc_codegen_llvm-llvm.dylib %i/lib/rustlib/x86_64-apple-darwin/codegen-backends/librustc_codegen_llvm-llvm.dylib
+  #install_name_tool -id %p/lib/rustlib/%m-apple-darwin/lib/libLLVM.dylib %i/lib/rustlib/%m-apple-darwin/lib/libLLVM.dylib
+  #install_name_tool -id %p/lib/rustlib/%m-apple-darwin/codegen-backends/librustc_codegen_llvm-llvm.dylib %i/lib/rustlib/%m-apple-darwin/codegen-backends/librustc_codegen_llvm-llvm.dylib
+  
+  mv %i/libexec/rust-analyzer-proc-macro-srv %i/bin
+  rm -rf %i/libexec
+  
+  rm %i/lib/rustlib/install.log %i/lib/rustlib/uninstall.sh
 <<
 Shlibs: <<
-  !%p/lib/libsyntax_ext-0610082927f13b68.dylib
-  !%p/lib/librustc_privacy-3d33ff72e4be01b5.dylib
-  !%p/lib/librustc_cratesio_shim-89f003a3cf6a0f50.dylib
-  !%p/lib/libproc_macro-3c3310d56327c751.dylib
-  !%p/lib/librustc_passes-5ac07255fd417c7c.dylib
-  !%p/lib/libgraphviz-c745ad126f555404.dylib
-  !%p/lib/librustc_resolve-0d9c524c490cd9a3.dylib
-  !%p/lib/librustc_mir-edaccdabe5628117.dylib
-  !%p/lib/librustc_driver-458544d1543584e9.dylib
-  !%p/lib/librustc_codegen_utils-c51aa952698007b6.dylib
-  !%p/lib/librustc_traits-cc86a672bc385867.dylib
-  !%p/lib/librustc_metadata_utils-11a27c37b38fb414.dylib
-  !%p/lib/librustc_fs_util-195ee3fb273b97b8.dylib
-  !%p/lib/libsyntax_pos-af163bbd2a3b6cd4.dylib
-  !%p/lib/librustc_target-9b72dc107559762c.dylib
-  !%p/lib/librustc_data_structures-2444c86d41a6f566.dylib
-  !%p/lib/librustc_lint-ef0c6b45c55e1240.dylib
-  !%p/lib/librustc_save_analysis-1f003a00ca6206d5.dylib
-  !%p/lib/librustc_metadata-d63be93a557a9597.dylib
-  !%p/lib/librustc-a140d9ea5f6f61ed.dylib
-  !%p/lib/libarena-640d3352917efd05.dylib
-  !%p/lib/libserialize-48f4ceb2315fb290.dylib
-  !%p/lib/librustc_borrowck-82a0023f67ed38e8.dylib
-  !%p/lib/librustc_typeck-d938956a2378df20.dylib
-  !%p/lib/libtest-3d08e1a1fd6ab8b9.dylib
-  !%p/lib/libfmt_macros-cd8f1f3ba30325c9.dylib
-  !%p/lib/libsyntax-5804bc44f6aa386c.dylib
-  !%p/lib/librustc_platform_intrinsics-7e34762bb9904c06.dylib
-  !%p/lib/librustc_incremental-d61b642a5aa7f559.dylib
-  !%p/lib/libterm-99cc253bfe0ceff1.dylib
-  !%p/lib/librustc_plugin-68a342b785413fe8.dylib
-  !%p/lib/libstd-8b3bb8561e753cc3.dylib
-  !%p/lib/librustc_allocator-23cb74b7a7975376.dylib
-  !%p/lib/librustc_errors-4eab085f8d21579c.dylib
-  !%p/lib/rustlib/x86_64-apple-darwin/lib/libLLVM.dylib
-  !%p/lib/rustlib/x86_64-apple-darwin/codegen-backends/librustc_codegen_llvm-llvm.dylib
+	!%p/lib/librustc_driver-cb37f7977dcc4af4.dylib
+	!%p/lib/libstd-167ec58ba7f44bef.dylib
 <<
+#	!%p/lib/libLLVM.dylib
 DocFiles: <<
   CONTRIBUTING.md COPYRIGHT LICENSE-APACHE LICENSE-MIT README.md RELEASES.md
 <<
-
-Homepage: http://www.rust-lang.org/
+SplitOff: <<
+	Package: cargo
+	Description: Rust package manager
+	# add libiconv once we can correctly link to fink-libiconv
+	Depends: <<
+		libcurl4-shlibs,
+		libgit2-1.7-shlibs,
+		openssl300-shlibs,
+		rustc
+	<<
+	Suggests: <<
+		python310
+	<<
+	Files: <<
+		bin/cargo
+		etc/bash_completion.d/cargo
+		share/doc/cargo
+		share/man/man1/cargo*
+		share/zsh/site-functions
+	<<
+<<
+SplitOff2: <<
+	Package: libstd-rust-dev
+	Description: Rust standard libraries - development files
+	# NOT BDO (see rustc)
+	#BuildDependsOnly: true
+	Depends: <<
+		rustc (= %v-%r)
+	<<
+	Files: <<
+		lib/rustlib/%m-apple-darwin/lib
+	<<
+#	Shlibs: <<
+#		!%p/lib/rustlib/x86_64-apple-darwin/lib/libstd-d50560e9e437b847.dylib
+#	<<
+<<
+SplitOff3: <<
+	Package: rust-doc
+	Description: Rust  programming language - Documentation
+	Files: <<
+		share/doc/rust-doc
+	<<
+<<
+SplitOff4: <<
+	Package: rust-src
+	Description: Rust programming language - source code
+	Files: <<
+		lib/rustlib/src
+	<<
+<<
+Homepage: https://www.rust-lang.org/
 DescDetail: <<
 Rust is a curly-brace, block-structured expression language. It visually
 resembles the C language family, but differs significantly in syntactic
@@ -147,4 +305,15 @@ integrity, availability and concurrency.
 It supports a mixture of imperative procedural, concurrent actor,
 object-oriented and pure functional styles. Rust also supports generic
 programming and metaprogramming, in both static and dynamic styles.
+<<
+DescPort: <<
+Build internal LLVM as static to avoid collision with Fink
+libLLVM.dylib. Can't use Fink libLLVM.dylib and friends due to compiler
+errors with its wchar.h::wmemchr
+
+Fix for 1.85.0 tarball missing submodules
+https://github.com/rust-lang/rust/issues/137332
+https://github.com/rust-lang/rust/pull/137338
+https://github.com/rust-lang/rust/pull/137340
+<<
 <<
