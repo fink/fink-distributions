@@ -2,7 +2,7 @@
 Info2: <<
 Package: python%type_pkg[python]
 Version: 3.10.4
-Revision: 3
+Revision: 4
 Type: python 3.10
 # Free to modify, update, and take over
 Maintainer: Hanspeter Niederstrasser <nieder@users.sourceforge.net>
@@ -67,12 +67,19 @@ PatchFile2-MD5: 7c784b142b6ff2ff6a9d34b49b2ef6f6
 # From upstream https://github.com/python/cpython/pull/109928
 PatchFile3: %n-test_mmap.patch
 PatchFile3-MD5: e4a836ddb4424981928f46d50028c722
+# Fix syntax error in Tools/c-analyzer
+# See: https://github.com/python/cpython/issues/102033
+# Patch: https://github.com/python/cpython/pull/102066
+# (squashed and tweaked so that it applies cleanly to this version)
+PatchFile4: %n-c-analyzer.patch
+PatchFile4-MD5: c1d5eff186ae19339751cc4de41acc14
 
 PatchScript: <<
 	#!/bin/sh -ex
 	sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
 	patch -p1 < %{PatchFile2}
 	patch -p1 < %{PatchFile3}
+	patch -p1 < %{PatchFile4}
 	# /tmp and /var/tmp are symlinks to /private/tmp and /private/var/tmp
 	# on OS X. That's fine except it can cause tests in some packages to
 	# fail since '/tmp' != '/private/tmp'. Default to using /private/tmp.
@@ -133,6 +140,7 @@ InfoTest: <<
 		# test_socket can fail with some DNS settings.
 		# multiprocessing_spawn fails on "KeyboardInterrupt not raised by wait",
 		# test_tcl and test_idle require an active $DISPLAY
+		# test_pkgutil fails on HFS+ https://bugs.python.org/issue41154
 		EXTRATESTOPTS='-w -unone -x test_socket test_multiprocessing_spawn test_code test_idle test_tcl test_pkgutil'
 		# test_ctypes is currently broken on 12.0 (py3.10.1)
 		EXTRATESTOPTS="$EXTRATESTOPTS -x test_ctypes"
@@ -165,13 +173,15 @@ InstallScript: <<
 	perl -pi -e 's/-lintl //' `ls -d %b/build/lib*`/_sysconfigdata__darwin_darwin.py
 	# Remove stray .pyc that get made during tests (including preliminary ones in CompileScript) to keep validator happy.
 	find ./Lib ./Parser ./Tools ./build -name '*.pyc' -delete
+	# Change interpreter name in scripts to versioned executable.
+	perl -pi -e 's|(/usr/bin/env python)(3?)$|${1}%type_raw[python]|' ./Tools/scripts/*
 	# install fails with -j greater than 1
 	export MAKEFLAGS=-j1
 	make install DESTDIR=%d
 
 	# we don't want -lintl to appear in LIBS otherwise python-config will propagate it
 	perl -pi -e 's/-lintl //' %i/lib/python%type_raw[python]/config-%type_raw[python]-darwin/Makefile
-	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]-darwin,' %i/lib/python%type_raw[python]/config-%type_raw[python]-darwin/Makefile	
+	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]-darwin,' %i/lib/python%type_raw[python]/config-%type_raw[python]-darwin/Makefile
 	# Fix all main things to be python-versioned filenames with unversioned symlinks to them.
 	pushd %i/bin
 		for f in idle3 pydoc3; do
@@ -190,6 +200,9 @@ InstallScript: <<
 	# install some docs and other useful tidbits
 	rm -rf Misc/RPM
 	/bin/cp -R Misc Tools %i/lib/python%type_raw[python]
+	pushd %i/lib/python%type_raw[python]
+		DYLD_LIBRARY_PATH=%i/lib %i/bin/python%type_raw[python] -m compileall Tools/[a-su]* Tools/tz || exit 1
+	popd
 
 # Doc tarball missing upstream.
 #	mkdir -p %i/share/doc/%n/html
