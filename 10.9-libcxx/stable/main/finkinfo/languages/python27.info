@@ -3,7 +3,7 @@ Info2: <<
 Package: python%type_pkg[python]
 # GDBM_COMPAT
 Version: 2.7.18
-Revision: 6
+Revision: 7
 Epoch: 1
 Type: python 2.7
 Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
@@ -19,7 +19,7 @@ Depends: <<
 	libffi8-shlibs,
 	libgettext8-shlibs,
 	libncursesw5-shlibs,
-	openssl110-shlibs (>= 1.1.1d-1),
+	openssl110-shlibs (>= 1.1.1g-1),
 	readline8-shlibs,
 	sqlite3-shlibs  (>= 3.30.1-1),
 	tcltk (>= 8.4.1-1),
@@ -30,14 +30,14 @@ BuildDepends: <<
 	bzip2-dev,
 	db53-aes,
 	expat1 (>= 2.2.8-1),
-	fink (>= 0.32), 
+	fink (>= 0.32),
 	gdbm4,
 	gettext-bin,
 	gettext-tools,
 	libffi8,
 	libgettext8-dev,
 	libncursesw5,
-	openssl110-dev (>= 1.1.1d-1),
+	openssl110-dev (>= 1.1.1g-1),
 	pkgconfig,
 	readline8,
 	sqlite3-dev (>= 3.30.1-1),
@@ -53,9 +53,9 @@ Provides: <<
 	argparse-py%type_pkg[python]
 <<
 
-Source: http://python.org/ftp/python/%v/Python-%v.tar.xz
+Source: https://www.python.org/ftp/python/%v/Python-%v.tar.xz
 Source-Checksum: SHA256(b62c0e7937551d0cc02b8fd5cb0f544f9405bafc9a54d3808ed4594812edef43)
-Source2: http://www.python.org/ftp/python/doc/%v/python-%v-docs-html.tar.bz2
+Source2: https://www.python.org/ftp/python/doc/%v/python-%v-docs-html.tar.bz2
 Source2-Checksum: SHA256(20445e9a571cacdd350f702f0980e4dc559b6ff81f1d69affe9b0a862fef2f0e)
 
 PatchFile: %n.patch
@@ -86,8 +86,6 @@ PatchScript: <<
 	perl -pi -e 's|num_missing != 5:|num_missing != 7:|g; s|have 5 missing|have 7 missing|' ./setup.py
 <<
 
-UseMaxBuildJobs: true
-
 ConfigureParams: <<
 	--enable-shared \
 	--with-dbmliborder=gdbm \
@@ -101,10 +99,10 @@ ConfigureParams: <<
 
 CompileScript: <<
 #!/bin/sh -ex
-
+	darwinvers=$(uname -r | cut -d. -f1)
+	SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 	# for OS X 10.14, ensure full SDK is available, but include it after any fink specific versions.
-	if [ "$(uname -r | cut -d. -f1)" -ge 18 ]; then
-		SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
+	if [ $darwinvers -ge 18 ]; then
 		export CFLAGS="-Wno-nullability-completeness -isysroot $SDK_PATH"
 		export CPPFLAGS="-I%p/include -I%p/include/ncursesw -I$SDK_PATH/usr/include"
 	fi
@@ -112,8 +110,8 @@ CompileScript: <<
 	# for macOS 11, need help finding libz in new system-library cache
 	# https://bugs.python.org/issue41116
 	# pthread is still not found, so disable test_ctypes for now as well
-	#if [ "$(uname -r | cut -d. -f1)" -ge 20 ]; then
-	#	DIST_CONFIG_PARAMS="--enable-universalsdk=$(xcrun --sdk macosx --show-sdk-path) --with-universal-archs=intel-64"
+	#if [ $darwinvers -ge 20 ]; then
+	#	DIST_CONFIG_PARAMS="--enable-universalsdk=$SDK_PATH --with-universal-archs=intel-64"
 	#fi
 
 	# https://bugs.python.org/issue28456 and radar://28372390
@@ -123,10 +121,6 @@ CompileScript: <<
 	perl -pi -e 's|\#define HAVE_POLL_H 1||g' ./pyconfig.h
 	perl -pi -e 's|\#define HAVE_SYS_POLL_H 1||g' ./pyconfig.h
 	make
-	
-	echo "If the build fails here, please see"
-	echo "http://www.finkproject.org/faq/comp-general.php?phpLang=en#missing-usr-include-headers"
-	echo "for the most likely solution."
 <<
 
 InfoTest: <<
@@ -160,8 +154,8 @@ InfoTest: <<
 		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %b/libpython%type_raw[python].dylib %p/lib/python%type_raw[python]/config/libpython%type_raw[python].dylib {} \;
 		install_name_tool -id %p/lib/python%type_raw[python]/config/libpython%type_raw[python].dylib libpython%type_raw[python].dylib
 
-		# Remove stray .pyc that get made during tests to keep validator happy.
-		find ./Tools -name "*.pyc" -delete
+		# remove leftovers from testing
+		/usr/bin/find %b/Tools -name "*.pyc" -delete
 		exit $TESTRETURN
 	<<
 <<
@@ -180,19 +174,17 @@ InstallScript: <<
 
 	# we don't want -lintl to appear in LIBS otherwise python-config will propagate it
 	perl -pi -e 's/-lintl //' %i/lib/python%type_raw[python]/config/Makefile
-
-	# fix all main things to be python-versioned filenames with
-	# unversioned symlinks to them
+	# Fix all main things to be python-versioned filenames with unversioned symlinks to them.
 	pushd %i/bin
 		for f in 2to3 idle pydoc smtpd.py; do
 			mv ${f} ${f}%type_raw[python]
-			ln -s ${f}%type_raw[python] %i/bin/${f}
+			ln -s ${f}%type_raw[python] ${f}
 		done
 	popd
 	ln -s python%type_raw[python].1 %i/share/man/man1/python%type_pkg[python].1
 	
 	# Add symlink to %p/lib.
-	ln -s %p/lib/python%type_raw[python]/config/libpython%type_raw[python].dylib %i/lib/libpython%type_raw[python].dylib
+	ln -s python%type_raw[python]/config/libpython%type_raw[python].dylib %i/lib/libpython%type_raw[python].dylib
 
 	# install some docs and other useful tidbits
 	rm -rf Misc/RPM
@@ -203,17 +195,20 @@ InstallScript: <<
 	/bin/cp -R ../python-%v-docs-html/ %i/share/doc/%n/html
 <<
 SplitOff: <<
- Package: %N-shlibs
- Files: lib/libpython%type_raw[python].dylib lib/python%type_raw[python]/config/libpython%type_raw[python].dylib
- Shlibs: %p/lib/python2.7/config/libpython2.7.dylib 2.7.0 %n (>= 1:2.7-1)
- DocFiles: README LICENSE 
+	Package: %N-shlibs
+	Files: <<
+		lib/libpython%type_raw[python].dylib
+		lib/python%type_raw[python]/config/libpython%type_raw[python].dylib
+	<<
+	Shlibs: %p/lib/python2.7/config/libpython2.7.dylib 2.7.0 %n (>= 1:2.7-1)
+	DocFiles: README LICENSE
 <<
 SplitOff2: <<
- Package: python
- Depends: %N (>= %e:%v-%r)
- Conflicts: python-nox
- Replaces: python-nox, python25 (<< 1:2.5.1-3)
- Files: <<
+	Package: python
+	Depends: %N (>= %e:%v-%r)
+	Conflicts: python-nox
+	Replaces: python-nox, python25 (<< 1:2.5.1-3)
+	Files: <<
 		bin/2to3
 		bin/idle
 		bin/pydoc
@@ -226,28 +221,28 @@ SplitOff2: <<
 		lib/pkgconfig/python2.pc
 		share/man/man1/python.1
 	<<
- DocFiles: README LICENSE
- Description: Generic commands to invoke python%type_pkg[python]
- DescDetail: <<
-  This package only contains non-versioned symlinks to the binaries included
-  with python%type_pkg[python].
- <<
- DescUsage: <<
-  This package should only be used when you don't care which version of the
-  python 2.x interpreter you need.
- <<
+	DocFiles: README LICENSE
+	Description: Generic commands to invoke python%type_pkg[python]
+	DescDetail: <<
+		This package only contains non-versioned symlinks to the binaries included
+		with python%type_pkg[python].
+	<<
+	DescUsage: <<
+		This package should only be used when you don't care which version of the
+		python 3.x interpreter you need.
+	<<
 <<
-DocFiles: README LICENSE 
+DocFiles: README LICENSE
 Description: Interpreted, object-oriented language
 DescDetail: <<
- Python is often compared to Tcl, Perl, Scheme or Java. 
- This package installs unix python - not the OSX Framework version.
- Builds a two-level namespace dynamic libpython (needed for koffice).
+	Python is often compared to Tcl, Perl, Scheme or Java.
+	This package installs unix python - not the OSX Framework version.
+	Builds a two-level namespace dynamic libpython (needed for koffice).
 
- The interpreter is installed as "python%type_raw[python]", and all associated
- commands are similarly named with the python-version in them. To get
- the simple "python" command, install the fink package "python" (note:
- the "python" command there is not guaranteed to be python%type_raw[python]!).
+	The interpreter is installed as "python%type_raw[python]", and all associated
+	commands are similarly named with the python-version in them. To get
+	the simple "python3" command, install the fink package "python3" (note:
+	the "python3" command there is not guaranteed to be python%type_raw[python]!).
 <<
 DescUsage: <<
 	python%type_raw[python] changes the compiler options used to compile
@@ -313,5 +308,5 @@ DescPort: <<
 	https://github.com/python/cpython/pull/22855
 <<
 License: OSI-Approved
-Homepage: http://www.python.org
+Homepage: https://www.python.org/
 <<

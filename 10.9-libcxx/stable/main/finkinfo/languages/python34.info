@@ -6,7 +6,7 @@ Package: python%type_pkg[python]
 # GDBM_COMPAT
 Version: 3.4.10
 # Final version of 3.4
-Revision: 3
+Revision: 4
 Distribution: 10.9, 10.10, 10.11, 10.12, 10.13, 10.14, 10.14.5, 10.15
 Type: python 3.4
 Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
@@ -31,7 +31,7 @@ BuildDepends: <<
 	blt-dev (>= 2.4z-15),
 	bzip2-dev,
 	expat1 (>= 2.2.8-1),
-	fink (>= 0.32), 
+	fink (>= 0.32),
 	gdbm4,
 	gettext-bin,
 	gettext-tools,
@@ -60,9 +60,10 @@ Provides: <<
 
 Source: https://www.python.org/ftp/python/%v/Python-%v.tar.xz
 Source-Checksum: SHA256(d46a8f6fe91679e199c671b1b0a30aaf172d2acb5bcab25beb35f16c3d195b4e)
-# Upstream no longer provides doc tarballs. :(
-#Source2: https://www.python.org/ftp/python/doc/3.4.3/python-3.4.3-docs-html.tar.bz2
+# Doc tarball missing upstream.
+#Source2: https://www.python.org/ftp/python/doc/%v/python-%v-docs-html.tar.bz2
 #Source2-MD5: cb6bd508aff25471fb4f32cc848a8c5b
+
 PatchFile: %n.patch
 PatchFile-MD5: 12ef0f8067e3682542c1cd773e62ca28
 # Backport from python-3.7.13
@@ -88,8 +89,6 @@ PatchScript: <<
 	fi
 <<
 
-UseMaxBuildJobs: true
-
 SetCC: gcc
 SetCXX: g++
 
@@ -106,10 +105,10 @@ ConfigureParams: <<
 
 CompileScript: <<
 #!/bin/sh -ex
-
+	darwinvers=$(uname -r | cut -d. -f1)
+	SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 	# for OS X 10.14, ensure full SDK is available, but include it after any fink specific versions.
-	if [ "$(uname -r | cut -d. -f1)" -ge 18 ]; then
-		SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
+	if [ $darwinvers -ge 18 ]; then
 		export CFLAGS="-Wno-nullability-completeness"
 		export CPPFLAGS="-I%p/include -I%p/include/ncursesw -I$SDK_PATH/usr/include"
 		perl -pi -e "s|/usr/include|$SDK_PATH/usr/include|" setup.py
@@ -117,7 +116,7 @@ CompileScript: <<
 
 	# https://bugs.python.org/issue28456 and radar://28372390
 	# https://daniel.haxx.se/blog/2016/10/11/poll-on-mac-10-12-is-broken/
-	./configure %c
+	./configure %c $DIST_CONFIG_PARAMS
 	perl -pi -e 's|\#define HAVE_POLL 1||' ./pyconfig.h
 	perl -pi -e 's|\#define HAVE_POLL_H 1||g' ./pyconfig.h
 	perl -pi -e 's|\#define HAVE_SYS_POLL_H 1||g' ./pyconfig.h
@@ -158,9 +157,9 @@ InfoTest: <<
 		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %b/libpython%type_raw[python]m.dylib %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib {} \;
 		install_name_tool -id %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib libpython%type_raw[python]m.dylib
 
-		# Remove stray .pyc that get made during tests to keep validator happy.
-		find ./Tools -name "*.pyc" -delete
-		find ./Tools -name "__pycache__" -delete
+		# remove leftovers from testing
+		# these dirs are empty and only created if tests are run
+		/usr/bin/find %b/Tools -name __pycache__ -type d -depth -exec rm -rf "{}" \;
 		exit $TESTRETURN
 	<<
 <<
@@ -182,39 +181,44 @@ InstallScript: <<
 	# we don't want -lintl to appear in LIBS otherwise python-config will propagate it
 	perl -pi -e 's/-lintl //' %i/lib/python%type_raw[python]/config-%type_raw[python]m/Makefile
 	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]m,' %i/lib/python%type_raw[python]/config-%type_raw[python]m/Makefile	
-	# fix all main things to be python-versioned filenames with
-	# unversioned symlinks to them
+	# Fix all main things to be python-versioned filenames with unversioned symlinks to them.
 	pushd %i/bin
 		for f in idle3 pydoc3; do
 			mv ${f} ${f}-%type_raw[python]
-			ln -s ${f}-%type_raw[python] %i/bin/${f}
+			ln -s ${f}-%type_raw[python] ${f}
 		done
 		#Remove this for now to avoid conflicting with 'python' package.
 		rm 2to3
 	popd
-	
-	# Add symlinks to %p/lib.
-	ln -s %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib %i/lib/libpython%type_raw[python].dylib
-	ln -s %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib %i/lib/libpython%type_raw[python]m.dylib
+
+	# Add symlinks to %p/lib for improved external visibility.
+	ln -s python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib %i/lib/libpython%type_raw[python].dylib
+	ln -s python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib %i/lib/libpython%type_raw[python]m.dylib
 
 	# install some docs and other useful tidbits
 	rm -rf Misc/RPM
 	/bin/cp -R Misc Tools %i/lib/python%type_raw[python]
+
+# Doc tarball missing upstream.
 #	mkdir -p %i/share/doc/%n/html
-#	/bin/cp -R ../python-3.4.3-docs-html/ %i/share/doc/%n/html
+#	/bin/cp -R ../python-%v-docs-html/ %i/share/doc/%n/html
 <<
 SplitOff: <<
- Package: %N-shlibs
- Depends: libgettext8-shlibs
- Replaces: %N (<< 3.4.1-5)
- Files: lib/libpython%type_raw[python].dylib lib/libpython%type_raw[python]m.dylib lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib
- Shlibs: %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython3.4m.dylib 3.4.0 %n (>= 3.4.0-1)
- DocFiles: README LICENSE 
+	Package: %N-shlibs
+	Depends: libgettext8-shlibs
+	Replaces: %N (<< 3.4.1-5)
+	Files: <<
+		lib/libpython%type_raw[python].dylib
+		lib/libpython%type_raw[python]m.dylib
+		lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib
+	<<
+	Shlibs: %p/lib/python%type_raw[python]/config-%type_raw[python]m/libpython%type_raw[python]m.dylib 3.4.0 %n (>= 3.4.0-1)
+	DocFiles: README LICENSE
 <<
 SplitOff2: <<
- Package: python3
- Depends: %N (>= %v-%r)
- Files: <<
+	Package: python3
+	Depends: %N (>= %v-%r)
+	Files: <<
 		bin/idle3
 		bin/pydoc3
 		bin/python3
@@ -223,28 +227,28 @@ SplitOff2: <<
 		lib/pkgconfig/python3.pc
 		share/man/man1/python3.1
 	<<
- DocFiles: README LICENSE
- Description: Generic commands to invoke python%type_pkg[python]
- DescDetail: <<
-  This package only contains non-versioned symlinks to the binaries included
-  with python%type_pkg[python].
- <<
- DescUsage: <<
-  This package should only be used when you don't care which version of the
-  python 3.x interpreter you need.
- <<
+	DocFiles: README LICENSE
+	Description: Generic commands to invoke python%type_pkg[python]
+	DescDetail: <<
+		This package only contains non-versioned symlinks to the binaries included
+		with python%type_pkg[python].
+	<<
+	DescUsage: <<
+		This package should only be used when you don't care which version of the
+		python 3.x interpreter you need.
+	<<
 <<
-DocFiles: README LICENSE 
+DocFiles: README LICENSE
 Description: Interpreted, object-oriented language
 DescDetail: <<
- Python is often compared to Tcl, Perl, Scheme or Java. 
- This package installs unix python - not the OSX Framework version.
- Builds a two-level namespace dynamic libpython (needed for koffice).
+	Python is often compared to Tcl, Perl, Scheme or Java.
+	This package installs unix python - not the OSX Framework version.
+	Builds a two-level namespace dynamic libpython (needed for koffice).
 
- The interpreter is installed as "python%type_raw[python]", and all associated
- commands are similarly named with the python-version in them. To get
- the simple "python3" command, install the fink package "python3" (note:
- the "python3" command there is not guaranteed to be python%type_raw[python]!).
+	The interpreter is installed as "python%type_raw[python]", and all associated
+	commands are similarly named with the python-version in them. To get
+	the simple "python3" command, install the fink package "python3" (note:
+	the "python3" command there is not guaranteed to be python%type_raw[python]!).
 <<
 DescUsage: <<
 	python%type_raw[python] changes the compiler options used to compile
@@ -269,7 +273,7 @@ DescPackaging: <<
 	mistakes and user runtime surprises.
 
 	Play lots of games to make sure we get expected support
-	libraries. 
+	libraries.
 
 	Adjust "python3" unversioned link to be a symlink not a hard link.
 
@@ -278,13 +282,13 @@ DescPackaging: <<
 	package series. Why would they be in different places? Patch
 	-config script to continue this tradition (bug in previous
 	versions accidentally did the Right Thing here).
-	
+
 	New in 3.2, .pyc files are saved in the __pycache__ directory
 	at the same level as the matching .py file. Any packages that
 	expect the .pyc file to be next to the .py file will need adjustment.
-	
+
 	The .pyc and .so files also include the python version in the name.
-	
+
 	Don't run ensurepip since it installs files that conflict with
 	the pip and setuptools packages.
 <<
@@ -296,9 +300,9 @@ DescPort: <<
 	bsddb is gone so drop db* patch and dep.
 	Patch setup.py to find ncursesw headers and drop libncurses5 dep.
 	Ensure $(LDFLAGS) is used linking libpython or else it can't find libintl.
-	
+
 	Patch ctypes to look in %p/lib for libraries.
-	
+
 	Upstream patch from https://bugs.python.org/issue27369 to fix tests
 	with expat 2.2.0.
 
@@ -309,5 +313,5 @@ DescPort: <<
 	(python on case-sensitive, python.exe on -insensitive file systems).
 <<
 License: OSI-Approved
-Homepage: http://www.python.org
+Homepage: https://www.python.org/
 <<
