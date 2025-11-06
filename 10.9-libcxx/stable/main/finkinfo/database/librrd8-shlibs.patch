@@ -1,0 +1,127 @@
+diff -Nurd rrdtool-1.9.0.orig/bindings/lua/Makefile.in rrdtool-1.9.0/bindings/lua/Makefile.in
+--- rrdtool-1.9.0.orig/bindings/lua/Makefile.in	2024-07-29 04:43:17
++++ rrdtool-1.9.0/bindings/lua/Makefile.in	2025-11-06 00:30:57
+@@ -435,8 +435,8 @@
+ @LUA_NEED_OUR_COMPAT51_TRUE@rrd_la_SOURCES = rrdlua.c compat-5.1r5/compat-5.1.c compat-5.1r5/compat-5.1.h
+ @LUA_NEED_OUR_COMPAT51_TRUE@compatdir = $(LUA_INSTALL_LMOD)
+ @LUA_NEED_OUR_COMPAT51_TRUE@compat_DATA = compat-5.1r5/compat-5.1.lua
+-rrd_la_LIBADD = -lrrd -lm
+-rrd_la_LDFLAGS = -module -version-info $(LIB_VERSION_INFO) $(LUA_LFLAGS) -L$(top_builddir)/src/.libs
++rrd_la_LIBADD = $(top_builddir)/src/librrd.la -lm
++rrd_la_LDFLAGS = -module -version-info $(LIB_VERSION_INFO) $(LUA_LFLAGS)
+ rrd_la_CFLAGS = -I$(top_srcdir)/src -I$(top_builddir)/src -I$(top_srcdir) $(LUA_CFLAGS) $(LUA_DEFINES) -DLIB_VERSION=\"$(LIB_VERSION)\"
+ all: all-am
+ 
+diff -Nurd rrdtool-1.9.0.orig/bindings/tcl/Makefile.in rrdtool-1.9.0/bindings/tcl/Makefile.in
+--- rrdtool-1.9.0.orig/bindings/tcl/Makefile.in	2024-07-29 04:43:17
++++ rrdtool-1.9.0/bindings/tcl/Makefile.in	2025-11-06 01:16:43
+@@ -74,7 +74,7 @@
+ am__make_keepgoing = (target_option=k; $(am__make_running_with_option))
+ pkgdatadir = $(datadir)/@PACKAGE@
+ pkgincludedir = $(includedir)/@PACKAGE@
+-pkglibdir = $(libdir)/@PACKAGE@
++pkglibdir = $(libdir)
+ pkglibexecdir = $(libexecdir)/@PACKAGE@
+ am__cd = CDPATH="$${ZSH_VERSION+.}$(PATH_SEPARATOR)" && cd
+ install_sh_DATA = $(install_sh) -c -m 644
+@@ -339,7 +339,7 @@
+ includedir = @includedir@
+ infodir = @infodir@
+ install_sh = @install_sh@
+-libdir = @libdir@
++libdir = @libdir@/tcl-libdirs/8.6/@PACKAGE@
+ libexecdir = @libexecdir@
+ localedir = @localedir@
+ localstatedir = @localstatedir@
+@@ -372,7 +372,7 @@
+ AM_CFLAGS = @CFLAGS@
+ SRC_DIR = $(top_srcdir)/src
+ AM_CPPFLAGS = $(TCL_INCLUDE_SPEC) -I$(top_builddir)/src -I$(SRC_DIR) -DUSE_TCL_STUBS
+-LIBDIRS = -L$(top_builddir)/src/.libs -L$(top_builddir)/src -L$(libdir)
++LIBDIRS = -L$(libdir)
+ LIB_RUNTIME_DIR = $(libdir)
+ @BUILD_TCL_SITE_FALSE@tclpkgdir = $(pkglibdir)
+ @BUILD_TCL_SITE_TRUE@tclpkgdir = @TCL_PACKAGE_DIR@
+@@ -688,7 +688,7 @@
+ all-local: $(TCL_RRD_LIB)
+ 
+ $(TCL_RRD_LIB): tclrrd.o
+-	$(TCL_SHLIB_LD) $(TCL_LD_SEARCH_FLAGS) $(LIBDIRS) $< -o $@ -lrrd -lm $(TCL_STUB_LIB_SPEC) $(LDFLAGS) $(LIBS)
++	$(TCL_SHLIB_LD) $(TCL_LD_SEARCH_FLAGS) $(LIBDIRS) $< -o $@ $(top_builddir)/src/.libs/librrd.dylib -lm $(TCL_STUB_LIB_SPEC) $(LDFLAGS) $(LIBS) -Wl,-single_module -install_name $(libdir)/$(TCL_RRD_LIB)
+ 
+ tclrrd.o: tclrrd.c
+ 	$(CC) $(AM_CFLAGS) $(CFLAGS) $(TCL_SHLIB_CFLAGS) $(AM_CPPFLAGS) $(CPPFLAGS) -c $(srcdir)/tclrrd.c -DVERSION=\"$(VERSION)\"
+@@ -698,6 +698,7 @@
+ 
+ install-exec-local: $(TCL_RRD_LIB)
+ 	@$(NORMAL_INSTALL)
++	test -z "$(libdir)" || $(MKDIR_P) "$(DESTDIR)$(libdir)"
+ 	$(INSTALL_PROGRAM) $(TCL_RRD_LIB) $(DESTDIR)$(libdir)/$(TCL_RRD_LIB)
+ 
+ # Tell versions [3.59,3.63) of GNU make to not export all variables.
+diff -Nurd rrdtool-1.9.0.orig/src/compat-cloexec.c rrdtool-1.9.0/src/compat-cloexec.c
+--- rrdtool-1.9.0.orig/src/compat-cloexec.c	2024-07-29 04:43:48
++++ rrdtool-1.9.0/src/compat-cloexec.c	2025-11-06 01:00:36
+@@ -17,7 +17,7 @@
+ 
+ inline static bool have_decl_o_cloexec(void)
+ {
+-#ifdef HAVE_DECL_O_CLOEXEC
++#if defined(HAVE_DECL_O_CLOEXEC) && HAVE_DECL_O_CLOEXEC
+ 	return true;
+ #else
+ 	return false;
+diff -Nurd rrdtool-1.9.0.orig/src/compat-cloexec.h rrdtool-1.9.0/src/compat-cloexec.h
+--- rrdtool-1.9.0.orig/src/compat-cloexec.h	2024-07-29 04:43:48
++++ rrdtool-1.9.0/src/compat-cloexec.h	2025-11-06 01:00:36
+@@ -3,11 +3,11 @@
+ 
+ #include <rrd_config.h>
+ 
+-#ifndef HAVE_DECL_O_CLOEXEC
++#if !defined(HAVE_DECL_O_CLOEXEC) || !HAVE_DECL_O_CLOEXEC
+ #  define O_CLOEXEC 0
+ #endif
+ 
+-#ifndef HAVE_DECL_SOCK_CLOEXEC
++#if !defined(HAVE_DECL_SOCK_CLOEXEC) || !HAVE_DECL_SOCK_CLOEXEC
+ #  define SOCK_CLOEXEC 0
+ #endif
+ 
+diff -Nurd rrdtool-1.9.0.orig/src/rrd_create.c rrdtool-1.9.0/src/rrd_create.c
+--- rrdtool-1.9.0.orig/src/rrd_create.c	2024-07-29 04:43:48
++++ rrdtool-1.9.0/src/rrd_create.c	2025-11-06 00:53:45
+@@ -11,6 +11,15 @@
+ #include <math.h>
+ #include <glib.h>       // will use glist and regex
+ 
++/* g_list_free_full() from glib-2.87.0/glib/glist.c */
++static void
++_g_list_free_full (GList          *list,
++		   GDestroyNotify  free_func)
++{
++  g_list_foreach (list, (GFunc) free_func, NULL);
++  g_list_free (list);
++}
++/* g_list_free_full() from glib-2.87.0/glib/glist.c */
+ 
+ 
+ #include <sys/types.h>  // stat()
+@@ -250,7 +259,7 @@
+     }
+     if (sources != NULL) {
+         // this will free the list elements as well
+-        g_list_free_full(sources, (GDestroyNotify) free);
++        _g_list_free_full(sources, (GDestroyNotify) free);
+         sources = NULL;
+     }
+     if (template != NULL) {
+@@ -1081,7 +1090,7 @@
+     rc = write_rrd(filename, &rrd);
+ 
+   done:
+-    g_list_free_full(sources_rrd_files, (GDestroyNotify) cleanup_source_file);
++    _g_list_free_full(sources_rrd_files, (GDestroyNotify) cleanup_source_file);
+ 
+     if (mappings) {
+         int       ii;
