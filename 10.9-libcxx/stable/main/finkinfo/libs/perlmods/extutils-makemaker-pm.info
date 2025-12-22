@@ -1,8 +1,8 @@
 # -*- coding: ascii; tab-width: 4; x-counterpart: extutils-makemaker-pm.patch -*-
 Info2: <<
 Package: extutils-makemaker-pm%type_pkg[perl]
-Version: 7.62
-Revision: 3
+Version: 7.76
+Revision: 1
 
 Type: perl (5.16.2 5.18.2 5.18.4 5.28.2 5.30.2 5.30.3 5.34.1)
 Distribution: <<
@@ -21,6 +21,8 @@ DescPackaging: <<
 	
 	Eliminated -bin splitoff and used update-alternatives to
 	allow binaries to coexist.
+
+	Hack a ton of perl-interp sub-launching due to fink's arch tricks.
 <<
 DescPort: <<
 	Patch makefile generator to remove -L/usr/local/lib from early
@@ -31,7 +33,13 @@ DescPort: <<
 	
 	On 10.15, Apple hardened system-perl to disallow loading from relative
 	paths. So patch INST_ARCHLIB to be an absolute path. The relative path
-	test "CHILD INST_ARCHLIB" is patched to use full paths.
+	test "CHILD INST_ARCHLIB" is patched to use full paths. See:
+	https://github.com/Perl-Toolchain-Gang/ExtUtils-MakeMaker/issues/350
+	This was working as of 7.62 but test-fail in 7.76.
+
+	clang >= 12 has a new warning that triggers many times on perl's
+	own headers, so turn off that warning on versions of perl prior to
+	when perl cleaned themselves up.
 <<
 
 # Dependencies:
@@ -51,17 +59,22 @@ Replaces: %{Ni}586-bin, %{Ni}588-bin
 Provides: %N-bin
 
 # Unpack Phase:
-#Source: mirror:cpan:modules/by-module/ExtUtils/ExtUtils-MakeMaker-%v.tar.gz
-Source: mirror:cpan:authors/id/B/BI/BINGOS/ExtUtils-MakeMaker-%v.tar.gz
-Source-Checksum: SHA256(5022ad857fd76bd3f6b16af099fe2324639d9932e08f21e891fb313d9cae1705)
+Source: mirror:cpan:modules/by-module/ExtUtils/ExtUtils-MakeMaker-%v.tar.gz
+Source-Checksum: SHA256(30bcfd75fec4d512e9081c792f7cb590009d9de2fe285ffa8eec1be35a5ae7ca)
 
 PatchFile: %{ni}.patch
-PatchFile-MD5: 4f00b40fb3b44fa11c0fb36bb509720c
+PatchFile-MD5: 0ef8e27cc7512f3684e5fe4ffe690e1f
 PatchFile2: %{ni}-sdk.patch
-PatchFile2-MD5: b528e11f18f145224a423088f730b7a4 
+PatchFile2-MD5: 85ee1155dad347b1c994463d3a0494b7
+PatchFile3: %{ni}-perl-interp.patch
+PatchFile3-MD5: 2507949a298c675f4b965aaa08e247b6
+PatchFile4: %{ni}-perl-headers-noise.patch
+PatchFile4-MD5: 6346911b188fade39aac0168c4bc7f1b
 PatchScript: <<
 	#!/bin/bash -ev
 	/usr/bin/sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
+ 	sed -e 's,@ARCH@,-%m,g' %{PatchFile3} | patch -p1
+ 	patch -p1 < %{PatchFile4}
 	darwin_vers=`uname -r | cut -d. -f1`
 	darwin_vers_minor=`uname -r | cut -d. -f2`
 	# only apply SDK fix for 10.14/10.15/11.0 (which hide system-headers) and their systemperl
@@ -99,6 +112,15 @@ PatchScript: <<
 	  patch -p1 < %{PatchFile2}
 	fi
 
+	# Some boilerplate in perl headers on all perl versions trigger a
+	# mile of compiler warnings that obscure debugging of actual
+	# issues in modules being compiled. I'm not sure when this warning
+	# was added to xocde, so I'm being conservative with applying a
+	# patch to hide it. --dmacks
+	if [[ "$darwin_vers" -ge 25 ]]; then
+	  perl -pi -e 's/(-Wno-error=implicit-function-declaration)/\1 -Wno-compound-token-split-by-macro/' lib/ExtUtils/MM_Darwin.pm
+	fi
+
 	/usr/bin/sed -i '' "s/'\.\$perlflags\.'//" lib/ExtUtils/MM_Unix.pm
 <<
 
@@ -110,7 +132,7 @@ CompileScript: <<
 
 # Install Phase:
 UpdatePOD: True
-DocFiles: Changes README
+DocFiles: Changes CONTRIBUTING README
 InstallScript: <<
 	%{default_script}
 	mv %i/share/man %i/lib/perl5/%type_raw[perl]
