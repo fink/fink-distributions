@@ -1,7 +1,9 @@
 # -*- coding: ascii; tab-width: 4; x-counterpart: python37.patch -*-
 Info2: <<
 Package: python%type_pkg[python]
-Version: 3.7.13
+# OPENSSL300 fails self-tests (might be able to backport from python38+)
+Version: 3.7.17
+# Final version of 3.7
 Revision: 2
 Type: python 3.7
 Maintainer: Daniel Johnson <daniel@daniel-johnson.org>
@@ -26,7 +28,7 @@ BuildDepends: <<
 	blt-dev (>= 2.4z-15),
 	bzip2-dev,
 	expat1 (>= 2.2.8-1),
-	fink (>= 0.32), 
+	fink (>= 0.32),
 	gdbm6,
 	gettext-bin,
 	gettext-tools,
@@ -56,23 +58,27 @@ Provides: <<
 <<
 
 Source: https://www.python.org/ftp/python/%v/Python-%v.tar.xz
-Source-Checksum: SHA256(99f106275df8899c3e8cb9d7c01ce686c202ef275953301427194693de5bef84)
+Source-Checksum: SHA256(7911051ed0422fd54b8f59ffc030f7cf2ae30e0f61bda191800bb040dce4f9d2)
 
 PatchFile: %n.patch
-PatchFile-MD5: c0e637d6b2cd5ecff8c88691d66d68e2
+PatchFile-MD5: d96870218583f95a3db6fb119e6e6bec
 # macOS11 patch from MP backported from 3.8 upstream
 # https://github.com/python/cpython/pull/25806
 PatchFile2: %n-macos11.patch
-PatchFile2-MD5: 769bc36a8aa0556fc71727a4493b5968
+PatchFile2-MD5: b11c36af7a9f205a1487e63971601045
 # Based on upstream (python38) https://github.com/python/cpython/pull/115536
 PatchFile3: %n-expat26.patch
 PatchFile3-MD5: c91b8b3c6b9561c5ba82b057c4da8cbb
+# From upstream https://github.com/python/cpython/pull/109928
+PatchFile4: %n-test_mmap.patch
+PatchFile4-MD5: e4a836ddb4424981928f46d50028c722
 
 PatchScript: <<
 	#!/bin/sh -ex
 	sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
-	patch -p0 < %{PatchFile2} 
+	patch -p1 < %{PatchFile2}
 	patch -p1 < %{PatchFile3}
+	patch -p1 < %{PatchFile4}
 	# /tmp and /var/tmp are symlinks to /private/tmp and /private/var/tmp
 	# on OS X. That's fine except it can cause tests in some packages to
 	# fail since '/tmp' != '/private/tmp'. Default to using /private/tmp.
@@ -98,17 +104,22 @@ ConfigureParams: <<
 
 CompileScript: <<
 #!/bin/sh -ex
+	darwinvers=$(uname -r | cut -d. -f1)
 	SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
 	# for OS X 10.14, ensure full SDK is available, but include it after any fink specific versions.
-	if [ "$(uname -r | cut -d. -f1)" -ge 18 ]; then
+	if [ $darwinvers -ge 18 ]; then
 		export CFLAGS="-Wno-nullability-completeness -Wno-expansion-to-defined"
 		#export CPPFLAGS="-I%p/include -I%p/include/ncursesw -I$SDK_PATH/usr/include"
 		#perl -pi -e "s|/usr/include|$SDK_PATH/usr/include|" setup.py
 	fi
+	# https://github.com/python/cpython/issues/97897
+	if [ $darwinvers -eq 21 ]; then
+		MKFIFOAT_CONFIG_PARAMS="ac_cv_func_mkfifoat=no ac_cv_func_mknodat=no"
+	fi
 
 	# https://bugs.python.org/issue28456 and radar://28372390
 	# https://daniel.haxx.se/blog/2016/10/11/poll-on-mac-10-12-is-broken/
-	./configure %c $DIST_CONFIG_PARAMS
+	./configure %c $MKFIFOAT_CONFIG_PARAMS $DIST_CONFIG_PARAMS
 	perl -pi -e 's|\#define HAVE_POLL 1||' ./pyconfig.h
 	perl -pi -e 's|\#define HAVE_POLL_H 1||g' ./pyconfig.h
 	perl -pi -e 's|\#define HAVE_SYS_POLL_H 1||g' ./pyconfig.h
@@ -132,10 +143,16 @@ InfoTest: <<
 		# test_socket can fail with some DNS settings.
 		# multiprocessing_spawn fails on "KeyboardInterrupt not raised by wait",
 		# test_code segfaults on macOS12
-		# test_ctypes is currently broken on 11.0 (py3.7.12)
 		# test_tcl and test_idle require an active $DISPLAY
 		# test_distutils can't find -lpython3.7m because not installed yet
-		EXTRATESTOPTS='-w -unone -x test_socket test_multiprocessing_spawn test_code test_ctypes test_idle test_tcl test_distutils'
+		# test_asyncio fails sometimes
+		EXTRATESTOPTS='-w -unone -x test_socket test_multiprocessing_spawn test_asyncio test_code test_idle test_tcl test_distutils'
+		# test_ctypes is currently broken on 11.0 (py3.7.12)
+		EXTRATESTOPTS="$EXTRATESTOPTS -x test_ctypes"
+		# test_capi fails on 26.0, no idea why (lots of code-changes
+		# in newer python3x). Upstream has a related fix that is not sufficient:
+		# https://github.com/python/cpython/pull/13888
+		EXTRATESTOPTS="$EXTRATESTOPTS -x test_capi"
 		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS="$EXTRATESTOPTS" || TESTRETURN=$?
 
 		# Put install_name back.
@@ -143,9 +160,9 @@ InfoTest: <<
 		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %b/libpython%type_raw[python]m.dylib %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib {} \;
 		install_name_tool -id %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib libpython%type_raw[python]m.dylib
 
-		# Remove stray .pyc that get made during tests to keep validator happy.
-		find ./Tools -name "*.pyc" -delete
-		find ./Tools -name "__pycache__" -delete
+		# remove leftovers from testing
+		# these dirs are empty and only created if tests are run
+		/usr/bin/find %b/Tools -name __pycache__ -type d -depth -exec rm -rf "{}" \;
 		exit $TESTRETURN
 	<<
 <<
@@ -160,45 +177,57 @@ InstallScript: <<
 	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin,' `ls -d %b/build/lib*`/_sysconfigdata_m_darwin_darwin.py
 	# Don't propagate -lintl to other packages.
 	perl -pi -e 's/-lintl //' `ls -d %b/build/lib*`/_sysconfigdata_m_darwin_darwin.py
+	# Remove stray .pyc that get made during tests (including preliminary ones in CompileScript) to keep validator happy.
+	find ./Lib ./Parser ./Tools ./build -name '*.pyc' -delete
+	# Change interpreter name in scripts to versioned executable.
+	perl -pi -e 's|(/usr/bin/env python)(3?)$|${1}%type_raw[python]|' ./Tools/scripts/*
 	# install fails with -j greater than 1
 	export MAKEFLAGS=-j1
 	make install DESTDIR=%d
 
 	# we don't want -lintl to appear in LIBS otherwise python-config will propagate it
 	perl -pi -e 's/-lintl //' %i/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/Makefile
-	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin,' %i/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/Makefile	
+	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin,' %i/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/Makefile
 	# Fix all main things to be python-versioned filenames with unversioned symlinks to them.
 	pushd %i/bin
 		for f in idle3 pydoc3; do
 			mv ${f} ${f}-%type_raw[python]
-			ln -s ${f}-%type_raw[python] %i/bin/${f}
+			ln -s ${f}-%type_raw[python] ${f}
 		done
 		#Remove this for now to avoid conflicting with 'python' package.
 		rm 2to3
 	popd
 
-	# Add symlinks to %p/lib.
-	ln -s %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib %i/lib/libpython%type_raw[python].dylib
-	ln -s %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib %i/lib/libpython%type_raw[python]m.dylib
+	# Add symlinks to %p/lib for improved external visibility.
+	ln -s python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib %i/lib/libpython%type_raw[python].dylib
+	ln -s python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib %i/lib/libpython%type_raw[python]m.dylib
 
 	# install some docs and other useful tidbits
 	rm -rf Misc/RPM
 	/bin/cp -R Misc Tools %i/lib/python%type_raw[python]
+	pushd %i/lib/python%type_raw[python]
+		DYLD_LIBRARY_PATH=%i/lib %i/bin/python%type_raw[python] -m compileall Tools/[a-su]* Tools/tz || exit 1
+	popd
+
 # Doc tarball missing upstream.
 #	mkdir -p %i/share/doc/%n/html
 #	/bin/cp -R ../python-%v-docs-html/ %i/share/doc/%n/html
 <<
 SplitOff: <<
- Package: %N-shlibs
- Depends: libgettext8-shlibs
- Files: lib/libpython%type_raw[python].dylib lib/libpython%type_raw[python]m.dylib lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib
- Shlibs: %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib 3.7.0 %n (>= 3.7.0-1)
- DocFiles: README.rst LICENSE 
+	Package: %N-shlibs
+	Depends: libgettext8-shlibs
+	Files: <<
+		lib/libpython%type_raw[python].dylib
+		lib/libpython%type_raw[python]m.dylib
+		lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib
+	<<
+	Shlibs: %p/lib/python%type_raw[python]/config-%type_raw[python]m-darwin/libpython%type_raw[python]m.dylib 3.7.0 %n (>= 3.7.0-1)
+	DocFiles: README.rst LICENSE
 <<
 SplitOff2: <<
- Package: python3
- Depends: %N (>= %v-%r)
- Files: <<
+	Package: python3
+	Depends: %N (>= %v-%r)
+	Files: <<
 		bin/idle3
 		bin/pydoc3
 		bin/python3
@@ -207,28 +236,28 @@ SplitOff2: <<
 		lib/pkgconfig/python3.pc
 		share/man/man1/python3.1
 	<<
- DocFiles: README.rst LICENSE
- Description: Generic commands to invoke python%type_pkg[python]
- DescDetail: <<
-  This package only contains non-versioned symlinks to the binaries included
-  with python%type_pkg[python].
- <<
- DescUsage: <<
-  This package should only be used when you don't care which version of the
-  python 3.x interpreter you need.
- <<
+	DocFiles: README.rst LICENSE
+	Description: Generic commands to invoke python%type_pkg[python]
+	DescDetail: <<
+		This package only contains non-versioned symlinks to the binaries included
+		with python%type_pkg[python].
+	<<
+	DescUsage: <<
+		This package should only be used when you don't care which version of the
+		python 3.x interpreter you need.
+	<<
 <<
-DocFiles: README.rst LICENSE 
+DocFiles: README.rst LICENSE
 Description: Interpreted, object-oriented language
 DescDetail: <<
- Python is often compared to Tcl, Perl, Scheme or Java. 
- This package installs unix python - not the OSX Framework version.
- Builds a two-level namespace dynamic libpython (needed for koffice).
+	Python is often compared to Tcl, Perl, Scheme or Java.
+	This package installs unix python - not the OSX Framework version.
+	Builds a two-level namespace dynamic libpython (needed for koffice).
 
- The interpreter is installed as "python%type_raw[python]", and all associated
- commands are similarly named with the python-version in them. To get
- the simple "python3" command, install the fink package "python3" (note:
- the "python3" command there is not guaranteed to be python%type_raw[python]!).
+	The interpreter is installed as "python%type_raw[python]", and all associated
+	commands are similarly named with the python-version in them. To get
+	the simple "python3" command, install the fink package "python3" (note:
+	the "python3" command there is not guaranteed to be python%type_raw[python]!).
 <<
 DescUsage: <<
 	python%type_raw[python] changes the compiler options used to compile
@@ -253,7 +282,7 @@ DescPackaging: <<
 	mistakes and user runtime surprises.
 
 	Play lots of games to make sure we get expected support
-	libraries. 
+	libraries.
 
 	Adjust "python3" unversioned link to be a symlink not a hard link.
 

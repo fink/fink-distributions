@@ -1,58 +1,92 @@
 Package: expect
 # dylib install_name is tied to package micro version number
-Version: 5.45
-Revision: 206
+Version: 5.45.4
+Revision: 1
 Maintainer: None <fink-devel@lists.sourceforge.net>
 BuildDepends: <<
-	fink-buildenv-modules (>= 0.1.3-1),
+	autoconf2.6,
+	fink (>= 0.32),
 	tcltk-dev (>= 8.6.1-1),
 	x11-dev
 <<
 Depends: <<
-	tcltk (>= 8.6.1-1)
+	tcl-%n (>= %v-%r),
+	tcl-libdirs,
+	tcltk (>= 8.6.1-1),
+	tcltk-shlibs (>= 8.6.1-1)
 <<
+Conflicts: %N-dev
+Replaces: %N-dev
 Source: mirror:sourceforge:%n/Expect/%v/%n%v.tar.gz
-Source-Checksum: SHA256(b28dca90428a3b30e650525cdc16255d76bb6ccd65d448be53e620d95d5cc040)
+Source-Checksum: SHA256(49a7da83b0bdd9f46d04a04deec19c7767bb9a323e40c4781f89caf760b92c34)
+Source2: mirror:debian:pool/main/e/%n/%n_%v-4.debian.tar.xz
+Source2-Checksum: SHA256(3f8b9600ccf3d0d9afaa029ab3831327512311dc945879f11757041190f8b3ab)
 PatchFile: %n.patch
-PatchFile-MD5: c33c2a37d1dbd5b351cb6bd51970399d
+PatchFile-MD5: 2f98c4647c1eb433b4fb47f7d1cfbbb1
+# Uses autoconf but not automake, so there's no simple way to trigger
+# autotools to handle this one:
+UpdateConfigGuessInDirs: tclconfig
 ConfigureParams: <<
-	--mandir='$(prefix)/share/man' \
 	--with-tcl=%p/lib \
 	--with-tk=%p/lib \
-	--x-inc=$X11_BASE_DIR/include \
-	--x-lib=$X11_BASE_DIR/lib \
 	--with-tkinclude=%p/include \
-	--with-tclinclude=%p/include/tcltk-private/tcl8.6/generic
+	--with-tclinclude=%p/include/tcltk-private/tcl8.6/generic \
+	--libdir=%p/lib/tcl-libdirs/8.6
 <<
 PatchScript: <<
-	%{default_script}
-	perl -pi -e 's|-Wall|-Wall -Wno-unused-variable -Wno-unused-function -Wno-knr-promoted-parameter -Wno-switch|' configure
-	perl -pi -e 's|int fdin|intptr_t fdin|' exp_command.h
+	#!/bin/sh -ev
+	for p in `cat ../debian/patches/series`; do
+		[[ $p == "05-makefile-soname.patch" ]] && continue;
+		[[ $p == "06-pkgindex.patch" ]] && continue;
+		echo "applying Debian's $p"
+		patch -p1 < ../debian/patches/$p
+	done
+	sed -e 's,@SONAME@,%p/lib/tcl-libdirs/8.6/%n%v/libexpect%v.dylib,' < %{PatchFile} | patch -p1
 <<
 InfoTest: TestScript: make test || exit 2
+SetLDFLAGS: -ltcl8.6
 CompileScript: <<
 	#!/bin/sh -ev
-	 . %p/sbin/fink-buildenv-helper.sh
-	export CFLAGS="-I%p/include -I$X11_BASE_DIR/include"
-	export LDFLAGS="-L%p/lib -ltclstub8.6"
+	autoreconf -fi
 	./configure %c
 	make
 <<
 InstallScript: <<
 	#!/bin/sh -ev
 	make install DESTDIR=%d
-	install_name_tool -change libexpect%v.dylib %p/lib/%n%v/libexpect%v.dylib %i/bin/expect
-	install_name_tool -id %p/lib/%n%v/libexpect%v.dylib %i/lib/%n%v/libexpect%v.dylib
+
+	mkdir -p %i/lib/tcl-libdirs
+	ln -s tcl-libdirs/%n%v/libexpect%v.dylib %i/lib/libexpect.dylib
 <<
-# is a tcl runtime-loadable module and also a dynamic-linker library
-Shlibs:%p/lib/expect5.45/libexpect5.45.dylib 5.45.0 %n (>= 5.45-200)
+# Doesn't seem to have any reverse-depends outside of this .info, but
+# it does have a header (and simple-name symlink for linking by
+# others, per Debian packaging). Will leave it quasi-public but not
+# strictly "Shlibs policy" for now (again, per Debian).
 SplitOff: <<
-	Package: %N-dev
-	BuildDependsOnly: true
+	Package: tcl-%N
+	Depends: <<
+		tcltk (>= 8.6.1-1),
+		tcltk-shlibs (>= 8.6.1-1)
+	<<
+	Conflicts: %N-dev
+	Replaces: %N-dev
 	Files: <<
-		include/*.h
-		bin/[a-df-z]*
-		share/man/man1/[a-df-z]*
+		lib/tcl-libdirs
+	<<
+	Shlibs: %p/lib/tcl-libdirs/8.6/%N%v/libexpect%v.dylib 5.45.4 %n (>= 5.45.4-1)
+	DocFiles: README
+<<
+SplitOff2: <<
+	Package: tcl-%N-dev
+	Depends: tcl-%N (= %v-%r)
+	BuildDependsOnly: true
+	# converge to Debian's layout
+	Conflicts: %N-dev
+	Replaces: %N-dev
+	Files: <<
+		include
+		lib/libexpect.dylib
+		share/man/man3
 	<<
 	DocFiles: README
 <<
@@ -64,10 +98,8 @@ telnet, ftp, passwd, fsck, rlogin, tip, etc. Expect really makes this
 stuff trivial. Expect is also useful for testing these same
 applications. 
 <<
-DescPort: <<
-Expect has to access internal Tcl headers, so it needs to grab the tcl
-distribution during build (This should not require an extra download
-since the source should still be around from the tcltk dependency).
+DescPackaging: <<
+	Import debian's patch-set (see Source2)
 <<
 License: Public Domain
 Homepage: https://core.tcl-lang.org/expect/index

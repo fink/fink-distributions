@@ -1,0 +1,168 @@
+Package: libxml2.16
+Version: 2.15.1
+Revision: 1
+Maintainer: The Gnome Core Team <fink-gnome-core@lists.sourceforge.net>
+Depends: libxml2-bin (>= %v-%r), %N-shlibs (= %v-%r)
+BuildDepends: <<
+	doxygen (>= 1.9.8),
+	fink (>= 0.32.0),
+	fink-package-precedence,
+	libiconv-dev,
+	pkgconfig (>= 1.0),
+	readline8
+<<
+Conflicts: <<
+	libxml2,
+	libxml2-32bit,
+	libxml2.16
+<<
+Replaces: <<
+	libxml2,
+	libxml2-32bit,
+	libxml2.16
+<<
+Source: mirror:gnome:sources/libxml2/2.15/libxml2-%v.tar.xz
+Source-Checksum: SHA256(c008bac08fd5c7b4a87f7b8a71f283fa581d80d80ff8d2efd3b26224c39bc54c)
+PatchFile: %n.patch
+PatchFile-MD5: 12573060e6bc97e32cc2854af66a5d29
+PatchScript: <<
+	sed 's|@PREFIX@|%p|g' <%{PatchFile} | patch -p1
+	perl -pi -e 's|/etc|%p/etc|g' *.[ch] doc/*.1 doc/*.xml
+	rm test/ebcdic_566012.xml
+<<
+# Force system xsltproc for deterministic build rather than circular
+# dep of libxslt-bin:(Build)Depends:%n*:BuildDepends:libxslt-proc
+ConfigureParams: <<
+	--with-iconv=%p \
+	--with-history \
+	--disable-static \
+	--without-python \
+	--with-legacy \
+	--enable-dependency-tracking \
+	--disable-silent-rules \
+	--with-docs \
+	--docdir=%p/share/doc/%n \
+	XSLTPROC=/usr/bin/xsltproc
+<<
+CompileScript: <<
+	%{default_script}
+	fink-package-precedence --prohibit-bdep=%n .
+<<
+InfoTest: <<
+	TestScript: <<
+		make check || exit 2
+		fink-package-precedence --prohibit-bdep=%n . || exit 2
+	<<
+<<
+InstallScript: <<
+	make install DESTDIR=%d DOC_MODULE=%n
+	mkdir -p %i/etc/xml/catalog.d
+	mkdir -p %i/etc/sgml/catalog.d
+	mkdir -p %i/sbin
+	install -c -m 755 update-xml-catalog %i/sbin/
+	install -c -m 755 update-sgml-catalog %i/sbin/
+<<
+DocFiles: Copyright NEWS README.md
+BuildDependsOnly: True
+SplitOff: <<
+	Package: %N-shlibs
+	Depends: <<
+		libiconv
+	<<
+	Replaces: libxml2 (<< 2.4.18-2)
+	Suggests: %N-bin
+	Files: lib/libxml2.16.dylib
+	Shlibs: %p/lib/libxml2.16.dylib 18.0.0 %n (>= 2.15.1-1)
+	DocFiles: Copyright NEWS README.md
+<<
+SplitOff2: <<
+	Package: libxml2-bin
+	Depends: <<
+		%N-shlibs (>= %v-%r),
+		libiconv,
+		readline8-shlibs
+	<<
+	Conflicts: libxml2-32bit-bin
+	Replaces: libxml2-32bit-bin, libxml2 (<< 2.4.18-2)
+	Files: <<
+		bin/xmlcatalog
+		bin/xmllint
+		sbin
+		share/man/man1/xmlcatalog.1
+		share/man/man1/xmllint.1
+		etc/xml
+	<<
+	DocFiles: Copyright NEWS README.md
+	RuntimeVars: <<
+		SGML_CATALOG_FILES: %p/etc/sgml/catalog
+		XML_CATALOG_FILES: %p/etc/xml/catalog
+	<<
+	PostInstScript: <<
+		case "$1" in
+			configure)
+				export SGML_CATALOG_FILES=%p/etc/sgml/catalog
+				export XML_CATALOG_FILES=%p/etc/xml/catalog
+				%p/sbin/update-xml-catalog
+				%p/sbin/update-sgml-catalog
+			;;
+		esac
+	<<
+	PostRmScript: <<
+		case "$1" in
+			abort-install|purge|remove)
+				rm -f %p/etc/xml/catalog
+				rm -f %p/etc/sgml/catalog
+				;;
+		esac
+	<<
+<<
+Description: XML parsing library, version 2
+DescDetail: <<
+	This set of packages does *not* contain the python bindings. Those
+	are in libxml2-pyXX for various pythonX.X versions.
+<<
+DescUsage: <<
+libxml2 uses XML/SGML super catalog to know location of DTDs installed
+on the local system. They are managed by update-xml-catalog and
+update-sgml-catalog scripts. Each package that provides DTDs should
+also provide configuration file(s) for these scripts and call them
+within Pre/PostInstScript.
+
+When update-xml-catalog is called, it reads every configuration file
+in the %p/etc/xml/catalog.d/ directory. Each line of them contains 3
+fields, TYPE, ORIG and REPLACE, corresponding to arguments of
+`xmlcatalog --add'. See xmlcatalog(1) for detail.
+
+When update-sgml-catalog is called, it reads every configuration file
+in the %p/etc/sgml/catalog.d/ directory. Each line of them contains
+only 1 field, a reference to other SGML catalog file.
+<<
+DescPort: <<
+	disable the self-test of ebcdic handling because GNU
+	libiconv doesn't support ebcdic. See:
+	https://bugzilla.gnome.org/show_bug.cgi?id=603432
+	Should we switch to libicu support?
+<<
+DescPackaging: <<
+	Previous versions by Christoph Pfisterer <chrisp@users.sourceforge.net>
+
+	Hide xsltproc executables from ./configure to avoid circular
+	dependencies (on libxslt-bin (depends on libxml2)) and network
+	access during build. Fortunately, these executables are only
+	used to build docs that already come prebuilt (we patch the
+	targets instead of patching sources and rebuilding).
+
+	As of 2.9.4-1, scrap static lib, which means we can avoid
+	publishing any internal-implementation flags. See also
+	Debian's 0001-modify-xml2-config-and-pkgconfig-behaviour.patch
+
+	Follow Debian's lead in assuming all linking is dynamic and
+	remove --dynamic from *-config, but be lenient and don't have
+	*-config crash when the flag is passed.
+
+	Follow Debian's lead and retain "legacy" interfaces. See also:
+	https://bugzilla.redhat.com/show_bug.cgi?id=2139546
+	https://gitlab.gnome.org/GNOME/libxml2/-/issues/433
+<<
+License: BSD
+Homepage: http://www.xmlsoft.org/
