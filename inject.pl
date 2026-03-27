@@ -30,7 +30,7 @@ use File::Find;
 
 ### list our directories
 
-my @contents = `ls`;
+my @contents = `ls -A | grep -v ^\\\\.`;
 my ($filename,@directories);
 foreach $filename (@contents) {
     chomp($filename);
