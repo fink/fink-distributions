@@ -1,0 +1,193 @@
+From a6f6ecaab5df894f3b6ec2df5cc421957f985abd Mon Sep 17 00:00:00 2001
+From: Jason Madden <jamadden@gmail.com>
+Date: Mon, 11 Nov 2024 05:38:45 -0600
+Subject: [PATCH] Remove some legacy Python 2 support code for compatibility
+ with the upcoming release of Cython 3.1
+
+---
+ docs/changes/2076.bugfix.rst  |  2 ++
+ src/gevent/greenlet.py        |  8 +----
+ src/gevent/libev/corecext.pyx | 66 +++++++++++++++--------------------
+ src/gevent/queue.py           |  6 ----
+ 4 files changed, 31 insertions(+), 51 deletions(-)
+ create mode 100644 docs/changes/2076.bugfix.rst
+
+diff --git a/docs/changes/2076.bugfix.rst b/docs/changes/2076.bugfix.rst
+new file mode 100644
+index 000000000..23678d3ad
+--- /dev/null
++++ b/docs/changes/2076.bugfix.rst
+@@ -0,0 +1,2 @@
++Remove some legacy code that supported Python 2 for compatibility with
++the upcoming releases of Cython 3.1.
+diff --git a/src/gevent/greenlet.py b/src/gevent/greenlet.py
+index 34c38bab1..c83a652e9 100644
+--- a/src/gevent/greenlet.py
++++ b/src/gevent/greenlet.py
+@@ -378,14 +378,8 @@ def loop(self):
+         hub = get_my_hub(self) # pylint:disable=undefined-variable
+         return hub.loop
+ 
+-    def __nonzero__(self): # pylint:disable=bad-dunder-name
++    def __bool__(self): # pylint:disable=bad-dunder-name
+         return self._start_event is not None and self._exc_info is None
+-    try:
+-        __bool__ = __nonzero__ # Python 3
+-    except NameError: # pragma: no cover
+-        # When we're compiled with Cython, the __nonzero__ function
+-        # goes directly into the slot and can't be accessed by name.
+-        pass
+ 
+     ### Lifecycle
+ 
+diff --git a/src/gevent/libev/corecext.pyx b/src/gevent/libev/corecext.pyx
+index bbb33ef98..49f7022c6 100644
+--- a/src/gevent/libev/corecext.pyx
++++ b/src/gevent/libev/corecext.pyx
+@@ -61,13 +61,6 @@ __all__ = ['get_version',
+            'time',
+            'loop']
+ 
+-cdef tuple integer_types
+-
+-if sys.version_info[0] >= 3:
+-    integer_types = int,
+-else:
+-    integer_types = (int, long)
+-
+ 
+ cdef extern from "callbacks.h":
+     void gevent_callback_io(libev.ev_loop, void*, int)
+@@ -151,7 +144,7 @@ def get_header_version():
+ 
+ # This list backends in the order they are actually tried by libev,
+ # as defined in loop_init. The names must be lower case.
+-_flags = [
++_flags = tuple([
+     # IOCP
+     (libev.EVBACKEND_PORT, 'port'),
+     (libev.EVBACKEND_KQUEUE, 'kqueue'),
+@@ -166,28 +159,30 @@ _flags = [
+     (libev.EVFLAG_NOINOTIFY, 'noinotify'),
+     (libev.EVFLAG_SIGNALFD, 'signalfd'),
+     (libev.EVFLAG_NOSIGMASK, 'nosigmask')
+-]
++])
+ 
+ 
+ _flags_str2int = dict((string, flag) for (flag, string) in _flags)
+ 
+ 
+-_events = [(libev.EV_READ,     'READ'),
+-           (libev.EV_WRITE,    'WRITE'),
+-           (libev.EV__IOFDSET, '_IOFDSET'),
+-           (libev.EV_PERIODIC, 'PERIODIC'),
+-           (libev.EV_SIGNAL,   'SIGNAL'),
+-           (libev.EV_CHILD,    'CHILD'),
+-           (libev.EV_STAT,     'STAT'),
+-           (libev.EV_IDLE,     'IDLE'),
+-           (libev.EV_PREPARE,  'PREPARE'),
+-           (libev.EV_CHECK,    'CHECK'),
+-           (libev.EV_EMBED,    'EMBED'),
+-           (libev.EV_FORK,     'FORK'),
+-           (libev.EV_CLEANUP,  'CLEANUP'),
+-           (libev.EV_ASYNC,    'ASYNC'),
+-           (libev.EV_CUSTOM,   'CUSTOM'),
+-           (libev.EV_ERROR,    'ERROR')]
++_events = tuple([
++    (libev.EV_READ,     'READ'),
++    (libev.EV_WRITE,    'WRITE'),
++    (libev.EV__IOFDSET, '_IOFDSET'),
++    (libev.EV_PERIODIC, 'PERIODIC'),
++    (libev.EV_SIGNAL,   'SIGNAL'),
++    (libev.EV_CHILD,    'CHILD'),
++    (libev.EV_STAT,     'STAT'),
++    (libev.EV_IDLE,     'IDLE'),
++    (libev.EV_PREPARE,  'PREPARE'),
++    (libev.EV_CHECK,    'CHECK'),
++    (libev.EV_EMBED,    'EMBED'),
++    (libev.EV_FORK,     'FORK'),
++    (libev.EV_CLEANUP,  'CLEANUP'),
++    (libev.EV_ASYNC,    'ASYNC'),
++    (libev.EV_CUSTOM,   'CUSTOM'),
++    (libev.EV_ERROR,    'ERROR')
++])
+ 
+ 
+ cpdef _flags_to_list(unsigned int flags):
+@@ -203,20 +198,15 @@ cpdef _flags_to_list(unsigned int flags):
+     return result
+ 
+ 
+-
+-basestring = (bytes, str)
+-
+-
+-
+ cpdef unsigned int _flags_to_int(object flags) except? -1:
+     # Note, that order does not matter, libev has its own predefined order
+     if not flags:
+         return 0
+-    if isinstance(flags, integer_types):
++    if isinstance(flags, int):
+         return flags
+     cdef unsigned int result = 0
+     try:
+-        if isinstance(flags, basestring):
++        if isinstance(flags, str):
+             flags = flags.split(',')
+         for value in flags:
+             value = value.strip().lower()
+@@ -228,7 +218,7 @@ cpdef unsigned int _flags_to_int(object flags) except? -1:
+ 
+ 
+ cdef str _str_hex(object flag):
+-    if isinstance(flag, integer_types):
++    if isinstance(flag, int):
+         return hex(flag)
+     return str(flag)
+ 
+@@ -297,13 +287,13 @@ cdef public class callback [object PyGeventCallbackObject, type PyGeventCallback
+ 
+     close = stop
+ 
+-    # Note, that __nonzero__ and pending are different
+-    # nonzero is used in contexts where we need to know whether to schedule another callback,
++    # Note, that __bool__ and pending are different
++    # bool is used in contexts where we need to know whether to schedule another callback,
+     # so it's true if it's pending or currently running
+     # 'pending' has the same meaning as libev watchers: it is cleared before entering callback
+ 
+-    def __nonzero__(self):
+-        # it's nonzero if it's pending or currently executing
++    def __bool__(self):
++        # it's bool if it's pending or currently executing
+         return self.args is not None
+ 
+     @property
+@@ -376,7 +366,7 @@ cdef class CallbackFIFO(object):
+         old_tail.next = new_tail
+         self.tail = new_tail
+ 
+-    def __nonzero__(self):
++    def __bool__(self):
+         return self.head is not None
+ 
+     def __len__(self):
+diff --git a/src/gevent/queue.py b/src/gevent/queue.py
+index 0fb8dbb0b..cd666d063 100644
+--- a/src/gevent/queue.py
++++ b/src/gevent/queue.py
+@@ -243,12 +243,6 @@ def __bool__(self):
+         """
+         return True
+ 
+-    def __nonzero__(self): # pylint:disable=bad-dunder-name
+-        # Py2.
+-        # For Cython; __bool__ becomes a special method that we can't
+-        # get by name.
+-        return True
+-
+     def empty(self):
+         """Return ``True`` if the queue is empty, ``False`` otherwise."""
+         return not self.qsize()
