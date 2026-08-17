@@ -1,0 +1,544 @@
+diff -Nurd postfix-2.11.0.orig/src/posttls-finger/posttls-finger.c postfix-2.11.0/src/posttls-finger/posttls-finger.c
+--- postfix-2.11.0.orig/src/posttls-finger/posttls-finger.c	2013-12-16 11:06:33
++++ postfix-2.11.0/src/posttls-finger/posttls-finger.c	2026-08-17 01:34:25
+@@ -1424,7 +1424,7 @@
+     return (0);
+ }
+ 
+-#ifdef USE_TLS
++#if defined(USE_TLS) && OPENSSL_VERSION_NUMBER < 0x10100000L
+ 
+ /* ssl_cleanup - free memory allocated in the OpenSSL library */
+ 
+@@ -1442,7 +1442,8 @@
+     CRYPTO_cleanup_all_ex_data();
+ }
+ 
+-#endif
++#endif					/* USE_TLS && OPENSSL_VERSION_NUMBER
++					 * < 0x10100000L */
+ 
+ /* run - do what we were asked to do. */
+ 
+@@ -1832,7 +1833,9 @@
+ 
+     /* Be valgrind friendly and clean-up */
+     cleanup(&state);
+-#ifdef USE_TLS
++
++    /* OpenSSL 1.1.0 and later (de)initialization is implicit */
++#if defined(USE_TLS) && OPENSSL_VERSION_NUMBER < 0x10100000L
+     ssl_cleanup();
+ #endif
+ 
+diff -Nurd postfix-2.11.0.orig/src/tls/tls.h postfix-2.11.0/src/tls/tls.h
+--- postfix-2.11.0.orig/src/tls/tls.h	2013-12-15 08:49:17
++++ postfix-2.11.0/src/tls/tls.h	2026-08-17 01:34:58
+@@ -297,23 +297,61 @@
+   * Protocol selection.
+   */
+ #define TLS_PROTOCOL_INVALID	(~0)	/* All protocol bits masked */
++
++#ifdef SSL_TXT_SSLV2
+ #define TLS_PROTOCOL_SSLv2	(1<<0)	/* SSLv2 */
++#else
++#define SSL_TXT_SSLV2		"SSLv2"
++#define TLS_PROTOCOL_SSLv2	0	/* Unknown */
++#undef  SSL_OP_NO_SSLv2
++#define SSL_OP_NO_SSLv2		0L	/* Noop */
++#endif
++
++#ifdef SSL_TXT_SSLV3
+ #define TLS_PROTOCOL_SSLv3	(1<<1)	/* SSLv3 */
++#else
++#define SSL_TXT_SSLV3		"SSLv3"
++#define TLS_PROTOCOL_SSLv3	0	/* Unknown */
++#undef  SSL_OP_NO_SSLv3
++#define SSL_OP_NO_SSLv3		0L	/* Noop */
++#endif
++
++#ifdef SSL_TXT_TLSV1
+ #define TLS_PROTOCOL_TLSv1	(1<<2)	/* TLSv1 */
++#else
++#define SSL_TXT_TLSV1		"TLSv1"
++#define TLS_PROTOCOL_TLSv1	0	/* Unknown */
++#undef  SSL_OP_NO_TLSv1
++#define SSL_OP_NO_TLSv1		0L	/* Noop */
++#endif
++
+ #ifdef SSL_TXT_TLSV1_1
+ #define TLS_PROTOCOL_TLSv1_1	(1<<3)	/* TLSv1_1 */
+ #else
++#define SSL_TXT_TLSV1_1		"TLSv1.1"
+ #define TLS_PROTOCOL_TLSv1_1	0	/* Unknown */
+ #undef  SSL_OP_NO_TLSv1_1
+ #define SSL_OP_NO_TLSv1_1	0L	/* Noop */
+ #endif
++
+ #ifdef SSL_TXT_TLSV1_2
+ #define TLS_PROTOCOL_TLSv1_2	(1<<4)	/* TLSv1_2 */
+ #else
++#define SSL_TXT_TLSV1_2		"TLSv1.2"
+ #define TLS_PROTOCOL_TLSv1_2	0	/* Unknown */
+ #undef  SSL_OP_NO_TLSv1_2
+ #define SSL_OP_NO_TLSv1_2	0L	/* Noop */
+ #endif
++
++#ifdef SSL_TXT_TLSV1_3
++#define TLS_PROTOCOL_TLSv1_3	(1<<5)	/* TLSv1_3 */
++#else
++#define SSL_TXT_TLSV1_3		"TLSv1.3"
++#define TLS_PROTOCOL_TLSv1_3	0	/* Unknown */
++#undef  SSL_OP_NO_TLSv1_3
++#define SSL_OP_NO_TLSv1_3	0L	/* Noop */
++#endif
++
+ #define TLS_KNOWN_PROTOCOLS \
+ 	( TLS_PROTOCOL_SSLv2 | TLS_PROTOCOL_SSLv3 | TLS_PROTOCOL_TLSv1 \
+ 	   | TLS_PROTOCOL_TLSv1_1 | TLS_PROTOCOL_TLSv1_2 )
+@@ -322,7 +360,8 @@
+ 	     | (((m) & TLS_PROTOCOL_SSLv3) ? SSL_OP_NO_SSLv3 : 0L) \
+ 	     | (((m) & TLS_PROTOCOL_TLSv1) ? SSL_OP_NO_TLSv1 : 0L) \
+ 	     | (((m) & TLS_PROTOCOL_TLSv1_1) ? SSL_OP_NO_TLSv1_1 : 0L) \
+-	     | (((m) & TLS_PROTOCOL_TLSv1_2) ? SSL_OP_NO_TLSv1_2 : 0L))
++	     | (((m) & TLS_PROTOCOL_TLSv1_2) ? SSL_OP_NO_TLSv1_2 : 0L) \
++	     | (((m) & TLS_PROTOCOL_TLSv1_3) ? SSL_OP_NO_TLSv1_3 : 0L))
+ 
+ /*
+  * SSL options that are managed via dedicated Postfix features, rather than
+diff -Nurd postfix-2.11.0.orig/src/tls/tls_client.c postfix-2.11.0/src/tls/tls_client.c
+--- postfix-2.11.0.orig/src/tls/tls_client.c	2013-12-15 08:35:52
++++ postfix-2.11.0/src/tls/tls_client.c	2026-08-17 01:35:04
+@@ -298,6 +298,8 @@
+      */
+     tls_check_version();
+ 
++#if OPENSSL_VERSION_NUMBER < 0x10100000L
++
+     /*
+      * Initialize the OpenSSL library by the book! To start with, we must
+      * initialize the algorithms. We want cleartext error messages instead of
+@@ -305,6 +307,7 @@
+      */
+     SSL_load_error_strings();
+     OpenSSL_add_ssl_algorithms();
++#endif
+ 
+     /*
+      * Create an application data index for SSL objects, so that we can
+diff -Nurd postfix-2.11.0.orig/src/tls/tls_dane.c postfix-2.11.0/src/tls/tls_dane.c
+--- postfix-2.11.0.orig/src/tls/tls_dane.c	2014-01-09 10:00:36
++++ postfix-2.11.0/src/tls/tls_dane.c	2026-08-17 01:36:11
+@@ -547,7 +547,7 @@
+ {
+     TLS_CERTS *new = (TLS_CERTS *) mymalloc(sizeof(*new));
+ 
+-    CRYPTO_add(&x->references, 1, CRYPTO_LOCK_X509);
++    X509_up_ref(x);
+     new->cert = x;
+     new->next = d->certs;
+     d->certs = new;
+@@ -569,7 +569,7 @@
+ {
+     TLS_PKEYS *new = (TLS_PKEYS *) mymalloc(sizeof(*new));
+ 
+-    CRYPTO_add(&k->references, 1, CRYPTO_LOCK_EVP_PKEY);
++    EVP_PKEY_up_ref(k);
+     new->pkey = k;
+     new->next = d->pkeys;
+     d->pkeys = new;
+@@ -1402,12 +1402,8 @@
+ 
+ static int push_ext(X509 *cert, X509_EXTENSION *ext)
+ {
+-    x509_extension_stack_t *exts;
+-
+     if (ext) {
+-	if ((exts = cert->cert_info->extensions) == 0)
+-	    exts = cert->cert_info->extensions = sk_X509_EXTENSION_new_null();
+-	if (exts && sk_X509_EXTENSION_push(exts, ext))
++	if (X509_add_ext(cert, ext, -1))
+ 	    return 1;
+ 	X509_EXTENSION_free(ext);
+     }
+@@ -1464,13 +1460,13 @@
+      * exempt from any potential (off by default for now in OpenSSL)
+      * self-signature checks!
+      */
+-    id = (ASN1_STRING *) ((akid && akid->keyid) ? akid->keyid : 0);
+-    if (id && M_ASN1_STRING_length(id) == 1 && *M_ASN1_STRING_data(id) == c)
++    id = ((akid && akid->keyid) ? akid->keyid : 0);
++    if (id && ASN1_STRING_length(id) == 1 && *ASN1_STRING_get0_data(id) == c)
+ 	c = 1;
+ 
+     if ((akid = AUTHORITY_KEYID_new()) != 0
+ 	&& (akid->keyid = ASN1_OCTET_STRING_new()) != 0
+-	&& M_ASN1_OCTET_STRING_set(akid->keyid, (void *) &c, 1)
++	&& ASN1_OCTET_STRING_set(akid->keyid, (void *) &c, 1)
+ 	&& X509_add1_ext_i2d(cert, nid, akid, 0, X509V3_ADD_DEFAULT) > 0)
+ 	ret = 1;
+     if (akid)
+@@ -1538,7 +1534,7 @@
+     if (cert) {
+ 	if (trusted && !X509_add1_trust_object(cert, serverAuth))
+ 	    msg_fatal("out of memory");
+-	CRYPTO_add(&cert->references, 1, CRYPTO_LOCK_X509);
++	X509_up_ref(cert);
+ 	if (!sk_X509_push(*xs, cert))
+ 	    msg_fatal("out of memory");
+     }
+@@ -1583,10 +1579,10 @@
+      */
+     if (!X509_set_version(cert, 2)
+ 	|| !set_serial(cert, akid, subject)
+-	|| !X509_set_subject_name(cert, name)
+ 	|| !set_issuer_name(cert, akid)
+-	|| !X509_gmtime_adj(X509_get_notBefore(cert), -30 * 86400L)
+-	|| !X509_gmtime_adj(X509_get_notAfter(cert), 30 * 86400L)
++	|| !X509_gmtime_adj(X509_getm_notBefore(cert), -30 * 86400L)
++	|| !X509_gmtime_adj(X509_getm_notAfter(cert), 30 * 86400L)
++	|| !X509_set_subject_name(cert, name)
+ 	|| !X509_set_pubkey(cert, key ? key : signkey)
+ 	|| !add_ext(0, cert, NID_basic_constraints, "CA:TRUE")
+ 	|| (key && !add_akid(cert, akid))
+@@ -1720,8 +1716,8 @@
+     int     depth = 0;
+     EVP_PKEY *takey;
+     X509   *ca;
+-    X509   *cert = ctx->cert;		/* XXX: Accessor? */
+-    x509_stack_t *in = ctx->untrusted;	/* XXX: Accessor? */
++    X509   *cert = X509_STORE_CTX_get0_cert(ctx);
++    x509_stack_t *in = X509_STORE_CTX_get0_untrusted(ctx);
+ 
+     /* shallow copy */
+     if ((in = sk_X509_dup(in)) == 0)
+@@ -1802,7 +1798,7 @@
+ {
+     const char *myname = "dane_cb";
+     TLS_SESS_STATE *TLScontext = (TLS_SESS_STATE *) app_ctx;
+-    X509   *cert = ctx->cert;		/* XXX: accessor? */
++    X509   *cert = X509_STORE_CTX_get0_cert(ctx);
+ 
+     /*
+      * Degenerate case: depth 0 self-signed cert.
+@@ -1832,9 +1828,9 @@
+      * Check that setting the untrusted chain updates the expected structure
+      * member at the expected offset.
+      */
+-    X509_STORE_CTX_trusted_stack(ctx, TLScontext->trusted);
+-    X509_STORE_CTX_set_chain(ctx, TLScontext->untrusted);
+-    if (ctx->untrusted != TLScontext->untrusted)
++    X509_STORE_CTX_set0_trusted_stack(ctx, TLScontext->trusted);
++    X509_STORE_CTX_set0_untrusted(ctx, TLScontext->untrusted);
++    if (X509_STORE_CTX_get0_untrusted(ctx) != TLScontext->untrusted)
+ 	msg_panic("%s: OpenSSL ABI change", myname);
+ 
+     return X509_verify_cert(ctx);
+@@ -2159,8 +2155,10 @@
+     tls_param_init();
+     tls_check_version();
+ 
++#if OPENSSL_VERSION_NUMBER < 0x10100000L
+     SSL_load_error_strings();
+     SSL_library_init();
++#endif
+ 
+     if (!tls_validate_digest(LN_sha1))
+ 	msg_fatal("%s digest algorithm not available", LN_sha1);
+diff -Nurd postfix-2.11.0.orig/src/tls/tls_dh.c postfix-2.11.0/src/tls/tls_dh.c
+--- postfix-2.11.0.orig/src/tls/tls_dh.c	2010-05-29 11:37:55
++++ postfix-2.11.0/src/tls/tls_dh.c	2026-08-17 01:36:27
+@@ -86,44 +86,66 @@
+ /* Application-specific. */
+ 
+  /*
+-  * Compiled-in EDH primes (the compiled-in generator is always 2). These are
+-  * used when no parameters are explicitly loaded from a site-specific file.
++  * Compiled-in DH parameters.  Used when no parameters are explicitly loaded
++  * from a site-specific file.  Using an ASN.1 DER encoding avoids the need
++  * to explicitly manipulate the internal representation of DH parameter
++  * objects.
+   * 
+-  * 512-bit parameters are used for export ciphers, and 1024-bit parameters are
+-  * used for non-export ciphers. An ~80-bit strong EDH key exchange is really
+-  * too weak to protect 128+ bit keys, but larger DH primes are
+-  * computationally expensive. When greater security is required, use EECDH.
++  * 512-bit parameters are used for export ciphers, and 2048-bit parameters are
++  * used for non-export ciphers.  The non-export group is now 2048-bit, as
++  * 1024 bits is increasingly considered to weak by clients.  When greater
++  * security is required, use EECDH.
+   */
+ 
+- /*
+-  * Generated via "openssl dhparam -2 -noout -C 512 2>/dev/null" TODO:
+-  * generate at compile-time.
++ /*-
++  * Generated via:
++  *   $ openssl dhparam -2 -outform DER 512 2>/dev/null |
++  *     hexdump -ve '/1 "0x%02x, "' | fmt
++  * TODO: generate at compile-time. But that is no good for the majority of
++  * sites that install pre-compiled binaries, and breaks reproducible builds.
++  * Instead, generate at installation time and use main.cf configuration.
+   */
+-static unsigned char dh512_p[] = {
+-    0x88, 0x3F, 0x00, 0xAF, 0xFC, 0x0C, 0x8A, 0xB8, 0x35, 0xCD, 0xE5, 0xC2,
+-    0x0F, 0x55, 0xDF, 0x06, 0x3F, 0x16, 0x07, 0xBF, 0xCE, 0x13, 0x35, 0xE4,
+-    0x1C, 0x1E, 0x03, 0xF3, 0xAB, 0x17, 0xF6, 0x63, 0x50, 0x63, 0x67, 0x3E,
+-    0x10, 0xD7, 0x3E, 0xB4, 0xEB, 0x46, 0x8C, 0x40, 0x50, 0xE6, 0x91, 0xA5,
+-    0x6E, 0x01, 0x45, 0xDE, 0xC9, 0xB1, 0x1F, 0x64, 0x54, 0xFA, 0xD9, 0xAB,
+-    0x4F, 0x70, 0xBA, 0x5B,
++static unsigned char dh512_der[] = {
++    0x30, 0x46, 0x02, 0x41, 0x00, 0xd8, 0xbf, 0x11, 0xd6, 0x41, 0x2a, 0x7a,
++    0x9c, 0x78, 0xb2, 0xaa, 0x41, 0x23, 0x0a, 0xdc, 0xcf, 0xb7, 0x19, 0xc5,
++    0x16, 0x4c, 0xcb, 0x4a, 0xd0, 0xd2, 0x1f, 0x1f, 0x70, 0x24, 0x86, 0x6f,
++    0x51, 0x52, 0xc6, 0x5b, 0x28, 0xbb, 0x82, 0xe1, 0x24, 0x91, 0x3d, 0x4d,
++    0x95, 0x56, 0xf8, 0x0b, 0x2c, 0xe0, 0x36, 0x67, 0x88, 0x64, 0x15, 0x1f,
++    0x45, 0xd5, 0xb8, 0x0a, 0x00, 0x03, 0x76, 0x32, 0x0b, 0x02, 0x01, 0x02,
+ };
+ 
+- /*
+-  * Generated via "openssl dhparam -2 -noout -C 1024 2>/dev/null" TODO:
+-  * generate at compile-time.
++ /*-
++  * Generated via:
++  *   $ openssl dhparam -2 -outform DER 2048 2>/dev/null |
++  *     hexdump -ve '/1 "0x%02x, "' | fmt
++  * TODO: generate at compile-time. But that is no good for the majority of
++  * sites that install pre-compiled binaries, and breaks reproducible builds.
++  * Instead, generate at installation time and use main.cf configuration.
+   */
+-static unsigned char dh1024_p[] = {
+-    0xB0, 0xFE, 0xB4, 0xCF, 0xD4, 0x55, 0x07, 0xE7, 0xCC, 0x88, 0x59, 0x0D,
+-    0x17, 0x26, 0xC5, 0x0C, 0xA5, 0x4A, 0x92, 0x23, 0x81, 0x78, 0xDA, 0x88,
+-    0xAA, 0x4C, 0x13, 0x06, 0xBF, 0x5D, 0x2F, 0x9E, 0xBC, 0x96, 0xB8, 0x51,
+-    0x00, 0x9D, 0x0C, 0x0D, 0x75, 0xAD, 0xFD, 0x3B, 0xB1, 0x7E, 0x71, 0x4F,
+-    0x3F, 0x91, 0x54, 0x14, 0x44, 0xB8, 0x30, 0x25, 0x1C, 0xEB, 0xDF, 0x72,
+-    0x9C, 0x4C, 0xF1, 0x89, 0x0D, 0x68, 0x3F, 0x94, 0x8E, 0xA4, 0xFB, 0x76,
+-    0x89, 0x18, 0xB2, 0x91, 0x16, 0x90, 0x01, 0x99, 0x66, 0x8C, 0x53, 0x81,
+-    0x4E, 0x27, 0x3D, 0x99, 0xE7, 0x5A, 0x7A, 0xAF, 0xD5, 0xEC, 0xE2, 0x7E,
+-    0xFA, 0xED, 0x01, 0x18, 0xC2, 0x78, 0x25, 0x59, 0x06, 0x5C, 0x39, 0xF6,
+-    0xCD, 0x49, 0x54, 0xAF, 0xC1, 0xB1, 0xEA, 0x4A, 0xF9, 0x53, 0xD0, 0xDF,
+-    0x6D, 0xAF, 0xD4, 0x93, 0xE7, 0xBA, 0xAE, 0x9B,
++static unsigned char dh2048_der[] = {
++    0x30, 0x82, 0x01, 0x08, 0x02, 0x82, 0x01, 0x01, 0x00, 0xbf, 0x28, 0x1b,
++    0x68, 0x69, 0x90, 0x2f, 0x37, 0x9f, 0x5a, 0x50, 0x23, 0x73, 0x2c, 0x11,
++    0xf2, 0xac, 0x7c, 0x3e, 0x58, 0xb9, 0x23, 0x3e, 0x02, 0x07, 0x4d, 0xba,
++    0xd9, 0x2c, 0xc1, 0x9e, 0xf9, 0xc4, 0x2f, 0xbc, 0x8d, 0x86, 0x4b, 0x2a,
++    0x87, 0x86, 0x93, 0x32, 0x0f, 0x72, 0x40, 0xfe, 0x7e, 0xa2, 0xc1, 0x32,
++    0xf0, 0x65, 0x9c, 0xc3, 0x19, 0x25, 0x2d, 0xeb, 0x6a, 0x49, 0x94, 0x79,
++    0x2d, 0xa1, 0xbe, 0x05, 0x26, 0xac, 0x8d, 0x69, 0xdc, 0x2e, 0x7e, 0xb5,
++    0xfd, 0x3c, 0x2b, 0x7d, 0x43, 0x22, 0x53, 0xf6, 0x1e, 0x04, 0x45, 0xd7,
++    0x53, 0x84, 0xfd, 0x6b, 0x12, 0x72, 0x47, 0x04, 0xaf, 0xa4, 0xac, 0x4b,
++    0x55, 0xb6, 0x79, 0x42, 0x40, 0x88, 0x54, 0x48, 0xd5, 0x4d, 0x3a, 0xb2,
++    0xbf, 0x6c, 0x26, 0x95, 0x29, 0xdd, 0x8b, 0x9e, 0xed, 0xb8, 0x60, 0x8e,
++    0xb5, 0x35, 0xb6, 0x22, 0x44, 0x1f, 0xfb, 0x56, 0x74, 0xfe, 0xf0, 0x2c,
++    0xe6, 0x0c, 0x22, 0xc9, 0x35, 0xb3, 0x1b, 0x96, 0xbb, 0x0a, 0x5a, 0xc3,
++    0x09, 0xa0, 0xcc, 0xa5, 0x40, 0x90, 0x0f, 0x59, 0xa2, 0x89, 0x69, 0x2a,
++    0x69, 0x79, 0xe4, 0xd3, 0x24, 0xc6, 0x8c, 0xda, 0xbc, 0x98, 0x3a, 0x5b,
++    0x16, 0xae, 0x63, 0x6c, 0x0b, 0x43, 0x4f, 0xf3, 0x2e, 0xc8, 0xa9, 0x6b,
++    0x58, 0x6a, 0xa9, 0x8e, 0x64, 0x09, 0x3d, 0x88, 0x44, 0x4f, 0x97, 0x2c,
++    0x1d, 0x98, 0xb0, 0xa9, 0xc0, 0xb6, 0x8d, 0x19, 0x37, 0x1f, 0xb7, 0xc9,
++    0x86, 0xa8, 0xdc, 0x37, 0x4d, 0x64, 0x27, 0xf3, 0xf5, 0x2b, 0x7b, 0x6b,
++    0x76, 0x84, 0x3f, 0xc1, 0x23, 0x97, 0x2d, 0x71, 0xf7, 0xb6, 0xc2, 0x35,
++    0x28, 0x10, 0x96, 0xd6, 0x69, 0x0c, 0x2e, 0x1f, 0x9f, 0xdf, 0x82, 0x81,
++    0x57, 0x57, 0x39, 0xa5, 0xf2, 0x81, 0x29, 0x57, 0xf9, 0x2f, 0xd0, 0x03,
++    0xab, 0x02, 0x01, 0x02,
+ };
+ 
+  /*
+@@ -150,6 +172,14 @@
+ 	msg_panic("Invalid DH parameters size %d, file %s", bits, path);
+     }
+ 
++    /*
++     * This function is the first to set the DH parameters, but free any
++     * prior value just in case the call sequence changes some day.
++     */
++    if (*dhPtr) {
++	DH_free(*dhPtr);
++	*dhPtr = 0;
++    }
+     if ((paramfile = fopen(path, "r")) != 0) {
+ 	if ((*dhPtr = PEM_read_DHparams(paramfile, 0, 0, 0)) == 0) {
+ 	    msg_warn("cannot load %d-bit DH parameters from file %s"
+@@ -165,24 +195,18 @@
+ 
+ /* tls_get_dh - get compiled-in DH parameters */
+ 
+-static DH *tls_get_dh(const unsigned char *p, int plen)
++static DH *tls_get_dh(const unsigned char *p, size_t plen)
+ {
+-    DH     *dh;
+-    static unsigned char g[] = {0x02,};
++    const unsigned char *endp = p;
++    DH     *dh = 0;
+ 
+-    /* Use the compiled-in parameters. */
+-    if ((dh = DH_new()) == 0) {
+-	msg_warn("cannot create DH parameter set: %m");	/* 200411 */
+-	return (0);
+-    }
+-    dh->p = BN_bin2bn(p, plen, (BIGNUM *) 0);
+-    dh->g = BN_bin2bn(g, 1, (BIGNUM *) 0);
+-    if ((dh->p == 0) || (dh->g == 0)) {
+-	msg_warn("cannot load compiled-in DH parameters");	/* 200411 */
+-	DH_free(dh);				/* 200411 */
+-	return (0);
+-    }
+-    return (dh);
++    if (d2i_DHparams(&dh, &endp, plen) && plen == endp - p)
++	return (dh);
++
++    msg_warn("cannot load compiled-in DH parameters");
++    if (dh)
++	DH_free(dh);
++    return (0);
+ }
+ 
+ /* tls_tmp_dh_cb - call-back for Diffie-Hellman parameters */
+@@ -193,11 +217,11 @@
+ 
+     if (export && keylength == 512) {		/* 40-bit export cipher */
+ 	if (dh_512 == 0)
+-	    dh_512 = tls_get_dh(dh512_p, (int) sizeof(dh512_p));
++	    dh_512 = tls_get_dh(dh512_der, sizeof(dh512_der));
+ 	dh_tmp = dh_512;
+     } else {					/* ADH, DHE-RSA or DSA */
+ 	if (dh_1024 == 0)
+-	    dh_1024 = tls_get_dh(dh1024_p, (int) sizeof(dh1024_p));
++	    dh_1024 = tls_get_dh(dh2048_der, sizeof(dh2048_der));
+ 	dh_tmp = dh_1024;
+     }
+     return (dh_tmp);
+diff -Nurd postfix-2.11.0.orig/src/tls/tls_misc.c postfix-2.11.0/src/tls/tls_misc.c
+--- postfix-2.11.0.orig/src/tls/tls_misc.c	2013-12-16 11:06:33
++++ postfix-2.11.0/src/tls/tls_misc.c	2026-08-17 01:44:25
+@@ -250,12 +250,9 @@
+     SSL_TXT_SSLV2, TLS_PROTOCOL_SSLv2,
+     SSL_TXT_SSLV3, TLS_PROTOCOL_SSLv3,
+     SSL_TXT_TLSV1, TLS_PROTOCOL_TLSv1,
+-#ifdef SSL_TXT_TLSV1_1
+     SSL_TXT_TLSV1_1, TLS_PROTOCOL_TLSv1_1,
+-#endif
+-#ifdef SSL_TXT_TLSV1_2
+     SSL_TXT_TLSV1_2, TLS_PROTOCOL_TLSv1_2,
+-#endif
++    SSL_TXT_TLSV1_3, TLS_PROTOCOL_TLSv1_3,
+     0, TLS_PROTOCOL_INVALID,
+ };
+ 
+@@ -462,7 +459,7 @@
+     static ARGV *exclude;		/* Cached */
+     SSL    *s = 0;
+     ssl_cipher_stack_t *ciphers;
+-    SSL_CIPHER *c;
++    const SSL_CIPHER *c;
+     const cipher_probe_t *probe;
+     int     alg_bits;
+     int     num;
+diff -Nurd postfix-2.11.0.orig/src/tls/tls_server.c postfix-2.11.0/src/tls/tls_server.c
+--- postfix-2.11.0.orig/src/tls/tls_server.c	2013-12-15 08:35:52
++++ postfix-2.11.0/src/tls/tls_server.c	2026-08-17 01:36:53
+@@ -164,9 +164,27 @@
+   */
+ static const char server_session_id_context[] = "Postfix/TLS";
+ 
++#if OPENSSL_VERSION_NUMBER >= 0x1000000fL
++#define GET_SID(s, v, lptr)	((v) = SSL_SESSION_get_id((s), (lptr)))
++
++#else					/* Older OpenSSL releases */
++#define GET_SID(s, v, lptr) \
++    do { (v) = (s)->session_id; *(lptr) = (s)->session_id_length; } while (0)
++
++#endif					/* OPENSSL_VERSION_NUMBER */
++
++ /* OpenSSL 1.1.0 bitrot */
++#if OPENSSL_VERSION_NUMBER >= 0x10100000L
++typedef const unsigned char *session_id_t;
++
++#else
++typedef unsigned char *session_id_t;
++
++#endif
++
+ /* get_server_session_cb - callback to retrieve session from server cache */
+ 
+-static SSL_SESSION *get_server_session_cb(SSL *ssl, unsigned char *session_id,
++static SSL_SESSION *get_server_session_cb(SSL *ssl, session_id_t session_id,
+ 					          int session_id_length,
+ 					          int *unused_copy)
+ {
+@@ -221,14 +239,16 @@
+ {
+     VSTRING *cache_id;
+     SSL_SESSION *session = SSL_get_session(TLScontext->con);
++    const unsigned char *sid;
++    unsigned int sid_length;
+ 
+     SSL_CTX_remove_session(ctx, session);
+ 
+     if (TLScontext->cache_type == 0)
+ 	return;
+ 
+-    GEN_CACHE_ID(cache_id, session->session_id, session->session_id_length,
+-		 TLScontext->serverid);
++    GET_SID(session, sid, &sid_length);
++    GEN_CACHE_ID(cache_id, sid, sid_length, TLScontext->serverid);
+ 
+     if (TLScontext->log_mask & TLS_LOG_CACHE)
+ 	msg_info("%s: remove session %s from %s cache", TLScontext->namaddr,
+@@ -246,12 +266,14 @@
+     VSTRING *cache_id;
+     TLS_SESS_STATE *TLScontext;
+     VSTRING *session_data;
++    const unsigned char *sid;
++    unsigned int sid_length;
+ 
+     if ((TLScontext = SSL_get_ex_data(ssl, TLScontext_index)) == 0)
+ 	msg_panic("%s: null TLScontext in new session callback", myname);
+ 
+-    GEN_CACHE_ID(cache_id, session->session_id, session->session_id_length,
+-		 TLScontext->serverid);
++    GET_SID(session, sid, &sid_length);
++    GEN_CACHE_ID(cache_id, sid, sid_length, TLScontext->serverid);
+ 
+     if (TLScontext->log_mask & TLS_LOG_CACHE)
+ 	msg_info("%s: save session %s to %s cache", TLScontext->namaddr,
+@@ -355,6 +377,8 @@
+      */
+     tls_check_version();
+ 
++#if OPENSSL_VERSION_NUMBER < 0x10100000L
++
+     /*
+      * Initialize the OpenSSL library by the book! To start with, we must
+      * initialize the algorithms. We want cleartext error messages instead of
+@@ -362,6 +386,7 @@
+      */
+     SSL_load_error_strings();
+     OpenSSL_add_ssl_algorithms();
++#endif
+ 
+     /*
+      * First validate the protocols. If these are invalid, we can't continue.
+diff -Nurd postfix-2.11.0.orig/src/tls/tls_verify.c postfix-2.11.0/src/tls/tls_verify.c
+--- postfix-2.11.0.orig/src/tls/tls_verify.c	2013-06-16 18:49:37
++++ postfix-2.11.0/src/tls/tls_verify.c	2026-08-17 01:37:01
+@@ -138,7 +138,7 @@
+     if (TLScontext->errorcert != 0)
+ 	X509_free(TLScontext->errorcert);
+     if (errorcert != 0)
+-	CRYPTO_add(&errorcert->references, 1, CRYPTO_LOCK_X509);
++	X509_up_ref(errorcert);
+     TLScontext->errorcert = errorcert;
+     TLScontext->errorcode = errorcode;
+     TLScontext->errordepth = depth;
+@@ -440,7 +440,7 @@
+     /*
+      * Safe to treat as an ASCII string possibly holding a DNS name
+      */
+-    dnsname = (char *) ASN1_STRING_data(gn->d.ia5);
++    dnsname = (const char *) ASN1_STRING_get0_data(gn->d.ia5);
+     len = ASN1_STRING_length(gn->d.ia5);
+     TRIM0(dnsname, len);
+ 
