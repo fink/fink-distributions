@@ -1,0 +1,572 @@
+Info4: <<
+Package: llvm-15
+Version: 15.0.7
+Revision: 2
+Type: llvm_maj (15), python(3.10)
+
+Description: Modular and reusable compiler
+License: BSD
+Maintainer: None <fink-devel@lists.sourceforge.net>
+Depends: <<
+	libllvm%type_pkg[llvm_maj]-shlibs,
+	llvm-%type_pkg[llvm_maj]-linker-tools,
+	llvm-%type_pkg[llvm_maj]-runtime,
+	libncurses5-shlibs,
+	libxml2-shlibs,
+	libzstd1-shlibs
+<<
+BuildDepends: <<
+	fink (>= 0.32),
+	fink-buildenv-modules,
+	fink-package-precedence,
+	help2man,
+	libffi8,
+	libiconv-dev,
+	libncurses5,
+	libxml2,
+	libzstd1-dev,
+	pygments-py%type_pkg[python],
+	python%type_pkg[python],
+	yaml-py%type_pkg[python]
+<<
+Source: https://github.com/llvm/llvm-project/releases/download/llvmorg-%v/llvm-project-%v.src.tar.xz
+Source-Checksum: SHA256(8b5fcb24b4128cf04df1b0b9410ce8b1a729cb3c544e6da885d234280dedeac6)
+# from Debian
+PatchFile: %n-python3-shebang.patch
+PatchFile-MD5: dbe52ba786d804fc8251dd6af218ad55
+# from Debian
+PatchFile2: %n-0044-soname.patch
+PatchFile2-MD5: 782ae80b139d71cb0ddbe741e5f5322c
+# from Debian
+PatchFile3: %n-libclang-major-version-only.patch
+PatchFile3-MD5: 323bb73ee0696d5ae0382d13aa8d0287
+PatchScript: <<
+	sed -e 's,@FINK_PYTHON@,%type_raw[python],g' < %{PatchFile} | patch -p1
+	patch -p1 < %{PatchFile2}
+	patch -p1 < %{PatchFile3}
+<<
+UseMaxBuildJobs: false
+CompileScript: <<
+#!/bin/sh -ev
+	echo "Start:" `date` > /tmp/llvm-%type_pkg[llvm_maj]_build_times.txt
+	. %p/sbin/fink-buildenv-cmake.sh
+	
+	# original ENVVAR and locations
+	export ORIG_CPPFLAGS="$CPPFLAGS"
+	export ORIG_CXXFLAGS="$CXXFLAGS"
+	export ORIG_LDFLAGS="$LDFLAGS"
+	export ORIG_MAKEFLAGS="$MAKEFLAGS"
+	export ORIG_PATH="$PATH"
+
+	export TARGET_BUILD=%b/finkbuild
+	export TARGET_BUILD_STAGE2=${TARGET_BUILD}/tools/clang/stage2-bins
+	
+	# CLANG_BOOTSTRAP_PASSTHROUGH: pass variable to 2nd stage
+	# -DBOOTSTRAP* flags are used to build stage2
+	cmake \
+		-S "%b/llvm" \
+		-B "%b/finkbuild" \
+		-G "Unix Makefiles" \
+		$FINK_CMAKE_ARGS \
+		-DCLANG_BUILD_EXAMPLES=OFF \
+		-DCLANG_FORCE_MATCHING_LIBCLANG_SOVERSION=ON \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_INSTALL_NAME_DIR="%p/lib/llvm-%type_pkg[llvm_maj]" \
+		-DCMAKE_INSTALL_PREFIX="%p/lib/llvm-%type_pkg[llvm_maj]" \
+		-DFFI_INCLUDE_DIR="%p/include" \
+		-DFFI_LIBRARIES="%p/lib/libffi.dylib" \
+		-DFFI_LIBRARY_DIR="%p/lib" \
+		-DLIBCXXABI_USE_LLVM_UNWINDER=ON \
+		-DLIBXML2_INCLUDE_DIR="%p/include/libxml2" \
+		-DLIBXML2_LIBRARY:FILEPATH="%p/lib/libxml2.dylib" \
+		-DLIBXML2_XMLLINT_EXECUTABLE:FILEPATH="%p/bin/xmllint" \
+		-DLLVM_BUILD_DOCS=OFF \
+		-DLLVM_ENABLE_FFI=ON \
+		-DLLVM_ENABLE_OCAMLDOC=OFF \
+		-DLLVM_ENABLE_PROJECTS="clang;lld" \
+		-DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
+		-DLLVM_ENABLE_SPHINX=OFF \
+		-DLLVM_INCLUDE_EXAMPLES=OFF \
+		-DLLVM_INCLUDE_TESTS=ON \
+		-DLLVM_TARGETS_TO_BUILD=Native \
+		-DPACKAGE_VENDOR="Fink Project" \
+		-DPython3_EXECUTABLE="%p/bin/python3.10" \
+		-DTerminfo_LIBRARIES="%p/lib/libncurses.dylib" \
+		-DCLANG_ENABLE_BOOTSTRAP=ON \
+		-DCLANG_BOOTSTRAP_PASSTHROUGH="CMAKE_INSTALL_PREFIX;CMAKE_INSTALL_NAME_DIR;CMAKE_VERBOSE_MAKEFILE;CLANG_FORCE_MATCHING_LIBCLANG_SOVERSION;FFI_LIBRARIES;Python3_EXECUTABLE;Terminfo_LIBRARIES" \
+		-DBOOTSTRAP_CLANG_LINK_CLANG_DYLIB=ON \
+		-DBOOTSTRAP_CMAKE_INSTALL_NAME_DIR="%p/lib/llvm-%type_pkg[llvm_maj]" \
+		-DBOOTSTRAP_LIBCLANG_LIBRARY_VERSION=1 \
+		-DBOOTSTRAP_LIBCXXABI_USE_LLVM_UNWINDER=ON \
+		-DBOOTSTRAP_LLVM_ENABLE_FFI=ON \
+		-DBOOTSTRAP_LLVM_ENABLE_PROJECTS="clang;clang-tools-extra;compiler-rt;lld" \
+		-DBOOTSTRAP_LLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
+		-DBOOTSTRAP_LLVM_ENABLE_SPHINX=OFF \
+		-DBOOTSTRAP_LLVM_INSTALL_UTILS=ON \
+		-DBOOTSTRAP_LLVM_LINK_LLVM_DYLIB=ON \
+		-DBOOTSTRAP_LLVM_TARGETS_TO_BUILD="AArch64;ARM;X86" \
+		-DBOOTSTRAP_Python3_EXECUTABLE="%p/bin/python3.10" \
+		-DBOOTSTRAP_Terminfo_LIBRARIES="%p/lib/libncurses.dylib"
+
+	pushd finkbuild
+		make stage2 # || echo "Failed:" `date` >> /tmp/llvm-%type_pkg[llvm_maj]_build_times.txt
+	popd
+	
+	# fix i_n for libLLVM, libclang, and libclang-cpp
+	# version libclang and libclang-cpp libraries.
+	# installing will re-link all things that use them and get the new name.
+	pushd ${TARGET_BUILD_STAGE2}/lib
+		# check before fix
+		otool -L libLLVM.1.dylib libclang-cpp.dylib libclang.dylib
+
+		mv libclang-cpp.dylib libclang-cpp.%type_pkg[llvm_maj].dylib
+		install_name_tool -id %p/lib/llvm-%type_pkg[llvm_maj]/lib/libclang-cpp.%type_pkg[llvm_maj].dylib libclang-cpp.%type_pkg[llvm_maj].dylib
+		ln -s libclang-cpp.%type_pkg[llvm_maj].dylib libclang-cpp.dylib
+		
+		mv libclang.dylib libclang.1.dylib
+		install_name_tool -id %p/lib/llvm-%type_pkg[llvm_maj]/lib/libclang.1.dylib libclang.1.dylib
+		ln -s libclang.1.dylib libclang.dylib
+		
+		install_name_tool -id %p/lib/llvm-%type_pkg[llvm_maj]/lib/libLLVM.1.dylib libLLVM.1.dylib
+
+		# confirm fix
+		otool -L libLLVM.1.dylib libclang-cpp.%type_pkg[llvm_maj].dylib libclang.1.dylib
+	popd
+	#fink-package-precedence --depfile-ext='\.d' ..
+	
+
+	echo "Finish:" `date` >> /tmp/llvm-%type_pkg[llvm_maj]_build_times.txt
+<<
+InstallScript: <<
+	#!/bin/sh -ev
+	export TARGET_BUILD=%b/finkbuild
+	export TARGET_BUILD_STAGE2=${TARGET_BUILD}/tools/clang/stage2-bins
+
+	pushd finkbuild
+		make stage2-install DESTDIR=%d
+	popd
+
+	pushd $TARGET_BUILD_STAGE2/lib
+		# make install only knows about the unversioned libclang-cpp.dylib and libclang.dylib
+		# install the versioned ones we created at the end of CompileScript
+		install -m 755 libclang-cpp.%type_pkg[llvm_maj].dylib %i/lib/llvm-%type_pkg[llvm_maj]/lib
+		install -m 755 libclang.1.dylib %i/lib/llvm-%type_pkg[llvm_maj]/lib
+	popd
+
+	# create some manpages. Do we want to ship them directly in %p/share/man ?
+	CMDS="clang clang++ clang-check clang-cpp clang-format clang-rename git-clang-format ld.lld ld64.lld lli"
+	for f in $CMDS; do
+		echo "Generating manpage of $f"
+		%p/bin/help2man --no-info --version-string=%type_pkg[llvm_maj] %i/lib/llvm-%type_pkg[llvm_maj]/bin/$f > %i/lib/llvm-%type_pkg[llvm_maj]/share/man/man1/$f-%type_pkg[llvm_maj].1 || true
+	done
+
+	# rename some files to be versioned
+	mv %i/lib/llvm-%type_pkg[llvm_maj]/share/man/man1/scan-build.1 %i/lib/llvm-%type_pkg[llvm_maj]/share/man/man1/scan-build-%type_pkg[llvm_maj].1
+	# also share/clang/clang-format-diff.py?
+
+	# make a maj_version convenience symlink for libLLVM.dylib (often needed by llvm-config)
+	ln -s libLLVM.1.dylib %i/lib/llvm-%type_pkg[llvm_maj]/lib/libLLVM-%type_pkg[llvm_maj].dylib
+<<
+SplitOff: <<
+	Package: clang-%type_pkg[llvm_maj]
+	Description: C, C++ and Objective-C compiler
+	Depends: <<
+		libclang-cpp%type_pkg[llvm_maj]-shlibs,
+		libclang1-%type_pkg[llvm_maj]-shlibs,
+		libllvm%type_pkg[llvm_maj]-shlibs
+	<<
+	Recommends: <<
+		python%type_pkg[python]
+	<<
+	# no man files?
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang++
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-%type_pkg[llvm_maj]
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-cpp
+		lib/llvm-%type_pkg[llvm_maj]/lib/cmake/clang
+		lib/llvm-%type_pkg[llvm_maj]/share/clang/bash-autocomplete.sh
+		lib/llvm-%type_pkg[llvm_maj]/share/man/man1/clang{,++,-cpp}-%type_pkg[llvm_maj].1
+	<<
+<<
+SplitOff2: <<
+	Package: libclang1-%type_pkg[llvm_maj]-shlibs
+	Description: C interface to the Clang library
+	Depends: <<
+		libllvm%type_pkg[llvm_maj]-shlibs
+	<<
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/lib/libclang.1.dylib
+	<<
+	Shlibs: <<
+		%p/lib/llvm-%type_pkg[llvm_maj]/lib/libclang.1.dylib 1.0.0 %n (>= 15.0.7-1)
+	<<
+<<
+SplitOff3: <<
+	Package: libclang1-%type_pkg[llvm_maj]-dev
+	Description: Clang library - Development package
+	Depends: <<
+		libclang1-%type_pkg[llvm_maj]-shlibs
+	<<
+	Recommends: <<
+		libclang-common-%type_pkg[llvm_maj]-dev
+	<<
+	BuildDependsOnly: true
+#		lib/llvm-%type_pkg[llvm_maj]/include/clang-tidy
+#		lib/llvm-%type_pkg[llvm_maj]/lib/libclang.dylib
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/include/clang-c
+		lib/llvm-%type_pkg[llvm_maj]/include/clang
+		lib/llvm-%type_pkg[llvm_maj]/lib/libclang*.a
+		lib/llvm-%type_pkg[llvm_maj]/lib/libclang.dylib
+	<<
+<<
+SplitOff4: <<
+	Package: libclang-common-%type_pkg[llvm_maj]-dev
+	Description: Clang library - Common development package
+	Depends: <<
+		libllvm%type_pkg[llvm_maj]-shlibs
+	<<
+	BuildDependsOnly: true
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/lib/clang/%v
+	<<
+<<
+SplitOff5: <<
+	Package: libclang-cpp%type_pkg[llvm_maj]-shlibs
+	Description: C++ interface to the Clang library
+	Depends: <<
+		libllvm%type_pkg[llvm_maj]-shlibs
+	<<
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/lib/libclang-cpp.%type_pkg[llvm_maj].dylib
+	<<
+	Shlibs: <<
+		%p/lib/llvm-%type_pkg[llvm_maj]/lib/libclang-cpp.%type_pkg[llvm_maj].dylib 0.0.0 %n (>= 15.0.7-1)
+	<<
+<<
+SplitOff6: <<
+	Package: libclang-cpp%type_pkg[llvm_maj]-dev
+	Description: C++ interface to the Clang library
+	Depends: <<
+		libclang-cpp%type_pkg[llvm_maj]-shlibs
+	<<
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/lib/libclang-cpp.dylib
+	<<
+<<
+SplitOff7: <<
+	Package: libllvm%type_pkg[llvm_maj]-shlibs
+	Description: Modular compiler and toolchain, runtime lib
+	Depends: <<
+		libffi8-shlibs,
+		libncurses5-shlibs,
+		libxml2-shlibs,
+		libzstd1-shlibs
+	<<
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/lib/libLLVM.1.dylib
+	<<
+	Shlibs: <<
+		%p/lib/llvm-%type_pkg[llvm_maj]/lib/libLLVM.1.dylib 1.0.0 %n (>= 15.0.7-1)
+	<<
+<<
+SplitOff8: <<
+	Package: libllvm%type_pkg[llvm_maj]-dev
+	Description: Modular compiler and toolchain, runtime lib
+	Depends: <<
+		libllvm%type_pkg[llvm_maj]-shlibs,
+		libclang-cpp%type_pkg[llvm_maj]-shlibs,
+		llvm-%type_pkg[llvm_maj]-tools
+	<<
+	BuildDependsOnly: true
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/lib/libLLVM.dylib
+		lib/llvm-%type_pkg[llvm_maj]/lib/libLLVM-%type_pkg[llvm_maj].dylib
+	<<
+<<
+SplitOff9: <<
+	Package: clang-tools-%type_pkg[llvm_maj]
+	Description: Clang-based tools
+	Depends: <<
+		clang-%type_pkg[llvm_maj],
+		libclang-cpp%type_pkg[llvm_maj]-shlibs,
+		libclang1-%type_pkg[llvm_maj]-shlibs,
+		llvm-%type_pkg[llvm_maj]-tools,
+		libxml2-shlibs,
+		python%type_pkg[python]
+	<<
+#		lib/llvm-%type_pkg[llvm_maj]/bin/amdgpu-arch
+#		lib/llvm-%type_pkg[llvm_maj]/bin/clang-apply-replacements
+#		lib/llvm-%type_pkg[llvm_maj]/bin/clang-change-namespace
+#		lib/llvm-%type_pkg[llvm_maj]/bin/clang-doc
+#		lib/llvm-%type_pkg[llvm_maj]/bin/clang-include-cleaner
+#		lib/llvm-%type_pkg[llvm_maj]/bin/clang-include-fixer
+#		lib/llvm-%type_pkg[llvm_maj]/bin/clang-move
+#		lib/llvm-%type_pkg[llvm_maj]/bin/clang-pseudo
+#		lib/llvm-%type_pkg[llvm_maj]/bin/clang-query
+#		lib/llvm-%type_pkg[llvm_maj]/bin/clang-reorder-fields
+#		lib/llvm-%type_pkg[llvm_maj]/bin/clang-tblgen
+#		lib/llvm-%type_pkg[llvm_maj]/bin/find-all-symbols
+#		lib/llvm-%type_pkg[llvm_maj]/bin/hwasan_symbolize
+#		lib/llvm-%type_pkg[llvm_maj]/bin/modularize
+#		lib/llvm-%type_pkg[llvm_maj]/bin/nvptx-arch
+#		lib/llvm-%type_pkg[llvm_maj]/bin/pp-trace
+#		lib/llvm-%type_pkg[llvm_maj]/share/clang/clang-include-fixer.el
+#		lib/llvm-%type_pkg[llvm_maj]/share/clang/clang-include-fixer.py
+#		lib/llvm-%type_pkg[llvm_maj]/share/clang/run-find-all-symbols.py
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/bin/analyze-build
+		lib/llvm-%type_pkg[llvm_maj]/bin/c-index-test
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-check
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-cl
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-extdef-mapping
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-linker-wrapper
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-nvlink-wrapper
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-offload-bundler
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-offload-packager
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-offload-wrapper
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-refactor
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-rename
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-repl
+		lib/llvm-%type_pkg[llvm_maj]/bin/clang-scan-deps
+		lib/llvm-%type_pkg[llvm_maj]/bin/diagtool
+		lib/llvm-%type_pkg[llvm_maj]/bin/hmaptool
+		lib/llvm-%type_pkg[llvm_maj]/bin/intercept-build
+		lib/llvm-%type_pkg[llvm_maj]/bin/sancov
+		lib/llvm-%type_pkg[llvm_maj]/bin/scan-build
+		lib/llvm-%type_pkg[llvm_maj]/bin/scan-build-py
+		lib/llvm-%type_pkg[llvm_maj]/bin/scan-view
+		lib/llvm-%type_pkg[llvm_maj]/bin/set-xcode-analyzer
+		lib/llvm-%type_pkg[llvm_maj]/lib/libear
+		lib/llvm-%type_pkg[llvm_maj]/lib/libscanbuild
+		lib/llvm-%type_pkg[llvm_maj]/libexec
+		lib/llvm-%type_pkg[llvm_maj]/share/clang/clang-rename.el
+		lib/llvm-%type_pkg[llvm_maj]/share/clang/clang-rename.py
+		lib/llvm-%type_pkg[llvm_maj]/share/man/man1/clang-{check,rename}-%type_pkg[llvm_maj].1
+		lib/llvm-%type_pkg[llvm_maj]/share/man/man1/scan-build-%type_pkg[llvm_maj].1
+		lib/llvm-%type_pkg[llvm_maj]/share/scan-build
+		lib/llvm-%type_pkg[llvm_maj]/share/scan-view
+	<<
+<<
+SplitOff10: <<
+	Package: llvm-%type_raw[llvm_maj]-linker-tools
+	Description: Modular compiler and toolchain - plugins
+	Depends: <<
+		libllvm%type_pkg[llvm_maj]-shlibs
+	<<
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/lib/libLTO.dylib
+	<<
+	Shlibs: <<
+		!@rpath/libLTO.dylib
+	<<
+<<
+SplitOff11: <<
+	Package: llvm-%type_pkg[llvm_maj]-tools
+	Description: Modular compiler and toolchain - tools
+	Depends: <<
+		libllvm%type_pkg[llvm_maj]-shlibs,
+		libncurses5-shlibs,
+		libzstd1-shlibs,
+		python%type_pkg[python],
+		pygments-py%type_pkg[python],
+		python%type_pkg[python],
+		yaml-py%type_pkg[python]
+	<<
+#		lib/llvm-%type_pkg[llvm_maj]/build/utils/lit
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/bin/FileCheck
+		lib/llvm-%type_pkg[llvm_maj]/bin/UnicodeNameMappingGenerator
+		lib/llvm-%type_pkg[llvm_maj]/bin/count
+		lib/llvm-%type_pkg[llvm_maj]/bin/not
+		lib/llvm-%type_pkg[llvm_maj]/bin/split-file
+		lib/llvm-%type_pkg[llvm_maj]/bin/yaml-bench
+		lib/llvm-%type_pkg[llvm_maj]/share/opt-viewer
+	<<
+<<
+SplitOff12: <<
+	Package: llvm-%type_pkg[llvm_maj]-dev
+	Description: Modular compiler and toolchain - dev/headers
+	Depends: <<
+		libclang-cpp%type_pkg[llvm_maj]-shlibs,
+		libllvm%type_pkg[llvm_maj]-shlibs,
+#		llvm-%type_pkg[llvm_maj]-shlibs,
+		llvm-%type_pkg[llvm_maj]-tools
+	<<
+	BuildDependsOnly: true
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/include/llvm
+		lib/llvm-%type_pkg[llvm_maj]/include/llvm-c
+		lib/llvm-%type_pkg[llvm_maj]/lib/cmake/llvm
+		lib/llvm-%type_pkg[llvm_maj]/lib/libLLVM*.a
+		lib/llvm-%type_pkg[llvm_maj]/lib/libRemarks.dylib
+	<<
+	Shlibs: <<
+		!@rpath/libRemarks.dylib
+	<<
+<<
+SplitOff13: <<
+	Package: libunwind-%type_pkg[llvm_maj]-shlibs
+	Description: LLVM production quality unwinder
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/lib/libunwind.1*dylib
+	<<
+	Shlibs: <<
+		@rpath/libunwind.1.dylib 1.0.0 %n (>= 15.0.7-1)
+	<<
+<<
+SplitOff14: <<
+	Package: libunwind-%type_pkg[llvm_maj]-dev
+	Description: LLVM production quality unwinder (dev)
+	Depends: <<
+		libunwind-%type_pkg[llvm_maj]-shlibs
+	<<
+	BuildDependsOnly: true
+#		lib/llvm-%type_pkg[llvm_maj]/include/libunwind
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/lib/libunwind.a
+		lib/llvm-%type_pkg[llvm_maj]/lib/libunwind.dylib
+	<<
+<<
+SplitOff15: <<
+	Package: libc++abi1-%type_pkg[llvm_maj]-shlibs
+	Description: LLVM low level support for c++ library
+	Depends: <<
+		libunwind-%type_pkg[llvm_maj]-shlibs
+	<<
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/lib/libc++abi.1*.dylib
+	<<
+	Shlibs: <<
+		@rpath/libc++abi.1.dylib 1.0.0 %n (>= 15.0.7-1)
+	<<
+<<
+SplitOff16: <<
+	Package: libc++abi1-%type_pkg[llvm_maj]-dev
+	Description: 
+	Depends: <<
+		libc++abi1-%type_pkg[llvm_maj]-shlibs
+	<<
+	BuildDependsOnly: true
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/include/c++/v1/{__cxxabi_config,cxxabi}.h
+		lib/llvm-%type_pkg[llvm_maj]/lib/libc++abi.a
+		lib/llvm-%type_pkg[llvm_maj]/lib/libc++abi.dylib
+	<<
+<<
+SplitOff17: <<
+	Package: libc++1-%type_pkg[llvm_maj]-shlibs
+	Description: LLVM C++ Standard library
+	Depends: <<
+		libc++abi1-%type_pkg[llvm_maj]-shlibs,
+		libunwind-%type_pkg[llvm_maj]-shlibs
+	<<
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/lib/libc++.1*.dylib
+	<<
+	Shlibs: <<
+		@rpath/libc++.1.dylib 1.0.0 %n (>= 15.0.7-1)
+	<<
+<<
+SplitOff18: <<
+	Package: libc++-%type_pkg[llvm_maj]-dev
+	Description: LLVM C++ Standard library (development)
+	Depends: <<
+		libc++1-%type_pkg[llvm_maj]-shlibs,
+		libunwind-%type_pkg[llvm_maj]-shlibs
+	<<
+	Recommends: <<
+		libunwind-%type_pkg[llvm_maj]-dev
+	<<
+	BuildDependsOnly: true
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/include/c++
+		lib/llvm-%type_pkg[llvm_maj]/lib/libc++.a
+		lib/llvm-%type_pkg[llvm_maj]/lib/libc++.dylib
+		lib/llvm-%type_pkg[llvm_maj]/lib/libc++experimental.a
+	<<
+<<
+SplitOff19: <<
+	Package: liblld-%type_pkg[llvm_maj]
+	Description: LLVM-based linker, library
+	Depends: <<
+		libllvm%type_pkg[llvm_maj]-shlibs
+	<<
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/lib/liblld*.a
+	<<
+<<
+SplitOff20: <<
+	Package: liblld-%type_pkg[llvm_maj]-dev
+	Description: LLVM-based linker, library (headers)
+	Depends: <<
+		liblld-%type_pkg[llvm_maj],
+		lld-%type_pkg[llvm_maj]
+	<<
+	BuildDependsOnly: true
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/include/lld
+		lib/llvm-%type_pkg[llvm_maj]/lib/cmake/lld
+	<<
+<<
+SplitOff21: <<
+	Package: lld-%type_pkg[llvm_maj]
+	Description: LLVM-based linker
+	Depends: <<
+		libllvm%type_pkg[llvm_maj]-shlibs
+	<<
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/bin/ld*
+		lib/llvm-%type_pkg[llvm_maj]/bin/lld*
+		lib/llvm-%type_pkg[llvm_maj]/bin/wasm-ld
+		lib/llvm-%type_pkg[llvm_maj]/share/man/man1/{ld,ld64}.lld-%type_pkg[llvm_maj].1
+	<<
+<<
+SplitOff22: <<
+	Package: llvm-%type_pkg[llvm_maj]-runtime
+	Description: Modular compiler / toolchain, IR interpreter
+	Depends: <<
+		libllvm%type_pkg[llvm_maj]-shlibs,
+		libncurses5-shlibs,
+		libzstd1-shlibs
+	<<
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/bin/lli*
+		lib/llvm-%type_pkg[llvm_maj]/share/man/man1/lli-%type_pkg[llvm_maj].1
+	<<
+<<
+SplitOff23: <<
+	Package: clang-format-%type_pkg[llvm_maj]
+	Description: Tool to format C/C++/Obj-C code
+	Depends: <<
+		libclang-cpp%type_pkg[llvm_maj]-shlibs,
+		libllvm%type_pkg[llvm_maj]-shlibs,
+		python%type_pkg[python]
+	<<
+	Files: <<
+		lib/llvm-%type_pkg[llvm_maj]/bin/*clang-format
+		lib/llvm-%type_pkg[llvm_maj]/share/clang/clang-format*
+		lib/llvm-%type_pkg[llvm_maj]/share/man/man1/clang-format-%type_pkg[llvm_maj].1
+		lib/llvm-%type_pkg[llvm_maj]/share/man/man1/git-clang-format-%type_pkg[llvm_maj].1
+	<<
+<<
+DescPackaging: <<
+The basic build directions are here:
+https://llvm.org/docs/GettingStarted.html
+
+We follow the interal bootstrap process provided in the source. See
+https://llvm.org/docs/AdvancedBuilds.html for details.
+<<
+DescUsage: <<
+Add "%p/lib/llvm-%type_pkg[llvm_maj]/bin" to your PATH variable to find
+the clang compilers.
+<<
+DescPort: <<
+* no py files should use plain 'python3' or 'python'
+  find . -name "*.py" -exec %p/bin/sed -e "s|\!/usr/bin/env python3$|\!/usr/bin/env python%type_raw[python]|g" -e "s|\!/usr/bin/env python$|\!/usr/bin/env python%type_raw[python]|g" -i {} \;
+* version the install_name for libLLVM.dylib
+* Also version libclang-cpp.dylib, and libclang.dylib, but that has to be done manually for now.
+<<
+# Info2
+<<
