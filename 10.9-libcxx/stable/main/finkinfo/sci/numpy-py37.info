@@ -1,26 +1,25 @@
 # -*- coding: ascii; tab-width: 4; x-counterpart: numpy-py.patch -*-
-Info2: <<
-Package: numpy-py%type_pkg[python]
-Version: 1.26.4
+Info4: <<
+Package: numpy-py37
+Version: 1.21.6
 Revision: 1
-# v1.25 drops support for py<39
+# v1.21 is LTS for Python 3.7
 Maintainer: None <fink-devel@lists.sourceforge.net>
-Type: python (3.9 3.10), gcc (12)
+Type: python (3.7), gcc (11)
 Depends: <<
     python%type_pkg[python],
     openblas-shlibs
 <<
 BuildDepends: <<
-    cython-py%type_pkg[python] (>= 3.2.4),
+    cython-py%type_pkg[python] (>= 0.29.23),
     openblas,
-    (%type_pkg[python] >= 310) setuptools-tng-py%type_pkg[python] (>= 59.6.0-1),
-    (%type_pkg[python] << 310) setuptools-tng-py%type_pkg[python] (<< 60.0.0-1),
-    (%type_pkg[python] = 312) setuptools-tng-py%type_pkg[python] (<< 68.1.0-1)
+    (%type_pkg[python] = 310) setuptools-tng-py%type_pkg[python] (>= 59.6.0-1),
+    setuptools-tng-py%type_pkg[python] (<< 60.0.0-1)
 <<
 #Source: https://github.com/numpy/numpy/releases/download/v%v/numpy-%v.tar.gz
 #Source-Checksum: SHA256(093d513a460fd94f94c16193c3ef29b2d69a33e482071e3d6d6e561a700587a6)
-Source: https://pypi.io/packages/source/n/numpy/numpy-%v.tar.gz
-Source-Checksum: SHA256(2a02aba9ed12e4ac4eb3ea9421c420301a0c6460d9830d74a9df87efa4912010)
+Source: https://pypi.io/packages/source/n/numpy/numpy-%v.zip
+Source-Checksum: SHA256(ecb55251139706669fdec2ff073c98ef8e9a84473e51e716211b41aa0f18e656)
 # There probably never existed any py38+ versions of these:
 Conflicts: <<
     f2py-py%type_pkg[python],
@@ -35,35 +34,18 @@ Provides: f2py-py%type_pkg[python]
 #SetCC: gcc-fsf-%type_raw[gcc]
 #SetCXX: g++-fsf-%type_raw[gcc]
 #SetCFLAGS: -march=native
+SetCFLAGS: -mtune=native
 # Support for macOS's Accelerate framework was re-enabled in numpy/numpy#18874
 # as numpy can get by with LAPACK 3.2.1.
 # Nonetheless giving preference to external OpenBLAS here.
 CompileScript: <<
-    #!/bin/sh -ev
-    NPY_BLAS_ORDER=openblas,accelerate
-    NPY_LAPACK_ORDER=openblas,accelerate
-    ATLAS=None
-    darwin_vers=$(uname -r | cut -d. -f1)
-    if [ %m != x86_64 ]; then
-        CFLAGS='-O2 -mtune=native -march=armv8.5-a'
-        CPU_OPTS='NEON NEON_FP16 NEON_VFPV4 ASIMD ASIMDHP ASIMDDP'
-        %p/bin/python%type_raw[python] setup.py build --cpu-baseline "$CPU_OPTS"
-    else
-        if [ "$darwin_vers" -ge 18 ]; then
-            CFLAGS='-O2 -mtune=native -march=ivybridge'
-        else
-            CFLAGS='-O2 -mtune=silvermont -march=westmere'
-        fi
-        NPY_BLAS_ORDER=openblas,accelerate NPY_LAPACK_ORDER=openblas,accelerate ATLAS=None %p/bin/python%type_raw[python] setup.py build
-    fi
+    NPY_BLAS_ORDER=openblas,accelerate NPY_LAPACK_ORDER=openblas,accelerate ATLAS=None %p/bin/python%type_raw[python] setup.py build
 <<
 InfoTest: <<
     TestDepends: <<
         gcc%type_raw[gcc]-compiler,
-        cffi-py%type_pkg[python],
         hypothesis-py%type_pkg[python] (>= 6.24.1),
-        pytest-py%type_pkg[python],
-        typing-extensions-py%type_pkg[python]
+        pytest-py%type_pkg[python]
     <<
     TestScript: touch %b/INSTALL_MAKE_CHECK
 <<
@@ -83,29 +65,15 @@ InstallScript: <<
         # >       ForkingPickler(file, protocol).dump(obj)
         # E       AttributeError: Can't pickle local object 'TestSaveTxt.test_large_zip.<locals>.check_large_zip'
         # %p/lib/python3.10/multiprocessing/reduction.py:60: AttributeError
-        # various combinations of data/dtype/ufunc failing in `test_unary_spurious_fpexception` on x86_64
-        # some tests (f2py in particular) spawn external compilation processes requiring meson and/or broken on Python 3.11+
-        SKIP='test_mem_policy or test_cython'
-        if [ %m == x86_64 ]; then
-            SKIP="$SKIP or spurious_fpexception"
-        fi
-        # numpy.random (with pytest_cache?) can raise "ValueError: state must be for a PCG64 RNG" by the thousands
-        SHELL=/bin/sh %p/bin/python%type_raw[python] -Bm pytest --cache-clear --cache-show
-        if [ %type_pkg[python] -le 310 ]; then
-            SHELL=/bin/sh %p/bin/python%type_raw[python] -Bm pytest numpy -k "not ($SKIP)" || echo "Test failures"
-        else
-            SKIP="$SKIP or test_randomstate"
-            SHELL=/bin/sh %p/bin/python%type_raw[python] -Bm pytest numpy/[a-dl-t]*/ numpy/fft -k "not ($SKIP)" || echo "Test failures"
-        fi
+        SHELL=/bin/sh %p/bin/python%type_raw[python] -Bm pytest numpy -k 'not (_large_zip or _einsum_sums_int8 or _einsum_sums_uint8 or _unary_PyUFunc_O_O_method_full[reciprocal] or _loss_of_precision[complex256])' || exit 2
         rm -r numpy/.pytest_cache
     fi
  
-    # We don't supply py-unversioned of this tool (could do it via update-alternatives
-    # if there is demand). f2py3 no longer built on Python 3.10+.
-    # rm %i/bin/f2py?(3)  # not supported by basic sh?
-    rm -f %i/bin/f2py{,3}
+    # We don't supply py-unversioned of this tool (could do it via
+    # update-alternatives if there is demand).
+    rm %i/bin/{f2py,f2py3}
 <<
-DocFiles: CITATION.bib INSTALL.rst LICENSE.txt PKG-INFO README.md THANKS.txt doc benchmarks
+DocFiles: INSTALL.rst.txt LICENSE.txt PKG-INFO README.md THANKS.txt doc benchmarks
 Description: N-dimensional array package for Python
 DescDetail: <<
 NumPy (formerly known as scipy_core) is the fundamental package needed
@@ -137,5 +105,4 @@ Dependent packages using numpy.distutils.exec_command will need to follow suite.
 <<
 License: OSI-Approved
 Homepage: http://www.numpy.org
-# Info2
 <<
