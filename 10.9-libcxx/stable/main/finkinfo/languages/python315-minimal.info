@@ -1,0 +1,283 @@
+# -*- tab-width: 4; x-counterpart: python315.patch -*-
+Info2: <<
+Package: python%type_pkg[python]-minimal
+# Keep in sync with python%ype_pkg[python]-tk
+Version: 3.15.0
+Revision: 1
+Type: python 3.15
+Maintainer: Daniel Macks <dmacks@netspace.org>
+Depends: <<
+		python%type_pkg[python]-shlibs (= %v-%r),
+		bzip2-shlibs,
+		expat1-shlibs (>= 2.2.8-1),
+		gdbm-compat4-shlibs,
+		gdbm6-shlibs,
+		libffi8-shlibs,
+		libgettext8-shlibs,
+		liblzma5-shlibs,
+		libzstd1-shlibs,
+		libncursesw5-shlibs,
+		openssl300-shlibs,
+		readline8-shlibs,
+		sqlite3-shlibs  (>= 3.30.1-1)
+	<<
+BuildDepends: <<
+	bzip2-dev,
+	expat1 (>= 2.2.8-1),
+	fink (>= 0.32),
+	fink-package-precedence,
+	gdbm-compat4,
+	gdbm6,
+	gettext-bin,
+	gettext-tools,
+	libffi8,
+	libgettext8-dev,
+	liblzma5,
+	libncurses5,
+	libncursesw5,
+	libzstd1-dev,
+	openssl300-dev,
+	pkgconfig,
+	readline8,
+	sqlite3-dev (>= 3.30.1-1)
+<<
+# See https://github.com/fink/fink-distributions/issues/193
+BuildConflicts: uuid
+# Python 3.4+ wants to install these packages but that conflicts with fink's.
+Recommends: <<
+	pip-py%type_pkg[python],
+	setuptools-tng-py%type_pkg[python]
+<<
+Provides: <<
+	argparse-py%type_pkg[python],
+	enum34-py%type_pkg[python],
+	futures-py%type_pkg[python],
+	pathlib-py%type_pkg[python]
+<<
+
+Source: https://www.python.org/ftp/python/%v/Python-%v.tar.xz
+Source-Checksum: SHA256(ba4bed1ba346b916890b76d9e320451420aa69f6408997d33c66482eeae3d575)
+
+PatchFile: python%type_pkg[python].patch
+PatchFile-MD5: 2ee56c52748657013d369974b6e8366f
+
+PatchScript: <<
+	#!/bin/sh -ex
+	sed 's|@PREFIX@|%p|g' < %{PatchFile} | patch -p1
+	# /tmp and /var/tmp are symlinks to /private/tmp and /private/var/tmp
+	# on OS X. That's fine except it can cause tests in some packages to
+	# fail since '/tmp' != '/private/tmp'. Default to using /private/tmp.
+	perl -pi -e "s|'/tmp', '/var/tmp'|'/private/tmp', '/private/var/tmp'|" Lib/tempfile.py
+	
+	# Make sure to use Apple's 'tar' for test that uses Apple-specific
+	# flags. See: https://github.com/python/cpython/issues/140072
+	perl -pi.bak -e "s,((cmd|which).*)'tar',\1'/usr/bin/tar'," Lib/test/test_shutil.py
+<<
+
+SetCPPFLAGS: -MD
+ConfigureParams: <<
+	--enable-shared \
+	--enable-loadable-sqlite-extensions \
+	--enable-optimizations \
+	--with-dbmliborder=gdbm \
+	--with-system-expat \
+	--without-system-libmpdec \
+	--without-ensurepip \
+	--enable-ipv6
+<<
+#	--with-dtrace \
+
+CompileScript: <<
+#!/bin/sh -ex
+
+	# uncomment the following line for the -tk package
+	#perl -pi -e 's/FORCE_DISABLE tcl/tcl/' configure
+	# comment the following line for the -tk package
+	DIST_CONFIG_PARAMS='py_cv_module__tkinter=n/a'
+
+	darwinvers=$(uname -r | cut -d. -f1)
+	SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
+	# for OS X 10.14, ensure full SDK is available, but include it after any fink specific versions.
+	#if [ $darwinvers -ge 18 ]; then
+		export CFLAGS="-Wno-nullability-completeness -Wno-expansion-to-defined"
+		# is this forced ordering needed on <= 10.14?
+		#export CPPFLAGS="-I%p/include -I%p/include/ncursesw -I$SDK_PATH/usr/include"
+		#perl -pi -e "s|/usr/include|$SDK_PATH/usr/include|" setup.py
+	#fi
+
+	./configure %c $DIST_CONFIG_PARAMS
+
+#	# https://bugs.python.org/issue28456 and radar://28372390
+#	# https://daniel.haxx.se/blog/2016/10/11/poll-on-mac-10-12-is-broken/
+#	perl -pi -e 's|\#define HAVE_POLL 1||' ./pyconfig.h
+#	perl -pi -e 's|\#define HAVE_POLL_H 1||g' ./pyconfig.h
+#	perl -pi -e 's|\#define HAVE_SYS_POLL_H 1||g' ./pyconfig.h
+
+	make
+	fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=python%type_pkg[python] .
+<<
+
+InfoTest: <<
+	TestConflicts: apple-gdb
+	TestScript: <<
+		#!/bin/sh -ex
+		# Change install_name of lib during tests since DYLD_LIBRARY_PATH is not exported to test_subprocess on 10.11+.
+		if [ -x python.exe ]; then
+			python_exe=python.exe
+		else
+			python_exe=python
+		fi
+		install_name_tool -change %p/lib/libpython%type_raw[python].dylib %b/libpython%type_raw[python].dylib $python_exe
+		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %p/lib/libpython%type_raw[python].dylib %b/libpython%type_raw[python].dylib {} \;
+		install_name_tool -id %b/libpython%type_raw[python].dylib libpython%type_raw[python].dylib
+
+		# test_socket can fail with some DNS settings.
+		# multiprocessing_spawn fails on "KeyboardInterrupt not raised by wait",
+		# test_tcl and test_idle require an active $DISPLAY
+		# test_pkgutil fails on HFS+ https://bugs.python.org/issue41154
+		EXTRATESTOPTS='-w -unone -x test_socket test_multiprocessing_spawn test_code test_idle test_tcl test_pkgutil'
+		# test_ctypes is currently broken on 12.0 (py3.10.1)
+		EXTRATESTOPTS="$EXTRATESTOPTS -x test_ctypes"
+		# test_select is missing attribute 'poll'
+		EXTRATESTOPTS="$EXTRATESTOPTS -x test_select"
+		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS="$EXTRATESTOPTS" || TESTRETURN=$?
+
+		# Put install_name back.
+		install_name_tool -change %b/libpython%type_raw[python].dylib %p/lib/libpython%type_raw[python].dylib $python_exe
+		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %b/libpython%type_raw[python].dylib %p/lib/libpython%type_raw[python].dylib {} \;
+		install_name_tool -id %p/lib/libpython%type_raw[python].dylib libpython%type_raw[python].dylib
+
+		# remove leftovers from testing
+		# these dirs are empty and only created if tests are run
+		/usr/bin/find %b/Tools -name __pycache__ -type d -depth -exec rm -rf "{}" \;
+		exit $TESTRETURN
+	<<
+<<
+
+InstallScript: <<
+#!/bin/sh -ex
+	# Rebuild _sysconfigdata.py if we ran tests.
+	make
+	# _sysconfigdata.py contains build-time variables that point to %b.
+	# This is harmless but upsets fink's validator.
+	# Change to %p/lib to make fink happy.
+	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]-darwin,' `ls -d %b/build/lib*`/_sysconfigdata__darwin_darwin.py
+	# Don't propagate -lintl to other packages.
+	perl -pi -e 's/-lintl //' `ls -d %b/build/lib*`/_sysconfigdata__darwin_darwin.py
+	# Remove stray .pyc that get made during tests (including preliminary ones in CompileScript) to keep validator happy.
+	find ./Lib ./Parser ./Tools ./build -name '*.pyc' -delete
+	# Change interpreter name in scripts to versioned executable.
+	perl -pi -e 's|(/usr/bin/env python)(3?)$|${1}%type_raw[python]|' ./Tools/scripts/*.py
+	# install fails with -j greater than 1
+	export MAKEFLAGS=-j1
+	make install DESTDIR=%d
+
+	# we don't want -lintl to appear in LIBS otherwise python-config will propagate it
+	perl -pi -e 's/-lintl //' %i/lib/python%type_raw[python]/config-%type_raw[python]-darwin/Makefile
+	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]-darwin,' %i/lib/python%type_raw[python]/config-%type_raw[python]-darwin/Makefile
+	# Fix all main things to be python-versioned filenames with unversioned symlinks to them.
+	pushd %i/bin
+		for f in idle3 pydoc3; do
+			mv ${f} ${f}-%type_raw[python]
+			ln -s ${f}-%type_raw[python] ${f}
+		done
+	popd
+
+	# Add symlink to %p/lib/python%type_raw[python]/config-%type_raw[python]-darwin
+	# for consistency with older pythonXX packaging layout.
+	# See DescPckaging "Previous python packages" note.
+	ln -s ../libpython%type_raw[python].dylib %i/lib/python%type_raw[python]/config-%type_raw[python]-darwin/libpython%type_raw[python].dylib
+
+	# install some docs and other useful tidbits
+	rm -rf Misc/RPM
+	/bin/cp -R Misc Tools %i/lib/python%type_raw[python]
+	pushd %i/lib/python%type_raw[python]
+		DYLD_LIBRARY_PATH=%i/lib %i/bin/python%type_raw[python] -m compileall Tools/[a-su]* Tools/tz || exit 1
+	popd
+
+	# Remove things that are in packages in the other .info
+	pushd %i/lib/python%type_raw[python]
+		rm -f lib-dynload/_tkinter*.so
+		rm -r tkinter
+		rm -r idlelib
+	popd
+	rm %i/bin/idle*
+	rm %i/bin/{pydoc3,python3,python3-config}
+	rm %i/share/man/man1/python3.1
+	rm %i/lib/pkgconfig/{python3-embed.pc,python3.pc}
+
+# Doc tarball missing upstream.
+#	mkdir -p %i/share/doc/python%type_pkg[python]/html
+#	/bin/cp -R ../python-%v-docs-html/ %i/share/doc/python%type_pkg[python]/html
+<<
+SplitOff: <<
+	Package: python%type_pkg[python]-shlibs
+	Depends: libgettext8-shlibs
+	Files: <<
+		lib/libpython%type_raw[python].dylib
+		lib/python%type_raw[python]/config-%type_raw[python]-darwin/libpython%type_raw[python].dylib
+	<<
+	Shlibs: %p/lib/libpython%type_raw[python].dylib 3.15.0 %n (>= 3.15.0-1)
+	DocFiles: README.rst LICENSE
+<<
+DocFiles: README.rst LICENSE
+Description: Core python%type_pkg[python], without tk or idle
+DescDetail: <<
+	Python is often compared to Tcl, Perl, Scheme or Java.
+	This package installs unix python - not the OSX Framework version.
+	Builds a two-level namespace dynamic libpython (needed for koffice).
+
+	The interpreter is installed as "python%type_raw[python]", and all associated
+	commands are similarly named with the python-version in them. To get
+	the simple "python3" command, install the fink package "python3" (note:
+	the "python3" command there is not guaranteed to be python%type_raw[python]!).
+	This package does not have the tk module, even though it is a core
+	upstream Based on Debian's packaging and to avoid dependency
+	cycles, we have python%type_pkg[python]-tk as a separate package.
+<<
+DescUsage: <<
+	Python 3.10+ changes the compiler options used to compile
+	third-party python modules. Please do not add %type_raw[python] variants
+	to them without actually testing that they build cleanly.
+<<
+
+DescPackaging: <<
+	Older-versions maintainer: Hanspeter Niederstrasser <nieder@users.sourceforge.net>
+
+	The build in this .info excludes the tk components.  See pythonXX-tk.info file for details.
+
+	Adjust "python3" and other unversioned links to be symlink not hard link.
+
+	New in 3.2, .pyc files are saved in the __pycache__ directory
+	at the same level as the matching .py file. Any packages that
+	expect the .pyc file to be next to the .py file will need adjustment.
+
+	The .pyc and .so files also include the python version in the name.
+
+	Don't run ensurepip since it installs files that conflict with
+	the pip and setuptools packages.
+
+	Previous python packages went to great lengths to patch to use
+	%p/lib/python%type_raw[python]/config-%type_raw[python]-darwin
+	for libpython instead of %p/lib. Revert to using default library
+	location but make symlink in config dir.
+
+	Upstream no longer links extensions to libpython and use of
+	-undefined dynamic_lookup is recommended instead so remove those
+	patches.
+<<
+DescPort: <<
+	libpython needs to link to CF because that lib has the parent
+	thread that load modules that need to have CF available. See:
+	http://bugs.python.org/issue7085
+
+	bsddb is gone so drop db* patch and dep.
+
+	Patch ctypes to look in %p/lib for libraries.
+
+	Call build executable by correct filename in test suite
+	(python on case-sensitive, python.exe on -insensitive file systems).
+<<
+License: OSI-Approved
+Homepage: https://www.python.org/
+<<

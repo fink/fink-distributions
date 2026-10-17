@@ -1,17 +1,18 @@
 # -*- tab-width: 4; x-counterpart: python315.patch -*-
 Info2: <<
 Package: python%type_pkg[python]
-# Keep in sync with python%ype_pkg[python]-tk
+# Keep in sync with python%ype_pkg[python]
 Version: 3.15.0
 Revision: 1
 Type: python 3.15
 Maintainer: Daniel Macks <dmacks@netspace.org>
-RuntimeDepends: <<
-	%N-minimal (>= %v-%r),
-	%N-idle (>= %v),
-	%N-tk (>= %v)
+Depends: <<
+	python%type_pkg[python]-minimal (>= %v),
+	python%type_pkg[python]-idle (>= %v),
+	python%type_pkg[python]-tk (>= %v)
 <<
 BuildDepends: <<
+	blt-dev (>= 2.4z-15),
 	bzip2-dev,
 	expat1 (>= 2.2.8-1),
 	fink (>= 0.32),
@@ -29,26 +30,17 @@ BuildDepends: <<
 	openssl300-dev,
 	pkgconfig,
 	readline8,
-	sqlite3-dev (>= 3.30.1-1)
+	sqlite3-dev (>= 3.30.1-1),
+	tcltk-dev (>= 8.5.12-1),
+	x11-dev
 <<
 # See https://github.com/fink/fink-distributions/issues/193
 BuildConflicts: uuid
-# Python 3.4+ wants to install these packages but that conflicts with fink's.
-Recommends: <<
-	pip-py%type_pkg[python],
-	setuptools-tng-py%type_pkg[python]
-<<
-Provides: <<
-	argparse-py%type_pkg[python],
-	enum34-py%type_pkg[python],
-	futures-py%type_pkg[python],
-	pathlib-py%type_pkg[python]
-<<
 
 Source: https://www.python.org/ftp/python/%v/Python-%v.tar.xz
 Source-Checksum: SHA256(ba4bed1ba346b916890b76d9e320451420aa69f6408997d33c66482eeae3d575)
 
-PatchFile: %n.patch
+PatchFile: python%type_pkg[python].patch
 PatchFile-MD5: 2ee56c52748657013d369974b6e8366f
 
 PatchScript: <<
@@ -81,9 +73,9 @@ CompileScript: <<
 #!/bin/sh -ex
 
 	# uncomment the following line for the -tk package
-	#perl -pi -e 's/FORCE_DISABLE tcl/tcl/' configure
+	perl -pi -e 's/FORCE_DISABLE tcl/tcl/' configure
 	# comment the following line for the -tk package
-	DIST_CONFIG_PARAMS='py_cv_module__tkinter=n/a'
+	#DIST_CONFIG_PARAMS='py_cv_module__tkinter=n/a'
 
 	darwinvers=$(uname -r | cut -d. -f1)
 	SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
@@ -104,44 +96,12 @@ CompileScript: <<
 #	perl -pi -e 's|\#define HAVE_SYS_POLL_H 1||g' ./pyconfig.h
 
 	make
-	fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=%n .
+	fink-package-precedence --depfile-ext='\.d' --prohibit-bdep=python%type_pkg[python] .
 <<
 
 InfoTest: <<
-	TestConflicts: apple-gdb
-	TestScript: <<
-		#!/bin/sh -ex
-		# Change install_name of lib during tests since DYLD_LIBRARY_PATH is not exported to test_subprocess on 10.11+.
-		if [ -x python.exe ]; then
-			python_exe=python.exe
-		else
-			python_exe=python
-		fi
-		install_name_tool -change %p/lib/libpython%type_raw[python].dylib %b/libpython%type_raw[python].dylib $python_exe
-		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %p/lib/libpython%type_raw[python].dylib %b/libpython%type_raw[python].dylib {} \;
-		install_name_tool -id %b/libpython%type_raw[python].dylib libpython%type_raw[python].dylib
-
-		# test_socket can fail with some DNS settings.
-		# multiprocessing_spawn fails on "KeyboardInterrupt not raised by wait",
-		# test_tcl and test_idle require an active $DISPLAY
-		# test_pkgutil fails on HFS+ https://bugs.python.org/issue41154
-		EXTRATESTOPTS='-w -unone -x test_socket test_multiprocessing_spawn test_code test_idle test_tcl test_pkgutil'
-		# test_ctypes is currently broken on 12.0 (py3.10.1)
-		EXTRATESTOPTS="$EXTRATESTOPTS -x test_ctypes"
-		# test_select is missing attribute 'poll'
-		EXTRATESTOPTS="$EXTRATESTOPTS -x test_select"
-		LANG=en_US.UTF-8 make -k test EXTRATESTOPTS="$EXTRATESTOPTS" || TESTRETURN=$?
-
-		# Put install_name back.
-		install_name_tool -change %b/libpython%type_raw[python].dylib %p/lib/libpython%type_raw[python].dylib $python_exe
-		/usr/bin/find `ls -d %b/build/lib*` -name *.so -exec install_name_tool -change %b/libpython%type_raw[python].dylib %p/lib/libpython%type_raw[python].dylib {} \;
-		install_name_tool -id %p/lib/libpython%type_raw[python].dylib libpython%type_raw[python].dylib
-
-		# remove leftovers from testing
-		# these dirs are empty and only created if tests are run
-		/usr/bin/find %b/Tools -name __pycache__ -type d -depth -exec rm -rf "{}" \;
-		exit $TESTRETURN
-	<<
+	# handled in main pythonXX package for the main components. The
+	# tcl parts can't be tested anyway due to display interaction
 <<
 
 InstallScript: <<
@@ -162,9 +122,6 @@ InstallScript: <<
 	export MAKEFLAGS=-j1
 	make install DESTDIR=%d
 
-	# we don't want -lintl to appear in LIBS otherwise python-config will propagate it
-	perl -pi -e 's/-lintl //' %i/lib/python%type_raw[python]/config-%type_raw[python]-darwin/Makefile
-	perl -pi -e 's,%b,%p/lib/python%type_raw[python]/config-%type_raw[python]-darwin,' %i/lib/python%type_raw[python]/config-%type_raw[python]-darwin/Makefile
 	# Fix all main things to be python-versioned filenames with unversioned symlinks to them.
 	pushd %i/bin
 		for f in idle3 pydoc3; do
@@ -173,129 +130,101 @@ InstallScript: <<
 		done
 	popd
 
-	# Add symlink to %p/lib/python%type_raw[python]/config-%type_raw[python]-darwin
-	# for consistency with older pythonXX packaging layout.
-	# See DescPckaging "Previous python packages" note.
-	ln -s ../libpython%type_raw[python].dylib %i/lib/python%type_raw[python]/config-%type_raw[python]-darwin/libpython%type_raw[python].dylib
+	# For these special component packages, we first installed
+	# everything as usual. Now we move everything aside, move back
+	# what we want, and nuke everything else. Ugly, no?
+	pushd %i
+		mkdir -p ../blib/lib
+		mv lib/python%type_raw[python] ../blib/lib
 
-	# install some docs and other useful tidbits
-	rm -rf Misc/RPM
-	/bin/cp -R Misc Tools %i/lib/python%type_raw[python]
-	pushd %i/lib/python%type_raw[python]
-		DYLD_LIBRARY_PATH=%i/lib %i/bin/python%type_raw[python] -m compileall Tools/[a-su]* Tools/tz || exit 1
+		mkdir -p lib/python%type_raw[python]/lib-dynload
+		mv ../blib/lib/python%type_raw[python]/lib-dynload/_tkinter*.so lib/python%type_raw[python]/lib-dynload
+		mv ../blib/lib/python%type_raw[python]/tkinter lib/python%type_raw[python]
+
+		rm bin/{pydoc3-%type_raw[python],pydoc%type_raw[python],python%type_raw[python],python%type_raw[python]-config}
+		rm share/man/man1/python%type_raw[python].1
+
+		mkdir -p lib/python%type_raw[python]
+		mv ../blib/lib/python%type_raw[python]/idlelib lib/python%type_raw[python]
+
+		rm lib/pkgconfig/python-%type_raw[python]*
+
+		rm -r ../blib
+		rm -r include
+		rm -r lib/libpython%type_raw[python].dylib
 	popd
-
-	# Remove things that are in separate packages in %n-tk.info
-	pushd %i/lib/python%type_raw[python]
-		rm -f lib-dynload/_tkinter*.so
-		rm -r tkinter
-		rm -r idlelib
-	pushd
-	rm %i/bin/idle3?*
-
-# Doc tarball missing upstream.
-#	mkdir -p %i/share/doc/%n/html
-#	/bin/cp -R ../python-%v-docs-html/ %i/share/doc/%n/html
 <<
 SplitOff: <<
-	Package: %N-shlibs
-	Depends: libgettext8-shlibs
-	Files: <<
-		lib/libpython%type_raw[python].dylib
-		lib/python%type_raw[python]/config-%type_raw[python]-darwin/libpython%type_raw[python].dylib
+	Package: python%type_pkg[python]-tk
+	Depends: <<
+		blt-shlibs,
+		python%type_pkg[python]-minimal (>= %v),
+		tcltk (>= 8.5.12-1),
+		x11
 	<<
-	Shlibs: %p/lib/libpython%type_raw[python].dylib 3.15.0 %n (>= 3.15.0-1)
+	Files: <<
+		lib/python%type_raw[python]/tkinter
+		lib/python%type_raw[python]/lib-dynload
+	<<
+	Description: Python 'tkinter' module
 	DocFiles: README.rst LICENSE
 <<
 SplitOff2: <<
-	Package: python3
-	Depends: %N (>= %v-%r)
+	Package: python%type_pkg[python]-idle
 	RuntimeDepends: <<
-		%N-idle (>= %v)
+		python%type_pkg[python]-minimal (>= %v),
+		python%type_pkg[python]-tk (>= %v-%r)
 	<<
 	Files: <<
-		bin/idle3
-		bin/pydoc3
-		bin/python3
-		bin/python3-config
-		lib/pkgconfig/python3.pc
-		lib/pkgconfig/python3-embed.pc
-		share/man/man1/python3.1
+		bin/idle3-%type_raw[python]
+		bin/idle%type_raw[python]
+		lib/python%type_raw[python]
+	<<
+	Description: Python 'idle' tool and supporting modules
+	DocFiles: README.rst LICENSE
+<<
+SplitOff3: <<
+	Package: python3
+	Depends: <<
+		python%type_pkg[python] (>= %v),
+		python%type_pkg[python]-idle (>= %v)
+	<<
+	Files: <<
+		bin
+		lib
+		share/man
 	<<
 	DocFiles: README.rst LICENSE
 	Description: Generic commands to invoke python%type_pkg[python]
 	DescDetail: <<
 		This package only contains non-versioned symlinks to the binaries included
-		with python%type_pkg[python].
+		with the versioned python%type_pkg[python] suite of packages.
 	<<
 	DescUsage: <<
 		This package should only be used when you don't care which version of the
 		python 3.x interpreter you need.
 	<<
 <<
-SplitOff3: <<
-	Package: %N-minimal
-	Depends: <<
-		%N-shlibs (= %v-%r),
-		bzip2-shlibs,
-		expat1-shlibs (>= 2.2.8-1),
-		gdbm-compat4-shlibs,
-		gdbm6-shlibs,
-		libffi8-shlibs,
-		libgettext8-shlibs,
-		liblzma5-shlibs,
-		libzstd1-shlibs,
-		libncursesw5-shlibs,
-		openssl300-shlibs,
-		readline8-shlibs,
-		sqlite3-shlibs  (>= 3.30.1-1)
-	<<
-#	Files: <<
-#		bin
-#		include
-#		lib
-#		share
-#	<<
-	InstallScript: <<
-		# We need to take all the files except one, but InstallScript
-		# runs before Files, so we have to do it manually. First take
-		# everything from them, then give them what they should have
-		# (just the sentinel file for a bundle).
-		mv %I/* %i
-		mkdir -p %I/share/doc/installed-packages
-		touch %I/share/doc/installed-packages/%N
-	<<
-	DocFiles: README.rst LICENSE
-	Description: Core %N, without tk or idle
-<<
-
 DocFiles: README.rst LICENSE
-Description: Interpreted, object-oriented language
-DescDetail: <<
-	Python is often compared to Tcl, Perl, Scheme or Java.
-	This package installs unix python - not the OSX Framework version.
-	Builds a two-level namespace dynamic libpython (needed for koffice).
-
-	The interpreter is installed as "python%type_raw[python]", and all associated
-	commands are similarly named with the python-version in them. To get
-	the simple "python3" command, install the fink package "python3" (note:
-	the "python3" command there is not guaranteed to be python%type_raw[python]!).
-	This package does not have the tk module, even though it is a core
-	upstream Based on Debian's packaging and to avoid dependency
-	cycles, we have %n-tk as a separate package.
-<<
+Description: Python 'tkinter' module
 DescUsage: <<
-	Python 3.10+ changes the compiler options used to compile
-	third-party python modules. Please do not add %type_raw[python] variants
-	to them without actually testing that they build cleanly.
+	Install this package to add the the components that have direct
+	dependencies on tk (tkinter, blt).
 <<
 
 DescPackaging: <<
 	Older-versions maintainer: Hanspeter Niederstrasser <nieder@users.sourceforge.net>
 
-	The build in this .info excludes the tk components, but includes a
-	bundle package that brings them in from separate packages at
-	runtime. See the -tk.info file for details.
+	The goal of this package is to remove tk from the main python
+	build. The tcltk package is large and with large dependencies,
+	some of which might need meson and meson requires python. By
+	having a core build that meson can use and a separate .info for
+	the componenents that require tk to build, we avoid a dependency
+	cycle.
+
+	Not sure how to build just the tk components, so we build the
+	whole thing and then delete the parts we don't want. They are
+	supplied by the pythonXX-minimal package on which we depend.
 
 	Adjust "python3" and other unversioned links to be symlink not hard link.
 
