@@ -1,66 +1,111 @@
 # -*- coding: ascii; tab-width: 4; x-counterpart: numpy-py.patch -*-
-Info4: <<
+Info2: <<
 Package: numpy-py%type_pkg[python]
-Version: 1.22.1
+Version: 1.26.4
 Revision: 1
-# v1.22 drops support for py<38
+# v1.25 drops support for py<39
 Maintainer: None <fink-devel@lists.sourceforge.net>
-Type: python (3.8 3.9 3.10)
+Type: python (3.9 3.10), gcc (12)
 Depends: <<
-	python%type_pkg[python]
+    python%type_pkg[python],
+    openblas-shlibs
 <<
 BuildDepends: <<
-	cython-py%type_pkg[python],
-	(%type_pkg[python] = 310) setuptools-tng-py%type_pkg[python] (>= 59.6.0-1),
-	setuptools-tng-py%type_pkg[python] (<< 60.0.0-1)
+    cython-py%type_pkg[python] (>= 3.2.4),
+    openblas,
+    (%type_pkg[python] >= 310) setuptools-tng-py%type_pkg[python] (>= 59.6.0-1),
+    (%type_pkg[python] << 310) setuptools-tng-py%type_pkg[python] (<< 60.0.0-1),
+    (%type_pkg[python] = 312) setuptools-tng-py%type_pkg[python] (<< 68.1.0-1)
 <<
-Source: https://pypi.io/packages/source/n/numpy/numpy-%v.zip
-Source-Checksum: SHA256(e348ccf5bc5235fc405ab19d53bec215bb373300e5523c7b476cc0da8a5e9973)
-#SourceRename: numpy-%v.zip
-PatchFile: numpy-py.patch
-PatchFile-MD5: 6c2bdd945453d3a392728d376be0d28e
+#Source: https://github.com/numpy/numpy/releases/download/v%v/numpy-%v.tar.gz
+#Source-Checksum: SHA256(093d513a460fd94f94c16193c3ef29b2d69a33e482071e3d6d6e561a700587a6)
+Source: https://pypi.io/packages/source/n/numpy/numpy-%v.tar.gz
+Source-Checksum: SHA256(2a02aba9ed12e4ac4eb3ea9421c420301a0c6460d9830d74a9df87efa4912010)
+# There probably never existed any py38+ versions of these:
 Conflicts: <<
-	f2py-py%type_pkg[python],
-	scipy-py%type_pkg[python] (<= 1:0.4)
+    f2py-py%type_pkg[python],
+    scipy-py%type_pkg[python] (<= 1:0.4)
 <<
 Replaces: <<
-	f2py-py%type_pkg[python],
-	scipy-py%type_pkg[python] (<= 1:0.4),
-	scipy-core-py%type_pkg[python] (<< 1.3.0-6)
+    f2py-py%type_pkg[python],
+    scipy-py%type_pkg[python] (<= 1:0.4),
+    scipy-core-py%type_pkg[python] (<< 1.3.0-6)
 <<
 Provides: f2py-py%type_pkg[python]
-PatchScript: sed 's|@FINKPREFIX@|%p|g' <%{PatchFile} | patch -p1
-# Per upstream notes, must avoid OS X's Accelerate framework because
-# it's buggy. For now, we're using the built-in methods, but someone
-# who cares could switch to the external OpenBLAS or ATLAS libraries.
+#SetCC: gcc-fsf-%type_raw[gcc]
+#SetCXX: g++-fsf-%type_raw[gcc]
+#SetCFLAGS: -march=native
+# Support for macOS's Accelerate framework was re-enabled in numpy/numpy#18874
+# as numpy can get by with LAPACK 3.2.1.
+# Nonetheless giving preference to external OpenBLAS here.
 CompileScript: <<
-	SHELL=/bin/sh NPY_BLAS_ORDER= NPY_LAPACK_ORDER= %p/bin/python%type_raw[python] setup.py build
-<<
-InstallScript: <<
-#!/bin/bash -ev
-	SHELL=/bin/sh NPY_BLAS_ORDER= NPY_LAPACK_ORDER= %p/bin/python%type_raw[python] setup.py install --root %d
-
- if [ -f %b/INSTALL_MAKE_CHECK ]; then
-   mkdir test
-   cd test
-   PATH=%i/bin:$PATH
-   PYTHONPATH=%i/lib/python%type_raw[python]/site-packages
-   LANG=en_US.UTF-8 SHELL=/bin/sh %p/bin/python%type_raw[python] ../runtests.py
- fi
- 
- # We don't supply py-unversioned of this tool (could do it via
- # update-alternatives if there is demand).
- rm %i/bin/{f2py,f2py3}
+    #!/bin/sh -ev
+    NPY_BLAS_ORDER=openblas,accelerate
+    NPY_LAPACK_ORDER=openblas,accelerate
+    ATLAS=None
+    darwin_vers=$(uname -r | cut -d. -f1)
+    if [ %m != x86_64 ]; then
+        CFLAGS='-O2 -mtune=native -march=armv8.5-a'
+        CPU_OPTS='NEON NEON_FP16 NEON_VFPV4 ASIMD ASIMDHP ASIMDDP'
+        %p/bin/python%type_raw[python] setup.py build --cpu-baseline "$CPU_OPTS"
+    else
+        if [ "$darwin_vers" -ge 18 ]; then
+            CFLAGS='-O2 -mtune=native -march=ivybridge'
+        else
+            CFLAGS='-O2 -mtune=silvermont -march=westmere'
+        fi
+        NPY_BLAS_ORDER=openblas,accelerate NPY_LAPACK_ORDER=openblas,accelerate ATLAS=None %p/bin/python%type_raw[python] setup.py build
+    fi
 <<
 InfoTest: <<
-	TestDepends: <<
-		nose-py%type_pkg[python],
-		hypothesis-py%type_pkg[python],
-		pytest-py%type_pkg[python]
-	<<
-	TestScript: touch %b/INSTALL_MAKE_CHECK
+    TestDepends: <<
+        gcc%type_raw[gcc]-compiler,
+        cffi-py%type_pkg[python],
+        hypothesis-py%type_pkg[python] (>= 6.24.1),
+        pytest-py%type_pkg[python],
+        typing-extensions-py%type_pkg[python]
+    <<
+    TestScript: touch %b/INSTALL_MAKE_CHECK
 <<
-DocFiles: LICENSE.txt
+InstallScript: <<
+    #!/bin/sh -ev
+    ATLAS=None %p/bin/python%type_raw[python] setup.py install --root %d
+
+    if [ -f %b/INSTALL_MAKE_CHECK ]; then
+        PATH=%i/bin:$PATH
+        # Point to gfortran executables for f2py tests.
+        export F90=gfortran-fsf-%type_raw[gcc]
+        export F77=$F90
+        export PYTHONPATH=%i/lib/python%type_raw[python]/site-packages
+        cd $PYTHONPATH
+        # For comparison, runtest.py has 17404 passed, 730 skipped, 1293 deselected, 28 xfailed, 8 xpassed, 1 warning
+        # pytest should have 18460-18537 passed, 968-889 skipped, 1 deselected, 27-28 xfailed, 8 xpassed, 230-246 warnings
+        # >       ForkingPickler(file, protocol).dump(obj)
+        # E       AttributeError: Can't pickle local object 'TestSaveTxt.test_large_zip.<locals>.check_large_zip'
+        # %p/lib/python3.10/multiprocessing/reduction.py:60: AttributeError
+        # various combinations of data/dtype/ufunc failing in `test_unary_spurious_fpexception` on x86_64
+        # some tests (f2py in particular) spawn external compilation processes requiring meson and/or broken on Python 3.11+
+        SKIP='test_mem_policy or test_cython'
+        if [ %m == x86_64 ]; then
+            SKIP="$SKIP or spurious_fpexception"
+        fi
+        # numpy.random (with pytest_cache?) can raise "ValueError: state must be for a PCG64 RNG" by the thousands
+        SHELL=/bin/sh %p/bin/python%type_raw[python] -Bm pytest --cache-clear --cache-show
+        if [ %type_pkg[python] -le 310 ]; then
+            SHELL=/bin/sh %p/bin/python%type_raw[python] -Bm pytest numpy -k "not ($SKIP)" || echo "Test failures"
+        else
+            SKIP="$SKIP or test_randomstate"
+            SHELL=/bin/sh %p/bin/python%type_raw[python] -Bm pytest numpy/[a-dl-t]*/ numpy/fft -k "not ($SKIP)" || echo "Test failures"
+        fi
+        rm -r numpy/.pytest_cache
+    fi
+ 
+    # We don't supply py-unversioned of this tool (could do it via update-alternatives
+    # if there is demand). f2py3 no longer built on Python 3.10+.
+    # rm %i/bin/f2py?(3)  # not supported by basic sh?
+    rm -f %i/bin/f2py{,3}
+<<
+DocFiles: CITATION.bib INSTALL.rst LICENSE.txt PKG-INFO README.md THANKS.txt doc benchmarks
 Description: N-dimensional array package for Python
 DescDetail: <<
 NumPy (formerly known as scipy_core) is the fundamental package needed
@@ -85,10 +130,12 @@ causes the install phase to immediately exit (thanks to 'bash -e'?).
 Set SHELL (%v >= 1.13.0) because fink-bld's shell is /usr/bin/false and several configure test programs require a real shell.
 https://sourceforge.net/p/fink/package-submissions/4930/#467b
 
-But on 10.13+, we need to not use SHELL from the environment, but hardcode a real shell.
+Patched on 10.13, to not use SHELL from the environment, but hardcode a real shell following
 https://bugs.freebsd.org/bugzilla/show_bug.cgi?id=225156
-Dependent packages that see this bug should depend on numpy-py%type_pkg[python] (>= 1.14.5-2).
+Upstream kept the slightly non-POSIX behaviour, thus reverting to setting SHELL=/bin/sh.
+Dependent packages using numpy.distutils.exec_command will need to follow suite.
 <<
 License: OSI-Approved
 Homepage: http://www.numpy.org
+# Info2
 <<
